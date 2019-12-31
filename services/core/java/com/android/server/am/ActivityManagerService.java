@@ -4596,6 +4596,13 @@ public class ActivityManagerService extends IActivityManager.Stub
         mBatteryStatsService.noteProcessStart(app.processName, app.info.uid);
         checkTime(app.startTime, "startProcess: done updating battery stats");
 
+        // Recover nfc's persistent and Adj
+        if("false".equals(SystemProperties.get("def_nfc_on"))
+            && app.processName.equals("com.android.nfc")) {
+            app.persistent = true;
+            app.maxAdj = ProcessList.PERSISTENT_PROC_ADJ;
+        }
+
         EventLog.writeEvent(EventLogTags.AM_PROC_START,
                 UserHandle.getUserId(app.startUid), pid, app.startUid,
                 app.processName, app.hostingType,
@@ -7179,6 +7186,12 @@ public class ActivityManagerService extends IActivityManager.Stub
             final int NA = apps.size();
             for (int ia=0; ia<NA; ia++) {
                 ProcessRecord app = apps.valueAt(ia);
+                // For lowmem target, it need to be able to stop com.android.nfc.
+                if("false".equals(SystemProperties.get("def_nfc_on"))
+                    && app.processName.equals("com.android.nfc")) {
+                    app.persistent = false;
+                    app.setAdj = ProcessList.HOME_APP_ADJ;
+                }
                 if (app.persistent && !evenPersistent) {
                     // we don't kill persistent processes
                     continue;
