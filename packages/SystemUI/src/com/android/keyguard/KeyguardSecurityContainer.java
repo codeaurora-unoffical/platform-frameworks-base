@@ -46,10 +46,11 @@ import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.keyguard.KeyguardSecurityModel.SecurityMode;
+import com.android.settingslib.utils.ThreadUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
 import com.android.systemui.SystemUIFactory;
-import com.android.systemui.statusbar.phone.UnlockMethodCache;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.util.InjectionInflationController;
 
 public class KeyguardSecurityContainer extends FrameLayout implements KeyguardSecurityView {
@@ -76,7 +77,7 @@ public class KeyguardSecurityContainer extends FrameLayout implements KeyguardSe
     // How much you need to drag the bouncer to trigger an auth retry (in dps.)
     private static final float MIN_DRAG_SIZE = 10;
     // How much to scale the default slop by, to avoid accidental drags.
-    private static final float SLOP_SCALE = 2f;
+    private static final float SLOP_SCALE = 4f;
 
     private KeyguardSecurityModel mSecurityModel;
     private LockPatternUtils mLockPatternUtils;
@@ -94,7 +95,7 @@ public class KeyguardSecurityContainer extends FrameLayout implements KeyguardSe
     private final SpringAnimation mSpringAnimation;
     private final VelocityTracker mVelocityTracker = VelocityTracker.obtain();
     private final KeyguardUpdateMonitor mUpdateMonitor;
-    private final UnlockMethodCache mUnlockMethodCache;
+    private final KeyguardStateController mKeyguardStateController;
 
     private final MetricsLogger mMetricsLogger = Dependency.get(MetricsLogger.class);
     private float mLastTouchY = -1;
@@ -128,14 +129,14 @@ public class KeyguardSecurityContainer extends FrameLayout implements KeyguardSe
 
     public KeyguardSecurityContainer(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
-        mSecurityModel = new KeyguardSecurityModel(context);
+        mSecurityModel = Dependency.get(KeyguardSecurityModel.class);
         mLockPatternUtils = new LockPatternUtils(context);
         mUpdateMonitor = Dependency.get(KeyguardUpdateMonitor.class);
         mSpringAnimation = new SpringAnimation(this, DynamicAnimation.Y);
         mInjectionInflationController =  new InjectionInflationController(
             SystemUIFactory.getInstance().getRootComponent());
-        mUnlockMethodCache = UnlockMethodCache.getInstance(context);
         mViewConfiguration = ViewConfiguration.get(context);
+        mKeyguardStateController = Dependency.get(KeyguardStateController.class);
     }
 
     public void setSecurityCallback(SecurityCallback callback) {
@@ -272,7 +273,7 @@ public class KeyguardSecurityContainer extends FrameLayout implements KeyguardSe
      */
     private void updateBiometricRetry() {
         SecurityMode securityMode = getSecurityMode();
-        mSwipeUpToRetry = mUnlockMethodCache.isFaceAuthEnabled()
+        mSwipeUpToRetry = mKeyguardStateController.isFaceAuthEnabled()
                 && securityMode != SecurityMode.SimPin
                 && securityMode != SecurityMode.SimPuk
                 && securityMode != SecurityMode.None;
@@ -617,6 +618,15 @@ public class KeyguardSecurityContainer extends FrameLayout implements KeyguardSe
                 StatsLog.write(StatsLog.KEYGUARD_BOUNCER_PASSWORD_ENTERED,
                     StatsLog.KEYGUARD_BOUNCER_PASSWORD_ENTERED__RESULT__SUCCESS);
                 mLockPatternUtils.reportSuccessfulPasswordAttempt(userId);
+                // Force a garbage collection in an attempt to erase any lockscreen password left in
+                // memory. Do it asynchronously with a 5-sec delay to avoid making the keyguard
+                // dismiss animation janky.
+                ThreadUtils.postOnBackgroundThread(() -> {
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException ignored) { }
+                    Runtime.getRuntime().gc();
+                });
             } else {
                 StatsLog.write(StatsLog.KEYGUARD_BOUNCER_PASSWORD_ENTERED,
                     StatsLog.KEYGUARD_BOUNCER_PASSWORD_ENTERED__RESULT__FAILURE);

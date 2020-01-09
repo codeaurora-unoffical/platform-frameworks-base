@@ -21,6 +21,7 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_NONE;
 import static android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS;
+import static android.view.WindowManager.LayoutParams.PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND;
 
 import static java.lang.annotation.RetentionPolicy.SOURCE;
 
@@ -66,6 +67,7 @@ import android.view.ViewGroup;
 import android.view.ViewRootImpl;
 import android.view.ViewTreeObserver;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.animation.AnimationUtils;
 import android.view.inputmethod.CompletionInfo;
@@ -94,6 +96,7 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Collections;
 
 /**
  * InputMethodService provides a standard implementation of an InputMethod,
@@ -434,6 +437,7 @@ public class InputMethodService extends AbstractInputMethodService {
     final int[] mTmpLocation = new int[2];
 
     final ViewTreeObserver.OnComputeInternalInsetsListener mInsetsComputer = info -> {
+        onComputeInsets(mTmpInsets);
         if (isExtractViewShown()) {
             // In true fullscreen mode, we just say the window isn't covering
             // any content so we don't impact whatever is behind.
@@ -442,11 +446,14 @@ public class InputMethodService extends AbstractInputMethodService {
             info.touchableRegion.setEmpty();
             info.setTouchableInsets(ViewTreeObserver.InternalInsetsInfo.TOUCHABLE_INSETS_FRAME);
         } else {
-            onComputeInsets(mTmpInsets);
             info.contentInsets.top = mTmpInsets.contentTopInsets;
             info.visibleInsets.top = mTmpInsets.visibleTopInsets;
             info.touchableRegion.set(mTmpInsets.touchableRegion);
             info.setTouchableInsets(mTmpInsets.touchableInsets);
+        }
+
+        if (mInputFrame != null) {
+            setImeExclusionRect(mTmpInsets.visibleTopInsets);
         }
     };
 
@@ -670,6 +677,14 @@ public class InputMethodService extends AbstractInputMethodService {
 
     private void setImeWindowStatus(int visibilityFlags, int backDisposition) {
         mPrivOps.setImeWindowStatus(visibilityFlags, backDisposition);
+    }
+
+    /** Set region of the keyboard to be avoided from back gesture */
+    private void setImeExclusionRect(int visibleTopInsets) {
+        View inputFrameRootView = mInputFrame.getRootView();
+        Rect r = new Rect(0, visibleTopInsets, inputFrameRootView.getWidth(),
+                inputFrameRootView.getHeight());
+        inputFrameRootView.setSystemGestureExclusionRects(Collections.singletonList(r));
     }
 
     /**
@@ -1006,6 +1021,16 @@ public class InputMethodService extends AbstractInputMethodService {
                 Context.LAYOUT_INFLATER_SERVICE);
         mWindow = new SoftInputWindow(this, "InputMethod", mTheme, null, null, mDispatcherState,
                 WindowManager.LayoutParams.TYPE_INPUT_METHOD, Gravity.BOTTOM, false);
+        mWindow.getWindow().setFitWindowInsetsTypes(WindowInsets.Type.systemBars());
+        mWindow.getWindow().addPrivateFlags(PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND);
+        mWindow.getWindow().getDecorView().setOnApplyWindowInsetsListener(
+                (v, insets) -> v.onApplyWindowInsets(
+                        new WindowInsets.Builder(insets).setSystemWindowInsets(
+                                android.graphics.Insets.of(
+                                        insets.getSystemWindowInsetLeft(),
+                                        insets.getSystemWindowInsetTop(),
+                                        insets.getSystemWindowInsetRight(),
+                                        insets.getStableInsetBottom())).build()));
         // For ColorView in DecorView to work, FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS needs to be set
         // by default (but IME developers can opt this out later if they want a new behavior).
         mWindow.getWindow().setFlags(

@@ -16,10 +16,11 @@
 
 package android.view;
 
-import android.content.res.Resources;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
+import android.annotation.TestApi;
 import android.content.Context;
-import android.view.SurfaceControl;
-import android.view.View;
+import android.os.IBinder;
 
 /**
  * Utility class for adding a view hierarchy to a SurfaceControl.
@@ -27,15 +28,47 @@ import android.view.View;
  * See WindowlessWmTest for example usage.
  * @hide
  */
+@TestApi
 public class WindowlessViewRoot {
-    ViewRootImpl mViewRoot;
-    WindowlessWindowManager mWm;
-    public WindowlessViewRoot(Context c, Display d, SurfaceControl rootSurface) {
-        mWm = new WindowlessWindowManager(c.getResources().getConfiguration(), rootSurface);
+    private ViewRootImpl mViewRoot;
+    private WindowlessWindowManager mWm;
+
+    /** @hide */
+    public WindowlessViewRoot(@NonNull Context c, @NonNull Display d,
+            @NonNull WindowlessWindowManager wwm) {
+        mWm = wwm;
+        mViewRoot = new ViewRootImpl(c, d, mWm);
+    }
+
+    public WindowlessViewRoot(@NonNull Context c, @NonNull Display d,
+            @NonNull SurfaceControl rootSurface,
+            @Nullable IBinder hostInputToken) {
+        mWm = new WindowlessWindowManager(c.getResources().getConfiguration(), rootSurface,
+                hostInputToken);
         mViewRoot = new ViewRootImpl(c, d, mWm);
     }
 
     public void addView(View view, WindowManager.LayoutParams attrs) {
         mViewRoot.setView(view, attrs, null);
+    }
+
+    public void relayout(WindowManager.LayoutParams attrs) {
+        mViewRoot.setLayoutParams(attrs, false);
+        mViewRoot.setReportNextDraw();
+        mWm.setCompletionCallback(mViewRoot.mWindow.asBinder(), (SurfaceControl.Transaction t) -> {
+            t.apply();
+        });
+    }
+
+    public void dispose() {
+        mViewRoot.dispatchDetachedFromWindow();
+    }
+
+    /**
+     * Tell this viewroot to clean itself up.
+     * @hide
+     */
+    public void die() {
+        mViewRoot.die(false /* immediate */);
     }
 }

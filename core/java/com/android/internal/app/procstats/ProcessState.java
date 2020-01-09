@@ -77,7 +77,6 @@ public final class ProcessState {
         STATE_PERSISTENT,               // ActivityManager.PROCESS_STATE_PERSISTENT
         STATE_PERSISTENT,               // ActivityManager.PROCESS_STATE_PERSISTENT_UI
         STATE_TOP,                      // ActivityManager.PROCESS_STATE_TOP
-        STATE_IMPORTANT_FOREGROUND,     // ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE_LOCATION
         STATE_IMPORTANT_FOREGROUND,     // ActivityManager.PROCESS_STATE_BOUND_TOP
         STATE_IMPORTANT_FOREGROUND,     // ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE
         STATE_IMPORTANT_FOREGROUND,     // ActivityManager.PROCESS_STATE_BOUND_FOREGROUND_SERVICE
@@ -1342,7 +1341,7 @@ public final class ProcessState {
         return sb.toString();
     }
 
-    public void writeToProto(ProtoOutputStream proto, long fieldId,
+    public void dumpDebug(ProtoOutputStream proto, long fieldId,
             String procName, int uid, long now) {
         final long token = proto.start(fieldId);
         proto.write(ProcessStatsProto.PROCESS, procName);

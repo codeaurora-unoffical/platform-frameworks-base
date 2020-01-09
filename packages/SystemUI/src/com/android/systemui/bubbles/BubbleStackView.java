@@ -19,6 +19,8 @@ package com.android.systemui.bubbles;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
+import static com.android.systemui.bubbles.BadgedImageView.DOT_STATE_DEFAULT;
+import static com.android.systemui.bubbles.BadgedImageView.DOT_STATE_SUPPRESSED_FOR_FLYOUT;
 import static com.android.systemui.bubbles.BubbleDebugConfig.DEBUG_BUBBLE_STACK_VIEW;
 import static com.android.systemui.bubbles.BubbleDebugConfig.TAG_BUBBLES;
 import static com.android.systemui.bubbles.BubbleDebugConfig.TAG_WITH_CLASS_NAME;
@@ -45,6 +47,7 @@ import android.service.notification.StatusBarNotification;
 import android.util.Log;
 import android.util.StatsLog;
 import android.view.Choreographer;
+import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -107,6 +110,7 @@ public class BubbleStackView extends FrameLayout {
     /** How long to wait, in milliseconds, before hiding the flyout. */
     @VisibleForTesting
     static final int FLYOUT_HIDE_AFTER = 5000;
+    private BubbleController.BubbleScreenshotListener mBubbleScreenshotListener;
 
     /**
      * Interface to synchronize {@link View} state and the screen.
@@ -160,6 +164,7 @@ public class BubbleStackView extends FrameLayout {
     private ExpandedAnimationController mExpandedAnimationController;
 
     private FrameLayout mExpandedViewContainer;
+    @Nullable private BubbleMenuView mBubbleMenuView;
 
     private BubbleFlyoutView mFlyout;
     /** Runnable that fades out the flyout and then sets it to GONE. */
@@ -168,7 +173,7 @@ public class BubbleStackView extends FrameLayout {
      * Callback to run after the flyout hides. Also called if a new flyout is shown before the
      * previous one animates out.
      */
-    private Runnable mFlyoutOnHide;
+    private Runnable mAfterFlyoutHidden;
 
     /** Layout change listener that moves the stack to the nearest valid position on rotation. */
     private OnLayoutChangeListener mOrientationChangedListener;
@@ -180,7 +185,9 @@ public class BubbleStackView extends FrameLayout {
      */
     private float mVerticalPosPercentBeforeRotation = -1;
 
+    private int mMaxBubbles;
     private int mBubbleSize;
+    private int mBubbleElevation;
     private int mBubblePaddingTop;
     private int mBubbleTouchPadding;
     private int mExpandedViewPadding;
@@ -189,6 +196,7 @@ public class BubbleStackView extends FrameLayout {
     private int mPointerHeight;
     private int mStatusBarHeight;
     private int mImeOffset;
+    private int mBubbleMenuOffset = 252;
     private BubbleIconFactory mBubbleIconFactory;
     private Bubble mExpandedBubble;
     private boolean mIsExpanded;
@@ -325,7 +333,9 @@ public class BubbleStackView extends FrameLayout {
         mInflater = LayoutInflater.from(context);
 
         Resources res = getResources();
+        mMaxBubbles = res.getInteger(R.integer.bubbles_max_rendered);
         mBubbleSize = res.getDimensionPixelSize(R.dimen.individual_bubble_size);
+        mBubbleElevation = res.getDimensionPixelSize(R.dimen.bubble_elevation);
         mBubblePaddingTop = res.getDimensionPixelSize(R.dimen.bubble_padding_top);
         mBubbleTouchPadding = res.getDimensionPixelSize(R.dimen.bubble_touch_padding);
         mExpandedAnimateXDistance =
@@ -340,7 +350,8 @@ public class BubbleStackView extends FrameLayout {
 
         mDisplaySize = new Point();
         WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        wm.getDefaultDisplay().getSize(mDisplaySize);
+        // We use the real size & subtract screen decorations / window insets ourselves when needed
+        wm.getDefaultDisplay().getRealSize(mDisplaySize);
 
         mVibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
 
@@ -417,7 +428,35 @@ public class BubbleStackView extends FrameLayout {
 
         mOrientationChangedListener =
                 (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
-                    mExpandedAnimationController.updateOrientation(mOrientation);
+                    mExpandedAnimationController.updateOrientation(mOrientation, mDisplaySize);
+                    mStackAnimationController.updateOrientation(mOrientation);
+
+                    // Reposition & adjust the height for new orientation
+                    if (mIsExpanded) {
+                        mExpandedViewContainer.setTranslationY(getExpandedViewY());
+                        mExpandedBubble.getExpandedView().updateView();
+                    }
+
+                    // Need to update the padding around the view
+                    WindowInsets insets = getRootWindowInsets();
+                    int leftPadding = mExpandedViewPadding;
+                    int rightPadding = mExpandedViewPadding;
+                    if (insets != null) {
+                        // Can't have the expanded view overlaying notches
+                        int cutoutLeft = 0;
+                        int cutoutRight = 0;
+                        DisplayCutout cutout = insets.getDisplayCutout();
+                        if (cutout != null) {
+                            cutoutLeft = cutout.getSafeInsetLeft();
+                            cutoutRight = cutout.getSafeInsetRight();
+                        }
+                        // Or overlaying nav or status bar
+                        leftPadding += Math.max(cutoutLeft, insets.getStableInsetLeft());
+                        rightPadding += Math.max(cutoutRight, insets.getStableInsetRight());
+                    }
+                    mExpandedViewContainer.setPadding(leftPadding, mExpandedViewPadding,
+                            rightPadding, mExpandedViewPadding);
+
                     if (mIsExpanded) {
                         // Re-draw bubble row and pointer for new orientation.
                         mExpandedAnimationController.expandFromStack(() -> {
@@ -456,6 +495,9 @@ public class BubbleStackView extends FrameLayout {
             mDesaturateAndDarkenPaint.setColorFilter(new ColorMatrixColorFilter(animatedMatrix));
             mDesaturateAndDarkenTargetView.setLayerPaint(mDesaturateAndDarkenPaint);
         });
+
+        mInflater.inflate(R.layout.bubble_menu_view, this);
+        mBubbleMenuView = findViewById(R.id.bubble_menu_container);
     }
 
     private void setUpFlyout() {
@@ -487,6 +529,11 @@ public class BubbleStackView extends FrameLayout {
     /** Respond to the phone being rotated by repositioning the stack and hiding any flyouts. */
     public void onOrientationChanged(int orientation) {
         mOrientation = orientation;
+
+        // Display size is based on the rotation device was in when requested, we should update it
+        // We use the real size & subtract screen decorations / window insets ourselves when needed
+        WindowManager wm = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
+        wm.getDefaultDisplay().getRealSize(mDisplaySize);
 
         // Some resources change depending on orientation
         Resources res = getContext().getResources();
@@ -590,7 +637,7 @@ public class BubbleStackView extends FrameLayout {
         }
         Bubble topBubble = mBubbleData.getBubbles().get(0);
         String appName = topBubble.getAppName();
-        Notification notification = topBubble.getEntry().notification.getNotification();
+        Notification notification = topBubble.getEntry().getSbn().getNotification();
         CharSequence titleCharSeq = notification.extras.getCharSequence(Notification.EXTRA_TITLE);
         String titleStr = getResources().getString(R.string.stream_notification);
         if (titleCharSeq != null) {
@@ -635,22 +682,17 @@ public class BubbleStackView extends FrameLayout {
     }
 
     /**
-     * Updates the visibility of the 'dot' indicating an update on the bubble.
-     *
-     * @param key the {@link NotificationEntry#key} associated with the bubble.
-     */
-    public void updateDotVisibility(String key) {
-        Bubble b = mBubbleData.getBubbleWithKey(key);
-        if (b != null) {
-            b.updateDotVisibility();
-        }
-    }
-
-    /**
      * Sets the listener to notify when the bubble stack is expanded.
      */
     public void setExpandListener(BubbleController.BubbleExpandListener listener) {
         mExpandListener = listener;
+    }
+
+    /**
+     * Sets the screenshot listener.
+     */
+    public void setBubbleScreenshotListener(BubbleController.BubbleScreenshotListener listener) {
+        mBubbleScreenshotListener = listener;
     }
 
     /**
@@ -668,9 +710,9 @@ public class BubbleStackView extends FrameLayout {
     }
 
     /**
-     * The {@link BubbleView} that is expanded, null if one does not exist.
+     * The {@link BadgedImageView} that is expanded, null if one does not exist.
      */
-    BubbleView getExpandedBubbleView() {
+    BadgedImageView getExpandedBubbleView() {
         return mExpandedBubble != null ? mExpandedBubble.getIconView() : null;
     }
 
@@ -692,7 +734,7 @@ public class BubbleStackView extends FrameLayout {
         Bubble bubbleToExpand = mBubbleData.getBubbleWithKey(key);
         if (bubbleToExpand != null) {
             setSelectedBubble(bubbleToExpand);
-            bubbleToExpand.setShowInShadeWhenBubble(false);
+            bubbleToExpand.setShowInShade(false);
             setExpanded(true);
         }
     }
@@ -707,8 +749,8 @@ public class BubbleStackView extends FrameLayout {
             mStackOnLeftOrWillBe = mStackAnimationController.isStackOnLeftSide();
         }
 
+        bubble.setBubbleIconFactory(mBubbleIconFactory);
         bubble.inflate(mInflater, this);
-        bubble.getIconView().setBubbleIconFactory(mBubbleIconFactory);
         bubble.getIconView().updateViews();
 
         // Set the dot position to the opposite of the side the stack is resting on, since the stack
@@ -841,11 +883,17 @@ public class BubbleStackView extends FrameLayout {
     public View getTargetView(MotionEvent event) {
         float x = event.getRawX();
         float y = event.getRawY();
+        if (mBubbleMenuView.isShowing()) {
+            if (isIntersecting(mBubbleMenuView.getMenuView(), x, y)) {
+                return mBubbleMenuView;
+            }
+            return null;
+        }
         if (mIsExpanded) {
             if (isIntersecting(mBubbleContainer, x, y)) {
                 // Could be tapping or dragging a bubble while expanded
                 for (int i = 0; i < mBubbleContainer.getChildCount(); i++) {
-                    BubbleView view = (BubbleView) mBubbleContainer.getChildAt(i);
+                    BadgedImageView view = (BadgedImageView) mBubbleContainer.getChildAt(i);
                     if (isIntersecting(view, x, y)) {
                         return view;
                     }
@@ -989,9 +1037,9 @@ public class BubbleStackView extends FrameLayout {
     }
 
     /** Return the BubbleView at the given index from the bubble container. */
-    public BubbleView getBubbleAt(int i) {
+    public BadgedImageView getBubbleAt(int i) {
         return mBubbleContainer.getChildCount() > i
-                ? (BubbleView) mBubbleContainer.getChildAt(i)
+                ? (BadgedImageView) mBubbleContainer.getChildAt(i)
                 : null;
     }
 
@@ -1045,6 +1093,7 @@ public class BubbleStackView extends FrameLayout {
             return;
         }
 
+        hideBubbleMenu();
         mStackAnimationController.cancelStackPositionAnimations();
         mBubbleContainer.setActiveController(mStackAnimationController);
         hideFlyoutImmediate();
@@ -1343,16 +1392,6 @@ public class BubbleStackView extends FrameLayout {
                         : 0f);
     }
 
-    /** Updates the dot visibility, this is used in response to a zen mode config change. */
-    void updateDots() {
-        int bubbsCount = mBubbleContainer.getChildCount();
-        for (int i = 0; i < bubbsCount; i++) {
-            BubbleView bv = (BubbleView) mBubbleContainer.getChildAt(i);
-            // If nothing changed the animation won't happen
-            bv.updateDotVisibility(true /* animate */);
-        }
-    }
-
     /**
      * Calculates the y position of the expanded view when it is expanded.
      */
@@ -1366,37 +1405,40 @@ public class BubbleStackView extends FrameLayout {
     @VisibleForTesting
     void animateInFlyoutForBubble(Bubble bubble) {
         final CharSequence updateMessage = bubble.getUpdateMessage(getContext());
-        if (!bubble.showFlyoutForBubble()) {
-            // In case flyout was suppressed for this update, reset now.
-            bubble.setSuppressFlyout(false);
-            return;
-        }
+        final BadgedImageView bubbleView = bubble.getIconView();
         if (updateMessage == null
+                || !bubble.showFlyout()
                 || isExpanded()
                 || mIsExpansionAnimating
                 || mIsGestureInProgress
                 || mBubbleToExpandAfterFlyoutCollapse != null
-                || bubble.getIconView() == null) {
+                || bubbleView == null) {
+            if (bubbleView != null) {
+                bubbleView.setDotState(DOT_STATE_DEFAULT);
+            }
             // Skip the message if none exists, we're expanded or animating expansion, or we're
             // about to expand a bubble from the previous tapped flyout, or if bubble view is null.
             return;
         }
+
         mFlyoutDragDeltaX = 0f;
         clearFlyoutOnHide();
-        mFlyoutOnHide = () -> {
-            resetDot(bubble);
-            if (mBubbleToExpandAfterFlyoutCollapse == null) {
-                return;
+        mAfterFlyoutHidden = () -> {
+            // Null it out to ensure it runs once.
+            mAfterFlyoutHidden = null;
+
+            if (mBubbleToExpandAfterFlyoutCollapse != null) {
+                // User tapped on the flyout and we should expand
+                mBubbleData.setSelectedBubble(mBubbleToExpandAfterFlyoutCollapse);
+                mBubbleData.setExpanded(true);
+                mBubbleToExpandAfterFlyoutCollapse = null;
             }
-            mBubbleData.setSelectedBubble(mBubbleToExpandAfterFlyoutCollapse);
-            mBubbleData.setExpanded(true);
-            mBubbleToExpandAfterFlyoutCollapse = null;
+            bubbleView.setDotState(DOT_STATE_DEFAULT);
         };
         mFlyout.setVisibility(INVISIBLE);
 
-        // Temporarily suppress the dot while the flyout is visible.
-        bubble.getIconView().setSuppressDot(
-                true /* suppressDot */, false /* animate */);
+        // Don't show the dot when we're animating the flyout
+        bubbleView.setDotState(DOT_STATE_SUPPRESSED_FOR_FLYOUT);
 
         // Start flyout expansion. Post in case layout isn't complete and getWidth returns 0.
         post(() -> {
@@ -1420,33 +1462,16 @@ public class BubbleStackView extends FrameLayout {
             mFlyout.setupFlyoutStartingAsDot(
                     updateMessage, mStackAnimationController.getStackPosition(), getWidth(),
                     mStackAnimationController.isStackOnLeftSide(),
-                    bubble.getIconView().getBadgeColor() /* dotColor */,
+                    bubble.getIconView().getDotColor() /* dotColor */,
                     expandFlyoutAfterDelay /* onLayoutComplete */,
-                    mFlyoutOnHide,
-                    bubble.getIconView().getDotCenter());
+                    mAfterFlyoutHidden,
+                    bubble.getIconView().getDotCenter(),
+                    !bubble.showDot());
             mFlyout.bringToFront();
         });
         mFlyout.removeCallbacks(mHideFlyout);
         mFlyout.postDelayed(mHideFlyout, FLYOUT_HIDE_AFTER);
         logBubbleEvent(bubble, StatsLog.BUBBLE_UICHANGED__ACTION__FLYOUT);
-    }
-
-    private void resetDot(Bubble bubble) {
-        final boolean suppressDot = !bubble.showBubbleDot();
-        // If we're going to suppress the dot, make it visible first so it'll
-        // visibly animate away.
-
-        if (suppressDot) {
-            bubble.getIconView().setSuppressDot(
-                    false /* suppressDot */, false /* animate */);
-        }
-        // Reset dot suppression. If we're not suppressing due to DND, then
-        // stop suppressing it with no animation (since the flyout has
-        // transformed into the dot). If we are suppressing due to DND, animate
-        // it away.
-        bubble.getIconView().setSuppressDot(
-                suppressDot /* suppressDot */,
-                suppressDot /* animate */);
     }
 
     /** Hide the flyout immediately and cancel any pending hide runnables. */
@@ -1459,15 +1484,20 @@ public class BubbleStackView extends FrameLayout {
 
     private void clearFlyoutOnHide() {
         mFlyout.removeCallbacks(mAnimateInFlyout);
-        if (mFlyoutOnHide == null) {
+        if (mAfterFlyoutHidden == null) {
             return;
         }
-        mFlyoutOnHide.run();
-        mFlyoutOnHide = null;
+        mAfterFlyoutHidden.run();
+        mAfterFlyoutHidden = null;
     }
 
     @Override
     public void getBoundsOnScreen(Rect outRect) {
+        // If the bubble menu is open, the entire screen should capture touch events.
+        if (mBubbleMenuView.isShowing()) {
+            outRect.set(0, 0, getWidth(), getHeight());
+            return;
+        }
         if (!mIsExpanded) {
             if (mBubbleContainer.getChildCount() > 0) {
                 mBubbleContainer.getChildAt(0).getBoundsOnScreen(outRect);
@@ -1560,10 +1590,8 @@ public class BubbleStackView extends FrameLayout {
     private void updateBubbleZOrdersAndDotPosition(boolean animate) {
         int bubbleCount = mBubbleContainer.getChildCount();
         for (int i = 0; i < bubbleCount; i++) {
-            BubbleView bv = (BubbleView) mBubbleContainer.getChildAt(i);
-            bv.updateDotVisibility(true /* animate */);
-            bv.setZ((BubbleController.MAX_BUBBLES
-                    * getResources().getDimensionPixelSize(R.dimen.bubble_elevation)) - i);
+            BadgedImageView bv = (BadgedImageView) mBubbleContainer.getChildAt(i);
+            bv.setZ((mMaxBubbles * mBubbleElevation) - i);
             // If the dot is on the left, and so is the stack, we need to change the dot position.
             if (bv.getDotPositionOnLeft() == mStackOnLeftOrWillBe) {
                 bv.setDotPosition(!mStackOnLeftOrWillBe, animate);
@@ -1584,11 +1612,9 @@ public class BubbleStackView extends FrameLayout {
         int index = getBubbleIndex(expandedBubble);
         float bubbleLeftFromScreenLeft = mExpandedAnimationController.getBubbleLeft(index);
         float halfBubble = mBubbleSize / 2f;
-
-        // Bubbles live in expanded view container (x includes expanded view padding).
-        // Pointer lives in expanded view, which has padding (x does not include padding).
-        // Remove padding when deriving pointer location from bubbles.
-        float bubbleCenter = bubbleLeftFromScreenLeft + halfBubble - mExpandedViewPadding;
+        float bubbleCenter = bubbleLeftFromScreenLeft + halfBubble;
+        // Padding might be adjusted for insets, so get it directly from the view
+        bubbleCenter -= mExpandedViewContainer.getPaddingLeft();
 
         expandedBubble.getExpandedView().setPointerPosition(bubbleCenter);
     }
@@ -1645,7 +1671,7 @@ public class BubbleStackView extends FrameLayout {
      */
     private void logBubbleEvent(@Nullable Bubble bubble, int action) {
         if (bubble == null || bubble.getEntry() == null
-                || bubble.getEntry().notification == null) {
+                || bubble.getEntry().getSbn() == null) {
             StatsLog.write(StatsLog.BUBBLE_UI_CHANGED,
                     null /* package name */,
                     null /* notification channel */,
@@ -1659,7 +1685,7 @@ public class BubbleStackView extends FrameLayout {
                     false /* on-going bubble */,
                     false /* isAppForeground (unused) */);
         } else {
-            StatusBarNotification notification = bubble.getEntry().notification;
+            StatusBarNotification notification = bubble.getEntry().getSbn();
             StatsLog.write(StatsLog.BUBBLE_UI_CHANGED,
                     notification.getPackageName(),
                     notification.getNotification().getChannelId(),
@@ -1669,7 +1695,7 @@ public class BubbleStackView extends FrameLayout {
                     action,
                     getNormalizedXPosition(),
                     getNormalizedYPosition(),
-                    bubble.showInShadeWhenBubble(),
+                    bubble.showInShade(),
                     bubble.isOngoing(),
                     false /* isAppForeground (unused) */);
         }
@@ -1691,12 +1717,58 @@ public class BubbleStackView extends FrameLayout {
         List<Bubble> bubbles = new ArrayList<>();
         for (int i = 0; i < mBubbleContainer.getChildCount(); i++) {
             View child = mBubbleContainer.getChildAt(i);
-            if (child instanceof BubbleView) {
-                String key = ((BubbleView) child).getKey();
+            if (child instanceof BadgedImageView) {
+                String key = ((BadgedImageView) child).getKey();
                 Bubble bubble = mBubbleData.getBubbleWithKey(key);
                 bubbles.add(bubble);
             }
         }
         return bubbles;
+    }
+
+    /**
+     * Show the bubble menu, positioned relative to the stack.
+     */
+    public void showBubbleMenu() {
+        PointF currentPos = mStackAnimationController.getStackPosition();
+        mBubbleMenuView.setVisibility(View.INVISIBLE);
+        post(() -> {
+            float yPos = currentPos.y;
+            float xPos = currentPos.x;
+            if (mStackAnimationController.isStackOnLeftSide()) {
+                xPos += mBubbleSize;
+            } else {
+                xPos -= mBubbleMenuView.getMenuView().getWidth();
+            }
+
+            mBubbleMenuView.show(xPos, yPos);
+        });
+    }
+
+    /**
+     * Hide the bubble menu.
+     */
+    public void hideBubbleMenu() {
+        mBubbleMenuView.hide();
+    }
+
+    /**
+     * Determines whether the bubble menu is currently showing.
+     */
+    public boolean isShowingBubbleMenu() {
+        return mBubbleMenuView.isShowing();
+    }
+
+    /**
+     * Take a screenshot and send it to the specified bubble.
+     */
+    public void sendScreenshotToBubble(Bubble bubble) {
+        hideBubbleMenu();
+        // delay allows the bubble menu to disappear before the screenshot
+        // done here because we already have a Handler to delay with.
+        // TODO: Hide bubble + menu UI from screenshots entirely instead of just delaying.
+        postDelayed(() -> {
+            mBubbleScreenshotListener.onBubbleScreenshot(bubble);
+        }, BubbleMenuView.SCREENSHOT_DELAY);
     }
 }

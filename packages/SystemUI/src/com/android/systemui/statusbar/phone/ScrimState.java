@@ -19,6 +19,7 @@ package com.android.systemui.statusbar.phone;
 import android.graphics.Color;
 import android.os.Trace;
 
+import com.android.systemui.dock.DockManager;
 import com.android.systemui.statusbar.ScrimView;
 import com.android.systemui.statusbar.notification.stack.StackStateAnimator;
 
@@ -30,12 +31,35 @@ public enum ScrimState {
     /**
      * Initial state.
      */
-    UNINITIALIZED(-1),
+    UNINITIALIZED,
+
+    /**
+     * When turned off by sensors (prox, presence.)
+     */
+    OFF {
+        @Override
+        public void prepare(ScrimState previousState) {
+            mFrontTint = Color.BLACK;
+            mBehindTint = Color.BLACK;
+            mBubbleTint = previousState.mBubbleTint;
+
+            mFrontAlpha = 1f;
+            mBehindAlpha = 1f;
+            mBubbleAlpha = previousState.mBubbleAlpha;
+
+            mAnimationDuration = ScrimController.ANIMATION_DURATION_LONG;
+        }
+
+        @Override
+        public boolean isLowPowerState() {
+            return true;
+        }
+    },
 
     /**
      * On the lock screen.
      */
-    KEYGUARD(0) {
+    KEYGUARD {
         @Override
         public void prepare(ScrimState previousState) {
             mBlankScreen = false;
@@ -65,7 +89,7 @@ public enum ScrimState {
     /**
      * Showing password challenge on the keyguard.
      */
-    BOUNCER(1) {
+    BOUNCER {
         @Override
         public void prepare(ScrimState previousState) {
             mBehindAlpha = ScrimController.GRADIENT_SCRIM_ALPHA_BUSY;
@@ -77,7 +101,7 @@ public enum ScrimState {
     /**
      * Showing password challenge on top of a FLAG_SHOW_WHEN_LOCKED activity.
      */
-    BOUNCER_SCRIMMED(2) {
+    BOUNCER_SCRIMMED {
         @Override
         public void prepare(ScrimState previousState) {
             mBehindAlpha = 0;
@@ -89,7 +113,7 @@ public enum ScrimState {
     /**
      * Changing screen brightness from quick settings.
      */
-    BRIGHTNESS_MIRROR(3) {
+    BRIGHTNESS_MIRROR {
         @Override
         public void prepare(ScrimState previousState) {
             mBehindAlpha = 0;
@@ -101,14 +125,15 @@ public enum ScrimState {
     /**
      * Always on display or screen off.
      */
-    AOD(4) {
+    AOD {
         @Override
         public void prepare(ScrimState previousState) {
             final boolean alwaysOnEnabled = mDozeParameters.getAlwaysOn();
+            final boolean isDocked = mDockManager.isDocked();
             mBlankScreen = mDisplayRequiresBlanking;
 
             mFrontTint = Color.BLACK;
-            mFrontAlpha = alwaysOnEnabled ? mAodFrontScrimAlpha : 1f;
+            mFrontAlpha = (alwaysOnEnabled || isDocked) ? mAodFrontScrimAlpha : 1f;
 
             mBehindTint = Color.BLACK;
             mBehindAlpha = ScrimController.TRANSPARENT;
@@ -136,10 +161,10 @@ public enum ScrimState {
     /**
      * When phone wakes up because you received a notification.
      */
-    PULSING(5) {
+    PULSING {
         @Override
         public void prepare(ScrimState previousState) {
-            mFrontAlpha = 0f;
+            mFrontAlpha = mAodFrontScrimAlpha;
             mBubbleAlpha = 0f;
             mBehindTint = Color.BLACK;
             mFrontTint = Color.BLACK;
@@ -164,7 +189,7 @@ public enum ScrimState {
     /**
      * Unlocked on top of an app (launcher or any other activity.)
      */
-    UNLOCKED(6) {
+    UNLOCKED {
         @Override
         public void prepare(ScrimState previousState) {
             // State that UI will sync to.
@@ -201,7 +226,7 @@ public enum ScrimState {
     /**
      * Unlocked with a bubble expanded.
      */
-    BUBBLE_EXPANDED(7) {
+    BUBBLE_EXPANDED {
         @Override
         public void prepare(ScrimState previousState) {
             mFrontTint = Color.TRANSPARENT;
@@ -235,35 +260,28 @@ public enum ScrimState {
     ScrimView mScrimForBubble;
 
     DozeParameters mDozeParameters;
+    DockManager mDockManager;
     boolean mDisplayRequiresBlanking;
     boolean mWallpaperSupportsAmbientMode;
-    int mIndex;
     boolean mHasBackdrop;
     boolean mLaunchingAffordanceWithPreview;
     boolean mWakeLockScreenSensorActive;
     boolean mKeyguardFadingAway;
     long mKeyguardFadingAwayDuration;
 
-    ScrimState(int index) {
-        mIndex = index;
-    }
-
     public void init(ScrimView scrimInFront, ScrimView scrimBehind, ScrimView scrimForBubble,
-            DozeParameters dozeParameters) {
+            DozeParameters dozeParameters, DockManager dockManager) {
         mScrimInFront = scrimInFront;
         mScrimBehind = scrimBehind;
         mScrimForBubble = scrimForBubble;
 
         mDozeParameters = dozeParameters;
+        mDockManager = dockManager;
         mDisplayRequiresBlanking = dozeParameters.getDisplayNeedsBlanking();
     }
 
     /** Prepare state for transition. */
     public void prepare(ScrimState previousState) {
-    }
-
-    public int getIndex() {
-        return mIndex;
     }
 
     public float getFrontAlpha() {

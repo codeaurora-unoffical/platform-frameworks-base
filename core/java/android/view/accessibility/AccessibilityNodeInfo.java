@@ -39,8 +39,10 @@ import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.TextUtils;
 import android.text.style.AccessibilityClickableSpan;
+import android.text.style.AccessibilityReplacementSpan;
 import android.text.style.AccessibilityURLSpan;
 import android.text.style.ClickableSpan;
+import android.text.style.ReplacementSpan;
 import android.text.style.URLSpan;
 import android.util.ArrayMap;
 import android.util.ArraySet;
@@ -527,6 +529,20 @@ public class AccessibilityNodeInfo implements Parcelable {
     public static final String ACTION_ARGUMENT_ACCESSIBLE_CLICKABLE_SPAN =
             "android.view.accessibility.action.ACTION_ARGUMENT_ACCESSIBLE_CLICKABLE_SPAN";
 
+    /**
+     * Argument to represent the duration in milliseconds to press and hold a node.
+     * <p>
+     * <strong>Type:</strong> int<br>
+     * <strong>Actions:</strong>
+     * <ul>
+     *     <li>{@link AccessibilityAction#ACTION_PRESS_AND_HOLD}</li>
+     * </ul>
+     *
+     * @see AccessibilityAction#ACTION_PRESS_AND_HOLD
+     */
+    public static final String ACTION_ARGUMENT_PRESS_HOLD_DURATION_MILLIS_INT =
+            "android.view.accessibility.action.ARGUMENT_PRESS_HOLD_DURATION_MILLIS_INT";
+
     // Focus types
 
     /**
@@ -773,15 +789,38 @@ public class AccessibilityNodeInfo implements Parcelable {
     private TouchDelegateInfo mTouchDelegateInfo;
 
     /**
-     * Hide constructor from clients.
+     * Creates a new {@link AccessibilityNodeInfo}.
      */
-    private AccessibilityNodeInfo() {
-        /* do nothing */
+    public AccessibilityNodeInfo() {
     }
 
-    /** @hide */
-    AccessibilityNodeInfo(AccessibilityNodeInfo info) {
-        init(info);
+    /**
+     * Creates a new {@link AccessibilityNodeInfo} with the given <code>source</code>.
+     *
+     * @param source The source view.
+     */
+    public AccessibilityNodeInfo(@NonNull View source) {
+        setSource(source);
+    }
+
+    /**
+     * Creates a new {@link AccessibilityNodeInfo} with the given <code>source</code>.
+     *
+     * @param root The root of the virtual subtree.
+     * @param virtualDescendantId The id of the virtual descendant.
+     */
+    public AccessibilityNodeInfo(@NonNull View root, int virtualDescendantId) {
+        setSource(root, virtualDescendantId);
+    }
+
+    /**
+     * Copy constructor. Creates a new {@link AccessibilityNodeInfo}, and this new instance is
+     * initialized from the given <code>info</code>.
+     *
+     * @param info The other info.
+     */
+    public AccessibilityNodeInfo(@NonNull AccessibilityNodeInfo info) {
+        init(info, false /* usePoolingInfo */);
     }
 
     /**
@@ -909,7 +948,7 @@ public class AccessibilityNodeInfo implements Parcelable {
         // when it is obtained. Enforce sealing again before we init to fail when a node has been
         // recycled during a refresh to catch such errors earlier.
         enforceSealed();
-        init(refreshedInfo);
+        init(refreshedInfo, true /* usePoolingInfo */);
         refreshedInfo.recycle();
         return true;
     }
@@ -2641,34 +2680,83 @@ public class AccessibilityNodeInfo implements Parcelable {
     public void setText(CharSequence text) {
         enforceNotSealed();
         mOriginalText = text;
-        // Replace any ClickableSpans in mText with placeholders
         if (text instanceof Spanned) {
-            ClickableSpan[] spans =
-                    ((Spanned) text).getSpans(0, text.length(), ClickableSpan.class);
-            if (spans.length > 0) {
-                Spannable spannable = new SpannableStringBuilder(text);
-                for (int i = 0; i < spans.length; i++) {
-                    ClickableSpan span = spans[i];
-                    if ((span instanceof AccessibilityClickableSpan)
-                            || (span instanceof AccessibilityURLSpan)) {
-                        // We've already done enough
-                        break;
-                    }
-                    int spanToReplaceStart = spannable.getSpanStart(span);
-                    int spanToReplaceEnd = spannable.getSpanEnd(span);
-                    int spanToReplaceFlags = spannable.getSpanFlags(span);
-                    spannable.removeSpan(span);
-                    ClickableSpan replacementSpan = (span instanceof URLSpan)
-                            ? new AccessibilityURLSpan((URLSpan) span)
-                            : new AccessibilityClickableSpan(span.getId());
-                    spannable.setSpan(replacementSpan, spanToReplaceStart, spanToReplaceEnd,
-                            spanToReplaceFlags);
-                }
-                mText = spannable;
-                return;
-            }
+            CharSequence tmpText = text;
+            tmpText = replaceClickableSpan(tmpText);
+            tmpText = replaceReplacementSpan(tmpText);
+            mText = tmpText;
+            return;
         }
         mText = (text == null) ? null : text.subSequence(0, text.length());
+    }
+
+    /**
+     * Replaces any ClickableSpans in mText with placeholders.
+     *
+     * @param text The text.
+     *
+     * @return The spannable with ClickableSpan replacement.
+     */
+    private CharSequence replaceClickableSpan(CharSequence text) {
+        ClickableSpan[] clickableSpans =
+                ((Spanned) text).getSpans(0, text.length(), ClickableSpan.class);
+        Spannable spannable = new SpannableStringBuilder(text);
+        if (clickableSpans.length == 0) {
+            return text;
+        }
+        for (int i = 0; i < clickableSpans.length; i++) {
+            ClickableSpan span = clickableSpans[i];
+            if ((span instanceof AccessibilityClickableSpan)
+                    || (span instanceof AccessibilityURLSpan)) {
+                // We've already done enough
+                break;
+            }
+            int spanToReplaceStart = spannable.getSpanStart(span);
+            int spanToReplaceEnd = spannable.getSpanEnd(span);
+            int spanToReplaceFlags = spannable.getSpanFlags(span);
+            spannable.removeSpan(span);
+            ClickableSpan replacementSpan = (span instanceof URLSpan)
+                    ? new AccessibilityURLSpan((URLSpan) span)
+                    : new AccessibilityClickableSpan(span.getId());
+            spannable.setSpan(replacementSpan, spanToReplaceStart, spanToReplaceEnd,
+                    spanToReplaceFlags);
+        }
+        return spannable;
+    }
+
+    /**
+     * Replace any ImageSpans in mText with its content description.
+     *
+     * @param text The text.
+     *
+     * @return The spannable with ReplacementSpan replacement.
+     */
+    private CharSequence replaceReplacementSpan(CharSequence text) {
+        ReplacementSpan[] replacementSpans =
+                ((Spanned) text).getSpans(0, text.length(), ReplacementSpan.class);
+        SpannableStringBuilder spannable = new SpannableStringBuilder(text);
+        if (replacementSpans.length == 0) {
+            return text;
+        }
+        for (int i = 0; i < replacementSpans.length; i++) {
+            ReplacementSpan span = replacementSpans[i];
+            CharSequence replacementText = span.getContentDescription();
+            if (span instanceof AccessibilityReplacementSpan) {
+                // We've already done enough
+                break;
+            }
+            if (replacementText == null) {
+                continue;
+            }
+            int spanToReplaceStart = spannable.getSpanStart(span);
+            int spanToReplaceEnd = spannable.getSpanEnd(span);
+            int spanToReplaceFlags = spannable.getSpanFlags(span);
+            spannable.removeSpan(span);
+            ReplacementSpan replacementSpan = new AccessibilityReplacementSpan(replacementText);
+            spannable.setSpan(replacementSpan, spanToReplaceStart, spanToReplaceEnd,
+                    spanToReplaceFlags);
+        }
+        return spannable;
     }
 
     /**
@@ -3248,6 +3336,9 @@ public class AccessibilityNodeInfo implements Parcelable {
      * Returns a cached instance if such is available otherwise a new one
      * and sets the source.
      *
+     * <p>In most situations object pooling is not beneficial. Create a new instance using the
+     * constructor {@link #AccessibilityNodeInfo(View)} instead.
+     *
      * @param source The source view.
      * @return An instance.
      *
@@ -3262,6 +3353,9 @@ public class AccessibilityNodeInfo implements Parcelable {
     /**
      * Returns a cached instance if such is available otherwise a new one
      * and sets the source.
+     *
+     * <p>In most situations object pooling is not beneficial. Create a new instance using the
+     * constructor {@link #AccessibilityNodeInfo(View, int)} instead.
      *
      * @param root The root of the virtual subtree.
      * @param virtualDescendantId The id of the virtual descendant.
@@ -3278,6 +3372,9 @@ public class AccessibilityNodeInfo implements Parcelable {
     /**
      * Returns a cached instance if such is available otherwise a new one.
      *
+     * <p>In most situations object pooling is not beneficial. Create a new instance using the
+     * constructor {@link #AccessibilityNodeInfo()} instead.
+     *
      * @return An instance.
      */
     public static AccessibilityNodeInfo obtain() {
@@ -3293,12 +3390,15 @@ public class AccessibilityNodeInfo implements Parcelable {
      * create. The returned instance is initialized from the given
      * <code>info</code>.
      *
+     * <p>In most situations object pooling is not beneficial. Create a new instance using the
+     * constructor {@link #AccessibilityNodeInfo(AccessibilityNodeInfo)} instead.
+     *
      * @param info The other info.
      * @return An instance.
      */
     public static AccessibilityNodeInfo obtain(AccessibilityNodeInfo info) {
         AccessibilityNodeInfo infoClone = AccessibilityNodeInfo.obtain();
-        infoClone.init(info);
+        infoClone.init(info, true /* usePoolingInfo */);
         return infoClone;
     }
 
@@ -3306,6 +3406,8 @@ public class AccessibilityNodeInfo implements Parcelable {
      * Return an instance back to be reused.
      * <p>
      * <strong>Note:</strong> You must not touch the object after calling this function.
+     *
+     * <p>In most situations object pooling is not beneficial, and recycling is not necessary.
      *
      * @throws IllegalStateException If the info is already recycled.
      */
@@ -3519,8 +3621,7 @@ public class AccessibilityNodeInfo implements Parcelable {
                 for (int i = 0; i < actionCount; i++) {
                     AccessibilityAction action = mActions.get(i);
                     if (!isDefaultStandardAction(action)) {
-                        parcel.writeInt(action.getId());
-                        parcel.writeCharSequence(action.getLabel());
+                        action.writeToParcel(parcel, flags);
                     }
                 }
             } else {
@@ -3597,8 +3698,9 @@ public class AccessibilityNodeInfo implements Parcelable {
      * Initializes this instance from another one.
      *
      * @param other The other instance.
+     * @param usePoolingInfos whether using pooled object internally or not
      */
-    private void init(AccessibilityNodeInfo other) {
+    private void init(AccessibilityNodeInfo other, boolean usePoolingInfos) {
         mSealed = other.mSealed;
         mSourceNodeId = other.mSourceNodeId;
         mParentNodeId = other.mParentNodeId;
@@ -3657,6 +3759,18 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         mExtras = other.mExtras != null ? new Bundle(other.mExtras) : null;
 
+        if (usePoolingInfos) {
+            initPoolingInfos(other);
+        } else {
+            initCopyInfos(other);
+        }
+
+        final TouchDelegateInfo otherInfo = other.mTouchDelegateInfo;
+        mTouchDelegateInfo = (otherInfo != null)
+                ? new TouchDelegateInfo(otherInfo.mTargetMap, true) : null;
+    }
+
+    private void initPoolingInfos(AccessibilityNodeInfo other) {
         if (mRangeInfo != null) mRangeInfo.recycle();
         mRangeInfo = (other.mRangeInfo != null)
                 ? RangeInfo.obtain(other.mRangeInfo) : null;
@@ -3666,10 +3780,20 @@ public class AccessibilityNodeInfo implements Parcelable {
         if (mCollectionItemInfo != null) mCollectionItemInfo.recycle();
         mCollectionItemInfo =  (other.mCollectionItemInfo != null)
                 ? CollectionItemInfo.obtain(other.mCollectionItemInfo) : null;
+    }
 
-        final TouchDelegateInfo otherInfo = other.mTouchDelegateInfo;
-        mTouchDelegateInfo = (otherInfo != null)
-                ? new TouchDelegateInfo(otherInfo.mTargetMap, true) : null;
+    private void initCopyInfos(AccessibilityNodeInfo other) {
+        RangeInfo ri = other.mRangeInfo;
+        mRangeInfo = (ri == null) ? null
+                : new RangeInfo(ri.mType, ri.mMin, ri.mMax, ri.mCurrent);
+        CollectionInfo ci = other.mCollectionInfo;
+        mCollectionInfo = (ci == null) ? null
+                : new CollectionInfo(ci.mRowCount, ci.mColumnCount,
+                                     ci.mHierarchical, ci.mSelectionMode);
+        CollectionItemInfo cii = other.mCollectionItemInfo;
+        mCollectionItemInfo = (cii == null)  ? null
+                : new CollectionItemInfo(cii.mRowIndex, cii.mRowSpan, cii.mColumnIndex,
+                                         cii.mColumnSpan, cii.mHeading, cii.mSelected);
     }
 
     /**
@@ -3726,8 +3850,8 @@ public class AccessibilityNodeInfo implements Parcelable {
             addStandardActions(standardActions);
             final int nonStandardActionCount = parcel.readInt();
             for (int i = 0; i < nonStandardActionCount; i++) {
-                final AccessibilityAction action = new AccessibilityAction(
-                        parcel.readInt(), parcel.readCharSequence());
+                final AccessibilityAction action =
+                        AccessibilityAction.CREATOR.createFromParcel(parcel);
                 addActionUnchecked(action);
             }
         }
@@ -3804,7 +3928,7 @@ public class AccessibilityNodeInfo implements Parcelable {
      * Clears the state of this instance.
      */
     private void clear() {
-        init(DEFAULT);
+        init(DEFAULT, true /* usePoolingInfo */);
     }
 
     private static boolean isDefaultStandardAction(AccessibilityAction action) {
@@ -3925,6 +4049,8 @@ public class AccessibilityNodeInfo implements Parcelable {
                 return "ACTION_SHOW_TOOLTIP";
             case R.id.accessibilityActionHideTooltip:
                 return "ACTION_HIDE_TOOLTIP";
+            case R.id.accessibilityActionPressAndHold:
+                return "ACTION_PRESS_AND_HOLD";
             default:
                 return "ACTION_UNKNOWN";
         }
@@ -4126,7 +4252,7 @@ public class AccessibilityNodeInfo implements Parcelable {
      * can discover the set of supported actions.
      * </p>
      */
-    public static final class AccessibilityAction {
+    public static final class AccessibilityAction implements Parcelable {
 
         /** @hide */
         public static final ArraySet<AccessibilityAction> sStandardActions = new ArraySet<>();
@@ -4516,6 +4642,31 @@ public class AccessibilityNodeInfo implements Parcelable {
         public static final AccessibilityAction ACTION_HIDE_TOOLTIP =
                 new AccessibilityAction(R.id.accessibilityActionHideTooltip);
 
+        /**
+         * Action that presses and holds a node.
+         * <p>
+         * This action is for nodes that have distinct behavior that depends on how long a press is
+         * held. Nodes having a single action for long press should use {@link #ACTION_LONG_CLICK}
+         *  instead of this action, and nodes should not expose both actions.
+         * <p>
+         * Use {@link #ACTION_ARGUMENT_PRESS_HOLD_DURATION_MILLIS_INT} to specify how long the
+         * node is pressed. To ensure reasonable behavior, the first value of this argument should
+         * be 0 and the others should greater than 0 and less than 10,000. UIs requested to hold for
+         * times outside of this range should ignore the action.
+         * <p>
+         * The total time the element is held could be specified by an accessibility user up-front,
+         * or may depend on what happens on the UI as the user continues to request the hold.
+         * <p>
+         *   <strong>Note:</strong> The time between dispatching the action and it arriving in the
+         *     UI process is not guaranteed. It is possible on a busy system for the time to expire
+         *     unexpectedly. For the case of holding down a key for a repeating action, a delayed
+         *     arrival should be benign. Please do not use this sort of action in cases where such
+         *     delays will lead to unexpected UI behavior.
+         * <p>
+         */
+        @NonNull public static final AccessibilityAction ACTION_PRESS_AND_HOLD =
+                new AccessibilityAction(R.id.accessibilityActionPressAndHold);
+
         private final int mActionId;
         private final CharSequence mLabel;
 
@@ -4540,10 +4691,6 @@ public class AccessibilityNodeInfo implements Parcelable {
          * @param label The label for the new AccessibilityAction.
          */
         public AccessibilityAction(int actionId, @Nullable CharSequence label) {
-            if ((actionId & ACTION_TYPE_MASK) == 0 && Integer.bitCount(actionId) != 1) {
-                throw new IllegalArgumentException("Invalid standard action id");
-            }
-
             mActionId = actionId;
             mLabel = label;
         }
@@ -4603,6 +4750,38 @@ public class AccessibilityNodeInfo implements Parcelable {
         public String toString() {
             return "AccessibilityAction: " + getActionSymbolicName(mActionId) + " - " + mLabel;
         }
+
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public int describeContents() {
+            return 0;
+        }
+
+        /**
+         * Write data into a parcel.
+         */
+        public void writeToParcel(@NonNull Parcel out, int flags) {
+            out.writeInt(mActionId);
+            out.writeCharSequence(mLabel);
+        }
+
+        public static final @NonNull Parcelable.Creator<AccessibilityAction> CREATOR =
+                new Parcelable.Creator<AccessibilityAction>() {
+                    public AccessibilityAction createFromParcel(Parcel in) {
+                        return new AccessibilityAction(in);
+                    }
+
+                    public AccessibilityAction[] newArray(int size) {
+                        return new AccessibilityAction[size];
+                    }
+                };
+
+        private AccessibilityAction(Parcel in) {
+            mActionId = in.readInt();
+            mLabel = in.readCharSequence();
+        }
     }
 
     /**
@@ -4631,6 +4810,10 @@ public class AccessibilityNodeInfo implements Parcelable {
         /**
          * Obtains a pooled instance that is a clone of another one.
          *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link AccessibilityNodeInfo.RangeInfo#AccessibilityNodeInfo.RangeInfo(int,
+         * float, float, float)} instead.
+         *
          * @param other The instance to clone.
          *
          * @hide
@@ -4641,6 +4824,10 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Obtains a pooled instance.
+         *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link AccessibilityNodeInfo.RangeInfo#AccessibilityNodeInfo.RangeInfo(int,
+         * float, float, float)} instead.
          *
          * @param type The type of the range.
          * @param min The minimum value. Use {@code Float.NEGATIVE_INFINITY} if the range has no
@@ -4672,7 +4859,7 @@ public class AccessibilityNodeInfo implements Parcelable {
          *            maximum.
          * @param current The current value.
          */
-        private RangeInfo(int type, float min, float max, float current) {
+        public RangeInfo(int type, float min, float max, float current) {
             mType = type;
             mMin = min;
             mMax = max;
@@ -4721,6 +4908,8 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Recycles this instance.
+         *
+         * <p>In most situations object pooling is not beneficial, and recycling is not necessary.
          */
         void recycle() {
             clear();
@@ -4771,6 +4960,10 @@ public class AccessibilityNodeInfo implements Parcelable {
         /**
          * Obtains a pooled instance that is a clone of another one.
          *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link
+         * AccessibilityNodeInfo.CollectionInfo#AccessibilityNodeInfo.CollectionInfo} instead.
+         *
          * @param other The instance to clone.
          * @hide
          */
@@ -4781,6 +4974,11 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Obtains a pooled instance.
+         *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link
+         * AccessibilityNodeInfo.CollectionInfo#AccessibilityNodeInfo.CollectionInfo(int, int,
+         * boolean)} instead.
          *
          * @param rowCount The number of rows, or -1 if count is unknown.
          * @param columnCount The number of columns, or -1 if count is unknown.
@@ -4793,6 +4991,11 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Obtains a pooled instance.
+         *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link
+         * AccessibilityNodeInfo.CollectionInfo#AccessibilityNodeInfo.CollectionInfo(int, int,
+         * boolean, int)} instead.
          *
          * @param rowCount The number of rows.
          * @param columnCount The number of columns.
@@ -4824,9 +5027,20 @@ public class AccessibilityNodeInfo implements Parcelable {
          * @param rowCount The number of rows.
          * @param columnCount The number of columns.
          * @param hierarchical Whether the collection is hierarchical.
+         */
+        public CollectionInfo(int rowCount, int columnCount, boolean hierarchical) {
+            this(rowCount, columnCount, hierarchical, SELECTION_MODE_NONE);
+        }
+
+        /**
+         * Creates a new instance.
+         *
+         * @param rowCount The number of rows.
+         * @param columnCount The number of columns.
+         * @param hierarchical Whether the collection is hierarchical.
          * @param selectionMode The collection's selection mode.
          */
-        private CollectionInfo(int rowCount, int columnCount, boolean hierarchical,
+        public CollectionInfo(int rowCount, int columnCount, boolean hierarchical,
                 int selectionMode) {
             mRowCount = rowCount;
             mColumnCount = columnCount;
@@ -4877,6 +5091,8 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Recycles this instance.
+         *
+         * <p>In most situations object pooling is not beneficial, and recycling is not necessary.
          */
         void recycle() {
             clear();
@@ -4913,6 +5129,11 @@ public class AccessibilityNodeInfo implements Parcelable {
         /**
          * Obtains a pooled instance that is a clone of another one.
          *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link
+         * AccessibilityNodeInfo.CollectionItemInfo#AccessibilityNodeInfo.CollectionItemInfo}
+         * instead.
+         *
          * @param other The instance to clone.
          * @hide
          */
@@ -4923,6 +5144,11 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Obtains a pooled instance.
+         *
+         * <p>In most situations object pooling is not beneficial. Create a new instance using the
+         * constructor {@link
+         * AccessibilityNodeInfo.CollectionItemInfo#AccessibilityNodeInfo.CollectionItemInfo(int,
+         * int, int, int, boolean)} instead.
          *
          * @param rowIndex The row index at which the item is located.
          * @param rowSpan The number of rows the item spans.
@@ -4938,6 +5164,11 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Obtains a pooled instance.
+         *
+         * <p>In most situations object pooling is not beneficial. Creates a new instance using the
+         * constructor {@link
+         * AccessibilityNodeInfo.CollectionItemInfo#AccessibilityNodeInfo.CollectionItemInfo(int,
+         * int, int, int, boolean, boolean)} instead.
          *
          * @param rowIndex The row index at which the item is located.
          * @param rowSpan The number of rows the item spans.
@@ -4980,7 +5211,22 @@ public class AccessibilityNodeInfo implements Parcelable {
          * @param columnSpan The number of columns the item spans.
          * @param heading Whether the item is a heading.
          */
-        private CollectionItemInfo(int rowIndex, int rowSpan, int columnIndex, int columnSpan,
+        public CollectionItemInfo(int rowIndex, int rowSpan, int columnIndex, int columnSpan,
+                boolean heading) {
+            this(rowIndex, rowSpan, columnIndex, columnSpan, heading, false);
+        }
+
+        /**
+         * Creates a new instance.
+         *
+         * @param rowIndex The row index at which the item is located.
+         * @param rowSpan The number of rows the item spans.
+         * @param columnIndex The column index at which the item is located.
+         * @param columnSpan The number of columns the item spans.
+         * @param heading Whether the item is a heading.
+         * @param selected Whether the item is selected.
+         */
+        public CollectionItemInfo(int rowIndex, int rowSpan, int columnIndex, int columnSpan,
                 boolean heading, boolean selected) {
             mRowIndex = rowIndex;
             mRowSpan = rowSpan;
@@ -5048,6 +5294,8 @@ public class AccessibilityNodeInfo implements Parcelable {
 
         /**
          * Recycles this instance.
+         *
+         * <p>In most situations object pooling is not beneficial, and recycling is not necessary.
          */
         void recycle() {
             clear();

@@ -32,7 +32,6 @@ import android.app.StatusBarManager.WindowType;
 import android.app.StatusBarManager.WindowVisibleState;
 import android.content.ComponentName;
 import android.content.Context;
-import android.graphics.Rect;
 import android.hardware.biometrics.IBiometricServiceReceiverInternal;
 import android.hardware.display.DisplayManager;
 import android.inputmethodservice.InputMethodService.BackDispositionMode;
@@ -43,13 +42,13 @@ import android.os.Looper;
 import android.os.Message;
 import android.util.Pair;
 import android.util.SparseArray;
-
-import androidx.annotation.VisibleForTesting;
+import android.view.InsetsState.InternalInsetsType;
+import android.view.WindowInsetsController.Appearance;
 
 import com.android.internal.os.SomeArgs;
 import com.android.internal.statusbar.IStatusBar;
 import com.android.internal.statusbar.StatusBarIcon;
-import com.android.systemui.SystemUI;
+import com.android.internal.view.AppearanceRegion;
 import com.android.systemui.statusbar.CommandQueue.Callbacks;
 import com.android.systemui.statusbar.policy.CallbackController;
 
@@ -71,50 +70,55 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
     private static final int OP_SET_ICON    = 1;
     private static final int OP_REMOVE_ICON = 2;
 
-    private static final int MSG_ICON                          = 1 << MSG_SHIFT;
-    private static final int MSG_DISABLE                       = 2 << MSG_SHIFT;
-    private static final int MSG_EXPAND_NOTIFICATIONS          = 3 << MSG_SHIFT;
-    private static final int MSG_COLLAPSE_PANELS               = 4 << MSG_SHIFT;
-    private static final int MSG_EXPAND_SETTINGS               = 5 << MSG_SHIFT;
-    private static final int MSG_SET_SYSTEMUI_VISIBILITY       = 6 << MSG_SHIFT;
-    private static final int MSG_DISPLAY_READY                 = 7 << MSG_SHIFT;
-    private static final int MSG_SHOW_IME_BUTTON               = 8 << MSG_SHIFT;
-    private static final int MSG_TOGGLE_RECENT_APPS            = 9 << MSG_SHIFT;
-    private static final int MSG_PRELOAD_RECENT_APPS           = 10 << MSG_SHIFT;
-    private static final int MSG_CANCEL_PRELOAD_RECENT_APPS    = 11 << MSG_SHIFT;
-    private static final int MSG_SET_WINDOW_STATE              = 12 << MSG_SHIFT;
-    private static final int MSG_SHOW_RECENT_APPS              = 13 << MSG_SHIFT;
-    private static final int MSG_HIDE_RECENT_APPS              = 14 << MSG_SHIFT;
-    private static final int MSG_SHOW_SCREEN_PIN_REQUEST       = 18 << MSG_SHIFT;
-    private static final int MSG_APP_TRANSITION_PENDING        = 19 << MSG_SHIFT;
-    private static final int MSG_APP_TRANSITION_CANCELLED      = 20 << MSG_SHIFT;
-    private static final int MSG_APP_TRANSITION_STARTING       = 21 << MSG_SHIFT;
-    private static final int MSG_ASSIST_DISCLOSURE             = 22 << MSG_SHIFT;
-    private static final int MSG_START_ASSIST                  = 23 << MSG_SHIFT;
-    private static final int MSG_CAMERA_LAUNCH_GESTURE         = 24 << MSG_SHIFT;
-    private static final int MSG_TOGGLE_KEYBOARD_SHORTCUTS     = 25 << MSG_SHIFT;
-    private static final int MSG_SHOW_PICTURE_IN_PICTURE_MENU  = 26 << MSG_SHIFT;
-    private static final int MSG_ADD_QS_TILE                   = 27 << MSG_SHIFT;
-    private static final int MSG_REMOVE_QS_TILE                = 28 << MSG_SHIFT;
-    private static final int MSG_CLICK_QS_TILE                 = 29 << MSG_SHIFT;
-    private static final int MSG_TOGGLE_APP_SPLIT_SCREEN       = 30 << MSG_SHIFT;
-    private static final int MSG_APP_TRANSITION_FINISHED       = 31 << MSG_SHIFT;
-    private static final int MSG_DISMISS_KEYBOARD_SHORTCUTS    = 32 << MSG_SHIFT;
-    private static final int MSG_HANDLE_SYSTEM_KEY             = 33 << MSG_SHIFT;
-    private static final int MSG_SHOW_GLOBAL_ACTIONS           = 34 << MSG_SHIFT;
-    private static final int MSG_TOGGLE_PANEL                  = 35 << MSG_SHIFT;
-    private static final int MSG_SHOW_SHUTDOWN_UI              = 36 << MSG_SHIFT;
-    private static final int MSG_SET_TOP_APP_HIDES_STATUS_BAR  = 37 << MSG_SHIFT;
-    private static final int MSG_ROTATION_PROPOSAL             = 38 << MSG_SHIFT;
-    private static final int MSG_BIOMETRIC_SHOW                = 39 << MSG_SHIFT;
-    private static final int MSG_BIOMETRIC_AUTHENTICATED       = 40 << MSG_SHIFT;
-    private static final int MSG_BIOMETRIC_HELP                = 41 << MSG_SHIFT;
-    private static final int MSG_BIOMETRIC_ERROR               = 42 << MSG_SHIFT;
-    private static final int MSG_BIOMETRIC_HIDE                = 43 << MSG_SHIFT;
-    private static final int MSG_SHOW_CHARGING_ANIMATION       = 44 << MSG_SHIFT;
-    private static final int MSG_SHOW_PINNING_TOAST_ENTER_EXIT = 45 << MSG_SHIFT;
-    private static final int MSG_SHOW_PINNING_TOAST_ESCAPE     = 46 << MSG_SHIFT;
-    private static final int MSG_RECENTS_ANIMATION_STATE_CHANGED = 47 << MSG_SHIFT;
+    private static final int MSG_ICON                              = 1 << MSG_SHIFT;
+    private static final int MSG_DISABLE                           = 2 << MSG_SHIFT;
+    private static final int MSG_EXPAND_NOTIFICATIONS              = 3 << MSG_SHIFT;
+    private static final int MSG_COLLAPSE_PANELS                   = 4 << MSG_SHIFT;
+    private static final int MSG_EXPAND_SETTINGS                   = 5 << MSG_SHIFT;
+    private static final int MSG_SYSTEM_BAR_APPEARANCE_CHANGED     = 6 << MSG_SHIFT;
+    private static final int MSG_DISPLAY_READY                     = 7 << MSG_SHIFT;
+    private static final int MSG_SHOW_IME_BUTTON                   = 8 << MSG_SHIFT;
+    private static final int MSG_TOGGLE_RECENT_APPS                = 9 << MSG_SHIFT;
+    private static final int MSG_PRELOAD_RECENT_APPS               = 10 << MSG_SHIFT;
+    private static final int MSG_CANCEL_PRELOAD_RECENT_APPS        = 11 << MSG_SHIFT;
+    private static final int MSG_SET_WINDOW_STATE                  = 12 << MSG_SHIFT;
+    private static final int MSG_SHOW_RECENT_APPS                  = 13 << MSG_SHIFT;
+    private static final int MSG_HIDE_RECENT_APPS                  = 14 << MSG_SHIFT;
+    private static final int MSG_SHOW_SCREEN_PIN_REQUEST           = 18 << MSG_SHIFT;
+    private static final int MSG_APP_TRANSITION_PENDING            = 19 << MSG_SHIFT;
+    private static final int MSG_APP_TRANSITION_CANCELLED          = 20 << MSG_SHIFT;
+    private static final int MSG_APP_TRANSITION_STARTING           = 21 << MSG_SHIFT;
+    private static final int MSG_ASSIST_DISCLOSURE                 = 22 << MSG_SHIFT;
+    private static final int MSG_START_ASSIST                      = 23 << MSG_SHIFT;
+    private static final int MSG_CAMERA_LAUNCH_GESTURE             = 24 << MSG_SHIFT;
+    private static final int MSG_TOGGLE_KEYBOARD_SHORTCUTS         = 25 << MSG_SHIFT;
+    private static final int MSG_SHOW_PICTURE_IN_PICTURE_MENU      = 26 << MSG_SHIFT;
+    private static final int MSG_ADD_QS_TILE                       = 27 << MSG_SHIFT;
+    private static final int MSG_REMOVE_QS_TILE                    = 28 << MSG_SHIFT;
+    private static final int MSG_CLICK_QS_TILE                     = 29 << MSG_SHIFT;
+    private static final int MSG_TOGGLE_APP_SPLIT_SCREEN           = 30 << MSG_SHIFT;
+    private static final int MSG_APP_TRANSITION_FINISHED           = 31 << MSG_SHIFT;
+    private static final int MSG_DISMISS_KEYBOARD_SHORTCUTS        = 32 << MSG_SHIFT;
+    private static final int MSG_HANDLE_SYSTEM_KEY                 = 33 << MSG_SHIFT;
+    private static final int MSG_SHOW_GLOBAL_ACTIONS               = 34 << MSG_SHIFT;
+    private static final int MSG_TOGGLE_PANEL                      = 35 << MSG_SHIFT;
+    private static final int MSG_SHOW_SHUTDOWN_UI                  = 36 << MSG_SHIFT;
+    private static final int MSG_SET_TOP_APP_HIDES_STATUS_BAR      = 37 << MSG_SHIFT;
+    private static final int MSG_ROTATION_PROPOSAL                 = 38 << MSG_SHIFT;
+    private static final int MSG_BIOMETRIC_SHOW                    = 39 << MSG_SHIFT;
+    private static final int MSG_BIOMETRIC_AUTHENTICATED           = 40 << MSG_SHIFT;
+    private static final int MSG_BIOMETRIC_HELP                    = 41 << MSG_SHIFT;
+    private static final int MSG_BIOMETRIC_ERROR                   = 42 << MSG_SHIFT;
+    private static final int MSG_BIOMETRIC_HIDE                    = 43 << MSG_SHIFT;
+    private static final int MSG_SHOW_CHARGING_ANIMATION           = 44 << MSG_SHIFT;
+    private static final int MSG_SHOW_PINNING_TOAST_ENTER_EXIT     = 45 << MSG_SHIFT;
+    private static final int MSG_SHOW_PINNING_TOAST_ESCAPE         = 46 << MSG_SHIFT;
+    private static final int MSG_RECENTS_ANIMATION_STATE_CHANGED   = 47 << MSG_SHIFT;
+    private static final int MSG_SHOW_TRANSIENT                    = 48 << MSG_SHIFT;
+    private static final int MSG_ABORT_TRANSIENT                   = 49 << MSG_SHIFT;
+    private static final int MSG_TOP_APP_WINDOW_CHANGED            = 50 << MSG_SHIFT;
+    private static final int MSG_SHOW_INATTENTIVE_SLEEP_WARNING    = 51 << MSG_SHIFT;
+    private static final int MSG_DISMISS_INATTENTIVE_SLEEP_WARNING = 52 << MSG_SHIFT;
 
     public static final int FLAG_EXCLUDE_NONE = 0;
     public static final int FLAG_EXCLUDE_SEARCH_PANEL = 1 << 0;
@@ -158,28 +162,6 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
         default void animateCollapsePanels(int flags, boolean force) { }
         default void togglePanel() { }
         default void animateExpandSettingsPanel(String obj) { }
-
-        /**
-         * Called to notify visibility flag changes.
-         * @see IStatusBar#setSystemUiVisibility(int, int, int, int, int, Rect, Rect).
-         *
-         * @param displayId The id of the display to notify.
-         * @param vis The visibility flags except SYSTEM_UI_FLAG_LIGHT_STATUS_BAR which will
-         *            be reported separately in fullscreenStackVis and dockedStackVis.
-         * @param fullscreenStackVis The flags which only apply in the region of the fullscreen
-         *                           stack, which is currently only SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.
-         * @param dockedStackVis The flags that only apply in the region of the docked stack, which
-         *                       is currently only SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.
-         * @param mask Which flags to change.
-         * @param fullscreenStackBounds The current bounds of the fullscreen stack, in screen
-         *                              coordinates.
-         * @param dockedStackBounds The current bounds of the docked stack, in screen coordinates.
-         * @param navbarColorManagedByIme {@code true} if navigation bar color is managed by IME.
-         */
-        default void setSystemUiVisibility(int displayId, int vis, int fullscreenStackVis,
-                int dockedStackVis, int mask, Rect fullscreenStackBounds, Rect dockedStackBounds,
-                boolean navbarColorManagedByIme) {
-        }
 
         /**
          * Called to notify IME window status changes.
@@ -270,12 +252,13 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
 
         default void onRotationProposal(int rotation, boolean isValid) { }
 
-        default void showBiometricDialog(Bundle bundle, IBiometricServiceReceiverInternal receiver,
-                int type, boolean requireConfirmation, int userId, String opPackageName) { }
-        default void onBiometricAuthenticated(boolean authenticated, String failureReason) { }
+        default void showAuthenticationDialog(Bundle bundle,
+                IBiometricServiceReceiverInternal receiver, int biometricModality,
+                boolean requireConfirmation, int userId, String opPackageName) { }
+        default void onBiometricAuthenticated() { }
         default void onBiometricHelp(String message) { }
-        default void onBiometricError(String error) { }
-        default void hideBiometricDialog() { }
+        default void onBiometricError(int modality, int error, int vendorCode) { }
+        default void hideAuthenticationDialog() { }
 
         /**
          * @see IStatusBar#onDisplayReady(int)
@@ -291,9 +274,42 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
          * @see IStatusBar#onRecentsAnimationStateChanged(boolean)
          */
         default void onRecentsAnimationStateChanged(boolean running) { }
+
+        /**
+         * @see IStatusBar#onSystemBarAppearanceChanged(int, int, AppearanceRegion[], boolean).
+         */
+        default void onSystemBarAppearanceChanged(int displayId, @Appearance int appearance,
+                AppearanceRegion[] appearanceRegions, boolean navbarColorManagedByIme) { }
+
+        /**
+         * @see IStatusBar#showTransient(int, int[]).
+         */
+        default void showTransient(int displayId, @InternalInsetsType int[] types) { }
+
+        /**
+         * @see IStatusBar#abortTransient(int, int[]).
+         */
+        default void abortTransient(int displayId, @InternalInsetsType int[] types) { }
+
+        /**
+         * @see IStatusBar#topAppWindowChanged(int, boolean, boolean).
+         */
+        default void topAppWindowChanged(int displayId, boolean isFullscreen, boolean isImmersive) {
+        }
+
+        /**
+         * Called to notify System UI that a warning about the device going to sleep
+         * due to prolonged user inactivity should be shown.
+         */
+        default void showInattentiveSleepWarning() { }
+
+        /**
+         * Called to notify System UI that the warning about the device going to sleep
+         * due to prolonged user inactivity should be dismissed.
+         */
+        default void dismissInattentiveSleepWarning(boolean animated) { }
     }
 
-    @VisibleForTesting
     public CommandQueue(Context context) {
         context.getSystemService(DisplayManager.class).registerDisplayListener(this, mHandler);
         // We always have default display.
@@ -456,27 +472,16 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
     }
 
     @Override
-    public void setSystemUiVisibility(int displayId, int vis, int fullscreenStackVis,
-            int dockedStackVis, int mask, Rect fullscreenStackBounds, Rect dockedStackBounds,
-            boolean navbarColorManagedByIme) {
+    public void topAppWindowChanged(int displayId, boolean isFullscreen, boolean isImmersive) {
         synchronized (mLock) {
-            // Don't coalesce these, since it might have one time flags set such as
-            // STATUS_BAR_UNHIDE which might get lost.
             SomeArgs args = SomeArgs.obtain();
             args.argi1 = displayId;
-            args.argi2 = vis;
-            args.argi3 = fullscreenStackVis;
-            args.argi4 = dockedStackVis;
-            args.argi5 = mask;
-            args.argi6 = navbarColorManagedByIme ? 1 : 0;
-            args.arg1 = fullscreenStackBounds;
-            args.arg2 = dockedStackBounds;
-            mHandler.obtainMessage(MSG_SET_SYSTEMUI_VISIBILITY, args).sendToTarget();
+            args.argi2 = isFullscreen ? 1 : 0;
+            args.argi3 = isImmersive ? 1 : 0;
+            mHandler.obtainMessage(MSG_TOP_APP_WINDOW_CHANGED, args).sendToTarget();
         }
-    }
 
-    @Override
-    public void topAppWindowChanged(int displayId, boolean menuVisible) { }
+    }
 
     @Override
     public void setImeWindowStatus(int displayId, IBinder token, int vis, int backDisposition,
@@ -740,13 +745,13 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
     }
 
     @Override
-    public void showBiometricDialog(Bundle bundle, IBiometricServiceReceiverInternal receiver,
-            int type, boolean requireConfirmation, int userId, String opPackageName) {
+    public void showAuthenticationDialog(Bundle bundle, IBiometricServiceReceiverInternal receiver,
+            int biometricModality, boolean requireConfirmation, int userId, String opPackageName) {
         synchronized (mLock) {
             SomeArgs args = SomeArgs.obtain();
             args.arg1 = bundle;
             args.arg2 = receiver;
-            args.argi1 = type;
+            args.argi1 = biometricModality;
             args.arg3 = requireConfirmation;
             args.argi2 = userId;
             args.arg4 = opPackageName;
@@ -756,12 +761,9 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
     }
 
     @Override
-    public void onBiometricAuthenticated(boolean authenticated, String failureReason) {
+    public void onBiometricAuthenticated() {
         synchronized (mLock) {
-            SomeArgs args = SomeArgs.obtain();
-            args.arg1 = authenticated;
-            args.arg2 = failureReason;
-            mHandler.obtainMessage(MSG_BIOMETRIC_AUTHENTICATED, args).sendToTarget();
+            mHandler.obtainMessage(MSG_BIOMETRIC_AUTHENTICATED).sendToTarget();
         }
     }
 
@@ -773,14 +775,18 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
     }
 
     @Override
-    public void onBiometricError(String error) {
+    public void onBiometricError(int modality, int error, int vendorCode) {
         synchronized (mLock) {
-            mHandler.obtainMessage(MSG_BIOMETRIC_ERROR, error).sendToTarget();
+            SomeArgs args = SomeArgs.obtain();
+            args.argi1 = modality;
+            args.argi2 = error;
+            args.argi3 = vendorCode;
+            mHandler.obtainMessage(MSG_BIOMETRIC_ERROR, args).sendToTarget();
         }
     }
 
     @Override
-    public void hideBiometricDialog() {
+    public void hideAuthenticationDialog() {
         synchronized (mLock) {
             mHandler.obtainMessage(MSG_BIOMETRIC_HIDE).sendToTarget();
         }
@@ -797,6 +803,22 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
     public void onRecentsAnimationStateChanged(boolean running) {
         synchronized (mLock) {
             mHandler.obtainMessage(MSG_RECENTS_ANIMATION_STATE_CHANGED, running ? 1 : 0, 0)
+                    .sendToTarget();
+        }
+    }
+
+    @Override
+    public void showInattentiveSleepWarning() {
+        synchronized (mLock) {
+            mHandler.obtainMessage(MSG_SHOW_INATTENTIVE_SLEEP_WARNING)
+                    .sendToTarget();
+        }
+    }
+
+    @Override
+    public void dismissInattentiveSleepWarning(boolean animated) {
+        synchronized (mLock) {
+            mHandler.obtainMessage(MSG_DISMISS_INATTENTIVE_SLEEP_WARNING, animated)
                     .sendToTarget();
         }
     }
@@ -823,6 +845,33 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
             mCallbacks.get(i).setImeWindowStatus(mLastUpdatedImeDisplayId,
                     null /* token */, IME_INVISIBLE, BACK_DISPOSITION_DEFAULT,
                     false /* showImeSwitcher */);
+        }
+    }
+
+    @Override
+    public void onSystemBarAppearanceChanged(int displayId, @Appearance int appearance,
+            AppearanceRegion[] appearanceRegions, boolean navbarColorManagedByIme) {
+        synchronized (mLock) {
+            SomeArgs args = SomeArgs.obtain();
+            args.argi1 = displayId;
+            args.argi2 = appearance;
+            args.argi3 = navbarColorManagedByIme ? 1 : 0;
+            args.arg1 = appearanceRegions;
+            mHandler.obtainMessage(MSG_SYSTEM_BAR_APPEARANCE_CHANGED, args).sendToTarget();
+        }
+    }
+
+    @Override
+    public void showTransient(int displayId, int[] types) {
+        synchronized (mLock) {
+            mHandler.obtainMessage(MSG_SHOW_TRANSIENT, displayId, 0, types).sendToTarget();
+        }
+    }
+
+    @Override
+    public void abortTransient(int displayId, int[] types) {
+        synchronized (mLock) {
+            mHandler.obtainMessage(MSG_ABORT_TRANSIENT, displayId, 0, types).sendToTarget();
         }
     }
 
@@ -877,15 +926,6 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
                     for (int i = 0; i < mCallbacks.size(); i++) {
                         mCallbacks.get(i).animateExpandSettingsPanel((String) msg.obj);
                     }
-                    break;
-                case MSG_SET_SYSTEMUI_VISIBILITY:
-                    args = (SomeArgs) msg.obj;
-                    for (int i = 0; i < mCallbacks.size(); i++) {
-                        mCallbacks.get(i).setSystemUiVisibility(args.argi1, args.argi2, args.argi3,
-                                args.argi4, args.argi5, (Rect) args.arg1, (Rect) args.arg2,
-                                args.argi6 == 1);
-                    }
-                    args.recycle();
                     break;
                 case MSG_SHOW_IME_BUTTON:
                     args = (SomeArgs) msg.obj;
@@ -1032,10 +1072,10 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
                     mHandler.removeMessages(MSG_BIOMETRIC_AUTHENTICATED);
                     SomeArgs someArgs = (SomeArgs) msg.obj;
                     for (int i = 0; i < mCallbacks.size(); i++) {
-                        mCallbacks.get(i).showBiometricDialog(
+                        mCallbacks.get(i).showAuthenticationDialog(
                                 (Bundle) someArgs.arg1,
                                 (IBiometricServiceReceiverInternal) someArgs.arg2,
-                                someArgs.argi1 /* type */,
+                                someArgs.argi1 /* biometricModality */,
                                 (boolean) someArgs.arg3 /* requireConfirmation */,
                                 someArgs.argi2 /* userId */,
                                 (String) someArgs.arg4 /* opPackageName */);
@@ -1044,13 +1084,9 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
                     break;
                 }
                 case MSG_BIOMETRIC_AUTHENTICATED: {
-                    SomeArgs someArgs = (SomeArgs) msg.obj;
                     for (int i = 0; i < mCallbacks.size(); i++) {
-                        mCallbacks.get(i).onBiometricAuthenticated(
-                                (boolean) someArgs.arg1 /* authenticated */,
-                                (String) someArgs.arg2 /* failureReason */);
+                        mCallbacks.get(i).onBiometricAuthenticated();
                     }
-                    someArgs.recycle();
                     break;
                 }
                 case MSG_BIOMETRIC_HELP:
@@ -1059,13 +1095,19 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
                     }
                     break;
                 case MSG_BIOMETRIC_ERROR:
+                    SomeArgs someArgs = (SomeArgs) msg.obj;
                     for (int i = 0; i < mCallbacks.size(); i++) {
-                        mCallbacks.get(i).onBiometricError((String) msg.obj);
+                        mCallbacks.get(i).onBiometricError(
+                                someArgs.argi1 /* modality */,
+                                someArgs.argi2 /* error */,
+                                someArgs.argi3 /* vendorCode */
+                        );
                     }
+                    someArgs.recycle();
                     break;
                 case MSG_BIOMETRIC_HIDE:
                     for (int i = 0; i < mCallbacks.size(); i++) {
-                        mCallbacks.get(i).hideBiometricDialog();
+                        mCallbacks.get(i).hideAuthenticationDialog();
                     }
                     break;
                 case MSG_SHOW_CHARGING_ANIMATION:
@@ -1093,16 +1135,50 @@ public class CommandQueue extends IStatusBar.Stub implements CallbackController<
                         mCallbacks.get(i).onRecentsAnimationStateChanged(msg.arg1 > 0);
                     }
                     break;
+                case MSG_SYSTEM_BAR_APPEARANCE_CHANGED:
+                    args = (SomeArgs) msg.obj;
+                    for (int i = 0; i < mCallbacks.size(); i++) {
+                        mCallbacks.get(i).onSystemBarAppearanceChanged(args.argi1, args.argi2,
+                                (AppearanceRegion[]) args.arg1, args.argi3 == 1);
+                    }
+                    args.recycle();
+                    break;
+                case MSG_SHOW_TRANSIENT: {
+                    final int displayId = msg.arg1;
+                    final int[] types = (int[]) msg.obj;
+                    for (int i = 0; i < mCallbacks.size(); i++) {
+                        mCallbacks.get(i).showTransient(displayId, types);
+                    }
+                    break;
+                }
+                case MSG_ABORT_TRANSIENT: {
+                    final int displayId = msg.arg1;
+                    final int[] types = (int[]) msg.obj;
+                    for (int i = 0; i < mCallbacks.size(); i++) {
+                        mCallbacks.get(i).abortTransient(displayId, types);
+                    }
+                    break;
+                }
+                case MSG_TOP_APP_WINDOW_CHANGED: {
+                    args = (SomeArgs) msg.obj;
+                    for (int i = 0; i < mCallbacks.size(); i++) {
+                        mCallbacks.get(i).topAppWindowChanged(
+                                args.argi1, args.argi2 != 0, args.argi3 != 0);
+                    }
+                    args.recycle();
+                    break;
+                }
+                case MSG_SHOW_INATTENTIVE_SLEEP_WARNING:
+                    for (int i = 0; i < mCallbacks.size(); i++) {
+                        mCallbacks.get(i).showInattentiveSleepWarning();
+                    }
+                    break;
+                case MSG_DISMISS_INATTENTIVE_SLEEP_WARNING:
+                    for (int i = 0; i < mCallbacks.size(); i++) {
+                        mCallbacks.get(i).dismissInattentiveSleepWarning((Boolean) msg.obj);
+                    }
+                    break;
             }
-        }
-    }
-
-    // Need this class since CommandQueue already extends IStatusBar.Stub, so CommandQueueStart
-    // is needed so it can extend SystemUI.
-    public static class CommandQueueStart extends SystemUI {
-        @Override
-        public void start() {
-            putComponent(CommandQueue.class, new CommandQueue(mContext));
         }
     }
 }

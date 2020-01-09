@@ -173,6 +173,8 @@ final class LocalDisplayAdapter extends DisplayAdapter {
         private int mActiveModeId;
         private boolean mActiveModeInvalid;
         private int[] mAllowedModeIds;
+        private float mMinRefreshRate;
+        private float mMaxRefreshRate;
         private boolean mAllowedModeIdsInvalid;
         private int mActivePhysIndex;
         private int[] mAllowedPhysIndexes;
@@ -408,6 +410,9 @@ final class LocalDisplayAdapter extends DisplayAdapter {
                 final DisplayAddress.Physical physicalAddress =
                         DisplayAddress.fromPhysicalDisplayId(mPhysicalDisplayId);
                 mInfo.address = physicalAddress;
+                mInfo.densityDpi = (int) (phys.density * 160 + 0.5f);
+                mInfo.xDpi = phys.xDpi;
+                mInfo.yDpi = phys.yDpi;
 
                 // Assume that all built-in displays that have secure output (eg. HDCP) also
                 // support compositing from gralloc protected buffers.
@@ -434,9 +439,6 @@ final class LocalDisplayAdapter extends DisplayAdapter {
                     mInfo.displayCutout = DisplayCutout.fromResourcesRectApproximation(res,
                             mInfo.width, mInfo.height);
                     mInfo.type = Display.TYPE_BUILT_IN;
-                    mInfo.densityDpi = (int)(phys.density * 160 + 0.5f);
-                    mInfo.xDpi = phys.xDpi;
-                    mInfo.yDpi = phys.yDpi;
                     mInfo.touch = DisplayDeviceInfo.TOUCH_INTERNAL;
                 } else {
                     mInfo.displayCutout = null;
@@ -445,7 +447,6 @@ final class LocalDisplayAdapter extends DisplayAdapter {
                     mInfo.name = getContext().getResources().getString(
                             com.android.internal.R.string.display_manager_hdmi_display_name);
                     mInfo.touch = DisplayDeviceInfo.TOUCH_EXTERNAL;
-                    mInfo.setAssumedDensityForExternalDisplay(phys.width, phys.height);
 
                     // For demonstration purposes, allow rotation of the external display.
                     // In the future we might allow the user to configure this directly.
@@ -623,7 +624,9 @@ final class LocalDisplayAdapter extends DisplayAdapter {
         }
 
         @Override
-        public void setAllowedDisplayModesLocked(int[] modes) {
+        public void setDesiredDisplayConfigSpecs(int defaultModeId, float minRefreshRate,
+                float maxRefreshRate, int[] modes) {
+            updateDesiredDisplayConfigSpecs(defaultModeId, minRefreshRate, maxRefreshRate);
             updateAllowedModesLocked(modes);
         }
 
@@ -653,6 +656,7 @@ final class LocalDisplayAdapter extends DisplayAdapter {
             return true;
         }
 
+        // TODO(b/142507213): Remove once refresh rates are plummed through to kernel.
         public void updateAllowedModesLocked(int[] allowedModes) {
             if (Arrays.equals(allowedModes, mAllowedModeIds) && !mAllowedModeIdsInvalid) {
                 return;
@@ -660,6 +664,39 @@ final class LocalDisplayAdapter extends DisplayAdapter {
             if (updateAllowedModesInternalLocked(allowedModes)) {
                 updateDeviceInfoLocked();
             }
+        }
+
+        public void updateDesiredDisplayConfigSpecs(int defaultModeId, float minRefreshRate,
+                float maxRefreshRate) {
+            if (minRefreshRate == mMinRefreshRate
+                        && maxRefreshRate == mMaxRefreshRate
+                        && defaultModeId == mDefaultModeId) {
+                return;
+            }
+            if (updateDesiredDisplayConfigSpecsInternalLocked(defaultModeId, minRefreshRate,
+                    maxRefreshRate)) {
+                updateDeviceInfoLocked();
+            }
+        }
+
+        public boolean updateDesiredDisplayConfigSpecsInternalLocked(int defaultModeId,
+                float minRefreshRate, float maxRefreshRate) {
+            if (DEBUG) {
+                Slog.w(TAG, "updateDesiredDisplayConfigSpecsInternalLocked("
+                        + "defaultModeId="
+                        + Integer.toString(defaultModeId)
+                        + ", minRefreshRate="
+                        + Float.toString(minRefreshRate)
+                        + ", maxRefreshRate="
+                        + Float.toString(minRefreshRate));
+            }
+
+            final IBinder token = getDisplayTokenLocked();
+            SurfaceControl.setDesiredDisplayConfigSpecs(token,
+                    new SurfaceControl.DesiredDisplayConfigSpecs(
+                            defaultModeId, minRefreshRate, maxRefreshRate));
+            int activePhysIndex = SurfaceControl.getActiveConfig(token);
+            return updateActiveModeLocked(activePhysIndex);
         }
 
         public boolean updateAllowedModesInternalLocked(int[] allowedModes) {
@@ -735,6 +772,8 @@ final class LocalDisplayAdapter extends DisplayAdapter {
             pw.println("mPhysicalDisplayId=" + mPhysicalDisplayId);
             pw.println("mAllowedPhysIndexes=" + Arrays.toString(mAllowedPhysIndexes));
             pw.println("mAllowedModeIds=" + Arrays.toString(mAllowedModeIds));
+            pw.println("mMinRefreshRate=" + mMinRefreshRate);
+            pw.println("mMaxRefreshRate=" + mMaxRefreshRate);
             pw.println("mAllowedModeIdsInvalid=" + mAllowedModeIdsInvalid);
             pw.println("mActivePhysIndex=" + mActivePhysIndex);
             pw.println("mActiveModeId=" + mActiveModeId);
@@ -808,7 +847,7 @@ final class LocalDisplayAdapter extends DisplayAdapter {
             int[] ports = res.getIntArray(
                     com.android.internal.R.array.config_localPrivateDisplayPorts);
             if (ports != null) {
-                int port = physicalAddress.getPort();
+                int port = Byte.toUnsignedInt(physicalAddress.getPort());
                 for (int p : ports) {
                     if (p == port) {
                         return true;

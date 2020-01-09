@@ -28,9 +28,9 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkScoreCache;
-import android.net.wifi.WifiSsid;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 
 import com.android.settingslib.R;
 
@@ -142,7 +142,7 @@ public class WifiStatusTracker extends ConnectivityManager.NetworkCallback {
 
     private void updateRssi(int newRssi) {
         rssi = newRssi;
-        level = WifiManager.calculateSignalLevel(rssi, WifiManager.RSSI_LEVELS);
+        level = mWifiManager.calculateSignalLevel(rssi);
     }
 
     private void maybeRequestNetworkScore() {
@@ -163,7 +163,13 @@ public class WifiStatusTracker extends ConnectivityManager.NetworkCallback {
                 statusLabel = mContext.getString(R.string.wifi_limited_connection);
                 return;
             } else if (!networkCapabilities.hasCapability(NET_CAPABILITY_VALIDATED)) {
-                statusLabel = mContext.getString(R.string.wifi_status_no_internet);
+                final String mode = Settings.Global.getString(mContext.getContentResolver(),
+                        Settings.Global.PRIVATE_DNS_MODE);
+                if (networkCapabilities.isPrivateDnsBroken()) {
+                    statusLabel = mContext.getString(R.string.private_dns_broken);
+                } else {
+                    statusLabel = mContext.getString(R.string.wifi_status_no_internet);
+                }
                 return;
             }
         }
@@ -182,7 +188,7 @@ public class WifiStatusTracker extends ConnectivityManager.NetworkCallback {
 
     private String getValidSsid(WifiInfo info) {
         String ssid = info.getSSID();
-        if (ssid != null && !WifiSsid.NONE.equals(ssid)) {
+        if (ssid != null && !WifiManager.UNKNOWN_SSID.equals(ssid)) {
             return ssid;
         }
         // OK, it's not in the connectionInfo; we have to go hunting for it

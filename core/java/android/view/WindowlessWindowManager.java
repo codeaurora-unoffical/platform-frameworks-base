@@ -24,8 +24,6 @@ import android.os.RemoteException;
 import android.util.Log;
 import android.util.MergedConfiguration;
 import android.view.IWindowSession;
-import android.view.SurfaceControl;
-import android.view.SurfaceSession;
 
 import java.util.HashMap;
 
@@ -36,45 +34,84 @@ import java.util.HashMap;
 * By parcelling the root surface, the app can offer another app content for embedding.
 * @hide
 */
-class WindowlessWindowManager implements IWindowSession {
+public class WindowlessWindowManager implements IWindowSession {
     private final static String TAG = "WindowlessWindowManager";
+
+    private class State {
+        SurfaceControl mSurfaceControl;
+        WindowManager.LayoutParams mParams = new WindowManager.LayoutParams();
+        State(SurfaceControl sc, WindowManager.LayoutParams p) {
+            mSurfaceControl = sc;
+            mParams.copyFrom(p);
+        }
+    };
 
     /**
      * Used to store SurfaceControl we've built for clients to
      * reconfigure them if relayout is called.
      */
-    final HashMap<IBinder, SurfaceControl> mScForWindow = new HashMap<IBinder, SurfaceControl>();
-    final SurfaceSession mSurfaceSession = new SurfaceSession();
-    final SurfaceControl mRootSurface;
-    final Configuration mConfiguration;
-    IWindowSession mRealWm;
+    final HashMap<IBinder, State> mStateForWindow = new HashMap<IBinder, State>();
+
+    public interface ResizeCompleteCallback {
+        public void finished(SurfaceControl.Transaction completion);
+    }
+
+    final HashMap<IBinder, ResizeCompleteCallback> mResizeCompletionForWindow =
+        new HashMap<IBinder, ResizeCompleteCallback>();
+
+    private final SurfaceSession mSurfaceSession = new SurfaceSession();
+    private final SurfaceControl mRootSurface;
+    private final Configuration mConfiguration;
+    private final IWindowSession mRealWm;
+    private final IBinder mHostInputToken;
 
     private int mForceHeight = -1;
     private int mForceWidth = -1;
 
-    WindowlessWindowManager(Configuration c, SurfaceControl rootSurface) {
+    public WindowlessWindowManager(Configuration c, SurfaceControl rootSurface,
+            IBinder hostInputToken) {
         mRootSurface = rootSurface;
         mConfiguration = new Configuration(c);
         mRealWm = WindowManagerGlobal.getWindowSession();
+        mHostInputToken = hostInputToken;
     }
 
+    protected void setConfiguration(Configuration configuration) {
+        mConfiguration.setTo(configuration);
+    }
+
+    /**
+     * Utility API.
+     */
+    void setCompletionCallback(IBinder window, ResizeCompleteCallback callback) {
+        if (mResizeCompletionForWindow.get(window) != null) {
+            Log.w(TAG, "Unsupported overlapping resizes");
+        }
+        mResizeCompletionForWindow.put(window, callback);
+    }
+
+    /**
+     * IWindowSession implementation.
+     */
+    @Override
     public int addToDisplay(IWindow window, int seq, WindowManager.LayoutParams attrs,
             int viewVisibility, int displayId, Rect outFrame, Rect outContentInsets,
-            Rect outStableInsets, Rect outOutsets,
+            Rect outStableInsets,
             DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
             InsetsState outInsetsState) {
         final SurfaceControl.Builder b = new SurfaceControl.Builder(mSurfaceSession)
-            .setParent(mRootSurface)
-            .setName(attrs.getTitle().toString());
+                .setParent(mRootSurface)
+                .setFormat(attrs.format)
+                .setName(attrs.getTitle().toString());
         final SurfaceControl sc = b.build();
         synchronized (this) {
-            mScForWindow.put(window.asBinder(), sc);
+            mStateForWindow.put(window.asBinder(), new State(sc, attrs));
         }
 
-        if ((attrs.inputFeatures &
-                WindowManager.LayoutParams.INPUT_FEATURE_NO_INPUT_CHANNEL) == 0) {
+        if (((attrs.inputFeatures &
+                WindowManager.LayoutParams.INPUT_FEATURE_NO_INPUT_CHANNEL) == 0)) {
             try {
-                mRealWm.blessInputSurface(displayId, sc, outInputChannel);
+                mRealWm.grantInputChannel(displayId, sc, window, mHostInputToken, outInputChannel);
             } catch (RemoteException e) {
                 Log.e(TAG, "Failed to bless surface: " + e);
             }
@@ -92,39 +129,69 @@ class WindowlessWindowManager implements IWindowSession {
     }
 
     @Override
-    public void remove(android.view.IWindow window) {}
+    public void remove(android.view.IWindow window) throws RemoteException {
+        mRealWm.remove(window);
+        State state;
+        synchronized (this) {
+            state = mStateForWindow.remove(window.asBinder());
+        }
+        if (state == null) {
+            throw new IllegalArgumentException(
+                    "Invalid window token (never added or removed already)");
+        }
+        try (SurfaceControl.Transaction t = new SurfaceControl.Transaction()) {
+            t.remove(state.mSurfaceControl).apply();
+        }
+    }
 
     private boolean isOpaque(WindowManager.LayoutParams attrs) {
-        if (attrs.surfaceInsets.left != 0 || attrs.surfaceInsets.top != 0 ||
-                attrs.surfaceInsets.right != 0 || attrs.surfaceInsets.bottom != 0) {
+        if (attrs.surfaceInsets != null && attrs.surfaceInsets.left != 0 ||
+                attrs.surfaceInsets.top != 0 || attrs.surfaceInsets.right != 0 ||
+                attrs.surfaceInsets.bottom != 0) {
             return false;
         }
         return !PixelFormat.formatHasAlpha(attrs.format);
     }
 
     @Override
-    public int relayout(IWindow window, int seq, WindowManager.LayoutParams attrs,
+    public int relayout(IWindow window, int seq, WindowManager.LayoutParams inAttrs,
             int requestedWidth, int requestedHeight, int viewFlags, int flags, long frameNumber,
-            Rect outFrame, Rect outOverscanInsets, Rect outContentInsets, Rect outVisibleInsets,
-            Rect outStableInsets, Rect outsets, Rect outBackdropFrame,
+            Rect outFrame, Rect outContentInsets, Rect outVisibleInsets,
+            Rect outStableInsets, Rect outBackdropFrame,
             DisplayCutout.ParcelableWrapper cutout, MergedConfiguration mergedConfiguration,
             SurfaceControl outSurfaceControl, InsetsState outInsetsState) {
-        SurfaceControl sc = null;
+        State state = null;
         synchronized (this) {
-            sc = mScForWindow.get(window.asBinder());
+            state = mStateForWindow.get(window.asBinder());
         }
-        if (sc == null) {
+        if (state == null) {
             throw new IllegalArgumentException(
                     "Invalid window token (never added or removed already)");
         }
+        SurfaceControl sc = state.mSurfaceControl;
         SurfaceControl.Transaction t = new SurfaceControl.Transaction();
-        t.show(sc).setBufferSize(sc,
-                requestedWidth + attrs.surfaceInsets.left + attrs.surfaceInsets.right,
-                requestedHeight + attrs.surfaceInsets.top + attrs.surfaceInsets.bottom)
-            .setOpaque(sc, isOpaque(attrs))
-            .apply();
+
+        if (inAttrs != null) {
+            state.mParams.copyFrom(inAttrs);
+        }
+        WindowManager.LayoutParams attrs = state.mParams;
+
+        final Rect surfaceInsets = attrs.surfaceInsets;
+        int width = surfaceInsets != null ?
+                attrs.width + surfaceInsets.left + surfaceInsets.right : attrs.width;
+        int height = surfaceInsets != null ?
+                attrs.height + surfaceInsets.top + surfaceInsets.bottom : attrs.height;
+
+        t.setBufferSize(sc, width, height)
+            .setOpaque(sc, isOpaque(attrs));
+        if (viewFlags == View.VISIBLE) {
+            t.show(sc);
+        } else {
+            t.hide(sc);
+        }
+        t.apply();
         outSurfaceControl.copyFrom(sc);
-        outFrame.set(0, 0, requestedWidth, requestedHeight);
+        outFrame.set(0, 0, attrs.width, attrs.height);
 
         mergedConfiguration.setConfiguration(mConfiguration, mConfiguration);
 
@@ -158,6 +225,17 @@ class WindowlessWindowManager implements IWindowSession {
     @Override
     public void finishDrawing(android.view.IWindow window,
             android.view.SurfaceControl.Transaction postDrawTransaction) {
+        synchronized (this) {
+            final ResizeCompleteCallback c =
+                mResizeCompletionForWindow.get(window.asBinder());
+            if (c == null) {
+                // No one wanted the callback, but it wasn't necessarily unexpected.
+                postDrawTransaction.apply();
+                return;
+            }
+            c.finished(postDrawTransaction);
+            mResizeCompletionForWindow.remove(window.asBinder());
+        }
     }
 
     @Override
@@ -272,8 +350,8 @@ class WindowlessWindowManager implements IWindowSession {
     }
 
     @Override
-    public void blessInputSurface(int displayId, SurfaceControl surface,
-            InputChannel outInputChannel) {
+    public void grantInputChannel(int displayId, SurfaceControl surface, IWindow window,
+            IBinder hostInputToken, InputChannel outInputChannel) {
     }
 
     @Override

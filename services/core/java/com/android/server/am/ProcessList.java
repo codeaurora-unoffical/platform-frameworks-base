@@ -20,6 +20,8 @@ import static android.app.ActivityManager.PROCESS_STATE_CACHED_ACTIVITY;
 import static android.app.ActivityManager.PROCESS_STATE_NONEXISTENT;
 import static android.app.ActivityThread.PROC_START_SEQ_IDENT;
 import static android.content.pm.PackageManager.MATCH_DIRECT_BOOT_AUTO;
+import static android.net.NetworkPolicyManager.isProcStateAllowedWhileIdleOrPowerSaveMode;
+import static android.net.NetworkPolicyManager.isProcStateAllowedWhileOnRestrictBackground;
 import static android.os.Process.SYSTEM_UID;
 import static android.os.Process.THREAD_PRIORITY_BACKGROUND;
 import static android.os.Process.getFreeMemory;
@@ -28,6 +30,7 @@ import static android.os.Process.killProcessQuiet;
 import static android.os.Process.startWebView;
 
 import static com.android.server.am.ActivityManagerDebugConfig.DEBUG_LRU;
+import static com.android.server.am.ActivityManagerDebugConfig.DEBUG_NETWORK;
 import static com.android.server.am.ActivityManagerDebugConfig.DEBUG_PROCESSES;
 import static com.android.server.am.ActivityManagerDebugConfig.DEBUG_PSS;
 import static com.android.server.am.ActivityManagerDebugConfig.DEBUG_UID_OBSERVERS;
@@ -41,6 +44,7 @@ import static com.android.server.am.ActivityManagerService.PROC_START_TIMEOUT_MS
 import static com.android.server.am.ActivityManagerService.PROC_START_TIMEOUT_WITH_WRAPPER;
 import static com.android.server.am.ActivityManagerService.STOCK_PM_FLAGS;
 import static com.android.server.am.ActivityManagerService.TAG_LRU;
+import static com.android.server.am.ActivityManagerService.TAG_NETWORK;
 import static com.android.server.am.ActivityManagerService.TAG_PROCESSES;
 import static com.android.server.am.ActivityManagerService.TAG_PSS;
 import static com.android.server.am.ActivityManagerService.TAG_UID_OBSERVERS;
@@ -74,6 +78,9 @@ import android.os.Trace;
 import android.os.UserHandle;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageManagerInternal;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.EventLog;
@@ -94,6 +101,7 @@ import com.android.internal.util.MemInfoReader;
 import com.android.server.LocalServices;
 import com.android.server.ServiceThread;
 import com.android.server.Watchdog;
+import com.android.server.compat.PlatformCompat;
 import com.android.server.pm.dex.DexManager;
 import com.android.server.wm.ActivityServiceConnectionsHolder;
 import com.android.server.wm.WindowManagerService;
@@ -215,7 +223,7 @@ public final class ProcessList {
     // Memory pages are 4K.
     static final int PAGE_SIZE = 4 * 1024;
 
-    // Activity manager's version of Process.THREAD_GROUP_BG_NONINTERACTIVE
+    // Activity manager's version of Process.THREAD_GROUP_BACKGROUND
     static final int SCHED_GROUP_BACKGROUND = 0;
       // Activity manager's version of Process.THREAD_GROUP_RESTRICTED
     static final int SCHED_GROUP_RESTRICTED = 1;
@@ -240,6 +248,24 @@ public final class ProcessList {
     // Threshold of number of cached+empty where we consider memory critical.
     static final int TRIM_LOW_THRESHOLD = 5;
 
+    /**
+     * State indicating that there is no need for any blocking for network.
+     */
+    @VisibleForTesting
+    static final int NETWORK_STATE_NO_CHANGE = 0;
+
+    /**
+     * State indicating that the main thread needs to be informed about the network wait.
+     */
+    @VisibleForTesting
+    static final int NETWORK_STATE_BLOCK = 1;
+
+    /**
+     * State indicating that any threads waiting for network state to get updated can be unblocked.
+     */
+    @VisibleForTesting
+    static final int NETWORK_STATE_UNBLOCK = 2;
+
     // If true, then we pass the flag to ART to load the app image startup cache.
     private static final String PROPERTY_USE_APP_IMAGE_STARTUP_CACHE =
             "persist.device_config.runtime_native.use_app_image_startup_cache";
@@ -252,14 +278,26 @@ public final class ProcessList {
     // LMK_PROCREMOVE <pid>
     // LMK_PROCPURGE
     // LMK_GETKILLCNT
+    // LMK_PROCKILL
     static final byte LMK_TARGET = 0;
     static final byte LMK_PROCPRIO = 1;
     static final byte LMK_PROCREMOVE = 2;
     static final byte LMK_PROCPURGE = 3;
     static final byte LMK_GETKILLCNT = 4;
+    static final byte LMK_PROCKILL = 5; // Note: this is an unsolicated command
 
     // lmkd reconnect delay in msecs
-    private final static long LMDK_RECONNECT_DELAY_MS = 1000;
+    private static final long LMKD_RECONNECT_DELAY_MS = 1000;
+
+    /**
+     * How long between a process kill and we actually receive its death recipient
+     */
+    private static final long PROC_KILL_TIMEOUT = 2000; // 2 seconds;
+
+    /**
+     * How long between polls to check if the given process is dead or not.
+     */
+    private static final long PROC_DEATH_POLL_INTERVAL = 100;
 
     ActivityManagerService mService = null;
 
@@ -355,6 +393,12 @@ public final class ProcessList {
     ActiveUids mActiveUids;
 
     /**
+     * The listener who is intereted with the lmkd kills.
+     */
+    @GuardedBy("mService")
+    private LmkdKillListener mLmkdKillListener = null;
+
+    /**
      * The currently running isolated processes.
      */
     final SparseArray<ProcessRecord> mIsolatedProcesses = new SparseArray<>();
@@ -369,6 +413,15 @@ public final class ProcessList {
      */
     final ArrayMap<AppZygote, ArrayList<ProcessRecord>> mAppZygoteProcesses =
             new ArrayMap<AppZygote, ArrayList<ProcessRecord>>();
+
+    private PlatformCompat mPlatformCompat = null;
+
+    interface LmkdKillListener {
+        /**
+         * Called when there is a process kill by lmkd.
+         */
+        void onLmkdKillOccurred(int pid, int uid);
+    }
 
     final class IsolatedUidRange {
         @VisibleForTesting
@@ -522,7 +575,8 @@ public final class ProcessList {
 
     final class KillHandler extends Handler {
         static final int KILL_PROCESS_GROUP_MSG = 4000;
-        static final int LMDK_RECONNECT_MSG = 4001;
+        static final int LMKD_RECONNECT_MSG = 4001;
+        static final int LMKD_PROC_KILLED_MSG = 4002;
 
         public KillHandler(Looper looper) {
             super(looper, null, true);
@@ -536,14 +590,17 @@ public final class ProcessList {
                     Process.killProcessGroup(msg.arg1 /* uid */, msg.arg2 /* pid */);
                     Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
                     break;
-                case LMDK_RECONNECT_MSG:
+                case LMKD_RECONNECT_MSG:
                     if (!sLmkdConnection.connect()) {
                         Slog.i(TAG, "Failed to connect to lmkd, retry after " +
-                                LMDK_RECONNECT_DELAY_MS + " ms");
-                        // retry after LMDK_RECONNECT_DELAY_MS
+                                LMKD_RECONNECT_DELAY_MS + " ms");
+                        // retry after LMKD_RECONNECT_DELAY_MS
                         sKillHandler.sendMessageDelayed(sKillHandler.obtainMessage(
-                                KillHandler.LMDK_RECONNECT_MSG), LMDK_RECONNECT_DELAY_MS);
+                                KillHandler.LMKD_RECONNECT_MSG), LMKD_RECONNECT_DELAY_MS);
                     }
+                    break;
+                case LMKD_PROC_KILLED_MSG:
+                    handleLmkdProcKilled(msg.arg1 /* pid */, msg.arg2 /* uid */);
                     break;
 
                 default:
@@ -561,9 +618,11 @@ public final class ProcessList {
         updateOomLevels(0, 0, false);
     }
 
-    void init(ActivityManagerService service, ActiveUids activeUids) {
+    void init(ActivityManagerService service, ActiveUids activeUids,
+            PlatformCompat platformCompat) {
         mService = service;
         mActiveUids = activeUids;
+        mPlatformCompat = platformCompat;
 
         if (sKillHandler == null) {
             sKillThread = new ServiceThread(TAG + ":kill",
@@ -577,13 +636,15 @@ public final class ProcessList {
                             Slog.i(TAG, "Connection with lmkd established");
                             return onLmkdConnect(ostream);
                         }
+
                         @Override
                         public void onDisconnect() {
                             Slog.w(TAG, "Lost connection to lmkd");
                             // start reconnection after delay to let lmkd restart
                             sKillHandler.sendMessageDelayed(sKillHandler.obtainMessage(
-                                    KillHandler.LMDK_RECONNECT_MSG), LMDK_RECONNECT_DELAY_MS);
+                                    KillHandler.LMKD_RECONNECT_MSG), LMKD_RECONNECT_DELAY_MS);
                         }
+
                         @Override
                         public boolean isReplyExpected(ByteBuffer replyBuf,
                                 ByteBuffer dataReceived, int receivedLen) {
@@ -591,6 +652,26 @@ public final class ProcessList {
                             // this is the reply packet we are waiting for
                             return (receivedLen == replyBuf.array().length &&
                                     dataReceived.getInt(0) == replyBuf.getInt(0));
+                        }
+
+                        @Override
+                        public boolean handleUnsolicitedMessage(ByteBuffer dataReceived,
+                                int receivedLen) {
+                            if (receivedLen < 4) {
+                                return false;
+                            }
+                            switch (dataReceived.getInt(0)) {
+                                case LMK_PROCKILL:
+                                    if (receivedLen != 12) {
+                                        return false;
+                                    }
+                                    sKillHandler.obtainMessage(KillHandler.LMKD_PROC_KILLED_MSG,
+                                            dataReceived.getInt(4), dataReceived.getInt(8))
+                                            .sendToTarget();
+                                    return true;
+                                default:
+                                    return false;
+                            }
                         }
                     }
             );
@@ -788,9 +869,6 @@ public final class ProcessList {
             case ActivityManager.PROCESS_STATE_TOP:
                 procState = "TOP ";
                 break;
-            case ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE_LOCATION:
-                procState = "FGSL";
-                break;
             case ActivityManager.PROCESS_STATE_BOUND_TOP:
                 procState = "BTOP";
                 break;
@@ -860,8 +938,6 @@ public final class ProcessList {
                 return AppProtoEnums.PROCESS_STATE_PERSISTENT_UI;
             case ActivityManager.PROCESS_STATE_TOP:
                 return AppProtoEnums.PROCESS_STATE_TOP;
-            case ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE_LOCATION:
-                return AppProtoEnums.PROCESS_STATE_FOREGROUND_SERVICE;
             case ActivityManager.PROCESS_STATE_BOUND_TOP:
                 return AppProtoEnums.PROCESS_STATE_BOUND_TOP;
             case ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE:
@@ -992,7 +1068,6 @@ public final class ProcessList {
         PROC_MEM_PERSISTENT,            // ActivityManager.PROCESS_STATE_PERSISTENT
         PROC_MEM_PERSISTENT,            // ActivityManager.PROCESS_STATE_PERSISTENT_UI
         PROC_MEM_TOP,                   // ActivityManager.PROCESS_STATE_TOP
-        PROC_MEM_IMPORTANT,             // ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE_LOCATION
         PROC_MEM_IMPORTANT,             // ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE
         PROC_MEM_TOP,                   // ActivityManager.PROCESS_STATE_BOUND_TOP
         PROC_MEM_IMPORTANT,             // ActivityManager.PROCESS_STATE_BOUND_FOREGROUND_SERVICE
@@ -1274,10 +1349,10 @@ public final class ProcessList {
         if (!sLmkdConnection.isConnected()) {
             // try to connect immediately and then keep retrying
             sKillHandler.sendMessage(
-                sKillHandler.obtainMessage(KillHandler.LMDK_RECONNECT_MSG));
+                    sKillHandler.obtainMessage(KillHandler.LMKD_RECONNECT_MSG));
 
             // wait for connection retrying 3 times (up to 3 seconds)
-            if (!sLmkdConnection.waitForConnection(3 * LMDK_RECONNECT_DELAY_MS)) {
+            if (!sLmkdConnection.waitForConnection(3 * LMKD_RECONNECT_DELAY_MS)) {
                 return false;
             }
         }
@@ -1307,7 +1382,7 @@ public final class ProcessList {
             final int procCount = procs.size();
             for (int i = 0; i < procCount; i++) {
                 final int procUid = procs.keyAt(i);
-                if (UserHandle.isApp(procUid) || !UserHandle.isSameUser(procUid, uid)) {
+                if (!UserHandle.isCore(procUid) || !UserHandle.isSameUser(procUid, uid)) {
                     // Don't use an app process or different user process for system component.
                     continue;
                 }
@@ -1397,19 +1472,15 @@ public final class ProcessList {
 
     /**
      * @return {@code true} if process start is successful, false otherwise.
-     * @param app
-     * @param hostingRecord
-     * @param disableHiddenApiChecks
-     * @param abiOverride
      */
     @GuardedBy("mService")
     boolean startProcessLocked(ProcessRecord app, HostingRecord hostingRecord,
-            boolean disableHiddenApiChecks, boolean mountExtStorageFull,
-            String abiOverride) {
+            boolean disableHiddenApiChecks, boolean disableTestApiChecks,
+            boolean mountExtStorageFull, String abiOverride) {
         if (app.pendingStart) {
             return true;
         }
-        long startTime = SystemClock.elapsedRealtime();
+        long startTime = SystemClock.uptimeMillis();
         if (app.pid > 0 && app.pid != ActivityManagerService.MY_PID) {
             checkSlow(startTime, "startProcess: removing from pids map");
             mService.mPidsSelfLocked.remove(app);
@@ -1550,6 +1621,10 @@ public final class ProcessList {
                     throw new IllegalStateException("Invalid API policy: " + policy);
                 }
                 runtimeFlags |= policyBits;
+
+                if (disableTestApiChecks) {
+                    runtimeFlags |= Zygote.DISABLE_TEST_API_ENFORCEMENT_POLICY;
+                }
             }
 
             String useAppImageCache = SystemProperties.get(
@@ -1634,6 +1709,10 @@ public final class ProcessList {
         if (app.pid != 0) {
             Slog.wtf(TAG, "startProcessLocked processName:" + app.processName
                     + " with non-zero pid:" + app.pid);
+        }
+        app.mDisabledCompatChanges = null;
+        if (mPlatformCompat != null) {
+            app.mDisabledCompatChanges = mPlatformCompat.getDisabledChanges(app.info);
         }
         final long startSeq = app.startSeq = ++mProcStartSeqCounter;
         app.setStartParams(uid, hostingRecord, seInfo, startTime);
@@ -1797,8 +1876,8 @@ public final class ProcessList {
                 startResult = startWebView(entryPoint,
                         app.processName, uid, uid, gids, runtimeFlags, mountExternal,
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
-                        app.info.dataDir, null, app.info.packageName,
-                        new String[] {PROC_START_SEQ_IDENT + app.startSeq});
+                        app.info.dataDir, null, app.info.packageName, app.mDisabledCompatChanges,
+                        new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             } else if (hostingRecord.usesAppZygote()) {
                 final AppZygote appZygote = createAppZygoteForProcessIfNeeded(app);
 
@@ -1806,14 +1885,15 @@ public final class ProcessList {
                         app.processName, uid, uid, gids, runtimeFlags, mountExternal,
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
                         app.info.dataDir, null, app.info.packageName,
-                        /*useUsapPool=*/ false, isTopApp,
-                        new String[] {PROC_START_SEQ_IDENT + app.startSeq});
+                        /*useUsapPool=*/ false, isTopApp, app.mDisabledCompatChanges,
+                        new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             } else {
                 startResult = Process.start(entryPoint,
                         app.processName, uid, uid, gids, runtimeFlags, mountExternal,
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
                         app.info.dataDir, invokeWith, app.info.packageName, isTopApp,
-                        new String[] {PROC_START_SEQ_IDENT + app.startSeq});
+                        app.mDisabledCompatChanges,
+                        new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             }
             checkSlow(startTime, "startProcess: returned from zygote!");
             return startResult;
@@ -1831,7 +1911,8 @@ public final class ProcessList {
     final boolean startProcessLocked(ProcessRecord app, HostingRecord hostingRecord,
             String abiOverride) {
         return startProcessLocked(app, hostingRecord,
-                false /* disableHiddenApiChecks */, false /* mountExtStorageFull */, abiOverride);
+                false /* disableHiddenApiChecks */, false /* disableTestApiChecks */,
+                false /* mountExtStorageFull */, abiOverride);
     }
 
     @GuardedBy("mService")
@@ -1839,7 +1920,7 @@ public final class ProcessList {
             boolean knownToBeDead, int intentFlags, HostingRecord hostingRecord,
             boolean allowWhileBooting, boolean isolated, int isolatedUid, boolean keepIfLarge,
             String abiOverride, String entryPoint, String[] entryPointArgs, Runnable crashHandler) {
-        long startTime = SystemClock.elapsedRealtime();
+        long startTime = SystemClock.uptimeMillis();
         ProcessRecord app;
         if (!isolated) {
             app = getProcessRecordLocked(processName, info.uid, keepIfLarge);
@@ -1900,10 +1981,9 @@ public final class ProcessList {
             // An application record is attached to a previous process,
             // clean it up now.
             if (DEBUG_PROCESSES) Slog.v(TAG_PROCESSES, "App died: " + app);
-            checkSlow(startTime, "startProcess: bad proc running, killing");
-            ProcessList.killProcessGroup(app.uid, app.pid);
-            mService.handleAppDiedLocked(app, true, true);
-            checkSlow(startTime, "startProcess: done killing old proc");
+            // do the killing
+            killProcAndWaitIfNecessaryLocked(app, true, app.uid == info.uid || app.isolated,
+                    "startProcess: bad proc running, killing: %s", startTime);
         }
 
         if (app == null) {
@@ -1942,6 +2022,70 @@ public final class ProcessList {
         final boolean success = startProcessLocked(app, hostingRecord, abiOverride);
         checkSlow(startTime, "startProcess: done starting proc!");
         return success ? app : null;
+    }
+
+    /**
+     * A lite version of checking if a process is alive or not, by using kill(2) with signal 0.
+     *
+     * <p>
+     * Note that, zombie processes are stil "alive" in this case, use the {@link
+     * ActivityManagerService#isProcessAliveLocked} if zombie processes need to be excluded.
+     * </p>
+     */
+    @GuardedBy("mService")
+    private boolean isProcessAliveLiteLocked(ProcessRecord app) {
+        try {
+            Os.kill(app.pid, 0);
+        } catch (ErrnoException e) {
+            return e.errno != OsConstants.ESRCH;
+        }
+        return true;
+    }
+
+    /**
+     * Kill (if asked to) and wait for the given process died if necessary
+     * @param app - The process record to kill
+     * @param doKill - Kill the given process record
+     * @param wait - Wait for the death of the given process
+     * @param formatString - The log message for slow operation
+     * @param startTime - The start timestamp of the operation
+     */
+    @GuardedBy("mService")
+    void killProcAndWaitIfNecessaryLocked(final ProcessRecord app, final boolean doKill,
+            final boolean wait, final String formatString, final long startTime) {
+
+        checkSlow(startTime, String.format(formatString, "before appDied"));
+
+        if (doKill) {
+            // do the killing
+            ProcessList.killProcessGroup(app.uid, app.pid);
+        }
+
+        // wait for the death
+        if (wait) {
+            boolean isAlive = true;
+            // ideally we should use pidfd_open(2) but it's available on kernel 5.3 or later
+
+            final long timeout = SystemClock.uptimeMillis() + PROC_KILL_TIMEOUT;
+            isAlive = isProcessAliveLiteLocked(app);
+            while (timeout > SystemClock.uptimeMillis() && isAlive) {
+                try {
+                    Thread.sleep(PROC_DEATH_POLL_INTERVAL);
+                } catch (InterruptedException e) {
+                }
+                isAlive = isProcessAliveLiteLocked(app);
+            }
+
+            if (isAlive) {
+                // Maybe the process goes into zombie, use an expensive API to check again.
+                if (mService.isProcessAliveLocked(app)) {
+                    Slog.w(TAG, String.format(formatString,
+                              "waiting for app killing timed out"));
+                }
+            }
+        }
+
+        checkSlow(startTime, String.format(formatString, "after appDied"));
     }
 
     @GuardedBy("mService")
@@ -2281,7 +2425,8 @@ public final class ProcessList {
             uidRec.updateHasInternetPermission();
             mActiveUids.put(proc.uid, uidRec);
             EventLogTags.writeAmUidRunning(uidRec.uid);
-            mService.noteUidProcessState(uidRec.uid, uidRec.getCurProcState());
+            mService.noteUidProcessState(uidRec.uid, uidRec.getCurProcState(),
+                    uidRec.curCapability);
         }
         proc.uidRecord = uidRec;
 
@@ -2383,7 +2528,8 @@ public final class ProcessList {
                 mService.enqueueUidChangeLocked(old.uidRecord, -1, UidRecord.CHANGE_GONE);
                 EventLogTags.writeAmUidStopped(uid);
                 mActiveUids.remove(uid);
-                mService.noteUidProcessState(uid, ActivityManager.PROCESS_STATE_NONEXISTENT);
+                mService.noteUidProcessState(uid, ActivityManager.PROCESS_STATE_NONEXISTENT,
+                        ActivityManager.PROCESS_CAPABILITY_NONE);
             }
             old.uidRecord = null;
         }
@@ -3187,6 +3333,139 @@ public final class ProcessList {
                 continue;
             }
             mService.doStopUidLocked(uidRec.uid, uidRec);
+        }
+    }
+
+    /**
+     * Checks if the uid is coming from background to foreground or vice versa and returns
+     * appropriate block state based on this.
+     *
+     * @return blockState based on whether the uid is coming from background to foreground or
+     *         vice versa. If bg->fg or fg->bg, then {@link #NETWORK_STATE_BLOCK} or
+     *         {@link #NETWORK_STATE_UNBLOCK} respectively, otherwise
+     *         {@link #NETWORK_STATE_NO_CHANGE}.
+     */
+    @VisibleForTesting
+    int getBlockStateForUid(UidRecord uidRec) {
+        // Denotes whether uid's process state is currently allowed network access.
+        final boolean isAllowed =
+                isProcStateAllowedWhileIdleOrPowerSaveMode(uidRec.getCurProcState())
+                || isProcStateAllowedWhileOnRestrictBackground(uidRec.getCurProcState());
+        // Denotes whether uid's process state was previously allowed network access.
+        final boolean wasAllowed = isProcStateAllowedWhileIdleOrPowerSaveMode(uidRec.setProcState)
+                || isProcStateAllowedWhileOnRestrictBackground(uidRec.setProcState);
+
+        // When the uid is coming to foreground, AMS should inform the app thread that it should
+        // block for the network rules to get updated before launching an activity.
+        if (!wasAllowed && isAllowed) {
+            return NETWORK_STATE_BLOCK;
+        }
+        // When the uid is going to background, AMS should inform the app thread that if an
+        // activity launch is blocked for the network rules to get updated, it should be unblocked.
+        if (wasAllowed && !isAllowed) {
+            return NETWORK_STATE_UNBLOCK;
+        }
+        return NETWORK_STATE_NO_CHANGE;
+    }
+
+    /**
+     * Checks if any uid is coming from background to foreground or vice versa and if so, increments
+     * the {@link UidRecord#curProcStateSeq} corresponding to that uid using global seq counter
+     * {@link ProcessList#mProcStateSeqCounter} and notifies the app if it needs to block.
+     */
+    @VisibleForTesting
+    @GuardedBy("mService")
+    void incrementProcStateSeqAndNotifyAppsLocked(ActiveUids activeUids) {
+        if (mService.mWaitForNetworkTimeoutMs <= 0) {
+            return;
+        }
+        // Used for identifying which uids need to block for network.
+        ArrayList<Integer> blockingUids = null;
+        for (int i = activeUids.size() - 1; i >= 0; --i) {
+            final UidRecord uidRec = activeUids.valueAt(i);
+            // If the network is not restricted for uid, then nothing to do here.
+            if (!mService.mInjector.isNetworkRestrictedForUid(uidRec.uid)) {
+                continue;
+            }
+            if (!UserHandle.isApp(uidRec.uid) || !uidRec.hasInternetPermission) {
+                continue;
+            }
+            // If process state is not changed, then there's nothing to do.
+            if (uidRec.setProcState == uidRec.getCurProcState()) {
+                continue;
+            }
+            final int blockState = getBlockStateForUid(uidRec);
+            // No need to inform the app when the blockState is NETWORK_STATE_NO_CHANGE as
+            // there's nothing the app needs to do in this scenario.
+            if (blockState == NETWORK_STATE_NO_CHANGE) {
+                continue;
+            }
+            synchronized (uidRec.networkStateLock) {
+                uidRec.curProcStateSeq = ++mProcStateSeqCounter; // TODO: use method
+                if (blockState == NETWORK_STATE_BLOCK) {
+                    if (blockingUids == null) {
+                        blockingUids = new ArrayList<>();
+                    }
+                    blockingUids.add(uidRec.uid);
+                } else {
+                    if (DEBUG_NETWORK) {
+                        Slog.d(TAG_NETWORK, "uid going to background, notifying all blocking"
+                                + " threads for uid: " + uidRec);
+                    }
+                    if (uidRec.waitingForNetwork) {
+                        uidRec.networkStateLock.notifyAll();
+                    }
+                }
+            }
+        }
+
+        // There are no uids that need to block, so nothing more to do.
+        if (blockingUids == null) {
+            return;
+        }
+
+        for (int i = mLruProcesses.size() - 1; i >= 0; --i) {
+            final ProcessRecord app = mLruProcesses.get(i);
+            if (!blockingUids.contains(app.uid)) {
+                continue;
+            }
+            if (!app.killedByAm && app.thread != null) {
+                final UidRecord uidRec = getUidRecordLocked(app.uid);
+                try {
+                    if (DEBUG_NETWORK) {
+                        Slog.d(TAG_NETWORK, "Informing app thread that it needs to block: "
+                                + uidRec);
+                    }
+                    if (uidRec != null) {
+                        app.thread.setNetworkBlockSeq(uidRec.curProcStateSeq);
+                    }
+                } catch (RemoteException ignored) {
+                }
+            }
+        }
+    }
+
+    void setLmkdKillListener(final LmkdKillListener listener) {
+        synchronized (mService) {
+            mLmkdKillListener = listener;
+        }
+    }
+
+    private void handleLmkdProcKilled(final int pid, final int uid) {
+        // Log only now
+        if (DEBUG_PROCESSES) {
+            Slog.i(TAG, "lmkd kill: pid=" + pid + " uid=" + uid);
+        }
+
+        if (mService == null) {
+            return;
+        }
+        // Notify any interesed party regarding the lmkd kills
+        synchronized (mService) {
+            final LmkdKillListener listener = mLmkdKillListener;
+            if (listener != null) {
+                mService.mHandler.post(()-> listener.onLmkdKillOccurred(pid, uid));
+            }
         }
     }
 }

@@ -72,6 +72,8 @@ interface IDevicePolicyManager {
     void setPasswordMinimumNonLetter(in ComponentName who, int length, boolean parent);
     int getPasswordMinimumNonLetter(in ComponentName who, int userHandle, boolean parent);
 
+    PasswordMetrics getPasswordMinimumMetrics(int userHandle);
+
     void setPasswordHistoryLength(in ComponentName who, int length, boolean parent);
     int getPasswordHistoryLength(in ComponentName who, int userHandle, boolean parent);
 
@@ -82,7 +84,7 @@ interface IDevicePolicyManager {
 
     boolean isActivePasswordSufficient(int userHandle, boolean parent);
     boolean isProfileActivePasswordSufficientForParent(int userHandle);
-    int getPasswordComplexity();
+    int getPasswordComplexity(boolean parent);
     boolean isUsingUnifiedPassword(in ComponentName admin);
     int getCurrentFailedPasswordAttempts(int userHandle, boolean parent);
     int getProfileWithMinimumFailedPasswordsForWipe(int userHandle, boolean parent);
@@ -100,7 +102,7 @@ interface IDevicePolicyManager {
 
     void lockNow(int flags, boolean parent);
 
-    void wipeDataWithReason(int flags, String wipeReasonForUser);
+    void wipeDataWithReason(int flags, String wipeReasonForUser, boolean parent);
 
     ComponentName setGlobalProxy(in ComponentName admin, String proxySpec, String exclusionList);
     ComponentName getGlobalProxyAdmin(int userHandle);
@@ -112,8 +114,8 @@ interface IDevicePolicyManager {
 
     boolean requestBugreport(in ComponentName who);
 
-    void setCameraDisabled(in ComponentName who, boolean disabled);
-    boolean getCameraDisabled(in ComponentName who, int userHandle);
+    void setCameraDisabled(in ComponentName who, boolean disabled, boolean parent);
+    boolean getCameraDisabled(in ComponentName who, int userHandle, boolean parent);
 
     void setScreenCaptureDisabled(in ComponentName who, boolean disabled);
     boolean getScreenCaptureDisabled(in ComponentName who, int userHandle);
@@ -256,6 +258,8 @@ interface IDevicePolicyManager {
     void setSystemSetting(in ComponentName who, in String setting, in String value);
     void setSecureSetting(in ComponentName who, in String setting, in String value);
 
+    void setLocationEnabled(in ComponentName who, boolean locationEnabled);
+
     boolean setTime(in ComponentName who, long millis);
     boolean setTimeZone(in ComponentName who, String timeZone);
 
@@ -290,6 +294,12 @@ interface IDevicePolicyManager {
 
     void setAutoTimeRequired(in ComponentName who, boolean required);
     boolean getAutoTimeRequired();
+
+    void setAutoTime(in ComponentName who, boolean enabled);
+    boolean getAutoTime(in ComponentName who);
+
+    void setAutoTimeZone(in ComponentName who, boolean enabled);
+    boolean getAutoTimeZone(in ComponentName who);
 
     void setForceEphemeralUsers(in ComponentName who, boolean forceEpehemeralUsers);
     boolean getForceEphemeralUsers(in ComponentName who);
@@ -422,7 +432,7 @@ interface IDevicePolicyManager {
     int getGlobalPrivateDnsMode(in ComponentName admin);
     String getGlobalPrivateDnsHost(in ComponentName admin);
 
-    void grantDeviceIdsAccessToProfileOwner(in ComponentName who, int userId);
+    void markProfileOwnerOnOrganizationOwnedDevice(in ComponentName who, int userId);
 
     void installUpdateFromFile(in ComponentName admin, in ParcelFileDescriptor updateFileDescriptor, in StartInstallingUpdateCallback listener);
 
@@ -430,6 +440,9 @@ interface IDevicePolicyManager {
     List<String> getCrossProfileCalendarPackages(in ComponentName admin);
     boolean isPackageAllowedToAccessCalendarForUser(String packageName, int userHandle);
     List<String> getCrossProfileCalendarPackagesForUser(int userHandle);
+
+    void setCrossProfilePackages(in ComponentName admin, in List<String> packageNames);
+    List<String> getCrossProfilePackages(in ComponentName admin);
 
     boolean isManagedKiosk();
     boolean isUnattendedManagedKiosk();

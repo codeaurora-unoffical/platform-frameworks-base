@@ -25,17 +25,18 @@ import static android.telephony.SmsCbEtwsInfo.ETWS_WARNING_TYPE_TSUNAMI;
 import android.annotation.NonNull;
 import android.content.Context;
 import android.content.res.Resources;
+import android.telephony.CbGeoUtils;
+import android.telephony.CbGeoUtils.Circle;
+import android.telephony.CbGeoUtils.Geometry;
+import android.telephony.CbGeoUtils.LatLng;
+import android.telephony.CbGeoUtils.Polygon;
+import android.telephony.Rlog;
 import android.telephony.SmsCbLocation;
 import android.telephony.SmsCbMessage;
+import android.telephony.SubscriptionManager;
 import android.util.Pair;
-import android.util.Slog;
 
 import com.android.internal.R;
-import com.android.internal.telephony.CbGeoUtils;
-import com.android.internal.telephony.CbGeoUtils.Circle;
-import com.android.internal.telephony.CbGeoUtils.Geometry;
-import com.android.internal.telephony.CbGeoUtils.LatLng;
-import com.android.internal.telephony.CbGeoUtils.Polygon;
 import com.android.internal.telephony.GsmAlphabet;
 import com.android.internal.telephony.SmsConstants;
 import com.android.internal.telephony.gsm.GsmSmsCbMessage.GeoFencingTriggerMessage.CellBroadcastIdentity;
@@ -90,10 +91,19 @@ public class GsmSmsCbMessage {
      * Create a new SmsCbMessage object from a header object plus one or more received PDUs.
      *
      * @param pdus PDU bytes
+     * @slotIndex slotIndex for which received sms cb message
      */
     public static SmsCbMessage createSmsCbMessage(Context context, SmsCbHeader header,
-            SmsCbLocation location, byte[][] pdus)
+            SmsCbLocation location, byte[][] pdus, int slotIndex)
             throws IllegalArgumentException {
+        SubscriptionManager sm = (SubscriptionManager) context.getSystemService(
+                Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+        int subId = SubscriptionManager.DEFAULT_SUBSCRIPTION_ID;
+        int[] subIds = sm.getSubscriptionIds(slotIndex);
+        if (subIds != null && subIds.length > 0) {
+            subId = subIds[0];
+        }
+
         long receivedTimeMillis = System.currentTimeMillis();
         if (header.isEtwsPrimaryNotification()) {
             // ETSI TS 23.041 ETWS Primary Notification message
@@ -104,7 +114,8 @@ public class GsmSmsCbMessage {
                     header.getSerialNumber(), location, header.getServiceCategory(), null,
                     getEtwsPrimaryMessage(context, header.getEtwsInfo().getWarningType()),
                     SmsCbMessage.MESSAGE_PRIORITY_EMERGENCY, header.getEtwsInfo(),
-                    header.getCmasInfo(), 0, null /* geometries */, receivedTimeMillis);
+                    header.getCmasInfo(), 0, null /* geometries */, receivedTimeMillis, slotIndex,
+                    subId);
         } else if (header.isUmtsFormat()) {
             // UMTS format has only 1 PDU
             byte[] pdu = pdus[0];
@@ -130,7 +141,7 @@ public class GsmSmsCbMessage {
                 } catch (Exception ex) {
                     // Catch the exception here, the message will be considered as having no WAC
                     // information which means the message will be broadcasted directly.
-                    Slog.e(TAG, "Can't parse warning area coordinates, ex = " + ex.toString());
+                    Rlog.e(TAG, "Can't parse warning area coordinates, ex = " + ex.toString());
                 }
             }
 
@@ -138,7 +149,7 @@ public class GsmSmsCbMessage {
                     header.getGeographicalScope(), header.getSerialNumber(), location,
                     header.getServiceCategory(), language, body, priority,
                     header.getEtwsInfo(), header.getCmasInfo(), maximumWaitingTimeSec, geometries,
-                    receivedTimeMillis);
+                    receivedTimeMillis, slotIndex, subId);
         } else {
             String language = null;
             StringBuilder sb = new StringBuilder();
@@ -154,7 +165,7 @@ public class GsmSmsCbMessage {
                     header.getGeographicalScope(), header.getSerialNumber(), location,
                     header.getServiceCategory(), language, sb.toString(), priority,
                     header.getEtwsInfo(), header.getCmasInfo(), 0, null /* geometries */,
-                    receivedTimeMillis);
+                    receivedTimeMillis, slotIndex, subId);
         }
     }
 
@@ -197,7 +208,7 @@ public class GsmSmsCbMessage {
             }
             return new GeoFencingTriggerMessage(type, cbIdentifiers);
         } catch (Exception ex) {
-            Slog.e(TAG, "create geo-fencing trigger failed, ex = " + ex.toString());
+            Rlog.e(TAG, "create geo-fencing trigger failed, ex = " + ex.toString());
             return null;
         }
     }
@@ -214,7 +225,7 @@ public class GsmSmsCbMessage {
     private static Pair<Integer, List<Geometry>> parseWarningAreaCoordinates(
             byte[] pdu, int wacOffset) {
         // little-endian
-        int wacDataLength = (pdu[wacOffset + 1] << 8) | pdu[wacOffset];
+        int wacDataLength = ((pdu[wacOffset + 1] & 0xff) << 8) | (pdu[wacOffset] & 0xff);
         int offset = wacOffset + 2;
 
         if (offset + wacDataLength > pdu.length) {
@@ -461,7 +472,11 @@ public class GsmSmsCbMessage {
         }
     }
 
-    static final class GeoFencingTriggerMessage {
+    /**
+     * Part of a GSM SMS cell broadcast message which may trigger geo-fencing logic.
+     * @hide
+     */
+    public static final class GeoFencingTriggerMessage {
         /**
          * Indicate the list of active alerts share their warning area coordinates which means the
          * broadcast area is the union of the broadcast areas of the active alerts in this list.
@@ -476,6 +491,11 @@ public class GsmSmsCbMessage {
             this.cbIdentifiers = cbIdentifiers;
         }
 
+        /**
+         * Whether the trigger message indicates that the broadcast areas are shared between all
+         * active alerts.
+         * @return true if broadcast areas are to be shared
+         */
         boolean shouldShareBroadcastArea() {
             return type == TYPE_ACTIVE_ALERT_SHARE_WAC;
         }

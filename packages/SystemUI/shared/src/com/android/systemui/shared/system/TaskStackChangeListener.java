@@ -17,6 +17,7 @@
 package com.android.systemui.shared.system;
 
 import android.app.ActivityManager.RunningTaskInfo;
+import android.app.ITaskStackListener;
 import android.content.ComponentName;
 import android.os.IBinder;
 import android.os.UserHandle;
@@ -88,6 +89,14 @@ public abstract class TaskStackChangeListener {
         onTaskMovedToFront(taskInfo.taskId);
     }
 
+    /**
+     * Called when a task’s description is changed due to an activity calling
+     * ActivityManagerService.setTaskDescription
+     *
+     * @param taskInfo info about the task which changed, with {@link TaskInfo#taskDescription}
+     */
+    public void onTaskDescriptionChanged(RunningTaskInfo taskInfo) { }
+
     public void onActivityRequestedOrientationChanged(int taskId, int requestedOrientation) { }
     public void onSizeCompatModeActivityChanged(int displayId, IBinder activityToken) { }
 
@@ -105,6 +114,9 @@ public abstract class TaskStackChangeListener {
      * Called when any additions or deletions to the recent tasks list have been made.
      */
     public void onRecentTaskListUpdated() { }
+
+    /** @see ITaskStackListener#onRecentTaskListFrozenChanged(boolean) */
+    public void onRecentTaskListFrozenChanged(boolean frozen) { }
 
     /**
      * Checks that the current user matches the process. Since

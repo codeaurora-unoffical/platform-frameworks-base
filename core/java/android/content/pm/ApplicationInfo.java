@@ -470,6 +470,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
      *
      * {@hide}
      */
+    @UnsupportedAppUsage
     @TestApi
     public static final int PRIVATE_FLAG_PRIVILEGED = 1<<3;
 
@@ -733,6 +734,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
      * Private/hidden flags. See {@code PRIVATE_FLAG_...} constants.
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public @ApplicationInfoPrivateFlags int privateFlags;
 
@@ -1396,9 +1398,9 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
     }
 
     /** {@hide} */
-    public void writeToProto(ProtoOutputStream proto, long fieldId, int dumpFlags) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId, int dumpFlags) {
         long token = proto.start(fieldId);
-        super.writeToProto(proto, ApplicationInfoProto.PACKAGE, dumpFlags);
+        super.dumpDebug(proto, ApplicationInfoProto.PACKAGE, dumpFlags);
         proto.write(ApplicationInfoProto.PERMISSION, permission);
         proto.write(ApplicationInfoProto.PROCESS_NAME, processName);
         proto.write(ApplicationInfoProto.UID, uid);

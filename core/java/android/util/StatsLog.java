@@ -24,7 +24,7 @@ import android.annotation.NonNull;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.content.Context;
-import android.os.IStatsManager;
+import android.os.IStatsd;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 
@@ -36,7 +36,7 @@ public final class StatsLog extends StatsLogInternal {
     private static final String TAG = "StatsLog";
     private static final boolean DEBUG = false;
 
-    private static IStatsManager sService;
+    private static IStatsd sService;
 
     private static Object sLogLock = new Object();
 
@@ -52,7 +52,7 @@ public final class StatsLog extends StatsLogInternal {
     public static boolean logStart(int label) {
         synchronized (sLogLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (service == null) {
                     if (DEBUG) {
                         Slog.d(TAG, "Failed to find statsd when logging start");
@@ -81,7 +81,7 @@ public final class StatsLog extends StatsLogInternal {
     public static boolean logStop(int label) {
         synchronized (sLogLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (service == null) {
                     if (DEBUG) {
                         Slog.d(TAG, "Failed to find statsd when logging stop");
@@ -109,7 +109,7 @@ public final class StatsLog extends StatsLogInternal {
     public static boolean logEvent(int label) {
         synchronized (sLogLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (service == null) {
                     if (DEBUG) {
                         Slog.d(TAG, "Failed to find statsd when logging event");
@@ -151,7 +151,7 @@ public final class StatsLog extends StatsLogInternal {
             @NonNull long[] experimentIds) {
         synchronized (sLogLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (service == null) {
                     if (DEBUG) {
                         Slog.d(TAG, "Failed to find statsd when logging event");
@@ -179,6 +179,8 @@ public final class StatsLog extends StatsLogInternal {
      * @param rollbackType          state of the rollback.
      * @param packageName           package name being rolled back.
      * @param packageVersionCode    version of the package being rolled back.
+     * @param rollbackReason        reason the package is being rolled back.
+     * @param failingPackageName    the package name causing the failure.
      *
      * @return True if the log request was sent to statsd.
      *
@@ -186,10 +188,10 @@ public final class StatsLog extends StatsLogInternal {
      */
     @RequiresPermission(allOf = {DUMP, PACKAGE_USAGE_STATS})
     public static boolean logWatchdogRollbackOccurred(int rollbackType, String packageName,
-            long packageVersionCode) {
+            long packageVersionCode, int rollbackReason, String failingPackageName) {
         synchronized (sLogLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (service == null) {
                     if (DEBUG) {
                         Slog.d(TAG, "Failed to find statsd when logging event");
@@ -198,7 +200,7 @@ public final class StatsLog extends StatsLogInternal {
                 }
 
                 service.sendWatchdogRollbackOccurredAtom(rollbackType, packageName,
-                        packageVersionCode);
+                        packageVersionCode, rollbackReason, failingPackageName);
                 return true;
             } catch (RemoteException e) {
                 sService = null;
@@ -213,23 +215,49 @@ public final class StatsLog extends StatsLogInternal {
     }
 
 
-    private static IStatsManager getIStatsManagerLocked() throws RemoteException {
+    private static IStatsd getIStatsdLocked() throws RemoteException {
         if (sService != null) {
             return sService;
         }
-        sService = IStatsManager.Stub.asInterface(ServiceManager.getService("stats"));
+        sService = IStatsd.Stub.asInterface(ServiceManager.getService("stats"));
         return sService;
     }
 
     /**
      * Write an event to stats log using the raw format.
      *
-     * @param buffer    The encoded buffer of data to write..
+     * @param buffer    The encoded buffer of data to write.
      * @param size      The number of bytes from the buffer to write.
      * @hide
      */
+    // TODO(b/144935988): Mark deprecated.
     @SystemApi
-    public static native void writeRaw(@NonNull byte[] buffer, int size);
+    public static void writeRaw(@NonNull byte[] buffer, int size) {
+        // TODO(b/144935988): make this no-op once clients have migrated to StatsEvent.
+        writeImpl(buffer, size, 0);
+    }
+
+    /**
+     * Write an event to stats log using the raw format.
+     *
+     * @param buffer    The encoded buffer of data to write.
+     * @param size      The number of bytes from the buffer to write.
+     * @param atomId    The id of the atom to which the event belongs.
+     */
+    private static native void writeImpl(@NonNull byte[] buffer, int size, int atomId);
+
+    /**
+     * Write an event to stats log using the raw format encapsulated in StatsEvent.
+     * After writing to stats log, release() is called on the StatsEvent object.
+     * No further action should be taken on the StatsEvent object following this call.
+     *
+     * @param statsEvent    The StatsEvent object containing the encoded buffer of data to write.
+     * @hide
+     */
+    public static void write(@NonNull final StatsEvent statsEvent) {
+        writeImpl(statsEvent.getBytes(), statsEvent.getNumBytes(), statsEvent.getAtomId());
+        statsEvent.release();
+    }
 
     private static void enforceDumpCallingPermission(Context context) {
         context.enforceCallingPermission(android.Manifest.permission.DUMP, "Need DUMP permission.");

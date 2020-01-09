@@ -64,6 +64,7 @@ import java.util.concurrent.TimeUnit;
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
 @RunWithLooper(setAsMainLooper = true)
+@Ignore
 public class NotificationContentInflaterTest extends SysuiTestCase {
 
     private NotificationContentInflater mNotificationInflater;
@@ -77,7 +78,7 @@ public class NotificationContentInflaterTest extends SysuiTestCase {
                 .setContentTitle("Title")
                 .setContentText("Text")
                 .setStyle(new Notification.BigTextStyle().bigText("big text"));
-        ExpandableNotificationRow row = new NotificationTestHelper(mContext).createRow(
+        ExpandableNotificationRow row = new NotificationTestHelper(mContext, mDependency).createRow(
                 mBuilder.build());
         mRow = spy(row);
         mNotificationInflater = new NotificationContentInflater(mRow);
@@ -139,7 +140,7 @@ public class NotificationContentInflaterTest extends SysuiTestCase {
     @Test
     public void testInflationThrowsErrorDoesntCallUpdated() throws Exception {
         mRow.getPrivateLayout().removeAllViews();
-        mRow.getStatusBarNotification().getNotification().contentView
+        mRow.getEntry().getSbn().getNotification().contentView
                 = new RemoteViews(mContext.getPackageName(), R.layout.status_bar);
         runThenWaitForInflation(() -> mNotificationInflater.inflateNotificationViews(),
                 true /* expectingException */, mNotificationInflater);

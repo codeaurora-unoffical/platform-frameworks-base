@@ -281,6 +281,7 @@ message GlobalSettingsProto {
         optional SettingProto force_rtl = 4 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto emulate_display_cutout = 5 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto force_desktop_mode_on_external_displays = 6 [ (android.privacy).dest = DEST_AUTOMATIC ];
+        optional SettingProto enable_sizecompat_freeform = 7 [ (android.privacy).dest = DEST_AUTOMATIC ];
     }
     optional Development development = 39;
 
@@ -565,6 +566,7 @@ message GlobalSettingsProto {
     optional LowPowerMode low_power_mode = 70;
 
     optional SettingProto lte_service_forced = 71 [ (android.privacy).dest = DEST_AUTOMATIC ];
+    repeated SettingProto max_error_bytes = 151;
     optional SettingProto mdc_initial_max_retry = 72 [ (android.privacy).dest = DEST_AUTOMATIC ];
 
     message Mhl {
@@ -853,6 +855,7 @@ message GlobalSettingsProto {
         optional SettingProto low_battery_sounds_enabled = 12 [ (android.privacy).dest = DEST_AUTOMATIC ];
         optional SettingProto trusted = 13;
         optional SettingProto unlock = 14;
+        optional SettingProto wireless_charging_started = 15;
     }
     optional Sounds sounds = 110;
 
@@ -1056,5 +1059,5 @@ message GlobalSettingsProto {
 
     // Please insert fields in alphabetical order and group them into messages
     // if possible (to avoid reaching the method limit).
-    // Next tag = 151;
+    // Next tag = 152;
 }

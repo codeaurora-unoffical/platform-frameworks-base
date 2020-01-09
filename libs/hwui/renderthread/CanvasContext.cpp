@@ -102,13 +102,13 @@ CanvasContext::CanvasContext(RenderThread& thread, bool translucent, RenderNode*
         , mGenerationID(0)
         , mOpaque(!translucent)
         , mAnimationContext(contextFactory->createAnimationContext(mRenderThread.timeLord()))
-        , mJankTracker(&thread.globalProfileData(), DeviceInfo::get()->displayInfo())
+        , mJankTracker(&thread.globalProfileData())
         , mProfiler(mJankTracker.frames(), thread.timeLord().frameIntervalNanos())
         , mContentDrawBounds(0, 0, 0, 0)
         , mRenderPipeline(std::move(renderPipeline)) {
     rootRenderNode->makeRoot();
     mRenderNodes.emplace_back(rootRenderNode);
-    mProfiler.setDensity(DeviceInfo::get()->displayInfo().density);
+    mProfiler.setDensity(DeviceInfo::getDensity());
     setRenderAheadDepth(Properties::defaultRenderAhead);
 }
 
@@ -140,14 +140,15 @@ void CanvasContext::destroy() {
     mAnimationContext->destroy();
 }
 
-void CanvasContext::setSurface(sp<Surface>&& surface) {
+void CanvasContext::setSurface(sp<Surface>&& surface, bool enableTimeout) {
     ATRACE_CALL();
 
     if (surface) {
         mNativeSurface = new ReliableSurface{std::move(surface)};
-        // TODO: Fix error handling & re-shorten timeout
-        mNativeSurface->setDequeueTimeout(4000_ms);
-        mNativeSurface->enableFrameTimestamps(true);
+        if (enableTimeout) {
+            // TODO: Fix error handling & re-shorten timeout
+            ANativeWindow_setDequeueTimeout(mNativeSurface.get(), 4000_ms);
+        }
     } else {
         mNativeSurface = nullptr;
     }
@@ -169,6 +170,10 @@ void CanvasContext::setSurface(sp<Surface>&& surface) {
     if (hasSurface) {
         mHaveNewSurface = true;
         mSwapHistory.clear();
+        // Enable frame stats after the surface has been bound to the appropriate graphics API.
+        // Order is important when new and old surfaces are the same, because old surface has
+        // its frame stats disabled automatically.
+        mNativeSurface->enableFrameTimestamps(true);
     } else {
         mRenderThread.removeFrameCallback(this);
         mGenerationID++;
@@ -303,10 +308,10 @@ void CanvasContext::prepareTree(TreeInfo& info, int64_t* uiFrameInfo, int64_t sy
 
     info.damageAccumulator = &mDamageAccumulator;
     info.layerUpdateQueue = &mLayerUpdateQueue;
+    info.damageGenerationId = mDamageId++;
     info.out.canDrawThisFrame = true;
 
     mAnimationContext->startFrame(info.mode);
-    mRenderPipeline->onPrepareTree();
     for (const sp<RenderNode>& node : mRenderNodes) {
         // Only the primary target node will be drawn full - all other nodes would get drawn in
         // real time mode. In case of a window, the primary node is the window content and the other
@@ -479,7 +484,8 @@ void CanvasContext::draw() {
         if (didDraw) {
             swap.damage = windowDirty;
         } else {
-            swap.damage = SkRect::MakeWH(INT_MAX, INT_MAX);
+            float max = static_cast<float>(INT_MAX);
+            swap.damage = SkRect::MakeWH(max, max);
         }
         swap.swapCompletedTime = systemTime(SYSTEM_TIME_MONOTONIC);
         swap.vsyncTime = mRenderThread.timeLord().latestVsync();
@@ -491,9 +497,9 @@ void CanvasContext::draw() {
                 swap.dequeueDuration = 0;
             } else {
                 swap.dequeueDuration =
-                        us2ns(ANativeWindow_getLastDequeueDuration(mNativeSurface.get()));
+                        ANativeWindow_getLastDequeueDuration(mNativeSurface.get());
             }
-            swap.queueDuration = us2ns(ANativeWindow_getLastQueueDuration(mNativeSurface.get()));
+            swap.queueDuration = ANativeWindow_getLastQueueDuration(mNativeSurface.get());
         } else {
             swap.dequeueDuration = 0;
             swap.queueDuration = 0;
@@ -565,8 +571,8 @@ SkISize CanvasContext::getNextFrameSize() const {
     ReliableSurface* surface = mNativeSurface.get();
     if (surface) {
         SkISize size;
-        surface->query(NATIVE_WINDOW_WIDTH, &size.fWidth);
-        surface->query(NATIVE_WINDOW_HEIGHT, &size.fHeight);
+        size.fWidth = ANativeWindow_getWidth(surface);
+        size.fHeight = ANativeWindow_getHeight(surface);
         return size;
     }
     return {INT32_MAX, INT32_MAX};
@@ -703,7 +709,7 @@ bool CanvasContext::surfaceRequiresRedraw() {
     surface->query(NATIVE_WINDOW_WIDTH, &width);
     surface->query(NATIVE_WINDOW_HEIGHT, &height);
 
-    return width == mLastFrameWidth && height == mLastFrameHeight;
+    return width != mLastFrameWidth || height != mLastFrameHeight;
 }
 
 void CanvasContext::setRenderAheadDepth(int renderAhead) {

@@ -50,8 +50,6 @@ import android.os.ResultReceiver;
 import android.os.ShellCallback;
 import android.os.UserHandle;
 import android.os.UserManagerInternal;
-import android.service.sms.FinancialSmsService;
-import android.telephony.IFinancialSmsCallback;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
@@ -269,6 +267,7 @@ public class RoleManagerService extends SystemService implements RoleUserState.C
         maybeMigrateRole(RoleManager.ROLE_DIALER, userId);
         maybeMigrateRole(RoleManager.ROLE_SMS, userId);
         maybeMigrateRole(RoleManager.ROLE_EMERGENCY, userId);
+        maybeMigrateRole(RoleManager.ROLE_HOME, userId);
 
         // Some package state has changed, so grant default roles again.
         Slog.i(LOG_TAG, "Granting default roles...");
@@ -308,12 +307,12 @@ public class RoleManagerService extends SystemService implements RoleUserState.C
         ByteArrayOutputStream out = new ByteArrayOutputStream();
 
         pm.forEachInstalledPackage(FunctionalUtils.uncheckExceptions(pkg -> {
-            out.write(pkg.packageName.getBytes());
+            out.write(pkg.getPackageName().getBytes());
             out.write(BitUtils.toBytes(pkg.getLongVersionCode()));
-            out.write(pm.getApplicationEnabledState(pkg.packageName, userId));
+            out.write(pm.getApplicationEnabledState(pkg.getPackageName(), userId));
 
             ArraySet<String> enabledComponents =
-                    pm.getEnabledComponents(pkg.packageName, userId);
+                    pm.getEnabledComponents(pkg.getPackageName(), userId);
             int numComponents = CollectionUtils.size(enabledComponents);
             out.write(numComponents);
             for (int i = 0; i < numComponents; i++) {
@@ -321,12 +320,12 @@ public class RoleManagerService extends SystemService implements RoleUserState.C
             }
 
             ArraySet<String> disabledComponents =
-                    pm.getDisabledComponents(pkg.packageName, userId);
+                    pm.getDisabledComponents(pkg.getPackageName(), userId);
             numComponents = CollectionUtils.size(disabledComponents);
             for (int i = 0; i < numComponents; i++) {
                 out.write(disabledComponents.valueAt(i).getBytes());
             }
-            for (Signature signature : pkg.mSigningDetails.signatures) {
+            for (Signature signature : pkg.getSigningDetails().signatures) {
                 out.write(signature.toByteArray());
             }
         }), userId);
@@ -699,40 +698,6 @@ public class RoleManagerService extends SystemService implements RoleUserState.C
             }
 
             dumpOutputStream.flush();
-        }
-
-        /**
-         * Get filtered SMS messages for financial app.
-         */
-        @Override
-        public void getSmsMessagesForFinancialApp(
-                String callingPkg, Bundle params, IFinancialSmsCallback callback) {
-            int mode = PermissionChecker.checkCallingOrSelfPermission(
-                    getContext(),
-                    AppOpsManager.OPSTR_SMS_FINANCIAL_TRANSACTIONS);
-
-            if (mode == PermissionChecker.PERMISSION_GRANTED) {
-                FinancialSmsManager financialSmsManager = new FinancialSmsManager(getContext());
-                financialSmsManager.getSmsMessages(new RemoteCallback((result) -> {
-                    CursorWindow messages = null;
-                    if (result == null) {
-                        Slog.w(LOG_TAG, "result is null.");
-                    } else {
-                        messages = result.getParcelable(FinancialSmsService.EXTRA_SMS_MSGS);
-                    }
-                    try {
-                        callback.onGetSmsMessagesForFinancialApp(messages);
-                    } catch (RemoteException e) {
-                        // do nothing
-                    }
-                }), params);
-            } else {
-                try {
-                    callback.onGetSmsMessagesForFinancialApp(null);
-                } catch (RemoteException e) {
-                    // do nothing
-                }
-            }
         }
 
         private int getUidForPackage(String packageName) {

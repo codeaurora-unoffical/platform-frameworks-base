@@ -103,10 +103,6 @@ public class GnssMetrics {
         mPositionAccuracyMeterStatistics = new Statistics();
         mTopFourAverageCn0Statistics = new Statistics();
         mTopFourAverageCn0StatisticsL5 = new Statistics();
-        mNumSvStatus = 0;
-        mNumL5SvStatus = 0;
-        mNumSvStatusUsedInFix = 0;
-        mNumL5SvStatusUsedInFix = 0;
         reset();
     }
 
@@ -114,6 +110,7 @@ public class GnssMetrics {
      * Logs the status of a location report received from the HAL
      */
     public void logReceivedLocationStatus(boolean isSuccessful) {
+        StatsLog.write(StatsLog.GPS_LOCATION_STATUS_REPORTED, isSuccessful);
         if (!isSuccessful) {
             mLocationFailureStatistics.addItem(1.0);
             return;
@@ -130,6 +127,7 @@ public class GnssMetrics {
                 DEFAULT_TIME_BETWEEN_FIXES_MILLISECS, desiredTimeBetweenFixesMilliSeconds)) - 1;
         if (numReportMissed > 0) {
             for (int i = 0; i < numReportMissed; i++) {
+                StatsLog.write(StatsLog.GPS_LOCATION_STATUS_REPORTED, false);
                 mLocationFailureStatistics.addItem(1.0);
             }
         }
@@ -140,6 +138,7 @@ public class GnssMetrics {
      */
     public void logTimeToFirstFixMilliSecs(int timeToFirstFixMilliSeconds) {
         mTimeToFirstFixSecStatistics.addItem((double) (timeToFirstFixMilliSeconds / 1000));
+        StatsLog.write(StatsLog.GPS_TIME_TO_FIRST_FIX_REPORTED, timeToFirstFixMilliSeconds);
     }
 
     /**
@@ -188,22 +187,18 @@ public class GnssMetrics {
 
     /**
     * Logs sv status data
-    *
-    * @param svCount
-    * @param svidWithFlags
-    * @param svCarrierFreqs
     */
-    public void logSvStatus(int svCount, int[] svidWithFlags, float[] svCarrierFreqs) {
+    public void logSvStatus(GnssStatus status) {
         boolean isL5 = false;
         // Calculate SvStatus Information
-        for (int i = 0; i < svCount; i++) {
-            if ((svidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_HAS_CARRIER_FREQUENCY) != 0) {
+        for (int i = 0; i < status.getSatelliteCount(); i++) {
+            if (status.hasCarrierFrequencyHz(i)) {
                 mNumSvStatus++;
-                isL5 = isL5Sv(svCarrierFreqs[i]);
+                isL5 = isL5Sv(status.getCarrierFrequencyHz(i));
                 if (isL5) {
                     mNumL5SvStatus++;
                 }
-                if ((svidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_USED_IN_FIX) != 0) {
+                if (status.usedInFix(i)) {
                     mNumSvStatusUsedInFix++;
                     if (isL5) {
                         mNumL5SvStatusUsedInFix++;
@@ -211,15 +206,10 @@ public class GnssMetrics {
                 }
             }
         }
-        return;
     }
 
     /**
     * Logs CN0 when at least 4 SVs are available L5 Only
-    *
-    * @param svCount
-    * @param cn0s
-    * @param svCarrierFreqs
     */
     private void logCn0L5(int svCount, float[] cn0s, float[] svCarrierFreqs) {
         if (svCount == 0 || cn0s == null || cn0s.length == 0 || cn0s.length < svCount
@@ -416,6 +406,11 @@ public class GnssMetrics {
         mPositionAccuracyMeterStatistics.reset();
         mTopFourAverageCn0Statistics.reset();
         resetConstellationTypes();
+        mTopFourAverageCn0StatisticsL5.reset();
+        mNumSvStatus = 0;
+        mNumL5SvStatus = 0;
+        mNumSvStatusUsedInFix = 0;
+        mNumL5SvStatusUsedInFix = 0;
     }
 
     /** Resets {@link #mConstellationTypes} as an all-false boolean array. */

@@ -16,11 +16,11 @@
 
 package android.telecom;
 
-import android.annotation.Nullable;
 import android.annotation.UnsupportedAppUsage;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.RemoteException;
@@ -65,6 +65,7 @@ public final class ParcelableCall implements Parcelable {
     private final Bundle mExtras;
     private final long mCreationTimeMillis;
     private final int mCallDirection;
+    private final int mCallerNumberVerificationStatus;
 
     public ParcelableCall(
             String id,
@@ -93,7 +94,8 @@ public final class ParcelableCall implements Parcelable {
             Bundle intentExtras,
             Bundle extras,
             long creationTimeMillis,
-            int callDirection) {
+            int callDirection,
+            int callerNumberVerificationStatus) {
         mId = id;
         mState = state;
         mDisconnectCause = disconnectCause;
@@ -121,6 +123,7 @@ public final class ParcelableCall implements Parcelable {
         mExtras = extras;
         mCreationTimeMillis = creationTimeMillis;
         mCallDirection = callDirection;
+        mCallerNumberVerificationStatus = callerNumberVerificationStatus;
     }
 
     /** The unique ID of the call. */
@@ -225,6 +228,10 @@ public final class ParcelableCall implements Parcelable {
         return mVideoCall;
     }
 
+    public IVideoProvider getVideoProvider() {
+        return mVideoCallProvider;
+    }
+
     public boolean getIsRttCallChanged() {
         return mIsRttCallChanged;
     }
@@ -317,6 +324,15 @@ public final class ParcelableCall implements Parcelable {
         return mCallDirection;
     }
 
+    /**
+     * Gets the verification status for the phone number of an incoming call as identified in
+     * ATIS-1000082.
+     * @return the verification status.
+     */
+    public @Connection.VerificationStatus int getCallerNumberVerificationStatus() {
+        return mCallerNumberVerificationStatus;
+    }
+
     /** Responsible for creating ParcelableCall objects for deserialized Parcels. */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     public static final @android.annotation.NonNull Parcelable.Creator<ParcelableCall> CREATOR =
@@ -355,6 +371,7 @@ public final class ParcelableCall implements Parcelable {
             ParcelableRttCall rttCall = source.readParcelable(classLoader);
             long creationTimeMillis = source.readLong();
             int callDirection = source.readInt();
+            int callerNumberVerificationStatus = source.readInt();
             return new ParcelableCall(
                     id,
                     state,
@@ -382,7 +399,8 @@ public final class ParcelableCall implements Parcelable {
                     intentExtras,
                     extras,
                     creationTimeMillis,
-                    callDirection);
+                    callDirection,
+                    callerNumberVerificationStatus);
         }
 
         @Override
@@ -428,6 +446,7 @@ public final class ParcelableCall implements Parcelable {
         destination.writeParcelable(mRttCall, 0);
         destination.writeLong(mCreationTimeMillis);
         destination.writeInt(mCallDirection);
+        destination.writeInt(mCallerNumberVerificationStatus);
     }
 
     @Override

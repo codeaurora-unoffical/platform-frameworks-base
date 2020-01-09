@@ -43,10 +43,8 @@ import android.annotation.Nullable;
 import android.app.ActivityOptions;
 import android.app.WindowConfiguration;
 import android.content.pm.ActivityInfo;
-import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
 import android.graphics.Rect;
-import android.os.Build;
 import android.util.Slog;
 import android.view.Gravity;
 import android.view.View;
@@ -64,15 +62,6 @@ import java.util.List;
 class TaskLaunchParamsModifier implements LaunchParamsModifier {
     private static final String TAG = TAG_WITH_CLASS_NAME ? "TaskLaunchParamsModifier" : TAG_ATM;
     private static final boolean DEBUG = false;
-
-    // A mask for SUPPORTS_SCREEN that indicates the activity supports resize.
-    private static final int SUPPORTS_SCREEN_RESIZEABLE_MASK =
-            ApplicationInfo.FLAG_SUPPORTS_SCREEN_DENSITIES
-                    | ApplicationInfo.FLAG_SUPPORTS_LARGE_SCREENS
-                    | ApplicationInfo.FLAG_SUPPORTS_SMALL_SCREENS
-                    | ApplicationInfo.FLAG_RESIZEABLE_FOR_SCREENS
-                    | ApplicationInfo.FLAG_SUPPORTS_SCREEN_DENSITIES
-                    | ApplicationInfo.FLAG_SUPPORTS_XLARGE_SCREENS;
 
     // Screen size of Nexus 5x
     private static final int DEFAULT_PORTRAIT_PHONE_WIDTH_DP = 412;
@@ -104,7 +93,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
     }
 
     @VisibleForTesting
-    int onCalculate(TaskRecord task, ActivityInfo.WindowLayout layout, ActivityRecord activity,
+    int onCalculate(Task task, ActivityInfo.WindowLayout layout, ActivityRecord activity,
             ActivityRecord source, ActivityOptions options, LaunchParams currentParams,
             LaunchParams outParams) {
         return onCalculate(task, layout, activity, source, options, PHASE_BOUNDS, currentParams,
@@ -112,7 +101,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
     }
 
     @Override
-    public int onCalculate(TaskRecord task, ActivityInfo.WindowLayout layout,
+    public int onCalculate(Task task, ActivityInfo.WindowLayout layout,
                            ActivityRecord activity, ActivityRecord source, ActivityOptions options,
                            int phase, LaunchParams currentParams, LaunchParams outParams) {
         initLogBuilder(task, activity);
@@ -122,7 +111,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         return result;
     }
 
-    private int calculate(TaskRecord task, ActivityInfo.WindowLayout layout,
+    private int calculate(Task task, ActivityInfo.WindowLayout layout,
             ActivityRecord activity, ActivityRecord source, ActivityOptions options, int phase,
             LaunchParams currentParams, LaunchParams outParams) {
         final ActivityRecord root;
@@ -148,7 +137,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         // STEP 1: Determine the display to launch the activity/task.
         final int displayId = getPreferredLaunchDisplay(task, options, source, currentParams);
         outParams.mPreferredDisplayId = displayId;
-        ActivityDisplay display = mSupervisor.mRootActivityContainer.getActivityDisplay(displayId);
+        DisplayContent display = mSupervisor.mRootActivityContainer.getDisplayContent(displayId);
         if (DEBUG) {
             appendLog("display-id=" + outParams.mPreferredDisplayId + " display-windowing-mode="
                     + display.getWindowingMode());
@@ -253,10 +242,9 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         if (display.inFreeformWindowingMode()) {
             if (launchMode == WINDOWING_MODE_PINNED) {
                 if (DEBUG) appendLog("picture-in-picture");
-            } else if (isTaskForcedMaximized(root)) {
-                // We're launching an activity that probably can't handle resizing nicely, so force
-                // it to be maximized even someone suggests launching it in freeform using launch
-                // options.
+            } else if (!mSupervisor.mService.mSizeCompatFreeform && !root.isResizeable()) {
+                // We're launching an activity in size-compat mode and they aren't allowed in
+                // freeform, so force it to be maximized.
                 launchMode = WINDOWING_MODE_FULLSCREEN;
                 outParams.mBounds.setEmpty();
                 if (DEBUG) appendLog("forced-maximize");
@@ -294,9 +282,10 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
             if (source != null && source.inFreeformWindowingMode()
                     && resolvedMode == WINDOWING_MODE_FREEFORM
                     && outParams.mBounds.isEmpty()
-                    && source.getDisplayId() == display.mDisplayId) {
+                    && source.getDisplayId() == display.getDisplayId()) {
                 // Set bounds to be not very far from source activity.
-                cascadeBounds(source.getBounds(), display, outParams.mBounds);
+                cascadeBounds(source.getConfiguration().windowConfiguration.getBounds(),
+                        display, outParams.mBounds);
             }
             getTaskBounds(root, display, layout, resolvedMode, hasInitialBounds, outParams.mBounds);
         }
@@ -304,7 +293,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         return RESULT_CONTINUE;
     }
 
-    private int getPreferredLaunchDisplay(@Nullable TaskRecord task,
+    private int getPreferredLaunchDisplay(@Nullable Task task,
             @Nullable ActivityOptions options, ActivityRecord source, LaunchParams currentParams) {
         if (!mSupervisor.mService.mSupportsMultiDisplay) {
             return DEFAULT_DISPLAY;
@@ -344,17 +333,17 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         }
 
         if (displayId != INVALID_DISPLAY
-                && mSupervisor.mRootActivityContainer.getActivityDisplay(displayId) == null) {
+                && mSupervisor.mRootActivityContainer.getDisplayContent(displayId) == null) {
             displayId = currentParams.mPreferredDisplayId;
         }
         displayId = (displayId == INVALID_DISPLAY) ? currentParams.mPreferredDisplayId : displayId;
 
         return (displayId != INVALID_DISPLAY
-                && mSupervisor.mRootActivityContainer.getActivityDisplay(displayId) != null)
+                && mSupervisor.mRootActivityContainer.getDisplayContent(displayId) != null)
                 ? displayId : DEFAULT_DISPLAY;
     }
 
-    private boolean canInheritWindowingModeFromSource(@NonNull ActivityDisplay display,
+    private boolean canInheritWindowingModeFromSource(@NonNull DisplayContent display,
             @Nullable ActivityRecord source) {
         if (source == null) {
             return false;
@@ -376,10 +365,10 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         // Only inherit windowing mode if both source and target activities are on the same display.
         // Otherwise we may have unintended freeform windows showing up if an activity in freeform
         // window launches an activity on a fullscreen display by specifying display ID.
-        return display.mDisplayId == source.getDisplayId();
+        return display.getDisplayId() == source.getDisplayId();
     }
 
-    private boolean canApplyFreeformWindowPolicy(@NonNull ActivityDisplay display, int launchMode) {
+    private boolean canApplyFreeformWindowPolicy(@NonNull DisplayContent display, int launchMode) {
         return mSupervisor.mService.mSupportsFreeformWindowManagement
                 && (display.inFreeformWindowingMode() || launchMode == WINDOWING_MODE_FREEFORM);
     }
@@ -389,7 +378,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
                 && launchMode == WINDOWING_MODE_PINNED;
     }
 
-    private void getLayoutBounds(@NonNull ActivityDisplay display, @NonNull ActivityRecord root,
+    private void getLayoutBounds(@NonNull DisplayContent display, @NonNull ActivityRecord root,
             @NonNull ActivityInfo.WindowLayout windowLayout, @NonNull Rect outBounds) {
         final int verticalGravity = windowLayout.gravity & Gravity.VERTICAL_GRAVITY_MASK;
         final int horizontalGravity = windowLayout.gravity & Gravity.HORIZONTAL_GRAVITY_MASK;
@@ -398,9 +387,11 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
             return;
         }
 
-        final Rect bounds = display.getBounds();
-        final int defaultWidth = bounds.width();
-        final int defaultHeight = bounds.height();
+        // Use stable frame instead of raw frame to avoid launching freeform windows on top of
+        // stable insets, which usually are system widgets such as sysbar & navbar.
+        final Rect displayStableBounds = display.mDisplayContent.mDisplayFrames.mStable;
+        final int defaultWidth = displayStableBounds.width();
+        final int defaultHeight = displayStableBounds.height();
 
         int width;
         int height;
@@ -451,31 +442,10 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         }
 
         outBounds.set(0, 0, width, height);
+        outBounds.offset(displayStableBounds.left, displayStableBounds.top);
         final int xOffset = (int) (fractionOfHorizontalOffset * (defaultWidth - width));
         final int yOffset = (int) (fractionOfVerticalOffset * (defaultHeight - height));
         outBounds.offset(xOffset, yOffset);
-    }
-
-    /**
-     * Returns if task is forced to maximize.
-     *
-     * There are several cases where we force a task to maximize:
-     * 1) Root activity is targeting pre-Donut, which by default can't handle multiple screen
-     *    densities, so resizing will likely cause issues;
-     * 2) Root activity doesn't declare any flag that it supports any screen density, so resizing
-     *    may also cause issues;
-     * 3) Root activity is not resizeable, for which we shouldn't allow user resize it.
-     *
-     * @param root the root activity to check against.
-     * @return {@code true} if it should be forced to maximize; {@code false} otherwise.
-     */
-    private boolean isTaskForcedMaximized(@NonNull ActivityRecord root) {
-        if (root.info.applicationInfo.targetSdkVersion < Build.VERSION_CODES.DONUT
-                || (root.info.applicationInfo.flags & SUPPORTS_SCREEN_RESIZEABLE_MASK) == 0) {
-            return true;
-        }
-
-        return !root.isResizeable();
     }
 
     /**
@@ -518,7 +488,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         return orientation;
     }
 
-    private void cascadeBounds(@NonNull Rect srcBounds, @NonNull ActivityDisplay display,
+    private void cascadeBounds(@NonNull Rect srcBounds, @NonNull DisplayContent display,
             @NonNull Rect outBounds) {
         outBounds.set(srcBounds);
         float density = (float) display.getConfiguration().densityDpi / DENSITY_DEFAULT;
@@ -530,7 +500,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         outBounds.offset(dx, dy);
     }
 
-    private void getTaskBounds(@NonNull ActivityRecord root, @NonNull ActivityDisplay display,
+    private void getTaskBounds(@NonNull ActivityRecord root, @NonNull DisplayContent display,
             @NonNull ActivityInfo.WindowLayout layout, int resolvedMode, boolean hasInitialBounds,
             @NonNull Rect inOutBounds) {
         if (resolvedMode == WINDOWING_MODE_FULLSCREEN) {
@@ -597,7 +567,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         }
     }
 
-    private int resolveOrientation(@NonNull ActivityRecord root, @NonNull ActivityDisplay display,
+    private int resolveOrientation(@NonNull ActivityRecord root, @NonNull DisplayContent display,
             @NonNull Rect bounds) {
         int orientation = resolveOrientation(root);
 
@@ -623,14 +593,18 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         return orientation;
     }
 
-    private void getDefaultFreeformSize(@NonNull ActivityDisplay display,
+    private void getDefaultFreeformSize(@NonNull DisplayContent display,
             @NonNull ActivityInfo.WindowLayout layout, int orientation, @NonNull Rect bounds) {
         // Default size, which is letterboxing/pillarboxing in display. That's to say the large
         // dimension of default size is the small dimension of display size, and the small dimension
-        // of default size is calculated to keep the same aspect ratio as the display's.
-        Rect displayBounds = display.getBounds();
-        final int portraitHeight = Math.min(displayBounds.width(), displayBounds.height());
-        final int otherDimension = Math.max(displayBounds.width(), displayBounds.height());
+        // of default size is calculated to keep the same aspect ratio as the display's. Here we use
+        // stable bounds of displays because that indicates the area that isn't occupied by system
+        // widgets (e.g. sysbar and navbar).
+        Rect displayStableBounds = display.mDisplayContent.mDisplayFrames.mStable;
+        final int portraitHeight =
+                Math.min(displayStableBounds.width(), displayStableBounds.height());
+        final int otherDimension =
+                Math.max(displayStableBounds.width(), displayStableBounds.height());
         final int portraitWidth = (portraitHeight * portraitHeight) / otherDimension;
         final int defaultWidth = (orientation == SCREEN_ORIENTATION_LANDSCAPE) ? portraitHeight
                 : portraitWidth;
@@ -656,58 +630,59 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         final int height = Math.min(defaultHeight, Math.max(phoneHeight, layoutMinHeight));
 
         bounds.set(0, 0, width, height);
+        bounds.offset(displayStableBounds.left, displayStableBounds.top);
     }
 
     /**
      * Gets centered bounds of width x height. If inOutBounds is not empty, the result bounds
-     * centers at its center or display's center if inOutBounds is empty.
+     * centers at its center or display's app bounds center if inOutBounds is empty.
      */
-    private void centerBounds(@NonNull ActivityDisplay display, int width, int height,
+    private void centerBounds(@NonNull DisplayContent display, int width, int height,
             @NonNull Rect inOutBounds) {
         if (inOutBounds.isEmpty()) {
-            display.getBounds(inOutBounds);
+            inOutBounds.set(display.mDisplayContent.mDisplayFrames.mStable);
         }
         final int left = inOutBounds.centerX() - width / 2;
         final int top = inOutBounds.centerY() - height / 2;
         inOutBounds.set(left, top, left + width, top + height);
     }
 
-    private void adjustBoundsToFitInDisplay(@NonNull ActivityDisplay display,
+    private void adjustBoundsToFitInDisplay(@NonNull DisplayContent display,
             @NonNull Rect inOutBounds) {
-        final Rect displayBounds = display.getBounds();
+        final Rect displayStableBounds = display.mDisplayContent.mDisplayFrames.mStable;
 
-        if (displayBounds.width() < inOutBounds.width()
-                || displayBounds.height() < inOutBounds.height()) {
+        if (displayStableBounds.width() < inOutBounds.width()
+                || displayStableBounds.height() < inOutBounds.height()) {
             // There is no way for us to fit the bounds in the display without changing width
             // or height. Just move the start to align with the display.
             final int layoutDirection =
                     mSupervisor.mRootActivityContainer.getConfiguration().getLayoutDirection();
             final int left = layoutDirection == View.LAYOUT_DIRECTION_RTL
-                    ? displayBounds.width() - inOutBounds.width()
-                    : 0;
-            inOutBounds.offsetTo(left, 0 /* newTop */);
+                    ? displayStableBounds.right - inOutBounds.right + inOutBounds.left
+                    : displayStableBounds.left;
+            inOutBounds.offsetTo(left, displayStableBounds.top);
             return;
         }
 
         final int dx;
-        if (inOutBounds.right > displayBounds.right) {
+        if (inOutBounds.right > displayStableBounds.right) {
             // Right edge is out of display.
-            dx = displayBounds.right - inOutBounds.right;
-        } else if (inOutBounds.left < displayBounds.left) {
+            dx = displayStableBounds.right - inOutBounds.right;
+        } else if (inOutBounds.left < displayStableBounds.left) {
             // Left edge is out of display.
-            dx = displayBounds.left - inOutBounds.left;
+            dx = displayStableBounds.left - inOutBounds.left;
         } else {
             // Vertical edges are all in display.
             dx = 0;
         }
 
         final int dy;
-        if (inOutBounds.top < displayBounds.top) {
+        if (inOutBounds.top < displayStableBounds.top) {
             // Top edge is out of display.
-            dy = displayBounds.top - inOutBounds.top;
-        } else if (inOutBounds.bottom > displayBounds.bottom) {
+            dy = displayStableBounds.top - inOutBounds.top;
+        } else if (inOutBounds.bottom > displayStableBounds.bottom) {
             // Bottom edge is out of display.
-            dy = displayBounds.bottom - inOutBounds.bottom;
+            dy = displayStableBounds.bottom - inOutBounds.bottom;
         } else {
             // Horizontal edges are all in display.
             dy = 0;
@@ -727,11 +702,11 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
      * @param display the display which tasks are to check
      * @param inOutBounds the bounds used to input initial bounds and output result bounds
      */
-    private void adjustBoundsToAvoidConflictInDisplay(@NonNull ActivityDisplay display,
+    private void adjustBoundsToAvoidConflictInDisplay(@NonNull DisplayContent display,
             @NonNull Rect inOutBounds) {
         final List<Rect> taskBoundsToCheck = new ArrayList<>();
-        for (int i = 0; i < display.getChildCount(); ++i) {
-            final ActivityStack stack = display.getChildAt(i);
+        for (int i = 0; i < display.getStackCount(); ++i) {
+            final ActivityStack stack = display.getStackAt(i);
             if (!stack.inFreeformWindowingMode()) {
                 continue;
             }
@@ -891,7 +866,7 @@ class TaskLaunchParamsModifier implements LaunchParamsModifier {
         inOutBounds.offset(horizontalOffset, verticalOffset);
     }
 
-    private void initLogBuilder(TaskRecord task, ActivityRecord activity) {
+    private void initLogBuilder(Task task, ActivityRecord activity) {
         if (DEBUG) {
             mLogBuilder = new StringBuilder("TaskLaunchParamsModifier:task=" + task
                     + " activity=" + activity);

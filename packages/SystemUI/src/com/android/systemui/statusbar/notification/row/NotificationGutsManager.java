@@ -26,6 +26,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.ServiceManager;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -41,7 +42,7 @@ import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto;
 import com.android.systemui.Dependency;
 import com.android.systemui.Dumpable;
-import com.android.systemui.SysUiServiceProvider;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.NotificationLifetimeExtender;
@@ -62,6 +63,8 @@ import java.io.PrintWriter;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+
+import dagger.Lazy;
 
 /**
  * Handles various NotificationGuts related tasks, such as binding guts to a row, opening and
@@ -99,16 +102,19 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
     @VisibleForTesting
     protected String mKeyToRemoveOnGutsClosed;
 
-    private StatusBar mStatusBar;
+    private final Lazy<StatusBar> mStatusBarLazy;
+    private final Handler mMainHandler;
+    private Runnable mOpenRunnable;
 
     @Inject
-    public NotificationGutsManager(
-            Context context,
-            VisualStabilityManager visualStabilityManager) {
+    public NotificationGutsManager(Context context, VisualStabilityManager visualStabilityManager,
+            Lazy<StatusBar> statusBarLazy, @MainHandler Handler mainHandler,
+            AccessibilityManager accessibilityManager) {
         mContext = context;
         mVisualStabilityManager = visualStabilityManager;
-        mAccessibilityManager = (AccessibilityManager)
-                mContext.getSystemService(Context.ACCESSIBILITY_SERVICE);
+        mStatusBarLazy = statusBarLazy;
+        mMainHandler = mainHandler;
+        mAccessibilityManager = accessibilityManager;
     }
 
     public void setUpWithPresenter(NotificationPresenter presenter,
@@ -118,7 +124,6 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
         mListContainer = listContainer;
         mCheckSaveListener = checkSave;
         mOnSettingsClickListener = onSettingsClick;
-        mStatusBar = SysUiServiceProvider.getComponent(mContext, StatusBar.class);
     }
 
     public void setNotificationActivityStarter(
@@ -169,7 +174,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
             if (ops.contains(OP_CAMERA) || ops.contains(OP_RECORD_AUDIO)) {
                 startAppDetailsSettingsActivity(pkg, uid, null, row);
             } else {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_OVERLAY_PERMISSION);
                 intent.setData(Uri.fromParts("package", pkg, null));
                 mNotificationActivityStarter.startNotificationGutsIntent(intent, uid, row);
             }
@@ -188,7 +193,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
     @VisibleForTesting
     protected boolean bindGuts(final ExpandableNotificationRow row,
             NotificationMenuRowPlugin.MenuItem item) {
-        StatusBarNotification sbn = row.getStatusBarNotification();
+        StatusBarNotification sbn = row.getEntry().getSbn();
 
         row.setGutsView(item);
         row.setTag(sbn.getPackageName());
@@ -237,7 +242,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
             final ExpandableNotificationRow row,
             NotificationSnooze notificationSnoozeView) {
         NotificationGuts guts = row.getGuts();
-        StatusBarNotification sbn = row.getStatusBarNotification();
+        StatusBarNotification sbn = row.getEntry().getSbn();
 
         notificationSnoozeView.setSnoozeListener(mListContainer.getSwipeActionHelper());
         notificationSnoozeView.setStatusBarNotification(sbn);
@@ -257,7 +262,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
             final ExpandableNotificationRow row,
             AppOpsInfo appOpsInfoView) {
         NotificationGuts guts = row.getGuts();
-        StatusBarNotification sbn = row.getStatusBarNotification();
+        StatusBarNotification sbn = row.getEntry().getSbn();
         UserHandle userHandle = sbn.getUser();
         PackageManager pmUser = StatusBar.getPackageManagerForUser(mContext,
                 userHandle.getIdentifier());
@@ -283,7 +288,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
             final ExpandableNotificationRow row,
             NotificationInfo notificationInfoView) throws Exception {
         NotificationGuts guts = row.getGuts();
-        StatusBarNotification sbn = row.getStatusBarNotification();
+        StatusBarNotification sbn = row.getEntry().getSbn();
         String packageName = sbn.getPackageName();
         // Settings link is only valid for notifications that specify a non-system user
         NotificationInfo.OnSettingsClickListener onSettingsClick = null;
@@ -318,7 +323,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
                 packageName,
                 row.getEntry().getChannel(),
                 row.getUniqueChannels(),
-                sbn,
+                row.getEntry(),
                 mCheckSaveListener,
                 onSettingsClick,
                 onAppSettingsClick,
@@ -343,6 +348,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
     public void closeAndSaveGuts(boolean removeLeavebehinds, boolean force, boolean removeControls,
             int x, int y, boolean resetMenu) {
         if (mNotificationGutsExposed != null) {
+            mNotificationGutsExposed.removeCallbacks(mOpenRunnable);
             mNotificationGutsExposed.closeControls(removeLeavebehinds, removeControls, x, y, force);
         }
         if (resetMenu) {
@@ -387,10 +393,10 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
                         .setLeaveOpenOnKeyguardHide(true);
             }
 
-            Runnable r = () -> Dependency.get(Dependency.MAIN_HANDLER).post(
+            Runnable r = () -> mMainHandler.post(
                     () -> openGutsInternal(view, x, y, menuItem));
 
-            mStatusBar.executeRunnableDismissingKeyguard(
+            mStatusBarLazy.get().executeRunnableDismissingKeyguard(
                     r,
                     null /* cancelAction */,
                     false /* dismissShade */,
@@ -445,7 +451,7 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
         // ensure that it's laid but not visible until actually laid out
         guts.setVisibility(View.INVISIBLE);
         // Post to ensure the the guts are properly laid out.
-        guts.post(new Runnable() {
+        mOpenRunnable = new Runnable() {
             @Override
             public void run() {
                 if (row.getWindowToken() == null) {
@@ -470,7 +476,8 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
                 mListContainer.onHeightChanged(row, true /* needsAnimation */);
                 mGutsMenuItem = menuItem;
             }
-        });
+        };
+        guts.post(mOpenRunnable);
         return true;
     }
 
@@ -491,15 +498,17 @@ public class NotificationGutsManager implements Dumpable, NotificationLifetimeEx
     @Override
     public void setShouldManageLifetime(NotificationEntry entry, boolean shouldExtend) {
         if (shouldExtend) {
-            mKeyToRemoveOnGutsClosed = entry.key;
+            mKeyToRemoveOnGutsClosed = entry.getKey();
             if (Log.isLoggable(TAG, Log.DEBUG)) {
-                Log.d(TAG, "Keeping notification because it's showing guts. " + entry.key);
+                Log.d(TAG, "Keeping notification because it's showing guts. " + entry.getKey());
             }
         } else {
-            if (mKeyToRemoveOnGutsClosed != null && mKeyToRemoveOnGutsClosed.equals(entry.key)) {
+            if (mKeyToRemoveOnGutsClosed != null
+                    && mKeyToRemoveOnGutsClosed.equals(entry.getKey())) {
                 mKeyToRemoveOnGutsClosed = null;
                 if (Log.isLoggable(TAG, Log.DEBUG)) {
-                    Log.d(TAG, "Notification that was kept for guts was updated. " + entry.key);
+                    Log.d(TAG, "Notification that was kept for guts was updated. "
+                            + entry.getKey());
                 }
             }
         }

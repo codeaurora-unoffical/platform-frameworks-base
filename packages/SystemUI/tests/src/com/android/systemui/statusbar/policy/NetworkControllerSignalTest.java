@@ -26,6 +26,7 @@ import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.os.Looper;
+import android.telephony.CellSignalStrength;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.SubscriptionInfo;
@@ -61,7 +62,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
         mNetworkController = new NetworkControllerImpl(mContext, mMockCm, mMockTm, mMockWm, mMockSm,
                 mConfig, Looper.getMainLooper(), mCallbackHandler,
                 mock(AccessPointControllerImpl.class), mock(DataUsageController.class),
-                mMockSubDefaults, mock(DeviceProvisionedController.class));
+                mMockSubDefaults, mock(DeviceProvisionedController.class), mMockBd);
         setupNetworkController();
 
         verifyLastMobileDataIndicators(false, -1, 0);
@@ -123,7 +124,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
         mNetworkController = new NetworkControllerImpl(mContext, mMockCm, mMockTm, mMockWm, mMockSm,
                 mConfig, Looper.getMainLooper(), mCallbackHandler,
                 mock(AccessPointControllerImpl.class), mock(DataUsageController.class),
-                mMockSubDefaults, mock(DeviceProvisionedController.class));
+                mMockSubDefaults, mock(DeviceProvisionedController.class), mMockBd);
         setupNetworkController();
 
         // No Subscriptions.
@@ -180,7 +181,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
 
     @Test
     public void testCdmaSignalRoaming() {
-        for (int testStrength = SignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+        for (int testStrength = CellSignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
                 testStrength <= SignalStrength.SIGNAL_STRENGTH_GREAT; testStrength++) {
             setupDefaultSignal();
             setCdma();
@@ -203,7 +204,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
 
     @Test
     public void testQsSignalStrength() {
-        for (int testStrength = SignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+        for (int testStrength = CellSignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
                 testStrength <= SignalStrength.SIGNAL_STRENGTH_GREAT; testStrength++) {
             setupDefaultSignal();
             setLevel(testStrength);
@@ -216,7 +217,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
 
     @Test
     public void testCdmaQsSignalStrength() {
-        for (int testStrength = SignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+        for (int testStrength = CellSignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
                 testStrength <= SignalStrength.SIGNAL_STRENGTH_GREAT; testStrength++) {
             setupDefaultSignal();
             setCdma();

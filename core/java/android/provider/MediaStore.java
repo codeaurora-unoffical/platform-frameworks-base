@@ -20,12 +20,14 @@ import android.annotation.BytesLong;
 import android.annotation.CurrentTimeMillisLong;
 import android.annotation.CurrentTimeSecondsLong;
 import android.annotation.DurationMillisLong;
+import android.annotation.IntDef;
 import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
+import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.annotation.UnsupportedAppUsage;
 import android.app.Activity;
@@ -39,7 +41,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.UriPermission;
 import android.database.Cursor;
-import android.database.DatabaseUtils;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageDecoder;
@@ -47,6 +48,8 @@ import android.graphics.Point;
 import android.graphics.PostProcessor;
 import android.media.ExifInterface;
 import android.media.MediaFile;
+import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
@@ -60,6 +63,7 @@ import android.os.UserManager;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.os.storage.VolumeInfo;
+import android.os.storage.VolumeRecord;
 import android.service.media.CameraPrewarmService;
 import android.text.TextUtils;
 import android.text.format.DateUtils;
@@ -69,15 +73,21 @@ import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
 
+import libcore.util.HexEncoding;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -99,7 +109,14 @@ public final class MediaStore {
     /** The authority for the media provider */
     public static final String AUTHORITY = "media";
     /** A content:// style uri to the authority for the media provider */
-    public static final @NonNull Uri AUTHORITY_URI = Uri.parse("content://" + AUTHORITY);
+    public static final @NonNull Uri AUTHORITY_URI =
+            Uri.parse("content://" + AUTHORITY);
+
+    /** @hide */
+    public static final String AUTHORITY_LEGACY = "media_legacy";
+    /** @hide */
+    public static final @NonNull Uri AUTHORITY_LEGACY_URI =
+            Uri.parse("content://" + AUTHORITY_LEGACY);
 
     /**
      * Synthetic volume name that provides a view of all content across the
@@ -142,6 +159,8 @@ public final class MediaStore {
     public static final String SCAN_FILE_CALL = "scan_file";
     /** {@hide} */
     public static final String SCAN_VOLUME_CALL = "scan_volume";
+    /** {@hide} */
+    public static final String SUICIDE_CALL = "suicide";
 
     /**
      * Extra used with {@link #SCAN_FILE_CALL} or {@link #SCAN_VOLUME_CALL} to indicate that
@@ -193,8 +212,10 @@ public final class MediaStore {
     public static final String PARAM_DELETE_DATA = "deletedata";
 
     /** {@hide} */
+    @Deprecated
     public static final String PARAM_INCLUDE_PENDING = "includePending";
     /** {@hide} */
+    @Deprecated
     public static final String PARAM_INCLUDE_TRASHED = "includeTrashed";
     /** {@hide} */
     public static final String PARAM_PROGRESS = "progress";
@@ -547,6 +568,101 @@ public final class MediaStore {
     public static final String UNKNOWN_STRING = "<unknown>";
 
     /**
+     * Specify a {@link Uri} that is "related" to the current operation being
+     * performed.
+     * <p>
+     * This is typically used to allow an operation that may normally be
+     * rejected, such as making a copy of a pre-existing image located under a
+     * {@link MediaColumns#RELATIVE_PATH} where new images are not allowed.
+     * <p>
+     * It's strongly recommended that when making a copy of pre-existing content
+     * that you define the "original document ID" GUID as defined by the <em>XMP
+     * Media Management</em> standard.
+     * <p>
+     * This key can be placed in a {@link Bundle} of extras and passed to
+     * {@link ContentResolver#insert}.
+     */
+    public static final String QUERY_ARG_RELATED_URI = "android:query-arg-related-uri";
+
+    /**
+     * Specify how {@link MediaColumns#IS_PENDING} items should be filtered when
+     * performing a {@link MediaStore} operation.
+     * <p>
+     * This key can be placed in a {@link Bundle} of extras and passed to
+     * {@link ContentResolver#query}, {@link ContentResolver#update}, or
+     * {@link ContentResolver#delete}.
+     * <p>
+     * By default, pending items are filtered away from operations.
+     */
+    @Match
+    public static final String QUERY_ARG_MATCH_PENDING = "android:query-arg-match-pending";
+
+    /**
+     * Specify how {@link MediaColumns#IS_TRASHED} items should be filtered when
+     * performing a {@link MediaStore} operation.
+     * <p>
+     * This key can be placed in a {@link Bundle} of extras and passed to
+     * {@link ContentResolver#query}, {@link ContentResolver#update}, or
+     * {@link ContentResolver#delete}.
+     * <p>
+     * By default, trashed items are filtered away from operations.
+     */
+    @Match
+    public static final String QUERY_ARG_MATCH_TRASHED = "android:query-arg-match-trashed";
+
+    /**
+     * Specify how {@link MediaColumns#IS_FAVORITE} items should be filtered
+     * when performing a {@link MediaStore} operation.
+     * <p>
+     * This key can be placed in a {@link Bundle} of extras and passed to
+     * {@link ContentResolver#query}, {@link ContentResolver#update}, or
+     * {@link ContentResolver#delete}.
+     * <p>
+     * By default, favorite items are <em>not</em> filtered away from
+     * operations.
+     */
+    @Match
+    public static final String QUERY_ARG_MATCH_FAVORITE = "android:query-arg-match-favorite";
+
+    /** @hide */
+    @IntDef(flag = true, prefix = { "MATCH_" }, value = {
+            MATCH_DEFAULT,
+            MATCH_INCLUDE,
+            MATCH_EXCLUDE,
+            MATCH_ONLY,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface Match {}
+
+    /**
+     * Value indicating that the default matching behavior should be used, as
+     * defined by the key documentation.
+     */
+    public static final int MATCH_DEFAULT = 0;
+
+    /**
+     * Value indicating that operations should include items matching the
+     * criteria defined by this key.
+     * <p>
+     * Note that items <em>not</em> matching the criteria <em>may</em> also be
+     * included depending on the default behavior documented by the key. If you
+     * want to operate exclusively on matching items, use {@link #MATCH_ONLY}.
+     */
+    public static final int MATCH_INCLUDE = 1;
+
+    /**
+     * Value indicating that operations should exclude items matching the
+     * criteria defined by this key.
+     */
+    public static final int MATCH_EXCLUDE = 2;
+
+    /**
+     * Value indicating that operations should only operate on items explicitly
+     * matching the criteria defined by this key.
+     */
+    public static final int MATCH_ONLY = 3;
+
+    /**
      * Update the given {@link Uri} to also include any pending media items from
      * calls such as
      * {@link ContentResolver#query(Uri, String[], Bundle, CancellationSignal)}.
@@ -554,12 +670,16 @@ public final class MediaStore {
      *
      * @see MediaColumns#IS_PENDING
      * @see MediaStore#getIncludePending(Uri)
+     * @deprecated consider migrating to {@link #QUERY_ARG_MATCH_PENDING} which
+     *             is more expressive.
      */
+    @Deprecated
     public static @NonNull Uri setIncludePending(@NonNull Uri uri) {
         return setIncludePending(uri.buildUpon()).build();
     }
 
     /** @hide */
+    @Deprecated
     public static @NonNull Uri.Builder setIncludePending(@NonNull Uri.Builder uriBuilder) {
         return uriBuilder.appendQueryParameter(PARAM_INCLUDE_PENDING, "1");
     }
@@ -570,7 +690,11 @@ public final class MediaStore {
      *
      * @see MediaColumns#IS_PENDING
      * @see MediaStore#setIncludePending(Uri)
+     * @deprecated consider migrating to {@link #QUERY_ARG_MATCH_PENDING} which
+     *             is more expressive.
+     * @removed
      */
+    @Deprecated
     public static boolean getIncludePending(@NonNull Uri uri) {
         return parseBoolean(uri.getQueryParameter(MediaStore.PARAM_INCLUDE_PENDING));
     }
@@ -585,6 +709,8 @@ public final class MediaStore {
      * @see MediaStore#setIncludeTrashed(Uri)
      * @see MediaStore#trash(Context, Uri)
      * @see MediaStore#untrash(Context, Uri)
+     * @deprecated consider migrating to {@link #QUERY_ARG_MATCH_TRASHED} which
+     *             is more expressive.
      * @removed
      */
     @Deprecated
@@ -826,9 +952,7 @@ public final class MediaStore {
      * @see MediaStore#setIncludeTrashed(Uri)
      * @see MediaStore#trash(Context, Uri)
      * @see MediaStore#untrash(Context, Uri)
-     * @removed
      */
-    @Deprecated
     public static void trash(@NonNull Context context, @NonNull Uri uri) {
         trash(context, uri, 48 * DateUtils.HOUR_IN_MILLIS);
     }
@@ -846,9 +970,7 @@ public final class MediaStore {
      * @see MediaStore#setIncludeTrashed(Uri)
      * @see MediaStore#trash(Context, Uri)
      * @see MediaStore#untrash(Context, Uri)
-     * @removed
      */
-    @Deprecated
     public static void trash(@NonNull Context context, @NonNull Uri uri,
             @DurationMillisLong long timeoutMillis) {
         if (timeoutMillis < 0) {
@@ -870,14 +992,22 @@ public final class MediaStore {
      * @see MediaStore#setIncludeTrashed(Uri)
      * @see MediaStore#trash(Context, Uri)
      * @see MediaStore#untrash(Context, Uri)
-     * @removed
      */
-    @Deprecated
     public static void untrash(@NonNull Context context, @NonNull Uri uri) {
         final ContentValues values = new ContentValues();
         values.put(MediaColumns.IS_TRASHED, 0);
         values.putNull(MediaColumns.DATE_EXPIRES);
         context.getContentResolver().update(uri, values, null, null);
+    }
+
+    /**
+     * Rewrite the given {@link Uri} to point at
+     * {@link MediaStore#AUTHORITY_LEGACY}.
+     *
+     * @hide
+     */
+    public static @NonNull Uri rewriteToLegacy(@NonNull Uri uri) {
+        return uri.buildUpon().authority(MediaStore.AUTHORITY_LEGACY).build();
     }
 
     /**
@@ -903,26 +1033,8 @@ public final class MediaStore {
         public static final String DATA = "_data";
 
         /**
-         * Hash of the media item on disk.
-         * <p>
-         * Contains a 20-byte binary blob which is the SHA-1 hash of the file as
-         * persisted on disk. For performance reasons, the hash may not be
-         * immediately available, in which case a {@code NULL} value will be
-         * returned. If the underlying file is modified, this value will be
-         * cleared and recalculated.
-         * <p>
-         * If you require the hash of a specific item, you can call
-         * {@link ContentResolver#canonicalize(Uri)}, which will block until the
-         * hash is calculated.
-         *
-         * @removed
-         */
-        @Deprecated
-        @Column(value = Cursor.FIELD_TYPE_BLOB, readOnly = true)
-        public static final String HASH = "_hash";
-
-        /**
-         * The size of the media item.
+         * Indexed value of {@link File#length()} extracted from this media
+         * item.
          */
         @BytesLong
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
@@ -939,12 +1051,6 @@ public final class MediaStore {
         public static final String DISPLAY_NAME = "_display_name";
 
         /**
-         * The title of the media item.
-         */
-        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
-        public static final String TITLE = "title";
-
-        /**
          * The time the media item was first added.
          */
         @CurrentTimeSecondsLong
@@ -952,14 +1058,22 @@ public final class MediaStore {
         public static final String DATE_ADDED = "date_added";
 
         /**
-         * The time the media item was last modified.
+         * Indexed value of {@link File#lastModified()} extracted from this
+         * media item.
          */
         @CurrentTimeSecondsLong
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
         public static final String DATE_MODIFIED = "date_modified";
 
         /**
-         * The time the media item was taken.
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_DATE} or
+         * {@link ExifInterface#TAG_DATETIME_ORIGINAL} extracted from this media
+         * item.
+         * <p>
+         * Note that images must define both
+         * {@link ExifInterface#TAG_DATETIME_ORIGINAL} and
+         * {@code ExifInterface#TAG_OFFSET_TIME_ORIGINAL} to reliably determine
+         * this value in relation to the epoch.
          */
         @CurrentTimeMillisLong
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
@@ -985,17 +1099,6 @@ public final class MediaStore {
         public static final String MIME_TYPE = "mime_type";
 
         /**
-         * The MTP object handle of a newly transfered file.
-         * Used to pass the new file's object handle through the media scanner
-         * from MTP to the media provider
-         * For internal use only by MTP, media scanner and media provider.
-         * @hide
-         */
-        @Deprecated
-        // @Column(Cursor.FIELD_TYPE_INTEGER)
-        public static final String MEDIA_SCANNER_NEW_OBJECT_ID = "media_scanner_new_object_id";
-
-        /**
          * Non-zero if the media file is drm-protected
          * @hide
          */
@@ -1008,44 +1111,63 @@ public final class MediaStore {
          * Flag indicating if a media item is pending, and still being inserted
          * by its owner. While this flag is set, only the owner of the item can
          * open the underlying file; requests from other apps will be rejected.
+         * <p>
+         * Pending items are retained either until they are published by setting
+         * the field to {@code 0}, or until they expire as defined by
+         * {@link #DATE_EXPIRES}.
          *
-         * @see MediaStore#setIncludePending(Uri)
+         * @see MediaStore#QUERY_ARG_MATCH_PENDING
          */
         @Column(Cursor.FIELD_TYPE_INTEGER)
         public static final String IS_PENDING = "is_pending";
 
         /**
          * Flag indicating if a media item is trashed.
+         * <p>
+         * Trashed items are retained until they expire as defined by
+         * {@link #DATE_EXPIRES}.
          *
-         * @see MediaColumns#IS_TRASHED
-         * @see MediaStore#setIncludeTrashed(Uri)
+         * @see MediaStore#QUERY_ARG_MATCH_TRASHED
          * @see MediaStore#trash(Context, Uri)
          * @see MediaStore#untrash(Context, Uri)
-         * @removed
          */
-        @Deprecated
         @Column(Cursor.FIELD_TYPE_INTEGER)
         public static final String IS_TRASHED = "is_trashed";
 
         /**
          * The time the media item should be considered expired. Typically only
-         * meaningful in the context of {@link #IS_PENDING}.
+         * meaningful in the context of {@link #IS_PENDING} or
+         * {@link #IS_TRASHED}.
          */
         @CurrentTimeSecondsLong
         @Column(Cursor.FIELD_TYPE_INTEGER)
         public static final String DATE_EXPIRES = "date_expires";
 
         /**
-         * The width of the media item, in pixels.
+         * Indexed value of
+         * {@link MediaMetadataRetriever#METADATA_KEY_VIDEO_WIDTH},
+         * {@link MediaMetadataRetriever#METADATA_KEY_IMAGE_WIDTH} or
+         * {@link ExifInterface#TAG_IMAGE_WIDTH} extracted from this media item.
          */
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
         public static final String WIDTH = "width";
 
         /**
-         * The height of the media item, in pixels.
+         * Indexed value of
+         * {@link MediaMetadataRetriever#METADATA_KEY_VIDEO_HEIGHT},
+         * {@link MediaMetadataRetriever#METADATA_KEY_IMAGE_HEIGHT} or
+         * {@link ExifInterface#TAG_IMAGE_LENGTH} extracted from this media
+         * item.
          */
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
         public static final String HEIGHT = "height";
+
+        /**
+         * Calculated value that combines {@link #WIDTH} and {@link #HEIGHT}
+         * into a user-presentable string.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String RESOLUTION = "resolution";
 
         /**
          * Package name that contributed this media. The value may be
@@ -1091,28 +1213,6 @@ public final class MediaStore {
          */
         @Column(Cursor.FIELD_TYPE_STRING)
         public static final String RELATIVE_PATH = "relative_path";
-
-        /**
-         * The primary directory name this media exists under. The value may be
-         * {@code NULL} if the media doesn't have a primary directory name.
-         *
-         * @removed
-         * @deprecated Replaced by {@link #RELATIVE_PATH}.
-         */
-        @Column(Cursor.FIELD_TYPE_STRING)
-        @Deprecated
-        public static final String PRIMARY_DIRECTORY = "primary_directory";
-
-        /**
-         * The secondary directory name this media exists under. The value may
-         * be {@code NULL} if the media doesn't have a secondary directory name.
-         *
-         * @removed
-         * @deprecated Replaced by {@link #RELATIVE_PATH}.
-         */
-        @Column(Cursor.FIELD_TYPE_STRING)
-        @Deprecated
-        public static final String SECONDARY_DIRECTORY = "secondary_directory";
 
         /**
          * The primary bucket ID of this media item. This can be useful to
@@ -1187,18 +1287,173 @@ public final class MediaStore {
         public static final String ORIGINAL_DOCUMENT_ID = "original_document_id";
 
         /**
-         * The duration of the media item.
+         * Indexed value of
+         * {@link MediaMetadataRetriever#METADATA_KEY_VIDEO_ROTATION},
+         * {@link MediaMetadataRetriever#METADATA_KEY_IMAGE_ROTATION}, or
+         * {@link ExifInterface#TAG_ORIENTATION} extracted from this media item.
+         * <p>
+         * For consistency the indexed value is expressed in degrees, such as 0,
+         * 90, 180, or 270.
+         */
+        @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
+        public static final String ORIENTATION = "orientation";
+
+        /**
+         * Flag indicating if the media item has been marked as being a
+         * "favorite" by the user.
+         *
+         * @see MediaStore#QUERY_ARG_MATCH_FAVORITE
+         */
+        @Column(Cursor.FIELD_TYPE_INTEGER)
+        public static final String IS_FAVORITE = "is_favorite";
+
+        // =======================================
+        // ==== MediaMetadataRetriever values ====
+        // =======================================
+
+        /**
+         * Indexed value of
+         * {@link MediaMetadataRetriever#METADATA_KEY_CD_TRACK_NUMBER} extracted
+         * from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String CD_TRACK_NUMBER = "cd_track_number";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_ALBUM}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String ALBUM = "album";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_ARTIST}
+         * or {@link ExifInterface#TAG_ARTIST} extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String ARTIST = "artist";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_AUTHOR}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String AUTHOR = "author";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_COMPOSER}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String COMPOSER = "composer";
+
+        // METADATA_KEY_DATE is DATE_TAKEN
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_GENRE}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String GENRE = "genre";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_TITLE}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String TITLE = "title";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_YEAR}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
+        public static final String YEAR = "year";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_DURATION}
+         * extracted from this media item.
          */
         @DurationMillisLong
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
         public static final String DURATION = "duration";
 
         /**
-         * The orientation for the media item, expressed in degrees. For
-         * example, 0, 90, 180, or 270 degrees.
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_NUM_TRACKS}
+         * extracted from this media item.
          */
         @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
-        public static final String ORIENTATION = "orientation";
+        public static final String NUM_TRACKS = "num_tracks";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_WRITER}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String WRITER = "writer";
+
+        // METADATA_KEY_MIMETYPE is MIME_TYPE
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_ALBUMARTIST}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String ALBUM_ARTIST = "album_artist";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_DISC_NUMBER}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String DISC_NUMBER = "disc_number";
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_COMPILATION}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+        public static final String COMPILATION = "compilation";
+
+        // HAS_AUDIO is ignored
+        // HAS_VIDEO is ignored
+        // VIDEO_WIDTH is WIDTH
+        // VIDEO_HEIGHT is HEIGHT
+
+        /**
+         * Indexed value of {@link MediaMetadataRetriever#METADATA_KEY_BITRATE}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
+        public static final String BITRATE = "bitrate";
+
+        // TIMED_TEXT_LANGUAGES is ignored
+        // IS_DRM is ignored
+        // LOCATION is LATITUDE and LONGITUDE
+        // VIDEO_ROTATION is ORIENTATION
+
+        /**
+         * Indexed value of
+         * {@link MediaMetadataRetriever#METADATA_KEY_CAPTURE_FRAMERATE}
+         * extracted from this media item.
+         */
+        @Column(value = Cursor.FIELD_TYPE_FLOAT, readOnly = true)
+        public static final String CAPTURE_FRAMERATE = "capture_framerate";
+
+        // HAS_IMAGE is ignored
+        // IMAGE_COUNT is ignored
+        // IMAGE_PRIMARY is ignored
+        // IMAGE_WIDTH is WIDTH
+        // IMAGE_HEIGHT is HEIGHT
+        // IMAGE_ROTATION is ORIENTATION
+        // VIDEO_FRAME_COUNT is ignored
+        // EXIF_OFFSET is ignored
+        // EXIF_LENGTH is ignored
+        // COLOR_STANDARD is ignored
+        // COLOR_TRANSFER is ignored
+        // COLOR_RANGE is ignored
+        // SAMPLERATE is ignored
+        // BITS_PER_SAMPLE is ignored
     }
 
     /**
@@ -1327,10 +1582,7 @@ public final class MediaStore {
             @Column(Cursor.FIELD_TYPE_STRING)
             public static final String MIME_TYPE = "mime_type";
 
-            /**
-             * The title of the media item.
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String TITLE = "title";
 
             /**
@@ -1342,29 +1594,39 @@ public final class MediaStore {
 
             /**
              * Constant for the {@link #MEDIA_TYPE} column indicating that file
-             * is not an audio, image, video or playlist file.
+             * is not an audio, image, video, playlist, or subtitles file.
              */
             public static final int MEDIA_TYPE_NONE = 0;
 
             /**
-             * Constant for the {@link #MEDIA_TYPE} column indicating that file is an image file.
+             * Constant for the {@link #MEDIA_TYPE} column indicating that file
+             * is an image file.
              */
             public static final int MEDIA_TYPE_IMAGE = 1;
 
             /**
-             * Constant for the {@link #MEDIA_TYPE} column indicating that file is an audio file.
+             * Constant for the {@link #MEDIA_TYPE} column indicating that file
+             * is an audio file.
              */
             public static final int MEDIA_TYPE_AUDIO = 2;
 
             /**
-             * Constant for the {@link #MEDIA_TYPE} column indicating that file is a video file.
+             * Constant for the {@link #MEDIA_TYPE} column indicating that file
+             * is a video file.
              */
             public static final int MEDIA_TYPE_VIDEO = 3;
 
             /**
-             * Constant for the {@link #MEDIA_TYPE} column indicating that file is a playlist file.
+             * Constant for the {@link #MEDIA_TYPE} column indicating that file
+             * is a playlist file.
              */
             public static final int MEDIA_TYPE_PLAYLIST = 4;
+
+            /**
+             * Constant for the {@link #MEDIA_TYPE} column indicating that file
+             * is a subtitles or lyrics file.
+             */
+            public static final int MEDIA_TYPE_SUBTITLE = 5;
 
             /**
              * Column indicating if the file is part of Downloads collection.
@@ -1585,12 +1847,6 @@ public final class MediaStore {
          */
         public interface ImageColumns extends MediaColumns {
             /**
-             * The description of the image
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
-            public static final String DESCRIPTION = "description";
-
-            /**
              * The picasa id of the image
              *
              * @deprecated this value was only relevant for images hosted on
@@ -1652,6 +1908,34 @@ public final class MediaStore {
             public static final String BUCKET_DISPLAY_NAME = "bucket_display_name";
             /** @removed promoted to parent interface */
             public static final String GROUP_ID = "group_id";
+
+            /**
+             * Indexed value of {@link ExifInterface#TAG_IMAGE_DESCRIPTION}
+             * extracted from this media item.
+             */
+            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            public static final String DESCRIPTION = "description";
+
+            /**
+             * Indexed value of {@link ExifInterface#TAG_EXPOSURE_TIME}
+             * extracted from this media item.
+             */
+            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            public static final String EXPOSURE_TIME = "exposure_time";
+
+            /**
+             * Indexed value of {@link ExifInterface#TAG_F_NUMBER}
+             * extracted from this media item.
+             */
+            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            public static final String F_NUMBER = "f_number";
+
+            /**
+             * Indexed value of {@link ExifInterface#TAG_ISO_SPEED_RATINGS}
+             * extracted from this media item.
+             */
+            @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
+            public static final String ISO = "iso";
         }
 
         public static final class Media implements ImageColumns {
@@ -1900,6 +2184,10 @@ public final class MediaStore {
              * generated. Callers are responsible for their own in-memory
              * caching of returned values.
              *
+             * As of {@link android.os.Build.VERSION_CODES#Q}, this output
+             * of the thumbnail has correct rotation, don't need to rotate
+             * it again.
+             *
              * @param imageId the image item to obtain a thumbnail for.
              * @param kind optimal thumbnail size desired.
              * @return decoded thumbnail, or {@code null} if problem was
@@ -1941,6 +2229,10 @@ public final class MediaStore {
              * thumbnail doesn't exist, this method will block until it's
              * generated. Callers are responsible for their own in-memory
              * caching of returned values.
+             *
+             * As of {@link android.os.Build.VERSION_CODES#Q}, this output
+             * of the thumbnail has correct rotation, don't need to rotate
+             * it again.
              *
              * @param imageId the image item to obtain a thumbnail for.
              * @param kind optimal thumbnail size desired.
@@ -1995,6 +2287,9 @@ public final class MediaStore {
              * apps should use
              * {@link ContentResolver#openFileDescriptor(Uri, String)} to gain
              * access.
+             *
+             * As of {@link android.os.Build.VERSION_CODES#Q}, this thumbnail
+             * has correct rotation, don't need to rotate it again.
              *
              * @deprecated Apps may not have filesystem permissions to directly
              *             access this path. Instead of trying to open this path
@@ -2058,7 +2353,17 @@ public final class MediaStore {
             /**
              * A non human readable key calculated from the TITLE, used for
              * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
              */
+            @Deprecated
             @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String TITLE_KEY = "title_key";
 
@@ -2079,10 +2384,7 @@ public final class MediaStore {
             @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
             public static final String ARTIST_ID = "artist_id";
 
-            /**
-             * The artist who created the audio file, if any
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String ARTIST = "artist";
 
             /**
@@ -2093,24 +2395,23 @@ public final class MediaStore {
             public static final String ALBUM_ARTIST = "album_artist";
 
             /**
-             * Whether the song is part of a compilation
-             * @hide
-             */
-            @Deprecated
-            // @Column(Cursor.FIELD_TYPE_STRING)
-            public static final String COMPILATION = "compilation";
-
-            /**
              * A non human readable key calculated from the ARTIST, used for
              * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
              */
+            @Deprecated
             @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String ARTIST_KEY = "artist_key";
 
-            /**
-             * The composer of the audio file, if any
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String COMPOSER = "composer";
 
             /**
@@ -2119,16 +2420,23 @@ public final class MediaStore {
             @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
             public static final String ALBUM_ID = "album_id";
 
-            /**
-             * The album the audio file is from, if any
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String ALBUM = "album";
 
             /**
              * A non human readable key calculated from the ALBUM, used for
              * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
              */
+            @Deprecated
             @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String ALBUM_KEY = "album_key";
 
@@ -2185,91 +2493,89 @@ public final class MediaStore {
             public static final String IS_AUDIOBOOK = "is_audiobook";
 
             /**
-             * The genre of the audio file, if any
-             * Does not exist in the database - only used by the media scanner for inserts.
-             * @hide
+             * The id of the genre the audio file is from, if any
              */
-            @Deprecated
-            // @Column(Cursor.FIELD_TYPE_STRING)
+            @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
+            public static final String GENRE_ID = "genre_id";
+
+            /**
+             * The genre of the audio file, if any.
+             */
+            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String GENRE = "genre";
 
             /**
-             * The resource URI of a localized title, if any
+             * A non human readable key calculated from the GENRE, used for
+             * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
+             */
+            @Deprecated
+            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            public static final String GENRE_KEY = "genre_key";
+
+            /**
+             * The resource URI of a localized title, if any.
+             * <p>
              * Conforms to this pattern:
-             *   Scheme: {@link ContentResolver.SCHEME_ANDROID_RESOURCE}
-             *   Authority: Package Name of ringtone title provider
-             *   First Path Segment: Type of resource (must be "string")
-             *   Second Path Segment: Resource ID of title
-             * @hide
+             * <ul>
+             * <li>Scheme: {@link ContentResolver#SCHEME_ANDROID_RESOURCE}
+             * <li>Authority: Package Name of ringtone title provider
+             * <li>First Path Segment: Type of resource (must be "string")
+             * <li>Second Path Segment: Resource ID of title
+             * </ul>
              */
             @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String TITLE_RESOURCE_URI = "title_resource_uri";
         }
 
+        private static final Pattern PATTERN_TRIM_BEFORE = Pattern.compile(
+                "(?i)(^(the|an|a) |,\\s*(the|an|a)$|[^\\w\\s]|^\\s+|\\s+$)");
+        private static final Pattern PATTERN_TRIM_AFTER = Pattern.compile(
+                "(^(00)+|(00)+$)");
+
         /**
-         * Converts a name to a "key" that can be used for grouping, sorting
-         * and searching.
-         * The rules that govern this conversion are:
-         * - remove 'special' characters like ()[]'!?.,
-         * - remove leading/trailing spaces
-         * - convert everything to lowercase
-         * - remove leading "the ", "an " and "a "
-         * - remove trailing ", the|an|a"
-         * - remove accents. This step leaves us with CollationKey data,
-         *   which is not human readable
+         * Converts a user-visible string into a "key" that can be used for
+         * grouping, sorting, and searching.
          *
-         * @param name The artist or album name to convert
-         * @return The "key" for the given name.
+         * @return Opaque token that should not be parsed or displayed to users.
+         * @deprecated These keys are generated using
+         *             {@link java.util.Locale#ROOT}, which means they don't
+         *             reflect locale-specific sorting preferences. To apply
+         *             locale-specific sorting preferences, use
+         *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+         *             {@code COLLATE LOCALIZED}, or
+         *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
          */
-        public static String keyFor(String name) {
-            if (name != null)  {
-                boolean sortfirst = false;
-                if (name.equals(UNKNOWN_STRING)) {
-                    return "\001";
-                }
-                // Check if the first character is \001. We use this to
-                // force sorting of certain special files, like the silent ringtone.
-                if (name.startsWith("\001")) {
-                    sortfirst = true;
-                }
-                name = name.trim().toLowerCase();
-                if (name.startsWith("the ")) {
-                    name = name.substring(4);
-                }
-                if (name.startsWith("an ")) {
-                    name = name.substring(3);
-                }
-                if (name.startsWith("a ")) {
-                    name = name.substring(2);
-                }
-                if (name.endsWith(", the") || name.endsWith(",the") ||
-                    name.endsWith(", an") || name.endsWith(",an") ||
-                    name.endsWith(", a") || name.endsWith(",a")) {
-                    name = name.substring(0, name.lastIndexOf(','));
-                }
-                name = name.replaceAll("[\\[\\]\\(\\)\"'.,?!]", "").trim();
-                if (name.length() > 0) {
-                    // Insert a separator between the characters to avoid
-                    // matches on a partial character. If we ever change
-                    // to start-of-word-only matches, this can be removed.
-                    StringBuilder b = new StringBuilder();
-                    b.append('.');
-                    int nl = name.length();
-                    for (int i = 0; i < nl; i++) {
-                        b.append(name.charAt(i));
-                        b.append('.');
-                    }
-                    name = b.toString();
-                    String key = DatabaseUtils.getCollationKey(name);
-                    if (sortfirst) {
-                        key = "\001" + key;
-                    }
-                    return key;
-               } else {
-                    return "";
-                }
+        @Deprecated
+        public static @Nullable String keyFor(@Nullable String name) {
+            if (TextUtils.isEmpty(name)) return null;
+
+            if (UNKNOWN_STRING.equals(name)) {
+                return "01";
             }
-            return null;
+
+            final boolean sortFirst = name.startsWith("\001");
+
+            name = PATTERN_TRIM_BEFORE.matcher(name).replaceAll("");
+            if (TextUtils.isEmpty(name)) return null;
+
+            final Collator c = Collator.getInstance(Locale.ROOT);
+            c.setStrength(Collator.PRIMARY);
+            name = HexEncoding.encodeToString(c.getCollationKey(name).toByteArray(), false);
+
+            name = PATTERN_TRIM_AFTER.matcher(name).replaceAll("");
+            if (sortFirst) {
+                name = "01" + name;
+            }
+            return name;
         }
 
         public static final class Media implements AudioColumns {
@@ -2631,7 +2937,17 @@ public final class MediaStore {
             /**
              * A non human readable key calculated from the ARTIST, used for
              * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
              */
+            @Deprecated
             @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String ARTIST_KEY = "artist_key";
 
@@ -2735,6 +3051,23 @@ public final class MediaStore {
             public static final String ARTIST = "artist";
 
             /**
+             * A non human readable key calculated from the ARTIST, used for
+             * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
+             */
+            @Deprecated
+            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            public static final String ARTIST_KEY = "artist_key";
+
+            /**
              * The number of songs on this album
              */
             @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
@@ -2769,7 +3102,17 @@ public final class MediaStore {
             /**
              * A non human readable key calculated from the ALBUM, used for
              * searching, sorting and grouping
+             *
+             * @see Audio#keyFor(String)
+             * @deprecated These keys are generated using
+             *             {@link java.util.Locale#ROOT}, which means they don't
+             *             reflect locale-specific sorting preferences. To apply
+             *             locale-specific sorting preferences, use
+             *             {@link ContentResolver#QUERY_ARG_SQL_SORT_ORDER} with
+             *             {@code COLLATE LOCALIZED}, or
+             *             {@link ContentResolver#QUERY_ARG_SORT_LOCALE}.
              */
+            @Deprecated
             @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
             public static final String ALBUM_KEY = "album_key";
 
@@ -2904,23 +3247,11 @@ public final class MediaStore {
         public interface VideoColumns extends MediaColumns {
             /** @removed promoted to parent interface */
             public static final String DURATION = "duration";
-
-            /**
-             * The artist who created the video file, if any
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String ARTIST = "artist";
-
-            /**
-             * The album the video file is from, if any
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String ALBUM = "album";
-
-            /**
-             * The resolution of the video file, formatted as "XxY"
-             */
-            @Column(value = Cursor.FIELD_TYPE_STRING, readOnly = true)
+            /** @removed promoted to parent interface */
             public static final String RESOLUTION = "resolution";
 
             /**
@@ -3007,22 +3338,32 @@ public final class MediaStore {
             public static final String BOOKMARK = "bookmark";
 
             /**
-             * The standard of color aspects
-             * @hide
+             * The color standard of this media file, if available.
+             *
+             * @see MediaFormat#COLOR_STANDARD_BT709
+             * @see MediaFormat#COLOR_STANDARD_BT601_PAL
+             * @see MediaFormat#COLOR_STANDARD_BT601_NTSC
+             * @see MediaFormat#COLOR_STANDARD_BT2020
              */
             @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
             public static final String COLOR_STANDARD = "color_standard";
 
             /**
-             * The transfer of color aspects
-             * @hide
+             * The color transfer of this media file, if available.
+             *
+             * @see MediaFormat#COLOR_TRANSFER_LINEAR
+             * @see MediaFormat#COLOR_TRANSFER_SDR_VIDEO
+             * @see MediaFormat#COLOR_TRANSFER_ST2084
+             * @see MediaFormat#COLOR_TRANSFER_HLG
              */
             @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
             public static final String COLOR_TRANSFER = "color_transfer";
 
             /**
-             * The range of color aspects
-             * @hide
+             * The color range of this media file, if available.
+             *
+             * @see MediaFormat#COLOR_RANGE_LIMITED
+             * @see MediaFormat#COLOR_RANGE_FULL
              */
             @Column(value = Cursor.FIELD_TYPE_INTEGER, readOnly = true)
             public static final String COLOR_RANGE = "color_range";
@@ -3276,15 +3617,56 @@ public final class MediaStore {
     }
 
     /**
+     * Return list of all specific volume names that have recently been part of
+     * {@link #VOLUME_EXTERNAL}.
+     * <p>
+     * This includes both currently mounted volumes <em>and</em> recently
+     * mounted (but currently unmounted) volumes. Any indexed metadata for these
+     * volumes is preserved to optimize the speed of remounting at a later time.
+     *
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.WRITE_MEDIA_STORAGE)
+    public static @NonNull Set<String> getRecentExternalVolumeNames(@NonNull Context context) {
+        final StorageManager sm = context.getSystemService(StorageManager.class);
+
+        // We always have primary storage
+        final Set<String> volumeNames = new ArraySet<>();
+        volumeNames.add(VOLUME_EXTERNAL_PRIMARY);
+
+        final long lastWeek = System.currentTimeMillis() - DateUtils.WEEK_IN_MILLIS;
+        for (VolumeRecord rec : sm.getVolumeRecords()) {
+            // Skip volumes without valid UUIDs
+            if (TextUtils.isEmpty(rec.fsUuid)) continue;
+
+            final VolumeInfo vi = sm.findVolumeByUuid(rec.fsUuid);
+            if (vi != null && vi.isVisibleForUser(UserHandle.myUserId())
+                    && vi.isMountedReadable()) {
+                // We're mounted right now
+                volumeNames.add(rec.getNormalizedFsUuid());
+            } else if (rec.lastSeenMillis > 0 && rec.lastSeenMillis < lastWeek) {
+                // We're not mounted right now, but we've been seen recently
+                volumeNames.add(rec.getNormalizedFsUuid());
+            }
+        }
+        return volumeNames;
+    }
+
+    /**
      * Return the volume name that the given {@link Uri} references.
      */
     public static @NonNull String getVolumeName(@NonNull Uri uri) {
         final List<String> segments = uri.getPathSegments();
-        if (uri.getAuthority().equals(AUTHORITY) && segments != null && segments.size() > 0) {
-            return segments.get(0);
-        } else {
-            throw new IllegalArgumentException("Missing volume name: " + uri);
+        switch (uri.getAuthority()) {
+            case AUTHORITY:
+            case AUTHORITY_LEGACY: {
+                if (segments != null && segments.size() > 0) {
+                    return segments.get(0);
+                }
+            }
         }
+        throw new IllegalArgumentException("Missing volume name: " + uri);
     }
 
     /** {@hide} */
@@ -3370,6 +3752,8 @@ public final class MediaStore {
      * @hide
      */
     @TestApi
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.WRITE_MEDIA_STORAGE)
     public static @NonNull Collection<File> getVolumeScanPaths(@NonNull String volumeName)
             throws FileNotFoundException {
         if (TextUtils.isEmpty(volumeName)) {
@@ -3594,6 +3978,16 @@ public final class MediaStore {
             client.call(WAIT_FOR_IDLE_CALL, null, null);
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    /** @hide */
+    public static void suicide(Context context) {
+        final ContentResolver resolver = context.getContentResolver();
+        try (ContentProviderClient client = resolver
+                .acquireUnstableContentProviderClient(AUTHORITY)) {
+            client.call(SUICIDE_CALL, null, null);
+        } catch (Exception ignored) {
         }
     }
 

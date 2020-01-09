@@ -192,33 +192,37 @@ public final class ActiveServices {
         @Override
         public void stopForegroundServicesForUidPackage(final int uid, final String packageName) {
             synchronized (mAm) {
-                final ServiceMap smap = getServiceMapLocked(UserHandle.getUserId(uid));
-                final int N = smap.mServicesByInstanceName.size();
-                final ArrayList<ServiceRecord> toStop = new ArrayList<>(N);
-                for (int i = 0; i < N; i++) {
-                    final ServiceRecord r = smap.mServicesByInstanceName.valueAt(i);
-                    if (uid == r.serviceInfo.applicationInfo.uid
-                            || packageName.equals(r.serviceInfo.packageName)) {
-                        if (r.isForeground) {
-                            toStop.add(r);
-                        }
-                    }
-                }
+                stopAllForegroundServicesLocked(uid, packageName);
+            }
+        }
+    }
 
-                // Now stop them all
-                final int numToStop = toStop.size();
-                if (numToStop > 0 && DEBUG_FOREGROUND_SERVICE) {
-                    Slog.i(TAG, "Package " + packageName + "/" + uid
-                            + " entering FAS with foreground services");
-                }
-                for (int i = 0; i < numToStop; i++) {
-                    final ServiceRecord r = toStop.get(i);
-                    if (DEBUG_FOREGROUND_SERVICE) {
-                        Slog.i(TAG, "  Stopping fg for service " + r);
-                    }
-                    setServiceForegroundInnerLocked(r, 0, null, 0, 0);
+    void stopAllForegroundServicesLocked(final int uid, final String packageName) {
+        final ServiceMap smap = getServiceMapLocked(UserHandle.getUserId(uid));
+        final int N = smap.mServicesByInstanceName.size();
+        final ArrayList<ServiceRecord> toStop = new ArrayList<>(N);
+        for (int i = 0; i < N; i++) {
+            final ServiceRecord r = smap.mServicesByInstanceName.valueAt(i);
+            if (uid == r.serviceInfo.applicationInfo.uid
+                    || packageName.equals(r.serviceInfo.packageName)) {
+                if (r.isForeground) {
+                    toStop.add(r);
                 }
             }
+        }
+
+        // Now stop them all
+        final int numToStop = toStop.size();
+        if (numToStop > 0 && DEBUG_FOREGROUND_SERVICE) {
+            Slog.i(TAG, "Package " + packageName + "/" + uid
+                    + " in FAS with foreground services");
+        }
+        for (int i = 0; i < numToStop; i++) {
+            final ServiceRecord r = toStop.get(i);
+            if (DEBUG_FOREGROUND_SERVICE) {
+                Slog.i(TAG, "  Stopping fg for service " + r);
+            }
+            setServiceForegroundInnerLocked(r, 0, null, 0, 0);
         }
     }
 
@@ -565,7 +569,8 @@ public final class ActiveServices {
                         r.lastActivity);
             }
             mAm.mAppOpsService.startOperation(AppOpsManager.getToken(mAm.mAppOpsService),
-                    AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName, true);
+                    AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName, null,
+                    true);
         }
 
         final ServiceMap smap = getServiceMapLocked(r.userId);
@@ -1019,12 +1024,23 @@ public final class ActiveServices {
                         }
                     }
                     if (!aa.mAppOnTop) {
-                        if (active == null) {
-                            active = new ArrayList<>();
+                        // Transitioning a fg-service host app out of top: if it's bg restricted,
+                        // it loses the fg service state now.
+                        if (!appRestrictedAnyInBackground(aa.mUid, aa.mPackageName)) {
+                            if (active == null) {
+                                active = new ArrayList<>();
+                            }
+                            if (DEBUG_FOREGROUND_SERVICE) Slog.d(TAG, "Adding active: pkg="
+                                    + aa.mPackageName + ", uid=" + aa.mUid);
+                            active.add(aa);
+                        } else {
+                            if (DEBUG_FOREGROUND_SERVICE) {
+                                Slog.d(TAG, "bg-restricted app "
+                                        + aa.mPackageName + "/" + aa.mUid
+                                        + " exiting top; demoting fg services ");
+                            }
+                            stopAllForegroundServicesLocked(aa.mUid, aa.mPackageName);
                         }
-                        if (DEBUG_FOREGROUND_SERVICE) Slog.d(TAG, "Adding active: pkg="
-                                + aa.mPackageName + ", uid=" + aa.mUid);
-                        active.add(aa);
                     }
                 }
                 smap.removeMessages(ServiceMap.MSG_UPDATE_FOREGROUND_APPS);
@@ -1379,7 +1395,7 @@ public final class ActiveServices {
                         mAm.mAppOpsService.startOperation(
                                 AppOpsManager.getToken(mAm.mAppOpsService),
                                 AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName,
-                                true);
+                                null, true);
                         StatsLog.write(StatsLog.FOREGROUND_SERVICE_STATE_CHANGED,
                                 r.appInfo.uid, r.shortInstanceName,
                                 StatsLog.FOREGROUND_SERVICE_STATE_CHANGED__STATE__ENTER);
@@ -1412,7 +1428,8 @@ public final class ActiveServices {
                     // we have cleared the flag so can now drop it.
                     mAm.mAppOpsService.finishOperation(
                             AppOpsManager.getToken(mAm.mAppOpsService),
-                            AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName);
+                            AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName,
+                            null);
                 }
             }
         } else {
@@ -1429,7 +1446,7 @@ public final class ActiveServices {
                 }
                 mAm.mAppOpsService.finishOperation(
                         AppOpsManager.getToken(mAm.mAppOpsService),
-                        AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName);
+                        AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName, null);
                 StatsLog.write(StatsLog.FOREGROUND_SERVICE_STATE_CHANGED,
                         r.appInfo.uid, r.shortInstanceName,
                         StatsLog.FOREGROUND_SERVICE_STATE_CHANGED__STATE__EXIT);
@@ -1748,8 +1765,8 @@ public final class ActiveServices {
                     s.instanceName, s.processName);
             // Once the apps have become associated, if one of them is caller is ephemeral
             // the target app should now be able to see the calling app
-            mAm.grantEphemeralAccessLocked(callerApp.userId, service,
-                    UserHandle.getAppId(s.appInfo.uid), UserHandle.getAppId(callerApp.uid));
+            mAm.grantImplicitAccess(callerApp.userId, service,
+                    callerApp.uid, UserHandle.getAppId(s.appInfo.uid));
 
             AppBindRecord b = s.retrieveAppBindingLocked(service, callerApp);
             ConnectionRecord c = new ConnectionRecord(b, activity,
@@ -1804,7 +1821,7 @@ public final class ActiveServices {
                                 || (callerApp.getCurProcState() <= ActivityManager.PROCESS_STATE_TOP
                                         && (flags & Context.BIND_TREAT_LIKE_ACTIVITY) != 0),
                         b.client);
-                mAm.updateOomAdjLocked(OomAdjuster.OOM_ADJ_REASON_BIND_SERVICE);
+                mAm.updateOomAdjLocked(s.app, OomAdjuster.OOM_ADJ_REASON_BIND_SERVICE);
             }
 
             if (DEBUG_SERVICE) Slog.v(TAG_SERVICE, "Bind " + s + " with " + b
@@ -2686,7 +2703,7 @@ public final class ActiveServices {
         bumpServiceExecutingLocked(r, execInFg, "create");
         mAm.updateLruProcessLocked(app, false, null);
         updateServiceForegroundLocked(r.app, /* oomAdj= */ false);
-        mAm.updateOomAdjLocked(OomAdjuster.OOM_ADJ_REASON_START_SERVICE);
+        mAm.updateOomAdjLocked(app, OomAdjuster.OOM_ADJ_REASON_START_SERVICE);
 
         boolean created = false;
         try {
@@ -2802,8 +2819,9 @@ public final class ActiveServices {
                 mAm.mUgmInternal.grantUriPermissionUncheckedFromIntent(si.neededGrants,
                         si.getUriPermissionsLocked());
             }
-            mAm.grantEphemeralAccessLocked(r.userId, si.intent, UserHandle.getAppId(r.appInfo.uid),
-                    UserHandle.getAppId(si.callingId));
+            mAm.grantImplicitAccess(r.userId, si.intent, si.callingId,
+                    UserHandle.getAppId(r.appInfo.uid)
+            );
             bumpServiceExecutingLocked(r, execInFg, "start");
             if (!oomAdjusted) {
                 oomAdjusted = true;
@@ -2965,7 +2983,7 @@ public final class ActiveServices {
                         r.lastActivity);
             }
             mAm.mAppOpsService.finishOperation(AppOpsManager.getToken(mAm.mAppOpsService),
-                    AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName);
+                    AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName, null);
             mAm.mHandler.removeMessages(
                     ActivityManagerService.SERVICE_FOREGROUND_TIMEOUT_MSG, r);
             if (r.app != null) {
@@ -3023,7 +3041,7 @@ public final class ActiveServices {
             }
             mAm.mAppOpsService.finishOperation(
                     AppOpsManager.getToken(mAm.mAppOpsService),
-                    AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName);
+                    AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName, null);
             StatsLog.write(StatsLog.FOREGROUND_SERVICE_STATE_CHANGED, r.appInfo.uid,
                     r.shortInstanceName, StatsLog.FOREGROUND_SERVICE_STATE_CHANGED__STATE__EXIT);
             mAm.updateForegroundServiceUsageStats(r.name, r.userId, false);
@@ -4389,7 +4407,7 @@ public final class ActiveServices {
         return new ServiceDumper(fd, pw, args, opti, dumpAll, dumpPackage);
     }
 
-    protected void writeToProto(ProtoOutputStream proto, long fieldId) {
+    protected void dumpDebug(ProtoOutputStream proto, long fieldId) {
         synchronized (mAm) {
             final long outterToken = proto.start(fieldId);
             int[] users = mAm.mUserController.getUsers();
@@ -4402,7 +4420,7 @@ public final class ActiveServices {
                 proto.write(ActiveServicesProto.ServicesByUser.USER_ID, user);
                 ArrayMap<ComponentName, ServiceRecord> alls = smap.mServicesByInstanceName;
                 for (int i=0; i<alls.size(); i++) {
-                    alls.valueAt(i).writeToProto(proto,
+                    alls.valueAt(i).dumpDebug(proto,
                             ActiveServicesProto.ServicesByUser.SERVICE_RECORDS);
                 }
                 proto.end(token);

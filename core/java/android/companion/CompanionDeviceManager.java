@@ -21,7 +21,10 @@ import static com.android.internal.util.Preconditions.checkNotNull;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresPermission;
+import android.annotation.SystemApi;
 import android.annotation.SystemService;
+import android.annotation.TestApi;
 import android.app.Activity;
 import android.app.Application;
 import android.app.PendingIntent;
@@ -29,9 +32,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
+import android.net.MacAddress;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.service.notification.NotificationListenerService;
 import android.util.Log;
 
@@ -42,11 +47,15 @@ import java.util.function.BiConsumer;
 /**
  * System level service for managing companion devices
  *
+ * See <a href="{@docRoot}guide/topics/connectivity/companion-device-pairing">this guide</a>
+ * for a usage example.
+ *
  * <p>To obtain an instance call {@link Context#getSystemService}({@link
  * Context#COMPANION_DEVICE_SERVICE}) Then, call {@link #associate(AssociationRequest,
  * Callback, Handler)} to initiate the flow of associating current package with a
  * device selected by user.</p>
  *
+ * @see CompanionDeviceManager#associate
  * @see AssociationRequest
  */
 @SystemService(Context.COMPANION_DEVICE_SERVICE)
@@ -243,6 +252,38 @@ public final class CompanionDeviceManager {
         }
         try {
             return mService.hasNotificationAccess(component);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Check if a given package was {@link #associate associated} with a device with given
+     * mac address by given user.
+     *
+     * @param packageName the package to check for
+     * @param macAddress the mac address or BSSID of the device to check for
+     * @param user the user to check for
+     * @return whether a corresponding association record exists
+     *
+     * @hide
+     */
+    @SystemApi
+    @TestApi
+    @RequiresPermission(android.Manifest.permission.MANAGE_COMPANION_DEVICES)
+    public boolean isDeviceAssociated(
+            @NonNull String packageName,
+            @NonNull MacAddress macAddress,
+            @NonNull UserHandle user) {
+        if (!checkFeaturePresent()) {
+            return false;
+        }
+        checkNotNull(packageName, "package name cannot be null");
+        checkNotNull(macAddress, "mac address cannot be null");
+        checkNotNull(user, "user cannot be null");
+        try {
+            return mService.isDeviceAssociated(
+                    packageName, macAddress.toString(), user.getIdentifier());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

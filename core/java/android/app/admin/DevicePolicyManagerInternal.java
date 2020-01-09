@@ -24,6 +24,10 @@ import java.util.List;
 /**
  * Device policy manager local system service interface.
  *
+ * Maintenance note: if you need to expose information from DPMS to lower level services such as
+ * PM/UM/AM/etc, then exposing it from DevicePolicyManagerInternal is not safe because it may cause
+ * lock order inversion. Consider using {@link DevicePolicyCache} instead.
+ *
  * @hide Only for use within the system server.
  */
 public abstract class DevicePolicyManagerInternal {
@@ -81,6 +85,16 @@ public abstract class DevicePolicyManagerInternal {
     public abstract boolean isActiveAdminWithPolicy(int uid, int reqPolicy);
 
     /**
+     * Checks if an app with given uid is the active supervision admin.
+     *
+     * <p>This takes the DPMS lock. DO NOT call from PM/UM/AM with their lock held.
+     *
+     * @param uid App uid.
+     * @return true if the uid is the active supervision app.
+     */
+    public abstract boolean isActiveSupervisionApp(int uid);
+
+    /**
      * Creates an intent to show the admin support dialog to say that an action is disallowed by
      * the device/profile owner.
      *
@@ -131,15 +145,6 @@ public abstract class DevicePolicyManagerInternal {
     public abstract void reportSeparateProfileChallengeChanged(@UserIdInt int userId);
 
     /**
-     * Check whether the user could have their password reset in an untrusted manor due to there
-     * being an admin which can call {@link #resetPassword} to reset the password without knowledge
-     * of the previous password.
-     *
-     * @param userId The user in question
-     */
-    public abstract boolean canUserHaveUntrustedCredentialReset(@UserIdInt int userId);
-
-    /**
      * Return text of error message if printing is disabled.
      * Called by Print Service when printing is disabled by PO or DO when printing is attempted.
      *
@@ -153,4 +158,11 @@ public abstract class DevicePolicyManagerInternal {
      * Do not call it directly. Use {@link DevicePolicyCache#getInstance()} instead.
      */
     protected abstract DevicePolicyCache getDevicePolicyCache();
+
+    /**
+     * @return cached version of device state related to DPM that can be accessed without risking
+     * deadlocks.
+     * Do not call it directly. Use {@link DevicePolicyCache#getInstance()} instead.
+     */
+    protected abstract DeviceStateCache getDeviceStateCache();
 }

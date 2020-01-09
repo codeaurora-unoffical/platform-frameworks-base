@@ -337,9 +337,14 @@ public class MediaRecorder implements AudioRouting,
 
         /**
          * Audio source for capturing broadcast radio tuner output.
+         * Capturing the radio tuner output requires the
+         * {@link android.Manifest.permission#CAPTURE_AUDIO_OUTPUT} permission.
+         * This permission is reserved for use by system components and is not available to
+         * third-party applications.
          * @hide
          */
         @SystemApi
+        @RequiresPermission(android.Manifest.permission.CAPTURE_AUDIO_OUTPUT)
         public static final int RADIO_TUNER = 1998;
 
         /**
@@ -580,6 +585,46 @@ public class MediaRecorder implements AudioRouting,
     public static final int getAudioSourceMax() {
         return AudioSource.VOICE_PERFORMANCE;
     }
+
+    /**
+     * Indicates that this capture request is privacy sensitive and that
+     * any concurrent capture is not permitted.
+     * <p>
+     * The default is not privacy sensitive except when the audio source set with
+     * {@link #setAudioSource(int)} is {@link AudioSource#VOICE_COMMUNICATION} or
+     * {@link AudioSource#CAMCORDER}.
+     * <p>
+     * Always takes precedence over default from audio source when set explicitly.
+     * <p>
+     * Using this API is only permitted when the audio source is one of:
+     * <ul>
+     * <li>{@link AudioSource#MIC}</li>
+     * <li>{@link AudioSource#CAMCORDER}</li>
+     * <li>{@link AudioSource#VOICE_RECOGNITION}</li>
+     * <li>{@link AudioSource#VOICE_COMMUNICATION}</li>
+     * <li>{@link AudioSource#UNPROCESSED}</li>
+     * <li>{@link AudioSource#VOICE_PERFORMANCE}</li>
+     * </ul>
+     * Invoking {@link #prepare()} will throw an IOException if this
+     * condition is not met.
+     * <p>
+     * Must be called after {@link #setAudioSource(int)} and before {@link #setOutputFormat(int)}.
+     * @param privacySensitive True if capture from this MediaRecorder must be marked as privacy
+     * sensitive, false otherwise.
+     * @throws IllegalStateException if called before {@link #setAudioSource(int)}
+     * or after {@link #setOutputFormat(int)}
+     */
+    public native void setPrivacySensitive(boolean privacySensitive);
+
+    /**
+     * Returns whether this MediaRecorder is marked as privacy sensitive or not with
+     * regard to audio capture.
+     * <p>
+     * See {@link #setPrivacySensitive(boolean)}
+     * <p>
+     * @return true if privacy sensitive, false otherwise
+     */
+    public native boolean isPrivacySensitive();
 
     /**
      * Sets the video source to be used for recording. If this method is not

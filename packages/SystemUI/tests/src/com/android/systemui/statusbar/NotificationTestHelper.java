@@ -26,7 +26,6 @@ import static org.mockito.Mockito.mock;
 
 import android.annotation.Nullable;
 import android.app.ActivityManager;
-import android.app.Instrumentation;
 import android.app.Notification;
 import android.app.Notification.BubbleMetadata;
 import android.app.NotificationChannel;
@@ -40,8 +39,8 @@ import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.widget.RemoteViews;
 
-import androidx.test.InstrumentationRegistry;
-
+import com.android.systemui.TestableDependency;
+import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.bubbles.BubblesTestActivity;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
@@ -51,6 +50,7 @@ import com.android.systemui.statusbar.notification.row.NotificationContentInflat
 import com.android.systemui.statusbar.phone.HeadsUpManagerPhone;
 import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
+import com.android.systemui.statusbar.phone.StatusBarWindowController;
 import com.android.systemui.tests.R;
 
 /**
@@ -69,15 +69,17 @@ public class NotificationTestHelper {
     private static final String GROUP_KEY = "gruKey";
 
     private final Context mContext;
-    private final Instrumentation mInstrumentation;
     private int mId;
     private final NotificationGroupManager mGroupManager;
     private ExpandableNotificationRow mRow;
     private HeadsUpManagerPhone mHeadsUpManager;
 
-    public NotificationTestHelper(Context context) {
+    public NotificationTestHelper(Context context, TestableDependency dependency) {
         mContext = context;
-        mInstrumentation = InstrumentationRegistry.getInstrumentation();
+        dependency.injectMockDependency(NotificationMediaManager.class);
+        dependency.injectMockDependency(BubbleController.class);
+        dependency.injectMockDependency(StatusBarWindowController.class);
+        dependency.injectMockDependency(SmartReplyController.class);
         StatusBarStateController stateController = mock(StatusBarStateController.class);
         mGroupManager = new NotificationGroupManager(stateController);
         mHeadsUpManager = new HeadsUpManagerPhone(mContext, stateController,
@@ -320,7 +322,7 @@ public class NotificationTestHelper {
                 .build();
 
         entry.setRow(row);
-        entry.createIcons(mContext, entry.sbn());
+        entry.createIcons(mContext, entry.getSbn());
         row.setEntry(entry);
         row.getNotificationInflater().addInflationFlags(extraInflationFlags);
         NotificationContentInflaterTest.runThenWaitForInflation(

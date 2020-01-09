@@ -19,6 +19,9 @@ package com.android.server.wm;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
@@ -32,18 +35,20 @@ import androidx.test.filters.SmallTest;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Tests for the {@link DisplayContent.TaskStackContainers} container in {@link DisplayContent}.
  *
  * Build/Install/Run:
- *  atest FrameworksServicesTests:TaskStackContainersTests
+ *  atest WmTests:TaskStackContainersTests
  */
 @SmallTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class TaskStackContainersTests extends WindowTestsBase {
 
-    private TaskStack mPinnedStack;
+    private ActivityStack mPinnedStack;
 
     @Before
     public void setUp() throws Exception {
@@ -52,8 +57,8 @@ public class TaskStackContainersTests extends WindowTestsBase {
         // Stack should contain visible app window to be considered visible.
         final Task pinnedTask = createTaskInStack(mPinnedStack, 0 /* userId */);
         assertFalse(mPinnedStack.isVisible());
-        final WindowTestUtils.TestAppWindowToken pinnedApp =
-                WindowTestUtils.createTestAppWindowToken(mDisplayContent);
+        final ActivityRecord pinnedApp =
+                WindowTestUtils.createTestActivityRecord(mDisplayContent);
         pinnedTask.addChild(pinnedApp, 0 /* addPos */);
         assertTrue(mPinnedStack.isVisible());
     }
@@ -66,8 +71,8 @@ public class TaskStackContainersTests extends WindowTestsBase {
     @Test
     public void testStackPositionChildAt() {
         // Test that always-on-top stack can't be moved to position other than top.
-        final TaskStack stack1 = createTaskStackOnDisplay(mDisplayContent);
-        final TaskStack stack2 = createTaskStackOnDisplay(mDisplayContent);
+        final ActivityStack stack1 = createTaskStackOnDisplay(mDisplayContent);
+        final ActivityStack stack2 = createTaskStackOnDisplay(mDisplayContent);
 
         final WindowContainer taskStackContainer = stack1.getParent();
 
@@ -91,7 +96,7 @@ public class TaskStackContainersTests extends WindowTestsBase {
     @Test
     public void testStackPositionBelowPinnedStack() {
         // Test that no stack can be above pinned stack.
-        final TaskStack stack1 = createTaskStackOnDisplay(mDisplayContent);
+        final ActivityStack stack1 = createTaskStackOnDisplay(mDisplayContent);
 
         final WindowContainer taskStackContainer = stack1.getParent();
 
@@ -110,8 +115,12 @@ public class TaskStackContainersTests extends WindowTestsBase {
 
     @Test
     public void testDisplayPositionWithPinnedStack() {
+        // Make sure the display is system owned display which capable to move the stack to top.
+        spyOn(mDisplayContent);
+        doReturn(false).when(mDisplayContent).isUntrustedVirtualDisplay();
+
         // The display contains pinned stack that was added in {@link #setUp}.
-        final TaskStack stack = createTaskStackOnDisplay(mDisplayContent);
+        final ActivityStack stack = createTaskStackOnDisplay(mDisplayContent);
         final Task task = createTaskInStack(stack, 0 /* userId */);
 
         // Add another display at top.

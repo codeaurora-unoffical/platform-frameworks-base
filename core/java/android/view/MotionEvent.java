@@ -1440,7 +1440,7 @@ public final class MotionEvent extends InputEvent implements Parcelable {
     public static final int TOOL_TYPE_STYLUS = 2;
 
     /**
-     * Tool type constant: The tool is a mouse or trackpad.
+     * Tool type constant: The tool is a mouse.
      *
      * @see #getToolType
      */
@@ -2610,6 +2610,7 @@ public final class MotionEvent extends InputEvent implements Parcelable {
      * @see #getActionButton()
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public final void setActionButton(int button) {
         nativeSetActionButton(mNativePtr, button);

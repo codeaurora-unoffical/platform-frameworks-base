@@ -20,13 +20,14 @@ import android.content.Intent;
 import android.media.MediaRoute2Info;
 import android.media.MediaRoute2ProviderInfo;
 import android.media.MediaRoute2ProviderService;
+import android.os.Bundle;
 import android.os.IBinder;
 
 import java.util.HashMap;
 import java.util.Map;
 
 public class SampleMediaRoute2ProviderService extends MediaRoute2ProviderService {
-    private static final String TAG = "SampleMediaRoute2Serv";
+    private static final String TAG = "SampleMR2ProviderSvc";
 
     public static final String ROUTE_ID1 = "route_id1";
     public static final String ROUTE_NAME1 = "Sample Route 1";
@@ -35,6 +36,12 @@ public class SampleMediaRoute2ProviderService extends MediaRoute2ProviderService
 
     public static final String ROUTE_ID_SPECIAL_CATEGORY = "route_special_category";
     public static final String ROUTE_NAME_SPECIAL_CATEGORY = "Special Category Route";
+
+    public static final int VOLUME_MAX = 100;
+    public static final String ROUTE_ID_FIXED_VOLUME = "route_fixed_volume";
+    public static final String ROUTE_NAME_FIXED_VOLUME = "Fixed Volume Route";
+    public static final String ROUTE_ID_VARIABLE_VOLUME = "route_variable_volume";
+    public static final String ROUTE_NAME_VARIABLE_VOLUME = "Variable Volume Route";
 
     public static final String ACTION_REMOVE_ROUTE =
             "com.android.mediarouteprovider.action_remove_route";
@@ -58,9 +65,23 @@ public class SampleMediaRoute2ProviderService extends MediaRoute2ProviderService
                         .addSupportedCategory(CATEGORY_SAMPLE)
                         .addSupportedCategory(CATEGORY_SPECIAL)
                         .build();
+        MediaRoute2Info fixedVolumeRoute =
+                new MediaRoute2Info.Builder(ROUTE_ID_FIXED_VOLUME, ROUTE_NAME_FIXED_VOLUME)
+                        .addSupportedCategory(CATEGORY_SAMPLE)
+                        .setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_FIXED)
+                        .build();
+        MediaRoute2Info variableVolumeRoute =
+                new MediaRoute2Info.Builder(ROUTE_ID_VARIABLE_VOLUME, ROUTE_NAME_VARIABLE_VOLUME)
+                        .addSupportedCategory(CATEGORY_SAMPLE)
+                        .setVolumeHandling(MediaRoute2Info.PLAYBACK_VOLUME_VARIABLE)
+                        .setVolumeMax(VOLUME_MAX)
+                        .build();
+
         mRoutes.put(route1.getId(), route1);
         mRoutes.put(route2.getId(), route2);
         mRoutes.put(routeSpecial.getId(), routeSpecial);
+        mRoutes.put(fixedVolumeRoute.getId(), fixedVolumeRoute);
+        mRoutes.put(variableVolumeRoute.getId(), variableVolumeRoute);
     }
 
     @Override
@@ -75,7 +96,7 @@ public class SampleMediaRoute2ProviderService extends MediaRoute2ProviderService
     }
 
     @Override
-    public void onSelectRoute(String packageName, String routeId) {
+    public void onSelectRoute(String packageName, String routeId, SelectToken token) {
         MediaRoute2Info route = mRoutes.get(routeId);
         if (route == null) {
             return;
@@ -84,6 +105,7 @@ public class SampleMediaRoute2ProviderService extends MediaRoute2ProviderService
                 .setClientPackageName(packageName)
                 .build());
         publishRoutes();
+        notifyRouteSelected(token, Bundle.EMPTY);
     }
 
     @Override
@@ -108,6 +130,33 @@ public class SampleMediaRoute2ProviderService extends MediaRoute2ProviderService
                 mRoutes.put(routeId, route);
             }
         }
+    }
+
+    @Override
+    public void onSetVolume(String routeId, int volume) {
+        MediaRoute2Info route = mRoutes.get(routeId);
+        if (route == null) {
+            return;
+        }
+        volume = Math.min(volume, Math.max(0, route.getVolumeMax()));
+        mRoutes.put(routeId, new MediaRoute2Info.Builder(route)
+                .setVolume(volume)
+                .build());
+        publishRoutes();
+    }
+
+    @Override
+    public void onUpdateVolume(String routeId, int delta) {
+        MediaRoute2Info route = mRoutes.get(routeId);
+        if (route == null) {
+            return;
+        }
+        int volume = route.getVolume() + delta;
+        volume = Math.min(volume, Math.max(0, route.getVolumeMax()));
+        mRoutes.put(routeId, new MediaRoute2Info.Builder(route)
+                .setVolume(volume)
+                .build());
+        publishRoutes();
     }
 
     void publishRoutes() {

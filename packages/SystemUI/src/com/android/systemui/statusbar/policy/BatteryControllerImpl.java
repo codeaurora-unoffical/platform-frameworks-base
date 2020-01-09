@@ -33,12 +33,13 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.settingslib.fuelgauge.BatterySaverUtils;
 import com.android.settingslib.fuelgauge.Estimate;
 import com.android.settingslib.utils.PowerUtil;
-import com.android.systemui.Dependency;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dagger.qualifiers.BgHandler;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.power.EnhancedEstimates;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
-import java.text.NumberFormat;
 import java.util.ArrayList;
 
 import javax.inject.Inject;
@@ -52,41 +53,42 @@ import javax.inject.Singleton;
 public class BatteryControllerImpl extends BroadcastReceiver implements BatteryController {
     private static final String TAG = "BatteryController";
 
-    public static final String ACTION_LEVEL_TEST = "com.android.systemui.BATTERY_LEVEL_TEST";
+    private static final String ACTION_LEVEL_TEST = "com.android.systemui.BATTERY_LEVEL_TEST";
 
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
-    private static final int UPDATE_GRANULARITY_MSEC = 1000 * 60;
 
     private final EnhancedEstimates mEstimates;
-    private final ArrayList<BatteryController.BatteryStateChangeCallback> mChangeCallbacks = new ArrayList<>();
+    private final BroadcastDispatcher mBroadcastDispatcher;
+    private final ArrayList<BatteryController.BatteryStateChangeCallback>
+            mChangeCallbacks = new ArrayList<>();
     private final ArrayList<EstimateFetchCompletion> mFetchCallbacks = new ArrayList<>();
     private final PowerManager mPowerManager;
-    private final Handler mHandler;
+    private final Handler mMainHandler;
+    private final Handler mBgHandler;
     private final Context mContext;
 
-    protected int mLevel;
-    protected boolean mPluggedIn;
-    protected boolean mCharging;
-    protected boolean mCharged;
-    protected boolean mPowerSave;
-    protected boolean mAodPowerSave;
+    private int mLevel;
+    private boolean mPluggedIn;
+    private boolean mCharging;
+    private boolean mCharged;
+    private boolean mPowerSave;
+    private boolean mAodPowerSave;
     private boolean mTestmode = false;
     private boolean mHasReceivedBattery = false;
     private Estimate mEstimate;
     private boolean mFetchingEstimate = false;
 
-    @Inject
-    public BatteryControllerImpl(Context context, EnhancedEstimates enhancedEstimates) {
-        this(context, enhancedEstimates, context.getSystemService(PowerManager.class));
-    }
-
     @VisibleForTesting
+    @Inject
     BatteryControllerImpl(Context context, EnhancedEstimates enhancedEstimates,
-            PowerManager powerManager) {
+            PowerManager powerManager, BroadcastDispatcher broadcastDispatcher,
+            @MainHandler Handler mainHandler, @BgHandler Handler bgHandler) {
         mContext = context;
-        mHandler = new Handler();
+        mMainHandler = mainHandler;
+        mBgHandler = bgHandler;
         mPowerManager = powerManager;
         mEstimates = enhancedEstimates;
+        mBroadcastDispatcher = broadcastDispatcher;
 
         registerReceiver();
         updatePowerSave();
@@ -99,7 +101,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
         filter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
         filter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGING);
         filter.addAction(ACTION_LEVEL_TEST);
-        mContext.registerReceiver(this, filter);
+        mBroadcastDispatcher.registerReceiver(this, filter);
     }
 
     @Override
@@ -157,7 +159,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
             setPowerSave(intent.getBooleanExtra(PowerManager.EXTRA_POWER_SAVE_MODE, false));
         } else if (action.equals(ACTION_LEVEL_TEST)) {
             mTestmode = true;
-            mHandler.post(new Runnable() {
+            mMainHandler.post(new Runnable() {
                 int curLevel = 0;
                 int incr = 1;
                 int saveLevel = mLevel;
@@ -184,7 +186,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
                     if (curLevel == 100) {
                         incr *= -1;
                     }
-                    mHandler.postDelayed(this, 200);
+                    mMainHandler.postDelayed(this, 200);
                 }
             });
         }
@@ -217,7 +219,6 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
                 return null;
             }
 
-            String percentage = NumberFormat.getPercentInstance().format((double) mLevel / 100.0);
             return PowerUtil.getBatteryRemainingShortStringFormatted(
                     mContext, mEstimate.getEstimateMillis());
         }
@@ -230,7 +231,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
         }
 
         mFetchingEstimate = true;
-        Dependency.get(Dependency.BG_HANDLER).post(() -> {
+        mBgHandler.post(() -> {
             // Only fetch the estimate if they are enabled
             synchronized (mFetchCallbacks) {
                 mEstimate = null;
@@ -239,7 +240,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
                 }
             }
             mFetchingEstimate = false;
-            Dependency.get(Dependency.MAIN_HANDLER).post(this::notifyEstimateFetchCallbacks);
+            mMainHandler.post(this::notifyEstimateFetchCallbacks);
         });
     }
 
@@ -306,7 +307,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
     public void dispatchDemoCommand(String command, Bundle args) {
         if (!mDemoMode && command.equals(COMMAND_ENTER)) {
             mDemoMode = true;
-            mContext.unregisterReceiver(this);
+            mBroadcastDispatcher.unregisterReceiver(this);
         } else if (mDemoMode && command.equals(COMMAND_EXIT)) {
             mDemoMode = false;
             registerReceiver();

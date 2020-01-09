@@ -386,7 +386,7 @@ public class UsbHostManager {
                 return false;
             }
 
-            UsbDevice.Builder newDeviceBuilder = parser.toAndroidUsbDevice();
+            UsbDevice.Builder newDeviceBuilder = parser.toAndroidUsbDeviceBuilder();
             if (newDeviceBuilder == null) {
                 Slog.e(TAG, "Couldn't create UsbDevice object.");
                 // Tracking
@@ -488,7 +488,7 @@ public class UsbHostManager {
      *  Opens the specified USB device
      */
     public ParcelFileDescriptor openDevice(String deviceAddress,
-            UsbUserPermissionManager permissions, String packageName, int uid) {
+            UsbUserPermissionManager permissions, String packageName, int pid, int uid) {
         synchronized (mLock) {
             if (isBlackListed(deviceAddress)) {
                 throw new SecurityException("USB device is on a restricted bus");
@@ -500,7 +500,7 @@ public class UsbHostManager {
                         "device " + deviceAddress + " does not exist or is restricted");
             }
 
-            permissions.checkPermission(device, packageName, uid);
+            permissions.checkPermission(device, packageName, pid, uid);
             return nativeOpenDevice(deviceAddress);
         }
     }

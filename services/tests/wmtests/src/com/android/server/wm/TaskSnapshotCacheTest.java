@@ -18,15 +18,21 @@ package com.android.server.wm;
 
 import static android.view.WindowManager.LayoutParams.FIRST_APPLICATION_WINDOW;
 
+import static junit.framework.Assert.assertEquals;
+
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
+import android.app.ActivityManager.TaskSnapshot;
 import android.platform.test.annotations.Presubmit;
 
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 
 /**
  * Test class for {@link TaskSnapshotCache}.
@@ -36,15 +42,18 @@ import org.junit.Test;
  */
 @SmallTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class TaskSnapshotCacheTest extends TaskSnapshotPersisterTestBase {
 
     private TaskSnapshotCache mCache;
+    @Mock
+    TaskSnapshot mSnapshot;
 
     @Override
     @Before
     public void setUp() {
         super.setUp();
-
+        MockitoAnnotations.initMocks(this);
         mCache = new TaskSnapshotCache(mWm, mLoader);
     }
 
@@ -54,7 +63,7 @@ public class TaskSnapshotCacheTest extends TaskSnapshotPersisterTestBase {
         mCache.putSnapshot(window.getTask(), createSnapshot());
         assertNotNull(mCache.getSnapshot(window.getTask().mTaskId, 0 /* userId */,
                 false /* restoreFromDisk */, false /* reducedResolution */));
-        mCache.onAppRemoved(window.mAppToken);
+        mCache.onAppRemoved(window.mActivityRecord);
         assertNull(mCache.getSnapshot(window.getTask().mTaskId, 0 /* userId */,
                 false /* restoreFromDisk */, false /* reducedResolution */));
     }
@@ -65,7 +74,7 @@ public class TaskSnapshotCacheTest extends TaskSnapshotPersisterTestBase {
         mCache.putSnapshot(window.getTask(), createSnapshot());
         assertNotNull(mCache.getSnapshot(window.getTask().mTaskId, 0 /* userId */,
                 false /* restoreFromDisk */, false /* reducedResolution */));
-        mCache.onAppDied(window.mAppToken);
+        mCache.onAppDied(window.mActivityRecord);
         assertNull(mCache.getSnapshot(window.getTask().mTaskId, 0 /* userId */,
                 false /* restoreFromDisk */, false /* reducedResolution */));
     }
@@ -109,5 +118,14 @@ public class TaskSnapshotCacheTest extends TaskSnapshotPersisterTestBase {
         // Load it from disk
         assertNotNull(mCache.getSnapshot(window.getTask().mTaskId, mWm.mCurrentUserId,
                 true /* restoreFromDisk */, false /* reducedResolution */));
+    }
+
+    @Test
+    public void testClearCache() {
+        final WindowState window = createWindow(null, FIRST_APPLICATION_WINDOW, "window");
+        mCache.putSnapshot(window.getTask(), mSnapshot);
+        assertEquals(mSnapshot, mCache.getSnapshot(window.getTask().mTaskId, 0, false, false));
+        mCache.clearRunningCache();
+        assertNull(mCache.getSnapshot(window.getTask().mTaskId, 0, false, false));
     }
 }

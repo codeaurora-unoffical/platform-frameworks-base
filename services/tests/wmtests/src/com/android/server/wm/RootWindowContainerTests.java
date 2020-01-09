@@ -31,6 +31,7 @@ import android.platform.test.annotations.Presubmit;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Tests for RootWindowContainer.
@@ -40,6 +41,7 @@ import org.junit.Test;
  */
 @SmallTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class RootWindowContainerTests extends WindowTestsBase {
 
     private static final int FAKE_CALLING_UID = 667;
@@ -81,28 +83,27 @@ public class RootWindowContainerTests extends WindowTestsBase {
 
     @Test
     public void testIsAnyNonToastWindowVisibleForUid_aFewNonToastButNoneVisible() {
-        final WindowState topBar = createWindow(null, TYPE_STATUS_BAR, "topBar", FAKE_CALLING_UID);
+        final WindowState statusBar =
+                createWindow(null, TYPE_STATUS_BAR, "statusBar", FAKE_CALLING_UID);
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app", FAKE_CALLING_UID);
 
-        assertFalse(topBar.isVisibleNow());
+        assertFalse(statusBar.isVisibleNow());
         assertFalse(app.isVisibleNow());
         assertFalse(mWm.mRoot.isAnyNonToastWindowVisibleForUid(FAKE_CALLING_UID));
     }
 
     @Test
     public void testUpdateDefaultDisplayWindowingModeOnSettingsRetrieved() {
-        synchronized (mWm.mGlobalLock) {
-            assertEquals(WindowConfiguration.WINDOWING_MODE_FULLSCREEN,
-                    mWm.getDefaultDisplayContentLocked().getWindowingMode());
+        assertEquals(WindowConfiguration.WINDOWING_MODE_FULLSCREEN,
+                mWm.getDefaultDisplayContentLocked().getWindowingMode());
 
-            mWm.mIsPc = true;
-            mWm.mAtmService.mSupportsFreeformWindowManagement = true;
+        mWm.mIsPc = true;
+        mWm.mAtmService.mSupportsFreeformWindowManagement = true;
 
-            mWm.mRoot.onSettingsRetrieved();
+        mWm.mRoot.onSettingsRetrieved();
 
-            assertEquals(WindowConfiguration.WINDOWING_MODE_FREEFORM,
-                    mWm.getDefaultDisplayContentLocked().getWindowingMode());
-        }
+        assertEquals(WindowConfiguration.WINDOWING_MODE_FREEFORM,
+                mWm.getDefaultDisplayContentLocked().getWindowingMode());
     }
 }
 

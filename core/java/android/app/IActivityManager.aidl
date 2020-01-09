@@ -122,6 +122,7 @@ interface IActivityManager {
             in String resultData, in Bundle map, in String[] requiredPermissions,
             int appOp, in Bundle options, boolean serialized, boolean sticky, int userId);
     void unbroadcastIntent(in IApplicationThread caller, in Intent intent, int userId);
+    @UnsupportedAppUsage
     oneway void finishReceiver(in IBinder who, int resultCode, in String resultData, in Bundle map,
             boolean abortBroadcast, int flags);
     void attachApplication(in IApplicationThread app, long startSeq);
@@ -211,6 +212,7 @@ interface IActivityManager {
 
     @UnsupportedAppUsage
     ParceledListSlice getRecentTasks(int maxNum, int flags, int userId);
+    @UnsupportedAppUsage
     oneway void serviceDoneExecuting(in IBinder token, int type, int startId, int res);
     @UnsupportedAppUsage
     IIntentSender getIntentSender(int type, in String packageName, in IBinder token,
@@ -351,10 +353,6 @@ interface IActivityManager {
     // Request a heap dump for the system server.
     void requestSystemServerHeapDump();
 
-    // Deprecated - This method is only used by a few internal components and it will soon start
-    // using bug report API (which will be restricted to a few, pre-defined apps).
-    // No new code should be calling it.
-    @UnsupportedAppUsage
     void requestBugReport(int bugreportType);
     void requestBugReportWithDescription(in @nullable String shareTitle,
                 in @nullable String shareDescription, int bugreportType);
@@ -364,7 +362,7 @@ interface IActivityManager {
      *  that are passed to this API as parameters
      *
      *  @param shareTitle should be a valid legible string less than 50 chars long
-     *  @param shareDescription should be less than 91 bytes when encoded into UTF-8 format
+     *  @param shareDescription should be less than 150 chars long
      *
      *  @throws IllegalArgumentException if shareTitle or shareDescription is too big or if the
      *          paremeters cannot be encoding to an UTF-8 charset.
@@ -372,13 +370,12 @@ interface IActivityManager {
     void requestTelephonyBugReport(in String shareTitle, in String shareDescription);
 
     /**
-     *  Deprecated - This method is only used by Wifi, and it will soon start using
-     *  bug report API.
+     *  This method is only used by Wifi.
      *
      *  Takes a minimal bugreport of Wifi-related state.
      *
      *  @param shareTitle should be a valid legible string less than 50 chars long
-     *  @param shareDescription should be less than 91 bytes when encoded into UTF-8 format
+     *  @param shareDescription should be less than 150 chars long
      *
      *  @throws IllegalArgumentException if shareTitle or shareDescription is too big or if the
      *          parameters cannot be encoding to an UTF-8 charset.
@@ -390,6 +387,7 @@ interface IActivityManager {
     void requestInteractiveBugReport();
     void requestFullBugReport();
     void requestRemoteBugReport();
+    boolean launchBugReportHandlerApp();
 
     @UnsupportedAppUsage
     Intent getIntentForIntentSender(in IIntentSender sender);

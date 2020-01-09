@@ -16,15 +16,8 @@
 
 package com.android.systemui.usb;
 
-import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.DialogInterface;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.hardware.usb.UsbManager;
 import android.os.Bundle;
-import android.os.SystemProperties;
 
 import com.android.internal.app.AlertActivity;
 import com.android.internal.app.AlertController;
@@ -32,15 +25,9 @@ import com.android.systemui.R;
 
 public class UsbDebuggingSecondaryUserActivity extends AlertActivity
         implements DialogInterface.OnClickListener {
-    private UsbDisconnectedReceiver mDisconnectedReceiver;
-
     @Override
     public void onCreate(Bundle icicle) {
         super.onCreate(icicle);
-
-        if (SystemProperties.getInt("service.adb.tcp.port", 0) == 0) {
-            mDisconnectedReceiver = new UsbDisconnectedReceiver(this);
-        }
 
         final AlertController.AlertParams ap = mAlertParams;
         ap.mTitle = getString(R.string.usb_debugging_secondary_user_title);
@@ -49,40 +36,6 @@ public class UsbDebuggingSecondaryUserActivity extends AlertActivity
         ap.mPositiveButtonListener = this;
 
         setupAlert();
-    }
-
-    private class UsbDisconnectedReceiver extends BroadcastReceiver {
-        private final Activity mActivity;
-        public UsbDisconnectedReceiver(Activity activity) {
-            mActivity = activity;
-        }
-
-        @Override
-        public void onReceive(Context content, Intent intent) {
-            String action = intent.getAction();
-            if (UsbManager.ACTION_USB_STATE.equals(action)) {
-                boolean connected = intent.getBooleanExtra(UsbManager.USB_CONNECTED, false);
-                if (!connected) {
-                    mActivity.finish();
-                }
-            }
-        }
-    }
-
-    @Override
-    public void onStart() {
-        super.onStart();
-
-        IntentFilter filter = new IntentFilter(UsbManager.ACTION_USB_STATE);
-        registerReceiver(mDisconnectedReceiver, filter);
-    }
-
-    @Override
-    protected void onStop() {
-        if (mDisconnectedReceiver != null) {
-            unregisterReceiver(mDisconnectedReceiver);
-        }
-        super.onStop();
     }
 
     @Override

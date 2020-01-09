@@ -44,19 +44,22 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.never;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spy;
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.times;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
-import static com.android.server.wm.ActivityDisplay.POSITION_BOTTOM;
-import static com.android.server.wm.ActivityDisplay.POSITION_TOP;
 import static com.android.server.wm.ActivityTaskManagerService.ANIMATE;
+import static com.android.server.wm.WindowContainer.POSITION_BOTTOM;
+import static com.android.server.wm.WindowContainer.POSITION_TOP;
 
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyObject;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 
 import android.app.ActivityOptions;
@@ -98,6 +101,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
     private ActivityStarter mStarter;
     private ActivityStartController mController;
     private ActivityMetricsLogger mActivityMetricsLogger;
+    private PackageManagerInternal mMockPackageManager;
 
     private static final int PRECONDITION_NO_CALLER_APP = 1;
     private static final int PRECONDITION_NO_INTENT_COMPONENT = 1 << 1;
@@ -129,7 +133,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
     @Test
     public void testUpdateLaunchBounds() {
         // When in a non-resizeable stack, the task bounds should be updated.
-        final TaskRecord task = new TaskBuilder(mService.mStackSupervisor)
+        final Task task = new TaskBuilder(mService.mStackSupervisor)
                 .setStack(mService.mRootActivityContainer.getDefaultDisplay().createStack(
                         WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */))
                 .build();
@@ -140,7 +144,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
         assertEquals(new Rect(), task.getStack().getRequestedOverrideBounds());
 
         // When in a resizeable stack, the stack bounds should be updated as well.
-        final TaskRecord task2 = new TaskBuilder(mService.mStackSupervisor)
+        final Task task2 = new TaskBuilder(mService.mStackSupervisor)
                 .setStack(mService.mRootActivityContainer.getDefaultDisplay().createStack(
                         WINDOWING_MODE_PINNED, ACTIVITY_TYPE_STANDARD, true /* onTop */))
                 .build();
@@ -354,20 +358,24 @@ public class ActivityStarterTests extends ActivityTestsBase {
             doReturn(stack).when(mRootActivityContainer)
                     .getLaunchStack(any(), any(), any(), anyBoolean());
             doReturn(stack).when(mRootActivityContainer)
-                    .getLaunchStack(any(), any(), any(), anyBoolean(), any());
+                    .getLaunchStack(any(), any(), any(), anyBoolean(), any(), anyInt(), anyInt());
         }
 
         // Set up mock package manager internal and make sure no unmocked methods are called
-        PackageManagerInternal mockPackageManager = mock(PackageManagerInternal.class,
+        mMockPackageManager = mock(PackageManagerInternal.class,
                 invocation -> {
                     throw new RuntimeException("Not stubbed");
                 });
-        doReturn(mockPackageManager).when(mService).getPackageManagerInternalLocked();
+        doReturn(mMockPackageManager).when(mService).getPackageManagerInternalLocked();
+        doReturn(false).when(mMockPackageManager).isInstantAppInstallerComponent(any());
+        doReturn(null).when(mMockPackageManager).resolveIntent(any(), any(), anyInt(), anyInt(),
+                anyBoolean(), anyInt());
 
         // Never review permissions
-        doReturn(false).when(mockPackageManager).isPermissionsReviewRequired(any(), anyInt());
-        doNothing().when(mockPackageManager).grantEphemeralAccess(
+        doReturn(false).when(mMockPackageManager).isPermissionsReviewRequired(any(), anyInt());
+        doNothing().when(mMockPackageManager).grantImplicitAccess(
                 anyInt(), any(), anyInt(), anyInt());
+        doNothing().when(mMockPackageManager).notifyPackageUse(anyString(), anyInt());
 
         final Intent intent = new Intent();
         intent.addFlags(launchFlags);
@@ -494,7 +502,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
      */
     @Test
     public void testTaskModeViolation() {
-        final ActivityDisplay display = mService.mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mService.mRootActivityContainer.getDefaultDisplay();
         display.removeAllTasks();
         assertNoTasks(display);
 
@@ -509,10 +517,10 @@ public class ActivityStarterTests extends ActivityTestsBase {
         assertNoTasks(display);
     }
 
-    private void assertNoTasks(ActivityDisplay display) {
-        for (int i = display.getChildCount() - 1; i >= 0; --i) {
-            final ActivityStack stack = display.getChildAt(i);
-            assertThat(stack.getAllTasks()).isEmpty();
+    private void assertNoTasks(DisplayContent display) {
+        for (int i = display.getStackCount() - 1; i >= 0; --i) {
+            final ActivityStack stack = display.getStackAt(i);
+            assertFalse(stack.hasChild());
         }
     }
 
@@ -705,10 +713,10 @@ public class ActivityStarterTests extends ActivityTestsBase {
         verify(options, times(shouldHaveAborted ? 1 : 0)).abort();
 
         final ActivityRecord startedActivity = outActivity[0];
-        if (startedActivity != null && startedActivity.getTaskRecord() != null) {
+        if (startedActivity != null && startedActivity.getTask() != null) {
             // Remove the activity so it doesn't interfere with with subsequent activity launch
             // tests from this method.
-            startedActivity.getTaskRecord().removeActivity(startedActivity);
+            startedActivity.getTask().removeChild(startedActivity);
         }
     }
 
@@ -753,8 +761,9 @@ public class ActivityStarterTests extends ActivityTestsBase {
                 false /* mockGetLaunchStack */);
 
         // Create a secondary display at bottom.
-        final TestActivityDisplay secondaryDisplay = spy(createNewActivityDisplay());
-        mRootActivityContainer.addChild(secondaryDisplay, POSITION_BOTTOM);
+        final TestDisplayContent secondaryDisplay =
+                new TestDisplayContent.Builder(mService, 1000, 1500)
+                        .setPosition(POSITION_BOTTOM).build();
         final ActivityStack stack = secondaryDisplay.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, true /* onTop */);
 
@@ -791,7 +800,8 @@ public class ActivityStarterTests extends ActivityTestsBase {
                 false /* mockGetLaunchStack */);
 
         // Create a secondary display with an activity.
-        final TestActivityDisplay secondaryDisplay = spy(createNewActivityDisplay());
+        final TestDisplayContent secondaryDisplay =
+                new TestDisplayContent.Builder(mService, 1000, 1500).build();
         mRootActivityContainer.addChild(secondaryDisplay, POSITION_TOP);
         final ActivityRecord singleTaskActivity = createSingleTaskActivityOn(
                 secondaryDisplay.createStack(WINDOWING_MODE_FULLSCREEN,
@@ -800,7 +810,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
         // Create another activity on top of the secondary display.
         final ActivityStack topStack = secondaryDisplay.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, true /* onTop */);
-        final TaskRecord topTask = new TaskBuilder(mSupervisor).setStack(topStack).build();
+        final Task topTask = new TaskBuilder(mSupervisor).setStack(topStack).build();
         new ActivityBuilder(mService).setTask(topTask).build();
 
         // Start activity with the same intent as {@code singleTaskActivity} on secondary display.
@@ -822,14 +832,14 @@ public class ActivityStarterTests extends ActivityTestsBase {
         final ComponentName componentName = ComponentName.createRelative(
                 DEFAULT_COMPONENT_PACKAGE_NAME,
                 DEFAULT_COMPONENT_PACKAGE_NAME + ".SingleTaskActivity");
-        final TaskRecord taskRecord = new TaskBuilder(mSupervisor)
+        final Task task = new TaskBuilder(mSupervisor)
                 .setComponent(componentName)
                 .setStack(stack)
                 .build();
         return new ActivityBuilder(mService)
                 .setComponent(componentName)
                 .setLaunchMode(LAUNCH_SINGLE_TASK)
-                .setTask(taskRecord)
+                .setTask(task)
                 .build();
     }
 
@@ -843,7 +853,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
                 false /* mockGetLaunchStack */);
 
         // Create a secondary display at bottom.
-        final TestActivityDisplay secondaryDisplay = addNewActivityDisplayAt(POSITION_BOTTOM);
+        final TestDisplayContent secondaryDisplay = addNewDisplayContentAt(POSITION_BOTTOM);
         secondaryDisplay.createStack(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD,
                 true /* onTop */);
 
@@ -910,5 +920,62 @@ public class ActivityStarterTests extends ActivityTestsBase {
 
         verify(recentTasks, times(1)).setFreezeTaskListReordering();
         verify(recentTasks, times(1)).resetFreezeTaskListReorderingOnTimeout();
+    }
+
+    @Test
+    public void testNoActivityInfo() {
+        final ActivityStarter starter = prepareStarter(0 /* flags */);
+        spyOn(starter.mRequest);
+
+        final Intent intent = new Intent();
+        intent.setComponent(ActivityBuilder.getDefaultComponent());
+        starter.setReason("testNoActivityInfo").setIntent(intent)
+                .setActivityInfo(null).execute();
+        verify(starter.mRequest).resolveActivity(any());
+    }
+
+    @Test
+    public void testResolveEphemeralInstaller() {
+        final ActivityStarter starter = prepareStarter(0 /* flags */);
+        final Intent intent = new Intent();
+        intent.setComponent(ActivityBuilder.getDefaultComponent());
+
+        doReturn(true).when(mMockPackageManager).isInstantAppInstallerComponent(any());
+        starter.setIntent(intent).mRequest.resolveActivity(mService.mStackSupervisor);
+
+        // Make sure the client intent won't be modified.
+        assertThat(intent.getComponent()).isNotNull();
+        assertThat(starter.getIntent().getComponent()).isNull();
+    }
+
+    @Test
+    public void testNotAllowIntentWithFd() {
+        final ActivityStarter starter = prepareStarter(0 /* flags */);
+        final Intent intent = spy(new Intent());
+        intent.setComponent(ActivityBuilder.getDefaultComponent());
+        doReturn(true).when(intent).hasFileDescriptors();
+
+        boolean exceptionCaught = false;
+        try {
+            starter.setIntent(intent).execute();
+        } catch (IllegalArgumentException ex) {
+            exceptionCaught = true;
+        }
+        assertThat(exceptionCaught).isTrue();
+    }
+
+    @Test
+    public void testRecycleTaskFromAnotherUser() {
+        final ActivityStarter starter = prepareStarter(0 /* flags */);
+        starter.mStartActivity = new ActivityBuilder(mService).build();
+        final Task task = new TaskBuilder(mService.mStackSupervisor)
+                .setStack(mService.mRootActivityContainer.getDefaultDisplay().createStack(
+                        WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */))
+                .setUserId(10)
+                .build();
+
+        final int result = starter.recycleTask(task, null, null);
+        assertThat(result == START_SUCCESS).isTrue();
+        assertThat(starter.mAddingToTask).isTrue();
     }
 }

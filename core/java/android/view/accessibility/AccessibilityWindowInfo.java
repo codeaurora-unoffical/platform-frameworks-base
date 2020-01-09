@@ -26,9 +26,12 @@ import android.os.Parcelable;
 import android.text.TextUtils;
 import android.util.LongArray;
 import android.util.Pools.SynchronizedPool;
+import android.util.SparseArray;
 import android.view.Display;
 import android.view.accessibility.AccessibilityEvent.WindowsChangeTypes;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -84,6 +87,8 @@ public final class AccessibilityWindowInfo implements Parcelable {
     /** @hide */
     public static final int ACTIVE_WINDOW_ID = Integer.MAX_VALUE;
     /** @hide */
+    public static final int UNDEFINED_CONNECTION_ID = -1;
+    /** @hide */
     public static final int UNDEFINED_WINDOW_ID = -1;
     /** @hide */
     public static final int ANY_WINDOW_ID = -2;
@@ -114,14 +119,21 @@ public final class AccessibilityWindowInfo implements Parcelable {
     private CharSequence mTitle;
     private long mAnchorId = AccessibilityNodeInfo.UNDEFINED_NODE_ID;
 
-    private int mConnectionId = UNDEFINED_WINDOW_ID;
+    private int mConnectionId = UNDEFINED_CONNECTION_ID;
 
-    private AccessibilityWindowInfo() {
-        /* do nothing - hide constructor */
+    /**
+     * Creates a new {@link AccessibilityWindowInfo}.
+     */
+    public AccessibilityWindowInfo() {
     }
 
-    /** @hide */
-    AccessibilityWindowInfo(AccessibilityWindowInfo info) {
+    /**
+     * Copy constructor. Creates a new {@link AccessibilityWindowInfo}, and this new instance is
+     * initialized from given <code>info</code>.
+     *
+     * @param info The other info.
+     */
+    public AccessibilityWindowInfo(@NonNull AccessibilityWindowInfo info) {
         init(info);
     }
 
@@ -466,6 +478,9 @@ public final class AccessibilityWindowInfo implements Parcelable {
      * Returns a cached instance if such is available or a new one is
      * created.
      *
+     * <p>In most situations object pooling is not beneficial. Create a new instance using the
+     * constructor {@link #AccessibilityWindowInfo()} instead.
+     *
      * @return An instance.
      */
     public static AccessibilityWindowInfo obtain() {
@@ -483,6 +498,9 @@ public final class AccessibilityWindowInfo implements Parcelable {
      * Returns a cached instance if such is available or a new one is
      * created. The returned instance is initialized from the given
      * <code>info</code>.
+     *
+     * <p>In most situations object pooling is not beneficial. Create a new instance using the
+     * constructor {@link #AccessibilityWindowInfo(AccessibilityWindowInfo)} instead.
      *
      * @param info The other info.
      * @return An instance.
@@ -511,6 +529,8 @@ public final class AccessibilityWindowInfo implements Parcelable {
      * <strong>Note:</strong> You must not touch the object after calling this function.
      * </p>
      *
+     * <p>In most situations object pooling is not beneficial, and recycling is not necessary.
+     *
      * @throws IllegalStateException If the info is already recycled.
      */
     public void recycle() {
@@ -519,6 +539,30 @@ public final class AccessibilityWindowInfo implements Parcelable {
         if (sNumInstancesInUse != null) {
             sNumInstancesInUse.decrementAndGet();
         }
+    }
+
+    /**
+     * Refreshes this window with the latest state of the window it represents.
+     * <p>
+     * <strong>Note:</strong> If this method returns false this info is obsolete
+     * since it represents a window that is no longer exist.
+     * </p>
+     *
+     * @hide
+     */
+    public boolean refresh() {
+        if (mConnectionId == UNDEFINED_CONNECTION_ID || mId == UNDEFINED_WINDOW_ID) {
+            return false;
+        }
+        final AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+        final AccessibilityWindowInfo refreshedInfo = client.getWindow(mConnectionId,
+                mId, /* bypassCache */true);
+        if (refreshedInfo == null) {
+            return false;
+        }
+        init(refreshedInfo);
+        refreshedInfo.recycle();
+        return true;
     }
 
     @Override
@@ -568,6 +612,7 @@ public final class AccessibilityWindowInfo implements Parcelable {
         mTitle = other.mTitle;
         mAnchorId = other.mAnchorId;
 
+        if (mChildIds != null) mChildIds.clear();
         if (other.mChildIds != null && other.mChildIds.size() > 0) {
             if (mChildIds == null) {
                 mChildIds = other.mChildIds.clone();
@@ -797,4 +842,49 @@ public final class AccessibilityWindowInfo implements Parcelable {
             return new AccessibilityWindowInfo[size];
         }
     };
+
+    /**
+     * Transfers a sparsearray with lists having {@link AccessibilityWindowInfo}s across an IPC.
+     * The key of this sparsearray is display Id.
+     *
+     * @hide
+     */
+    public static final class WindowListSparseArray
+            extends SparseArray<List<AccessibilityWindowInfo>> implements Parcelable {
+
+        @Override
+        public int describeContents() {
+            return 0;
+        }
+
+        @Override
+        public void writeToParcel(Parcel dest, int flags) {
+            final int count = size();
+            dest.writeInt(count);
+            for (int i = 0; i < count; i++) {
+                dest.writeParcelableList(valueAt(i), 0);
+                dest.writeInt(keyAt(i));
+            }
+        }
+
+        public static final Parcelable.Creator<WindowListSparseArray> CREATOR =
+                new Parcelable.Creator<WindowListSparseArray>() {
+            public WindowListSparseArray createFromParcel(
+                    Parcel source) {
+                final WindowListSparseArray array = new WindowListSparseArray();
+                final ClassLoader loader = array.getClass().getClassLoader();
+                final int count = source.readInt();
+                for (int i = 0; i < count; i++) {
+                    List<AccessibilityWindowInfo> windows = new ArrayList<>();
+                    source.readParcelableList(windows, loader);
+                    array.put(source.readInt(), windows);
+                }
+                return array;
+            }
+
+            public WindowListSparseArray[] newArray(int size) {
+                return new WindowListSparseArray[size];
+            }
+        };
+    }
 }

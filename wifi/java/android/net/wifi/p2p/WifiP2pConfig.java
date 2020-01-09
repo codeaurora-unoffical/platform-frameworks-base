@@ -28,6 +28,7 @@ import android.text.TextUtils;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.nio.charset.StandardCharsets;
 import java.util.regex.PatternSyntaxException;
 
 /**
@@ -66,12 +67,6 @@ public class WifiP2pConfig implements Parcelable {
     public int groupOwnerBand = GROUP_OWNER_BAND_AUTO;
 
     /** @hide */
-    public static final int MAX_GROUP_OWNER_INTENT   =   15;
-    /** @hide */
-    @UnsupportedAppUsage
-    public static final int MIN_GROUP_OWNER_INTENT   =   0;
-
-    /** @hide */
     @IntDef(flag = false, prefix = { "GROUP_OWNER_BAND_" }, value = {
         GROUP_OWNER_BAND_AUTO,
         GROUP_OWNER_BAND_2GHZ,
@@ -94,13 +89,35 @@ public class WifiP2pConfig implements Parcelable {
     public static final int GROUP_OWNER_BAND_5GHZ = 2;
 
     /**
-     * This is an integer value between 0 and 15 where 0 indicates the least
-     * inclination to be a group owner and 15 indicates the highest inclination
-     * to be a group owner.
-     *
-     * A value of -1 indicates the system can choose an appropriate value.
+     * The least inclination to be a group owner, to be filled in the field
+     * {@link #groupOwnerIntent}.
      */
-    public int groupOwnerIntent = -1;
+    public static final int GROUP_OWNER_INTENT_MIN = 0;
+
+    /**
+     * The most inclination to be a group owner, to be filled in the field
+     * {@link #groupOwnerIntent}.
+     */
+    public static final int GROUP_OWNER_INTENT_MAX = 15;
+
+    /**
+     * The system can choose an appropriate owner intent value, to be filled in the field
+     * {@link #groupOwnerIntent}.
+     */
+    public static final int GROUP_OWNER_INTENT_AUTO = -1;
+
+    /**
+     * This is an integer value between {@link #GROUP_OWNER_INTENT_MIN} and
+     * {@link #GROUP_OWNER_INTENT_MAX} where
+     * {@link #GROUP_OWNER_INTENT_MIN} indicates the least inclination to be a group owner and
+     * {@link #GROUP_OWNER_INTENT_MAX} indicates the highest inclination to be a group owner.
+     *
+     * A value of {@link #GROUP_OWNER_INTENT_AUTO} indicates the system can choose an appropriate
+     * value.
+     *
+     * By default this field is set to {@link #GROUP_OWNER_INTENT_AUTO}.
+     */
+    public int groupOwnerIntent = GROUP_OWNER_INTENT_AUTO;
 
     /** @hide */
     @UnsupportedAppUsage
@@ -228,6 +245,10 @@ public class WifiP2pConfig implements Parcelable {
 
         private static final MacAddress MAC_ANY_ADDRESS =
                 MacAddress.fromString("02:00:00:00:00:00");
+        /**
+         * Maximum number of bytes allowed for a SSID.
+         */
+        private static final int MAX_SSID_BYTES = 32;
 
         private MacAddress mDeviceAddress = MAC_ANY_ADDRESS;
         private String mNetworkName = "";
@@ -278,6 +299,10 @@ public class WifiP2pConfig implements Parcelable {
             if (TextUtils.isEmpty(networkName)) {
                 throw new IllegalArgumentException(
                         "network name must be non-empty.");
+            }
+            if (networkName.getBytes(StandardCharsets.UTF_8).length > MAX_SSID_BYTES) {
+                throw new IllegalArgumentException(
+                        "network name exceeds " + MAX_SSID_BYTES + " bytes.");
             }
             try {
                 if (!networkName.matches("^DIRECT-[a-zA-Z0-9]{2}.*")) {

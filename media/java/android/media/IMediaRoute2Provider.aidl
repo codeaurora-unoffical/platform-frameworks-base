@@ -24,7 +24,9 @@ import android.media.IMediaRoute2ProviderClient;
  */
 oneway interface IMediaRoute2Provider {
     void setClient(IMediaRoute2ProviderClient client);
-    void selectRoute(String packageName, String id);
+    void requestSelectRoute(String packageName, String id, int seq);
     void unselectRoute(String packageName, String id);
     void notifyControlRequestSent(String id, in Intent request);
+    void requestSetVolume(String id, int volume);
+    void requestUpdateVolume(String id, int delta);
 }

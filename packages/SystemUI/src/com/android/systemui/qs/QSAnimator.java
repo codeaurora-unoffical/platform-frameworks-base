@@ -30,6 +30,7 @@ import com.android.systemui.qs.TouchAnimator.Builder;
 import com.android.systemui.qs.TouchAnimator.Listener;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerService.Tunable;
+import com.android.systemui.util.Utils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -267,6 +268,15 @@ public class QSAnimator implements Callback, PageListener, Listener, OnLayoutCha
             mAllViews.add(tileView);
             count++;
         }
+
+
+        if (Utils.useQsMediaPlayer(mQsPanel.getContext())) {
+            View qsMediaView = mQsPanel.getMediaPanel();
+            View qqsMediaView = mQuickQsPanel.getMediaPlayer().getView();
+            translationXBuilder.addFloat(qsMediaView, "alpha", 0, 1);
+            translationXBuilder.addFloat(qqsMediaView, "alpha", 1, 0);
+        }
+
         if (mAllowFancy) {
             // Make brightness appear static position and alpha in through second half.
             View brightness = mQsPanel.getBrightnessView();

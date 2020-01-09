@@ -20,7 +20,7 @@ import "frameworks/base/core/proto/android/app/statusbarmanager.proto";
 import "frameworks/base/core/proto/android/content/activityinfo.proto";
 import "frameworks/base/core/proto/android/content/configuration.proto";
 import "frameworks/base/core/proto/android/graphics/rect.proto";
-import "frameworks/base/core/proto/android/server/appwindowthumbnail.proto";
+import "frameworks/base/core/proto/android/server/windowcontainerthumbnail.proto";
 import "frameworks/base/core/proto/android/server/surfaceanimator.proto";
 import "frameworks/base/core/proto/android/view/displaycutout.proto";
 import "frameworks/base/core/proto/android/view/displayinfo.proto";
@@ -163,6 +163,7 @@ message DisplayContentProto {
     repeated IdentifierProto opening_apps = 17;
     repeated IdentifierProto closing_apps = 18;
     repeated IdentifierProto changing_apps = 19;
+    repeated WindowTokenProto overlay_windows = 20;
 }
 
 /* represents DisplayFrames */
@@ -196,7 +197,7 @@ message StackProto {
     repeated TaskProto tasks = 3;
     optional bool fills_parent = 4;
     optional .android.graphics.RectProto bounds = 5;
-    optional bool animation_background_surface_is_dimming = 6;
+    optional bool animation_background_surface_is_dimming = 6 [deprecated=true];
     optional bool defer_removal = 7;
     optional float minimize_amount = 8;
     optional bool adjusted_for_ime = 9;
@@ -216,7 +217,8 @@ message TaskProto {
     optional bool fills_parent = 4;
     optional .android.graphics.RectProto bounds = 5;
     optional .android.graphics.RectProto displayed_bounds = 6;
-    optional bool defer_removal = 7;
+    // Will be removed soon.
+    optional bool defer_removal = 7 [deprecated=true];
     optional int32 surface_width = 8;
     optional int32 surface_height = 9;
 }
@@ -230,12 +232,12 @@ message AppWindowTokenProto {
     optional WindowTokenProto window_token = 2;
     optional bool last_surface_showing = 3;
     optional bool is_waiting_for_transition_start = 4;
-    optional bool is_really_animating = 5;
-    optional AppWindowThumbnailProto thumbnail = 6;
+    optional bool is_animating = 5;
+    optional WindowContainerThumbnailProto thumbnail = 6;
     optional bool fills_parent = 7;
     optional bool app_stopped = 8;
-    optional bool hidden_requested = 9;
-    optional bool client_hidden = 10;
+    optional bool visible_requested = 9;
+    optional bool client_visible = 10;
     optional bool defer_hiding_client = 11;
     optional bool reported_drawn = 12;
     optional bool reported_visible = 13;
@@ -243,12 +245,14 @@ message AppWindowTokenProto {
     optional int32 num_drawn_windows = 15;
     optional bool all_drawn = 16;
     optional bool last_all_drawn = 17;
-    optional bool removed = 18;
+    // Will be removed soon
+    optional bool removed = 18 [deprecated=true];
     optional IdentifierProto starting_window = 19;
     optional bool starting_displayed = 20;
     optional bool starting_moved = 21;
-    optional bool hidden_set_from_transferred_starting_window = 22;
+    optional bool visible_set_from_transferred_starting_window = 22;
     repeated .android.graphics.RectProto frozen_bounds = 23;
+    optional bool visible = 24;
 }
 
 /* represents WindowToken */
@@ -258,7 +262,6 @@ message WindowTokenProto {
     optional WindowContainerProto window_container = 1;
     optional int32 hash_code = 2;
     repeated WindowStateProto windows = 3;
-    optional bool hidden = 4;
     optional bool waiting_to_show = 5;
     optional bool paused = 6;
 }
@@ -384,12 +387,12 @@ message WindowFramesProto {
     optional .android.graphics.RectProto display_frame = 4;
     optional .android.graphics.RectProto frame = 5;
     optional .android.graphics.RectProto outset_frame = 6;
-    optional .android.graphics.RectProto overscan_frame = 7;
+    optional .android.graphics.RectProto overscan_frame = 7 [deprecated=true];
     optional .android.graphics.RectProto parent_frame = 8;
     optional .android.graphics.RectProto visible_frame = 9;
     optional .android.view.DisplayCutoutProto cutout = 10;
     optional .android.graphics.RectProto content_insets = 11;
-    optional .android.graphics.RectProto overscan_insets = 12;
+    optional .android.graphics.RectProto overscan_insets = 12 [deprecated=true];
     optional .android.graphics.RectProto visible_insets = 13;
     optional .android.graphics.RectProto stable_insets = 14;
     optional .android.graphics.RectProto outsets = 15;

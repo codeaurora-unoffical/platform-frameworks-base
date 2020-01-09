@@ -66,15 +66,18 @@ import com.android.systemui.Dependency;
 import com.android.systemui.DockedStackExistsListener;
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
-import com.android.systemui.SysUiServiceProvider;
+import com.android.systemui.assist.AssistHandleViewController;
 import com.android.systemui.assist.AssistManager;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.recents.RecentsOnboarding;
+import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.shared.system.WindowManagerWrapper;
+import com.android.systemui.statusbar.CommandQueue;
+import com.android.systemui.statusbar.NavigationBarController;
 import com.android.systemui.statusbar.policy.DeadZone;
 import com.android.systemui.statusbar.policy.KeyButtonDrawable;
 
@@ -94,6 +97,7 @@ public class NavigationBarView extends FrameLayout implements
     private final RegionSamplingHelper mRegionSamplingHelper;
     private final int mNavColorSampleMargin;
     private final SysUiState mSysUiFlagContainer;
+    private final PluginManager mPluginManager;
 
     View mCurrentView = null;
     private View mVertical;
@@ -211,31 +215,32 @@ public class NavigationBarView extends FrameLayout implements
         }
     };
 
-    private final AccessibilityDelegate mQuickStepAccessibilityDelegate
-            = new AccessibilityDelegate() {
-        private AccessibilityAction mToggleOverviewAction;
+    private final AccessibilityDelegate mQuickStepAccessibilityDelegate =
+            new AccessibilityDelegate() {
+                private AccessibilityAction mToggleOverviewAction;
 
-        @Override
-        public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
-            super.onInitializeAccessibilityNodeInfo(host, info);
-            if (mToggleOverviewAction == null) {
-                mToggleOverviewAction = new AccessibilityAction(R.id.action_toggle_overview,
-                    getContext().getString(R.string.quick_step_accessibility_toggle_overview));
-            }
-            info.addAction(mToggleOverviewAction);
-        }
+                @Override
+                public void onInitializeAccessibilityNodeInfo(View host,
+                        AccessibilityNodeInfo info) {
+                    super.onInitializeAccessibilityNodeInfo(host, info);
+                    if (mToggleOverviewAction == null) {
+                        mToggleOverviewAction = new AccessibilityAction(
+                                R.id.action_toggle_overview, getContext().getString(
+                                R.string.quick_step_accessibility_toggle_overview));
+                    }
+                    info.addAction(mToggleOverviewAction);
+                }
 
-        @Override
-        public boolean performAccessibilityAction(View host, int action, Bundle args) {
-            if (action == R.id.action_toggle_overview) {
-                SysUiServiceProvider.getComponent(getContext(), Recents.class)
-                        .toggleRecentApps();
-            } else {
-                return super.performAccessibilityAction(host, action, args);
-            }
-            return true;
-        }
-    };
+                @Override
+                public boolean performAccessibilityAction(View host, int action, Bundle args) {
+                    if (action == R.id.action_toggle_overview) {
+                        Dependency.get(Recents.class).toggleRecentApps();
+                    } else {
+                        return super.performAccessibilityAction(host, action, args);
+                    }
+                    return true;
+                }
+            };
 
     private final OnComputeInternalInsetsListener mOnComputeInternalInsetsListener = info -> {
         // When the nav bar is in 2-button or 3-button mode, or when IME is visible in fully
@@ -269,6 +274,7 @@ public class NavigationBarView extends FrameLayout implements
         boolean isGesturalMode = isGesturalMode(mNavBarMode);
 
         mSysUiFlagContainer = Dependency.get(SysUiState.class);
+        mPluginManager = Dependency.get(PluginManager.class);
         // Set up the context group of buttons
         mContextualButtonGroup = new ContextualButtonGroup(R.id.menu_container);
         final ContextualButton imeSwitcherButton = new ContextualButton(R.id.ime_switcher,
@@ -298,7 +304,7 @@ public class NavigationBarView extends FrameLayout implements
         mConfiguration.updateFrom(context.getResources().getConfiguration());
 
         mScreenPinningNotify = new ScreenPinningNotify(mContext);
-        mBarTransitions = new NavigationBarTransitions(this);
+        mBarTransitions = new NavigationBarTransitions(this, Dependency.get(CommandQueue.class));
 
         mButtonDispatchers.put(R.id.back, backButton);
         mButtonDispatchers.put(R.id.home, new ButtonDispatcher(R.id.home));
@@ -312,8 +318,8 @@ public class NavigationBarView extends FrameLayout implements
 
         mNavColorSampleMargin = getResources()
                         .getDimensionPixelSize(R.dimen.navigation_handle_sample_horizontal_margin);
-        mEdgeBackGestureHandler =
-                new EdgeBackGestureHandler(context, mOverviewProxyService, mSysUiFlagContainer);
+        mEdgeBackGestureHandler = new EdgeBackGestureHandler(
+                context, mOverviewProxyService, mSysUiFlagContainer, mPluginManager);
         mRegionSamplingHelper = new RegionSamplingHelper(this,
                 new RegionSamplingHelper.SamplingCallback() {
                     @Override
@@ -362,6 +368,10 @@ public class NavigationBarView extends FrameLayout implements
     public boolean onTouchEvent(MotionEvent event) {
         shouldDeadZoneConsumeTouchEvents(event);
         return super.onTouchEvent(event);
+    }
+
+    void onTransientStateChanged(boolean isTransient) {
+        mEdgeBackGestureHandler.onNavBarTransientStateChanged(isTransient);
     }
 
     void onBarTransition(int newMode) {
@@ -829,7 +839,11 @@ public class NavigationBarView extends FrameLayout implements
         mRecentsOnboarding.onNavigationModeChanged(mNavBarMode);
         getRotateSuggestionButton().onNavigationModeChanged(mNavBarMode);
 
-        mRegionSamplingHelper.start(mSamplingBounds);
+        if (isGesturalMode(mNavBarMode)) {
+            mRegionSamplingHelper.start(mSamplingBounds);
+        } else {
+            mRegionSamplingHelper.stop();
+        }
     }
 
     public void setAccessibilityButtonState(final boolean visible, final boolean longClickable) {
@@ -1194,6 +1208,22 @@ public class NavigationBarView extends FrameLayout implements
         // we're passing the insets onto the gesture handler since the back arrow is only
         // conditionally added and doesn't always get all the insets.
         mEdgeBackGestureHandler.setInsets(leftInset, rightInset);
+
+        // this allows assist handle to be drawn outside its bound so that it can align screen
+        // bottom by translating its y position.
+        final boolean shouldClip =
+                !isGesturalMode(mNavBarMode) || insets.getSystemWindowInsetBottom() == 0;
+        setClipChildren(shouldClip);
+        setClipToPadding(shouldClip);
+
+        NavigationBarController navigationBarController =
+                Dependency.get(NavigationBarController.class);
+        AssistHandleViewController controller =
+                navigationBarController == null
+                        ? null : navigationBarController.getAssistHandlerViewController();
+        if (controller != null) {
+            controller.setBottomOffset(insets.getSystemWindowInsetBottom());
+        }
         return super.onApplyWindowInsets(insets);
     }
 

@@ -56,10 +56,8 @@ const int FIELD_ID_SKIPPED_START_MILLIS = 3;
 const int FIELD_ID_SKIPPED_END_MILLIS = 4;
 // for GaugeMetricData
 const int FIELD_ID_DIMENSION_IN_WHAT = 1;
-const int FIELD_ID_DIMENSION_IN_CONDITION = 2;
 const int FIELD_ID_BUCKET_INFO = 3;
 const int FIELD_ID_DIMENSION_LEAF_IN_WHAT = 4;
-const int FIELD_ID_DIMENSION_LEAF_IN_CONDITION = 5;
 // for GaugeBucketInfo
 const int FIELD_ID_ATOM = 3;
 const int FIELD_ID_ELAPSED_ATOM_TIMESTAMP = 4;
@@ -72,8 +70,13 @@ GaugeMetricProducer::GaugeMetricProducer(
         const sp<ConditionWizard>& wizard, const int whatMatcherIndex,
         const sp<EventMatcherWizard>& matcherWizard, const int pullTagId, const int triggerAtomId,
         const int atomId, const int64_t timeBaseNs, const int64_t startTimeNs,
-        const sp<StatsPullerManager>& pullerManager)
-    : MetricProducer(metric.id(), key, timeBaseNs, conditionIndex, wizard),
+        const sp<StatsPullerManager>& pullerManager,
+        const unordered_map<int, shared_ptr<Activation>>& eventActivationMap,
+        const unordered_map<int, vector<shared_ptr<Activation>>>& eventDeactivationMap,
+        const vector<int>& slicedStateAtoms,
+        const unordered_map<int, unordered_map<int, int64_t>>& stateGroupMap)
+    : MetricProducer(metric.id(), key, timeBaseNs, conditionIndex, wizard, eventActivationMap,
+                     eventDeactivationMap, slicedStateAtoms, stateGroupMap),
       mWhatMatcherIndex(whatMatcherIndex),
       mEventMatcherWizard(matcherWizard),
       mPullerManager(pullerManager),
@@ -133,8 +136,11 @@ GaugeMetricProducer::GaugeMetricProducer(
                                          mBucketSizeNs);
     }
 
-    // Adjust start for partial bucket
+    // Adjust start for partial first bucket and then pull if needed
     mCurrentBucketStartTimeNs = startTimeNs;
+    if (mIsActive && mIsPulled && mSamplingType == GaugeMetric::RANDOM_ONE_SAMPLE) {
+        pullAndMatchEventsLocked(mCurrentBucketStartTimeNs);
+    }
 
     VLOG("Gauge metric %lld created. bucket size %lld start_time: %lld sliced %d",
          (long long)metric.id(), (long long)mBucketSizeNs, (long long)mTimeBaseNs,
@@ -158,10 +164,9 @@ void GaugeMetricProducer::dumpStatesLocked(FILE* out, bool verbose) const {
             (unsigned long)mCurrentSlicedBucket->size());
     if (verbose) {
         for (const auto& it : *mCurrentSlicedBucket) {
-            fprintf(out, "\t(what)%s\t(condition)%s  %d atoms\n",
-                it.first.getDimensionKeyInWhat().toString().c_str(),
-                it.first.getDimensionKeyInCondition().toString().c_str(),
-                (int)it.second.size());
+            fprintf(out, "\t(what)%s\t(states)%s  %d atoms\n",
+                    it.first.getDimensionKeyInWhat().toString().c_str(),
+                    it.first.getStateValuesKey().toString().c_str(), (int)it.second.size());
         }
     }
 }
@@ -230,22 +235,9 @@ void GaugeMetricProducer::onDumpReportLocked(const int64_t dumpTimeNs,
                     FIELD_TYPE_MESSAGE | FIELD_ID_DIMENSION_IN_WHAT);
             writeDimensionToProto(dimensionKey.getDimensionKeyInWhat(), str_set, protoOutput);
             protoOutput->end(dimensionToken);
-
-            if (dimensionKey.hasDimensionKeyInCondition()) {
-                uint64_t dimensionInConditionToken = protoOutput->start(
-                        FIELD_TYPE_MESSAGE | FIELD_ID_DIMENSION_IN_CONDITION);
-                writeDimensionToProto(dimensionKey.getDimensionKeyInCondition(),
-                                      str_set, protoOutput);
-                protoOutput->end(dimensionInConditionToken);
-            }
         } else {
             writeDimensionLeafNodesToProto(dimensionKey.getDimensionKeyInWhat(),
                                            FIELD_ID_DIMENSION_LEAF_IN_WHAT, str_set, protoOutput);
-            if (dimensionKey.hasDimensionKeyInCondition()) {
-                writeDimensionLeafNodesToProto(dimensionKey.getDimensionKeyInCondition(),
-                                               FIELD_ID_DIMENSION_LEAF_IN_CONDITION,
-                                               str_set, protoOutput);
-            }
         }
 
         // Then fill bucket_info (GaugeBucketInfo).
@@ -295,11 +287,6 @@ void GaugeMetricProducer::onDumpReportLocked(const int64_t dumpTimeNs,
     }
 }
 
-void GaugeMetricProducer::prepareFirstBucketLocked() {
-    if (mIsActive && mIsPulled && mSamplingType == GaugeMetric::RANDOM_ONE_SAMPLE) {
-        pullAndMatchEventsLocked(mCurrentBucketStartTimeNs);
-    }
-}
 
 void GaugeMetricProducer::pullAndMatchEventsLocked(const int64_t timestampNs) {
     bool triggerPuller = false;
@@ -439,6 +426,7 @@ bool GaugeMetricProducer::hitGuardRailLocked(const MetricDimensionKey& newKey) {
         if (newTupleCount > mDimensionHardLimit) {
             ALOGE("GaugeMetric %lld dropping data for dimension key %s",
                 (long long)mMetricId, newKey.toString().c_str());
+            StatsdStats::getInstance().noteHardDimensionLimitReached(mMetricId);
             return true;
         }
     }

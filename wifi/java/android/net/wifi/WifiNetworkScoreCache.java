@@ -38,6 +38,7 @@ import java.util.List;
 /**
  * {@link INetworkScoreCache} implementation for Wifi Networks.
  *
+ * TODO: This should not be part of wifi mainline module.
  * @hide
  */
 public class WifiNetworkScoreCache extends INetworkScoreCache.Stub {

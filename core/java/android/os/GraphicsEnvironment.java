@@ -69,6 +69,8 @@ public class GraphicsEnvironment {
     private static final String METADATA_DRIVER_BUILD_TIME = "com.android.gamedriver.build_time";
     private static final String METADATA_DEVELOPER_DRIVER_ENABLE =
             "com.android.graphics.developerdriver.enable";
+    private static final String METADATA_INJECT_LAYERS_ENABLE =
+            "com.android.graphics.injectLayers.enable";
     private static final String ANGLE_RULES_FILE = "a4a_rules.json";
     private static final String ANGLE_TEMP_RULES = "debug.angle.rules";
     private static final String ACTION_ANGLE_FOR_ANDROID = "android.app.action.ANGLE_FOR_ANDROID";
@@ -100,14 +102,16 @@ public class GraphicsEnvironment {
     public void setup(Context context, Bundle coreSettings) {
         final PackageManager pm = context.getPackageManager();
         final String packageName = context.getPackageName();
+        final ApplicationInfo appInfoWithMetaData =
+                getAppInfoWithMetadata(context, pm, packageName);
         Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "setupGpuLayers");
-        setupGpuLayers(context, coreSettings, pm, packageName);
+        setupGpuLayers(context, coreSettings, pm, packageName, appInfoWithMetaData);
         Trace.traceEnd(Trace.TRACE_TAG_GRAPHICS);
         Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "setupAngle");
         setupAngle(context, coreSettings, pm, packageName);
         Trace.traceEnd(Trace.TRACE_TAG_GRAPHICS);
         Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "chooseDriver");
-        if (!chooseDriver(context, coreSettings, pm, packageName)) {
+        if (!chooseDriver(context, coreSettings, pm, packageName, appInfoWithMetaData)) {
             setGpuStats(SYSTEM_DRIVER_NAME, SYSTEM_DRIVER_VERSION_NAME, SYSTEM_DRIVER_VERSION_CODE,
                     SystemProperties.getLong(PROPERTY_GFX_DRIVER_BUILD_TIME, 0), packageName,
                     getVulkanVersion(pm));
@@ -173,10 +177,11 @@ public class GraphicsEnvironment {
     }
 
     /**
-     * Check whether application is debuggable
+     * Check whether application is has set the manifest metadata for layer injection.
      */
-    private static boolean isDebuggable(Context context) {
-        return (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) > 0;
+    private static boolean canInjectLayers(ApplicationInfo ai) {
+        return (ai.metaData != null && ai.metaData.getBoolean(METADATA_INJECT_LAYERS_ENABLE)
+                && setInjectLayersPrSetDumpable());
     }
 
     /**
@@ -225,15 +230,16 @@ public class GraphicsEnvironment {
      * If debuggable, check for additional debug settings
      */
     private void setupGpuLayers(
-            Context context, Bundle coreSettings, PackageManager pm, String packageName) {
+            Context context, Bundle coreSettings, PackageManager pm, String packageName,
+            ApplicationInfo ai) {
         String layerPaths = "";
 
         // Only enable additional debug functionality if the following conditions are met:
-        // 1. App is debuggable or device is rooted
+        // 1. App is debuggable or device is rooted or layer injection metadata flag is true
         // 2. ENABLE_GPU_DEBUG_LAYERS is true
         // 3. Package name is equal to GPU_DEBUG_APP
 
-        if (isDebuggable(context) || (getCanLoadSystemLibraries() == 1)) {
+        if (isDebuggable() || canInjectLayers(ai)) {
 
             final int enable = coreSettings.getInt(Settings.Global.ENABLE_GPU_DEBUG_LAYERS, 0);
 
@@ -343,6 +349,20 @@ public class GraphicsEnvironment {
         return -1;
     }
 
+    private static ApplicationInfo getAppInfoWithMetadata(Context context,
+                                                          PackageManager pm, String packageName) {
+        ApplicationInfo ai;
+        try {
+            // Get the ApplicationInfo from PackageManager so that metadata fields present.
+            ai = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA);
+        } catch (PackageManager.NameNotFoundException e) {
+            // Unlikely to fail for applications, but in case of failure, fall back to use the
+            // ApplicationInfo from context directly.
+            ai = context.getApplicationInfo();
+        }
+        return ai;
+    }
+
     private static String getDriverForPkg(Context context, Bundle bundle, String packageName) {
         final String allUseAngle;
         if (bundle != null) {
@@ -414,9 +434,7 @@ public class GraphicsEnvironment {
      * Check for ANGLE debug package, but only for apps that can load them (dumpable)
      */
     private String getAngleDebugPackage(Context context, Bundle coreSettings) {
-        final boolean appIsDebuggable = isDebuggable(context);
-        final boolean deviceIsDebuggable = getCanLoadSystemLibraries() == 1;
-        if (appIsDebuggable || deviceIsDebuggable) {
+        if (isDebuggable()) {
             String debugPackage;
 
             if (coreSettings != null) {
@@ -451,12 +469,8 @@ public class GraphicsEnvironment {
          *  - devices that are running a userdebug build (ro.debuggable) or can inject libraries for
          *    debugging (PR_SET_DUMPABLE).
          */
-        final boolean appIsDebuggable = isDebuggable(context);
-        final boolean deviceIsDebuggable = getCanLoadSystemLibraries() == 1;
-        if (!(appIsDebuggable || deviceIsDebuggable)) {
-            Log.v(TAG, "Skipping loading temporary rules file: "
-                    + "appIsDebuggable = " + appIsDebuggable + ", "
-                    + "adbRootEnabled = " + deviceIsDebuggable);
+        if (!isDebuggable()) {
+            Log.v(TAG, "Skipping loading temporary rules file");
             return false;
         }
 
@@ -693,8 +707,7 @@ public class GraphicsEnvironment {
     /**
      * Return the driver package name to use. Return null for system driver.
      */
-    private static String chooseDriverInternal(
-            Context context, Bundle coreSettings, PackageManager pm, String packageName) {
+    private static String chooseDriverInternal(Bundle coreSettings, ApplicationInfo ai) {
         final String gameDriver = SystemProperties.get(PROPERTY_GFX_DRIVER);
         final boolean hasGameDriver = gameDriver != null && !gameDriver.isEmpty();
 
@@ -709,15 +722,6 @@ public class GraphicsEnvironment {
         // To minimize risk of driver updates crippling the device beyond user repair, never use an
         // updated driver for privileged or non-updated system apps. Presumably pre-installed apps
         // were tested thoroughly with the pre-installed driver.
-        ApplicationInfo ai;
-        try {
-            // Get the ApplicationInfo from PackageManager so that metadata fields present.
-            ai = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA);
-        } catch (PackageManager.NameNotFoundException e) {
-            // Unlikely to fail for applications, but in case of failure, fall back to use the
-            // ApplicationInfo from context directly.
-            ai = context.getApplicationInfo();
-        }
         if (ai.isPrivilegedApp() || (ai.isSystemApp() && !ai.isUpdatedSystemApp())) {
             if (DEBUG) Log.v(TAG, "Ignoring driver package for privileged/non-updated system app.");
             return null;
@@ -725,7 +729,7 @@ public class GraphicsEnvironment {
 
         final boolean enablePrereleaseDriver =
                 (ai.metaData != null && ai.metaData.getBoolean(METADATA_DEVELOPER_DRIVER_ENABLE))
-                || getCanLoadSystemLibraries() == 1;
+                || isDebuggable();
 
         // Priority for Game Driver settings global on confliction (Higher priority comes first):
         // 1. GAME_DRIVER_ALL_APPS
@@ -797,9 +801,9 @@ public class GraphicsEnvironment {
      * Choose whether the current process should use the builtin or an updated driver.
      */
     private static boolean chooseDriver(
-            Context context, Bundle coreSettings, PackageManager pm, String packageName) {
-        final String driverPackageName = chooseDriverInternal(context, coreSettings, pm,
-                packageName);
+            Context context, Bundle coreSettings, PackageManager pm, String packageName,
+            ApplicationInfo ai) {
+        final String driverPackageName = chooseDriverInternal(coreSettings, ai);
         if (driverPackageName == null) {
             return false;
         }
@@ -901,7 +905,7 @@ public class GraphicsEnvironment {
         return "";
     }
 
-    private static native int getCanLoadSystemLibraries();
+    private static native boolean isDebuggable();
     private static native void setLayerPaths(ClassLoader classLoader, String layerPaths);
     private static native void setDebugLayers(String layers);
     private static native void setDebugLayersGLES(String layers);
@@ -911,4 +915,5 @@ public class GraphicsEnvironment {
     private static native void setAngleInfo(String path, String appPackage, String devOptIn,
             FileDescriptor rulesFd, long rulesOffset, long rulesLength);
     private static native boolean getShouldUseAngle(String packageName);
+    private static native boolean setInjectLayersPrSetDumpable();
 }

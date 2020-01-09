@@ -19,25 +19,41 @@ package com.android.systemui.pip;
 import static android.content.pm.PackageManager.FEATURE_LEANBACK_ONLY;
 import static android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE;
 
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.os.UserHandle;
 import android.os.UserManager;
 
 import com.android.systemui.SystemUI;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.statusbar.CommandQueue;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 
+import javax.inject.Inject;
+import javax.inject.Singleton;
+
 /**
  * Controls the picture-in-picture window.
  */
+@Singleton
 public class PipUI extends SystemUI implements CommandQueue.Callbacks {
 
+    private final CommandQueue mCommandQueue;
     private BasePipManager mPipManager;
+    private final BroadcastDispatcher mBroadcastDispatcher;
 
     private boolean mSupportsPip;
+
+    @Inject
+    public PipUI(Context context, CommandQueue commandQueue,
+            BroadcastDispatcher broadcastDispatcher) {
+        super(context);
+        mBroadcastDispatcher = broadcastDispatcher;
+        mCommandQueue = commandQueue;
+    }
 
     @Override
     public void start() {
@@ -56,10 +72,9 @@ public class PipUI extends SystemUI implements CommandQueue.Callbacks {
         mPipManager = pm.hasSystemFeature(FEATURE_LEANBACK_ONLY)
                 ? com.android.systemui.pip.tv.PipManager.getInstance()
                 : com.android.systemui.pip.phone.PipManager.getInstance();
-        mPipManager.initialize(mContext);
+        mPipManager.initialize(mContext, mBroadcastDispatcher);
 
-        getComponent(CommandQueue.class).addCallback(this);
-        putComponent(PipUI.class, this);
+        mCommandQueue.addCallback(this);
     }
 
     @Override
@@ -83,6 +98,14 @@ public class PipUI extends SystemUI implements CommandQueue.Callbacks {
         }
 
         mPipManager.onConfigurationChanged(newConfig);
+    }
+
+    public void setShelfHeight(boolean visible, int height) {
+        if (mPipManager == null) {
+            return;
+        }
+
+        mPipManager.setShelfHeight(visible, height);
     }
 
     @Override

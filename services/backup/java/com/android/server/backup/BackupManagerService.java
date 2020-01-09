@@ -67,6 +67,7 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -273,9 +274,14 @@ public class BackupManagerService extends IBackupManager.Stub {
         }
     }
 
-    // This method should not perform any I/O (e.g. do not call isBackupActivatedForUser),
-    // it's used in multiple places where I/O waits would cause system lock-ups.
-    private boolean isUserReadyForBackup(int userId) {
+    /**
+     * This method should not perform any I/O (e.g. do not call isBackupActivatedForUser),
+     * it's used in multiple places where I/O waits would cause system lock-ups.
+     * @param userId User id for which this operation should be performed.
+     * @return true if the user is ready for backup and false otherwise.
+     */
+    @Override
+    public boolean isUserReadyForBackup(int userId) {
         return mUserServices.get(UserHandle.USER_SYSTEM) != null
                 && mUserServices.get(userId) != null;
     }
@@ -1506,6 +1512,26 @@ public class BackupManagerService extends IBackupManager.Stub {
 
         if (userBackupManagerService != null) {
             userBackupManagerService.endFullBackup();
+        }
+    }
+
+    /**
+     * Excludes keys from KV restore for a given package. The corresponding data will be excluded
+     * from the data set available the backup agent during restore. However,  final list  of keys
+     * that have been excluded will be passed to the agent to make it aware of the exclusions.
+     */
+    public void excludeKeysFromRestore(String packageName, List<String> keys) {
+        int userId = Binder.getCallingUserHandle().getIdentifier();
+        if (!isUserReadyForBackup(userId)) {
+            Slog.w(TAG, "Returning from excludeKeysFromRestore as backup for user" + userId +
+                    " is not initialized yet");
+            return;
+        }
+        UserBackupManagerService userBackupManagerService =
+                getServiceForUserIfCallerHasPermission(userId, "excludeKeysFromRestore()");
+
+        if (userBackupManagerService != null) {
+            userBackupManagerService.excludeKeysFromRestore(packageName, keys);
         }
     }
 

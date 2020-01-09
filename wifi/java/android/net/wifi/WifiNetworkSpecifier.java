@@ -49,11 +49,11 @@ public final class WifiNetworkSpecifier extends NetworkSpecifier implements Parc
         private static final String MATCH_ALL_SSID_PATTERN_PATH = ".*";
         private static final String MATCH_EMPTY_SSID_PATTERN_PATH = "";
         private static final Pair<MacAddress, MacAddress> MATCH_NO_BSSID_PATTERN1 =
-                new Pair(MacAddress.BROADCAST_ADDRESS, MacAddress.BROADCAST_ADDRESS);
+                new Pair<>(MacAddress.BROADCAST_ADDRESS, MacAddress.BROADCAST_ADDRESS);
         private static final Pair<MacAddress, MacAddress> MATCH_NO_BSSID_PATTERN2 =
-                new Pair(MacAddress.ALL_ZEROS_ADDRESS, MacAddress.BROADCAST_ADDRESS);
+                new Pair<>(WifiManager.ALL_ZEROS_MAC_ADDRESS, MacAddress.BROADCAST_ADDRESS);
         private static final Pair<MacAddress, MacAddress> MATCH_ALL_BSSID_PATTERN =
-                new Pair(MacAddress.ALL_ZEROS_ADDRESS, MacAddress.ALL_ZEROS_ADDRESS);
+                new Pair<>(WifiManager.ALL_ZEROS_MAC_ADDRESS, WifiManager.ALL_ZEROS_MAC_ADDRESS);
         private static final MacAddress MATCH_EXACT_BSSID_PATTERN_MASK =
                 MacAddress.BROADCAST_ADDRESS;
 
@@ -157,7 +157,8 @@ public final class WifiNetworkSpecifier extends NetworkSpecifier implements Parc
          */
         public @NonNull Builder setBssidPattern(
                 @NonNull MacAddress baseAddress, @NonNull MacAddress mask) {
-            checkNotNull(baseAddress, mask);
+            checkNotNull(baseAddress);
+            checkNotNull(mask);
             mBssidPatternMatcher = Pair.create(baseAddress, mask);
             return this;
         }

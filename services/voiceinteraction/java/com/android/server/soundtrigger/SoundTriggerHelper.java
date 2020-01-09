@@ -16,11 +16,14 @@
 
 package com.android.server.soundtrigger;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.soundtrigger.IRecognitionStatusCallback;
+import android.hardware.soundtrigger.ModelParams;
 import android.hardware.soundtrigger.SoundTrigger;
 import android.hardware.soundtrigger.SoundTrigger.GenericRecognitionEvent;
 import android.hardware.soundtrigger.SoundTrigger.GenericSoundModel;
@@ -28,6 +31,7 @@ import android.hardware.soundtrigger.SoundTrigger.Keyphrase;
 import android.hardware.soundtrigger.SoundTrigger.KeyphraseRecognitionEvent;
 import android.hardware.soundtrigger.SoundTrigger.KeyphraseRecognitionExtra;
 import android.hardware.soundtrigger.SoundTrigger.KeyphraseSoundModel;
+import android.hardware.soundtrigger.SoundTrigger.ModelParamRange;
 import android.hardware.soundtrigger.SoundTrigger.ModuleProperties;
 import android.hardware.soundtrigger.SoundTrigger.RecognitionConfig;
 import android.hardware.soundtrigger.SoundTrigger.RecognitionEvent;
@@ -325,9 +329,8 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
                     false /* Don't notify for synchronous calls */);
 
                                 // Initialize power save, call active state monitoring logic.
-            if (status == STATUS_OK && !mRecognitionRequested) {
+            if (status == STATUS_OK) {
                 initializeTelephonyAndPowerStateListeners();
-                mRecognitionRequested = true;
             }
 
             return status;
@@ -481,6 +484,9 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
 
         if (unloadModel && modelData.isModelLoaded()) {
             Slog.d(TAG, "Unloading previously loaded stale model.");
+            if (mModule == null) {
+                return STATUS_ERROR;
+            }
             status = mModule.unloadSoundModel(modelData.getHandle());
             MetricsLogger.count(mContext, "sth_unloading_stale_model", 1);
             if (status != SoundTrigger.STATUS_OK) {
@@ -550,6 +556,9 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
                 }
             }
 
+            if (mModule == null) {
+                return STATUS_ERROR;
+            }
             int status = mModule.unloadSoundModel(modelData.getHandle());
             if (status != SoundTrigger.STATUS_OK) {
                 Slog.w(TAG, "unloadGenericSoundModel() call failed with " + status);
@@ -600,6 +609,67 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
         return STATUS_ERROR;
     }
 
+    int setParameter(UUID modelId, @ModelParams int modelParam, int value) {
+        synchronized (mLock) {
+            MetricsLogger.count(mContext, "sth_set_parameter", 1);
+            if (modelId == null || mModule == null) {
+                return SoundTrigger.STATUS_ERROR;
+            }
+            ModelData modelData = mModelDataMap.get(modelId);
+            if (modelData == null) {
+                Slog.w(TAG, "SetParameter: Invalid model id:" + modelId);
+                return SoundTrigger.STATUS_BAD_VALUE;
+            }
+            if (!modelData.isModelLoaded()) {
+                Slog.i(TAG, "SetParameter: Given model is not loaded:" + modelId);
+                return SoundTrigger.STATUS_BAD_VALUE;
+            }
+
+            return mModule.setParameter(modelData.getHandle(), modelParam, value);
+        }
+    }
+
+    int getParameter(@NonNull UUID modelId, @ModelParams int modelParam)
+            throws UnsupportedOperationException, IllegalArgumentException {
+        synchronized (mLock) {
+            MetricsLogger.count(mContext, "sth_get_parameter", 1);
+            if (mModule == null) {
+                throw new UnsupportedOperationException("SoundTriggerModule not initialized");
+            }
+
+            ModelData modelData = mModelDataMap.get(modelId);
+            if (modelData == null) {
+                throw new IllegalArgumentException("Invalid model id:" + modelId);
+            }
+            if (!modelData.isModelLoaded()) {
+                throw new UnsupportedOperationException("Given model is not loaded:" + modelId);
+            }
+
+            return mModule.getParameter(modelData.getHandle(), modelParam);
+        }
+    }
+
+    @Nullable
+    ModelParamRange queryParameter(@NonNull UUID modelId, @ModelParams int modelParam) {
+        synchronized (mLock) {
+            MetricsLogger.count(mContext, "sth_query_parameter", 1);
+            if (mModule == null) {
+                return null;
+            }
+            ModelData modelData = mModelDataMap.get(modelId);
+            if (modelData == null) {
+                Slog.w(TAG, "queryParameter: Invalid model id:" + modelId);
+                return null;
+            }
+            if (!modelData.isModelLoaded()) {
+                Slog.i(TAG, "queryParameter: Given model is not loaded:" + modelId);
+                return null;
+            }
+
+            return mModule.queryParameter(modelData.getHandle(), modelParam);
+        }
+    }
+
     //---- SoundTrigger.StatusListener methods
     @Override
     public void onRecognition(RecognitionEvent event) {
@@ -648,15 +718,15 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
         }
         ModelData model = getModelDataForLocked(event.soundModelHandle);
         if (model == null || !model.isGenericModel()) {
-            Slog.w(TAG, "Generic recognition event: Model does not exist for handle: " +
-                    event.soundModelHandle);
+            Slog.w(TAG, "Generic recognition event: Model does not exist for handle: "
+                    + event.soundModelHandle);
             return;
         }
 
         IRecognitionStatusCallback callback = model.getCallback();
         if (callback == null) {
-            Slog.w(TAG, "Generic recognition event: Null callback for model handle: " +
-                    event.soundModelHandle);
+            Slog.w(TAG, "Generic recognition event: Null callback for model handle: "
+                    + event.soundModelHandle);
             return;
         }
 
@@ -673,8 +743,8 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
 
         RecognitionConfig config = model.getRecognitionConfig();
         if (config == null) {
-            Slog.w(TAG, "Generic recognition event: Null RecognitionConfig for model handle: " +
-                    event.soundModelHandle);
+            Slog.w(TAG, "Generic recognition event: Null RecognitionConfig for model handle: "
+                    + event.soundModelHandle);
             return;
         }
 
@@ -878,6 +948,7 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
             mContext.unregisterReceiver(mPowerSaveModeListener);
             mPowerSaveModeListener = null;
         }
+        mRecognitionRequested = false;
     }
 
     // Clears state for all models (generic and keyphrase).
@@ -924,6 +995,9 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
     }
 
     private void initializeTelephonyAndPowerStateListeners() {
+        if (mRecognitionRequested) {
+            return;
+        }
         long token = Binder.clearCallingIdentity();
         try {
             // Get the current call state synchronously for the first recognition.
@@ -941,6 +1015,8 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
             }
             mIsPowerSaveMode = mPowerManager.getPowerSaveState(ServiceType.SOUND)
                     .batterySaverEnabled;
+
+            mRecognitionRequested = true;
         } finally {
             Binder.restoreCallingIdentity(token);
         }
@@ -986,6 +1062,9 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
             Iterator modelDataIterator) {
         if (exception != null) {
           Slog.e(TAG, "forceStopAndUnloadModel", exception);
+        }
+        if (mModule == null) {
+            return;
         }
         if (modelData.isModelStarted()) {
             Slog.d(TAG, "Stopping previously started dangling model " + modelData.getHandle());
@@ -1093,6 +1172,13 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
     // a recognition include: no active phone call or not being in a power save mode. Also,
     // the native service should be enabled.
     private boolean isRecognitionAllowed() {
+        // if mRecognitionRequested is false, call and power state listeners are not registered so
+        // we read current state directly from services
+        if (!mRecognitionRequested) {
+            mCallActive = mTelephonyManager.getCallState() == TelephonyManager.CALL_STATE_OFFHOOK;
+            mIsPowerSaveMode =
+                mPowerManager.getPowerSaveState(ServiceType.SOUND).batterySaverEnabled;
+        }
         return !mCallActive && !mServiceDisabled && !mIsPowerSaveMode;
     }
 
@@ -1116,6 +1202,9 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
             return STATUS_OK;
         }
 
+        if (mModule == null) {
+            return STATUS_ERROR;
+        }
         int status = mModule.startRecognition(handle, config);
         if (status != SoundTrigger.STATUS_OK) {
             Slog.w(TAG, "startRecognition failed with " + status);
@@ -1152,8 +1241,11 @@ public class SoundTriggerHelper implements SoundTrigger.StatusListener {
     }
 
     private int stopRecognitionLocked(ModelData modelData, boolean notify) {
-        IRecognitionStatusCallback callback = modelData.getCallback();
+        if (mModule == null) {
+            return STATUS_ERROR;
+        }
 
+        IRecognitionStatusCallback callback = modelData.getCallback();
         // Stop recognition.
         int status = STATUS_OK;
 

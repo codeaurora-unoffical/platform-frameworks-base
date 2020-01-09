@@ -67,6 +67,7 @@ import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -104,6 +105,9 @@ public class AccessibilityWindowManagerTest {
     // List of callback, mapping from displayId -> callback.
     private final SparseArray<WindowsForAccessibilityCallback> mCallbackOfWindows =
             new SparseArray<>();
+    // List of display ID.
+    private final ArrayList<Integer> mExpectedDisplayList = new ArrayList<>(Arrays.asList(
+            Display.DEFAULT_DISPLAY, SECONDARY_DISPLAY_ID));
 
     private final MessageCapturingHandler mHandler = new MessageCapturingHandler(null);
 
@@ -690,6 +694,35 @@ public class AccessibilityWindowManagerTest {
         final int windowId = mA11yWindowManager.findWindowIdLocked(
                 USER_PROFILE_PARENT, token.asBinder());
         assertTrue(windowId >= 0);
+    }
+
+    @Test
+    public void getDisplayList() throws RemoteException {
+        // Starts tracking window of second display.
+        startTrackingPerDisplay(SECONDARY_DISPLAY_ID);
+
+        final ArrayList<Integer> displayList = mA11yWindowManager.getDisplayListLocked();
+        assertTrue(displayList.equals(mExpectedDisplayList));
+    }
+
+    @Test
+    public void setAccessibilityWindowIdToSurfaceMetadata()
+            throws RemoteException {
+        final IWindow token = addAccessibilityInteractionConnection(Display.DEFAULT_DISPLAY,
+                true, USER_SYSTEM_ID);
+        int windowId = -1;
+        for (int i = 0; i < mA11yWindowTokens.size(); i++) {
+            if (mA11yWindowTokens.valueAt(i).equals(token)) {
+                windowId = mA11yWindowTokens.keyAt(i);
+            }
+        }
+        assertNotEquals("Returned token is not found in mA11yWindowTokens", -1, windowId);
+        verify(mMockWindowManagerInternal, times(1)).setAccessibilityIdToSurfaceMetadata(
+                token.asBinder(), windowId);
+
+        mA11yWindowManager.removeAccessibilityInteractionConnection(token);
+        verify(mMockWindowManagerInternal, times(1)).setAccessibilityIdToSurfaceMetadata(
+                token.asBinder(), -1);
     }
 
     private void startTrackingPerDisplay(int displayId) throws RemoteException {

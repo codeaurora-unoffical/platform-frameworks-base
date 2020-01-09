@@ -23,6 +23,7 @@ import static android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_C
 import static android.view.inputmethod.CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION;
 
 import android.R;
+import android.annotation.CallSuper;
 import android.annotation.CheckResult;
 import android.annotation.ColorInt;
 import android.annotation.DrawableRes;
@@ -344,6 +345,8 @@ import java.util.function.Supplier;
 public class TextView extends View implements ViewTreeObserver.OnPreDrawListener {
     static final String LOG_TAG = "TextView";
     static final boolean DEBUG_EXTRACT = false;
+    static final boolean DEBUG_CURSOR = false;
+
     private static final float[] TEMP_POSITION = new float[2];
 
     // Enum for the "typeface" XML parameter.
@@ -10446,10 +10449,15 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
     /**
      * This method is called when the selection has changed, in case any
      * subclasses would like to know.
+     * </p>
+     * <p class="note"><strong>Note:</strong> Always call the super implementation, which informs
+     * the accessibility subsystem about the selection change.
+     * </p>
      *
      * @param selStart The new selection start location.
      * @param selEnd The new selection end location.
      */
+    @CallSuper
     protected void onSelectionChanged(int selStart, int selEnd) {
         sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED);
     }
@@ -10851,6 +10859,13 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (DEBUG_CURSOR) {
+            logCursor("onTouchEvent", "%d: %s (%f,%f)",
+                    event.getSequenceNumber(),
+                    MotionEvent.actionToString(event.getActionMasked()),
+                    event.getX(), event.getY());
+        }
+
         final int action = event.getActionMasked();
         if (mEditor != null) {
             mEditor.onTouchEvent(event);
@@ -10862,6 +10877,9 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
         }
 
         final boolean superResult = super.onTouchEvent(event);
+        if (DEBUG_CURSOR) {
+            logCursor("onTouchEvent", "superResult=%s", superResult);
+        }
 
         /*
          * Don't handle the release after a long press, because it will move the selection away from
@@ -10870,7 +10888,9 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
          */
         if (mEditor != null && mEditor.mDiscardNextActionUp && action == MotionEvent.ACTION_UP) {
             mEditor.mDiscardNextActionUp = false;
-
+            if (DEBUG_CURSOR) {
+                logCursor("onTouchEvent", "release after long press detected");
+            }
             if (mEditor.mIsInsertionActionModeStartPending) {
                 mEditor.startInsertionActionMode();
                 mEditor.mIsInsertionActionModeStartPending = false;
@@ -12248,6 +12268,10 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
 
     @Override
     public boolean performLongClick() {
+        if (DEBUG_CURSOR) {
+            logCursor("performLongClick", null);
+        }
+
         boolean handled = false;
         boolean performedHapticFeedback = false;
 
@@ -13473,6 +13497,14 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                 Log.v(LOG_TAG, "onSpanRemoved s=" + s + " e=" + e + " what=" + what + ": " + buf);
             }
             TextView.this.spanChange(buf, what, s, -1, e, -1);
+        }
+    }
+
+    private static void logCursor(String location, @Nullable String msgFormat, Object ... msgArgs) {
+        if (msgFormat == null) {
+            Log.d(LOG_TAG, location);
+        } else {
+            Log.d(LOG_TAG, location + ": " + String.format(msgFormat, msgArgs));
         }
     }
 }

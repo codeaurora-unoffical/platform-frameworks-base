@@ -162,6 +162,16 @@ public class ContentCaptureSessionTest {
         }
 
         @Override
+        void internalNotifySessionResumed() {
+            throw new UnsupportedOperationException("should not have been called");
+        }
+
+        @Override
+        void internalNotifySessionPaused() {
+            throw new UnsupportedOperationException("should not have been called");
+        }
+
+        @Override
         public void updateContentCaptureContext(ContentCaptureContext context) {
             throw new UnsupportedOperationException("should not have been called");
         }

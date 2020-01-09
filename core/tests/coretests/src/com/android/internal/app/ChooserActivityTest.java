@@ -24,12 +24,12 @@ import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
-import static com.android.internal.app.ChooserActivity.CALLER_TARGET_SCORE_BOOST;
-import static com.android.internal.app.ChooserActivity.SHORTCUT_TARGET_SCORE_BOOST;
 import static com.android.internal.app.ChooserActivity.TARGET_TYPE_CHOOSER_TARGET;
 import static com.android.internal.app.ChooserActivity.TARGET_TYPE_DEFAULT;
 import static com.android.internal.app.ChooserActivity.TARGET_TYPE_SHORTCUTS_FROM_PREDICTION_SERVICE;
 import static com.android.internal.app.ChooserActivity.TARGET_TYPE_SHORTCUTS_FROM_SHORTCUT_MANAGER;
+import static com.android.internal.app.ChooserListAdapter.CALLER_TARGET_SCORE_BOOST;
+import static com.android.internal.app.ChooserListAdapter.SHORTCUT_TARGET_SCORE_BOOST;
 import static com.android.internal.app.ChooserWrapperActivity.sOverrides;
 
 import static org.hamcrest.CoreMatchers.is;
@@ -69,6 +69,7 @@ import androidx.test.rule.ActivityTestRule;
 
 import com.android.internal.R;
 import com.android.internal.app.ResolverActivity.ResolvedComponentInfo;
+import com.android.internal.app.chooser.DisplayResolveInfo;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 
@@ -284,7 +285,7 @@ public class ChooserActivityTest {
         waitForIdle();
         UsageStatsManager usm = activity.getUsageStatsManager();
         verify(sOverrides.resolverListController, times(1))
-                .sort(Mockito.any(List.class));
+                .topK(Mockito.any(List.class), Mockito.anyInt());
         assertThat(activity.getIsSelected(), is(false));
         sOverrides.onSafelyStartCallback = targetInfo -> {
             return true;
@@ -312,7 +313,7 @@ public class ChooserActivityTest {
         assertThat(activity.isFinishing(), is(false));
 
         onView(withId(R.id.empty)).check(matches(isDisplayed()));
-        onView(withId(R.id.resolver_list)).check(matches(not(isDisplayed())));
+        onView(withId(R.id.profile_pager)).check(matches(not(isDisplayed())));
         InstrumentationRegistry.getInstrumentation().runOnMainSync(
                 () -> activity.getAdapter().handlePackagesChanged()
         );
@@ -481,6 +482,36 @@ public class ChooserActivityTest {
     }
 
     @Test
+    public void copyTextToClipboardLogging() throws Exception {
+        Intent sendIntent = createSendTextIntent();
+        List<ResolvedComponentInfo> resolvedComponentInfos = createResolvedComponentsForTest(2);
+
+        when(ChooserWrapperActivity.sOverrides.resolverListController.getResolversForIntent(
+            Mockito.anyBoolean(),
+            Mockito.anyBoolean(),
+            Mockito.isA(List.class))).thenReturn(resolvedComponentInfos);
+
+        MetricsLogger mockLogger = sOverrides.metricsLogger;
+        ArgumentCaptor<LogMaker> logMakerCaptor = ArgumentCaptor.forClass(LogMaker.class);
+
+        final ChooserWrapperActivity activity = mActivityRule
+                .launchActivity(Intent.createChooser(sendIntent, null));
+        waitForIdle();
+
+        onView(withId(R.id.copy_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.copy_button)).perform(click());
+
+        verify(mockLogger, atLeastOnce()).write(logMakerCaptor.capture());
+        // First is  Activity shown, Second is "with preview"
+        assertThat(logMakerCaptor.getAllValues().get(2).getCategory(),
+                is(MetricsEvent.ACTION_ACTIVITY_CHOOSER_PICKED_SYSTEM_TARGET));
+        assertThat(logMakerCaptor
+                        .getAllValues().get(2)
+                        .getSubtype(),
+                is(1));
+    }
+
+    @Test
     public void oneVisibleImagePreview() throws InterruptedException {
         Uri uri = Uri.parse("android.resource://com.android.frameworks.coretests/"
                 + com.android.frameworks.coretests.R.drawable.test320x240);
@@ -643,12 +674,12 @@ public class ChooserActivityTest {
 
         mActivityRule.launchActivity(Intent.createChooser(sendIntent, null));
         waitForIdle();
+        // Second invocation is from onCreate
         verify(mockLogger, Mockito.times(2)).write(logMakerCaptor.capture());
-        // First invocation is from onCreate
-        assertThat(logMakerCaptor.getAllValues().get(1).getCategory(),
-                is(MetricsEvent.ACTION_SHARE_WITH_PREVIEW));
-        assertThat(logMakerCaptor.getAllValues().get(1).getSubtype(),
+        assertThat(logMakerCaptor.getAllValues().get(0).getSubtype(),
                 is(CONTENT_PREVIEW_TEXT));
+        assertThat(logMakerCaptor.getAllValues().get(0).getCategory(),
+                is(MetricsEvent.ACTION_SHARE_WITH_PREVIEW));
     }
 
     @Test
@@ -675,10 +706,10 @@ public class ChooserActivityTest {
         waitForIdle();
         verify(mockLogger, Mockito.times(2)).write(logMakerCaptor.capture());
         // First invocation is from onCreate
-        assertThat(logMakerCaptor.getAllValues().get(1).getCategory(),
-                is(MetricsEvent.ACTION_SHARE_WITH_PREVIEW));
-        assertThat(logMakerCaptor.getAllValues().get(1).getSubtype(),
+        assertThat(logMakerCaptor.getAllValues().get(0).getSubtype(),
                 is(CONTENT_PREVIEW_IMAGE));
+        assertThat(logMakerCaptor.getAllValues().get(0).getCategory(),
+                is(MetricsEvent.ACTION_SHARE_WITH_PREVIEW));
     }
 
     @Test
@@ -789,17 +820,18 @@ public class ChooserActivityTest {
         when(sOverrides.resolverListController.getResolversForIntent(Mockito.anyBoolean(),
                 Mockito.anyBoolean(),
                 Mockito.isA(List.class))).thenReturn(resolvedComponentInfos);
-        when(sOverrides.resolverListController.getScore(Mockito.isA(
-                ResolverActivity.DisplayResolveInfo.class))).thenReturn(testBaseScore);
+        when(sOverrides.resolverListController.getScore(Mockito.isA(DisplayResolveInfo.class)))
+                .thenReturn(testBaseScore);
 
         final ChooserWrapperActivity activity = mActivityRule
                 .launchActivity(Intent.createChooser(sendIntent, null));
         waitForIdle();
 
-        final ResolverActivity.DisplayResolveInfo testDri =
+        final DisplayResolveInfo testDri =
                 activity.createTestDisplayResolveInfo(sendIntent,
-                ResolverDataProvider.createResolveInfo(3, 0), "testLabel", "testInfo", sendIntent);
-        final ChooserActivity.ChooserListAdapter adapter = activity.getAdapter();
+                ResolverDataProvider.createResolveInfo(3, 0), "testLabel", "testInfo", sendIntent,
+                /* resolveInfoPresentationGetter */ null);
+        final ChooserListAdapter adapter = activity.getAdapter();
 
         assertThat(adapter.getBaseScore(null, 0), is(CALLER_TARGET_SCORE_BOOST));
         assertThat(adapter.getBaseScore(testDri, TARGET_TYPE_DEFAULT), is(testBaseScore));
@@ -940,7 +972,8 @@ public class ChooserActivityTest {
                                 ri,
                                 "testLabel",
                                 "testInfo",
-                                sendIntent),
+                                sendIntent,
+                                /* resolveInfoPresentationGetter */ null),
                         serviceTargets,
                         TARGET_TYPE_CHOOSER_TARGET)
         );
@@ -1006,7 +1039,8 @@ public class ChooserActivityTest {
                                 ri,
                                 "testLabel",
                                 "testInfo",
-                                sendIntent),
+                                sendIntent,
+                                /* resolveInfoPresentationGetter */ null),
                         serviceTargets,
                         TARGET_TYPE_CHOOSER_TARGET)
         );
@@ -1067,7 +1101,8 @@ public class ChooserActivityTest {
                                 ri,
                                 "testLabel",
                                 "testInfo",
-                                sendIntent),
+                                sendIntent,
+                                /* resolveInfoPresentationGetter */ null),
                         serviceTargets,
                         TARGET_TYPE_CHOOSER_TARGET)
         );

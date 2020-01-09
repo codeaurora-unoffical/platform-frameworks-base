@@ -61,6 +61,7 @@ public class TextClassificationManagerTest {
     public void testGetLocalTextClassifier() {
         assertTrue(mTcm.getTextClassifier(TextClassifier.LOCAL) instanceof TextClassifierImpl);
     }
+
     @Test
     public void testGetSystemTextClassifier() {
         assertTrue(
@@ -77,7 +78,7 @@ public class TextClassificationManagerTest {
 
         TextClassifier fallback = TextClassifier.NO_OP;
         TextClassifier classifier = new TextClassifierImpl(
-                fakeContext, new TextClassificationConstants(() -> null), fallback);
+                fakeContext, new TextClassificationConstants(), fallback);
 
         String text = "Contact me at +12122537077";
         String classifiedText = "+12122537077";

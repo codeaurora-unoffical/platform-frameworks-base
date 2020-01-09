@@ -17,6 +17,8 @@
 package com.android.server.notification;
 
 import android.app.Notification;
+import android.net.Uri;
+import android.os.UserHandle;
 import android.service.notification.NotificationStats;
 
 import com.android.internal.statusbar.NotificationVisibility;
@@ -47,6 +49,18 @@ public interface NotificationDelegate {
     void onNotificationDirectReplied(String key);
     void onNotificationSettingsViewed(String key);
     void onNotificationBubbleChanged(String key, boolean isBubble);
+
+    /**
+     * Grant permission to read the specified URI to the package associated with the
+     * NotificationRecord associated with the given key.
+     */
+    void grantInlineReplyUriPermission(String key, Uri uri, UserHandle user, String packageName,
+            int callingUid);
+
+    /**
+     * Clear inline URI grants associated with the given notification.
+     */
+    void clearInlineReplyUriPermissions(String key, int callingUid);
 
     /**
      * Notifies that smart replies and actions have been added to the UI.

@@ -16,19 +16,13 @@
 
 package com.android.systemui.usb;
 
-import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.debug.IAdbManager;
-import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.ServiceManager;
-import android.os.SystemProperties;
 import android.util.EventLog;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -48,20 +42,16 @@ public class UsbDebuggingActivity extends AlertActivity
     private static final String TAG = "UsbDebuggingActivity";
 
     private CheckBox mAlwaysAllow;
-    private UsbDisconnectedReceiver mDisconnectedReceiver;
     private String mKey;
 
     @Override
     public void onCreate(Bundle icicle) {
         Window window = getWindow();
-        window.addSystemFlags(WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS);
+        window.addSystemFlags(
+                WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS);
         window.setType(WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG);
 
         super.onCreate(icicle);
-
-        if (SystemProperties.getInt("service.adb.tcp.port", 0) == 0) {
-            mDisconnectedReceiver = new UsbDisconnectedReceiver(this);
-        }
 
         Intent intent = getIntent();
         String fingerprints = intent.getStringExtra("fingerprints");
@@ -113,40 +103,6 @@ public class UsbDebuggingActivity extends AlertActivity
     @Override
     public void onWindowAttributesChanged(WindowManager.LayoutParams params) {
         super.onWindowAttributesChanged(params);
-    }
-
-    private class UsbDisconnectedReceiver extends BroadcastReceiver {
-        private final Activity mActivity;
-        public UsbDisconnectedReceiver(Activity activity) {
-            mActivity = activity;
-        }
-
-        @Override
-        public void onReceive(Context content, Intent intent) {
-            String action = intent.getAction();
-            if (!UsbManager.ACTION_USB_STATE.equals(action)) {
-                return;
-            }
-            boolean connected = intent.getBooleanExtra(UsbManager.USB_CONNECTED, false);
-            if (!connected) {
-                mActivity.finish();
-            }
-        }
-    }
-
-    @Override
-    public void onStart() {
-        super.onStart();
-        IntentFilter filter = new IntentFilter(UsbManager.ACTION_USB_STATE);
-        registerReceiver(mDisconnectedReceiver, filter);
-    }
-
-    @Override
-    protected void onStop() {
-        if (mDisconnectedReceiver != null) {
-            unregisterReceiver(mDisconnectedReceiver);
-        }
-        super.onStop();
     }
 
     @Override

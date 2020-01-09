@@ -39,6 +39,7 @@ import android.content.pm.IPackageDeleteObserver;
 import android.content.pm.IPackageManager;
 import android.content.pm.IPackageMoveObserver;
 import android.content.pm.IPackageStatsObserver;
+import android.content.pm.InstallSourceInfo;
 import android.content.pm.InstantAppInfo;
 import android.content.pm.InstrumentationInfo;
 import android.content.pm.IntentFilterVerificationInfo;
@@ -92,7 +93,6 @@ import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.DebugUtils;
-import android.util.IconDrawableFactory;
 import android.util.LauncherIcons;
 import android.util.Log;
 import android.view.Display;
@@ -1474,11 +1474,11 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public Drawable getUserBadgedIcon(Drawable icon, UserHandle user) {
-        if (!isManagedProfile(user.getIdentifier())) {
+        if (!hasUserBadge(user.getIdentifier())) {
             return icon;
         }
         Drawable badge = new LauncherIcons(mContext).getBadgeDrawable(
-                com.android.internal.R.drawable.ic_corp_icon_badge_case,
+                getUserManager().getUserIconBadgeResId(user.getIdentifier()),
                 getUserBadgeColor(user));
         return getBadgedDrawable(icon, badge, null, true);
     }
@@ -1493,26 +1493,21 @@ public class ApplicationPackageManager extends PackageManager {
         return getBadgedDrawable(drawable, badgeDrawable, badgeLocation, true);
     }
 
-    @VisibleForTesting
-    public static final int[] CORP_BADGE_LABEL_RES_ID = new int[] {
-        com.android.internal.R.string.managed_profile_label_badge,
-        com.android.internal.R.string.managed_profile_label_badge_2,
-        com.android.internal.R.string.managed_profile_label_badge_3
-    };
-
+    /** Returns the color of the user's actual badge (not the badge's shadow). */
     private int getUserBadgeColor(UserHandle user) {
-        return IconDrawableFactory.getUserBadgeColor(getUserManager(), user.getIdentifier());
+        return getUserManager().getUserBadgeColor(user.getIdentifier());
     }
 
     @Override
     public Drawable getUserBadgeForDensity(UserHandle user, int density) {
-        Drawable badgeColor = getManagedProfileIconForDensity(user,
+        // This is part of the shadow, not the main color, and is not actually corp-specific.
+        Drawable badgeColor = getProfileIconForDensity(user,
                 com.android.internal.R.drawable.ic_corp_badge_color, density);
         if (badgeColor == null) {
             return null;
         }
         Drawable badgeForeground = getDrawableForDensity(
-                com.android.internal.R.drawable.ic_corp_badge_case, density);
+                getUserManager().getUserBadgeResId(user.getIdentifier()), density);
         badgeForeground.setTint(getUserBadgeColor(user));
         Drawable badge = new LayerDrawable(new Drawable[] {badgeColor, badgeForeground });
         return badge;
@@ -1520,8 +1515,8 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public Drawable getUserBadgeForDensityNoBackground(UserHandle user, int density) {
-        Drawable badge = getManagedProfileIconForDensity(user,
-                com.android.internal.R.drawable.ic_corp_badge_no_background, density);
+        Drawable badge = getProfileIconForDensity(user,
+                getUserManager().getUserBadgeNoBackgroundResId(user.getIdentifier()), density);
         if (badge != null) {
             badge.setTint(getUserBadgeColor(user));
         }
@@ -1535,8 +1530,8 @@ public class ApplicationPackageManager extends PackageManager {
         return mContext.getResources().getDrawableForDensity(drawableId, density);
     }
 
-    private Drawable getManagedProfileIconForDensity(UserHandle user, int drawableId, int density) {
-        if (isManagedProfile(user.getIdentifier())) {
+    private Drawable getProfileIconForDensity(UserHandle user, int drawableId, int density) {
+        if (hasUserBadge(user.getIdentifier())) {
             return getDrawableForDensity(drawableId, density);
         }
         return null;
@@ -1544,12 +1539,7 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public CharSequence getUserBadgedLabel(CharSequence label, UserHandle user) {
-        if (isManagedProfile(user.getIdentifier())) {
-            int badge = getUserManager().getManagedProfileBadge(user.getIdentifier());
-            int resourceId = CORP_BADGE_LABEL_RES_ID[badge % CORP_BADGE_LABEL_RES_ID.length];
-            return Resources.getSystem().getString(resourceId, label);
-        }
-        return label;
+        return getUserManager().getBadgedLabelForUser(label, user);
     }
 
     @Override
@@ -2096,6 +2086,21 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
+    @NonNull
+    public InstallSourceInfo getInstallSourceInfo(String packageName) throws NameNotFoundException {
+        final InstallSourceInfo installSourceInfo;
+        try {
+            installSourceInfo = mPM.getInstallSourceInfo(packageName);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+        if (installSourceInfo == null) {
+            throw new NameNotFoundException(packageName);
+        }
+        return installSourceInfo;
+    }
+
+    @Override
     public int getMoveStatus(int moveId) {
         try {
             return mPM.getMoveStatus(moveId);
@@ -2414,14 +2419,11 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public Bundle getSuspendedPackageAppExtras() {
-        final PersistableBundle extras;
         try {
-            extras = mPM.getSuspendedPackageAppExtras(mContext.getOpPackageName(),
-                    getUserId());
+            return mPM.getSuspendedPackageAppExtras(mContext.getOpPackageName(), getUserId());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
-        return extras != null ? new Bundle(extras.deepCopy()) : null;
     }
 
     @Override
@@ -2796,7 +2798,7 @@ public class ApplicationPackageManager extends PackageManager {
     public Drawable loadUnbadgedItemIcon(@NonNull PackageItemInfo itemInfo,
             @Nullable ApplicationInfo appInfo) {
         if (itemInfo.showUserIcon != UserHandle.USER_NULL) {
-            // Indicates itemInfo is for a different user (e.g. a profile's parent), so use a 
+            // Indicates itemInfo is for a different user (e.g. a profile's parent), so use a
             // generic user icon (users generally lack permission to view each other's actual icons)
             int targetUserId = itemInfo.showUserIcon;
             return UserIcons.getDefaultUserIcon(
@@ -2868,8 +2870,8 @@ public class ApplicationPackageManager extends PackageManager {
         return drawable;
     }
 
-    private boolean isManagedProfile(int userId) {
-        return getUserManager().isManagedProfile(userId);
+    private boolean hasUserBadge(int userId) {
+        return getUserManager().hasBadge(userId);
     }
 
     /**
@@ -3136,6 +3138,15 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
+    public String[] getSystemTextClassifierPackages() {
+        try {
+            return mPM.getSystemTextClassifierPackages();
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @Override
     public String getAttentionServicePackageName() {
         try {
             return mPM.getAttentionServicePackageName();
@@ -3163,6 +3174,15 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
+    public String[] getTelephonyPackageNames() {
+        try {
+            return mPM.getTelephonyPackageNames();
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @Override
     public String getSystemCaptionsServicePackageName() {
         try {
             return mPM.getSystemCaptionsServicePackageName();
@@ -3172,9 +3192,27 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
+    public String getSetupWizardPackageName() {
+        try {
+            return mPM.getSetupWizardPackageName();
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @Override
     public String getIncidentReportApproverPackageName() {
         try {
             return mPM.getIncidentReportApproverPackageName();
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @Override
+    public String getContentCaptureServicePackageName() {
+        try {
+            return mPM.getContentCaptureServicePackageName();
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
         }

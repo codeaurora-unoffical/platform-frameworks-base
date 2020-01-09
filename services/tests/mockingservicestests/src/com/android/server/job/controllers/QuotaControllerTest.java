@@ -78,6 +78,7 @@ import com.android.server.job.JobServiceContext;
 import com.android.server.job.JobStore;
 import com.android.server.job.controllers.QuotaController.ExecutionStats;
 import com.android.server.job.controllers.QuotaController.TimingSession;
+import com.android.server.usage.AppStandbyInternal;
 
 import org.junit.After;
 import org.junit.Before;
@@ -150,6 +151,8 @@ public class QuotaControllerTest {
         when(mContext.getSystemService(Context.ALARM_SERVICE)).thenReturn(mAlarmManager);
         doReturn(mActivityMangerInternal)
                 .when(() -> LocalServices.getService(ActivityManagerInternal.class));
+        doReturn(mock(AppStandbyInternal.class))
+                .when(() -> LocalServices.getService(AppStandbyInternal.class));
         doReturn(mock(BatteryManagerInternal.class))
                 .when(() -> LocalServices.getService(BatteryManagerInternal.class));
         doReturn(mUsageStatsManager)
@@ -233,7 +236,8 @@ public class QuotaControllerTest {
             doReturn(procState).when(mActivityMangerInternal).getUidProcessState(uid);
             SparseBooleanArray foregroundUids = mQuotaController.getForegroundUids();
             spyOn(foregroundUids);
-            mUidObserver.onUidStateChanged(uid, procState, 0);
+            mUidObserver.onUidStateChanged(uid, procState, 0,
+                    ActivityManager.PROCESS_CAPABILITY_NONE);
             if (procState <= ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE) {
                 verify(foregroundUids, timeout(2 * SECOND_IN_MILLIS).times(1))
                         .put(eq(uid), eq(true));

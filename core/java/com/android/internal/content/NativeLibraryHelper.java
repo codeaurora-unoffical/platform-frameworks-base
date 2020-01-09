@@ -28,12 +28,11 @@ import static android.system.OsConstants.S_IXOTH;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageParser;
-import android.content.pm.PackageParser.Package;
 import android.content.pm.PackageParser.PackageLite;
 import android.content.pm.PackageParser.PackageParserException;
+import android.content.pm.parsing.AndroidPackage;
 import android.os.Build;
 import android.os.SELinux;
-import android.os.SystemProperties;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Slog;
@@ -88,11 +87,12 @@ public class NativeLibraryHelper {
             }
         }
 
-        public static Handle create(Package pkg) throws IOException {
-            return create(pkg.getAllCodePaths(),
-                    (pkg.applicationInfo.flags & ApplicationInfo.FLAG_MULTIARCH) != 0,
-                    (pkg.applicationInfo.flags & ApplicationInfo.FLAG_EXTRACT_NATIVE_LIBS) != 0,
-                    (pkg.applicationInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
+        public static Handle create(AndroidPackage pkg) throws IOException {
+            return create(
+                    pkg.makeListAllCodePaths(),
+                    (pkg.getFlags() & ApplicationInfo.FLAG_MULTIARCH) != 0,
+                    (pkg.getFlags() & ApplicationInfo.FLAG_EXTRACT_NATIVE_LIBS) != 0,
+                    (pkg.getFlags() & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
         }
 
         public static Handle create(PackageLite lite) throws IOException {
@@ -442,6 +442,36 @@ public class NativeLibraryHelper {
             sum += sumNativeBinariesForSupportedAbi(handle, abiList);
         }
         return sum;
+    }
+
+    /**
+     * Configure the native library files managed by Incremental Service. Makes sure Incremental
+     * Service will create native library directories and set up native library binary files in the
+     * same structure as they are in non-incremental installations.
+     *
+     * @param pkg The package to be installed, including all the APK files.
+     * @param handle The pointer to an zip archive.
+     * @param libraryRoot The root directory of the native library files, e.g., lib/
+     * @param abiList The list of ABIs that are supported by the current device.
+     * @param useIsaSubdir Whether or not to set up a sub dir for the ISA.
+     * @return ABI code if installation succeeds or error code if installation fails.
+     */
+    public static int configureNativeBinariesForSupportedAbi(AndroidPackage pkg, Handle handle,
+            File libraryRoot, String[] abiList, boolean useIsaSubdir) {
+        int abi = findSupportedAbi(handle, abiList);
+        if (abi < 0) {
+            Slog.e(TAG, "Failed to find find matching ABI.");
+            return abi;
+        }
+
+        // Currently only support installations that have pre-configured native library files
+        // TODO(b/136132412): implement this after incfs supports file mapping
+        if (!libraryRoot.exists()) {
+            Slog.e(TAG, "Incremental installation currently does not configure native libs");
+            return INSTALL_FAILED_NO_MATCHING_ABIS;
+        }
+
+        return abi;
     }
 
     // We don't care about the other return values for now.

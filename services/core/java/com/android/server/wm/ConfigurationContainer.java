@@ -39,11 +39,15 @@ import android.app.WindowConfiguration;
 import android.content.res.Configuration;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.os.IBinder;
 import android.util.proto.ProtoOutputStream;
+import android.view.IWindowContainer;
+import android.view.SurfaceControl;
 
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.PrintWriter;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 
 /**
@@ -77,9 +81,6 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
      */
     private Configuration mFullConfiguration = new Configuration();
 
-    /** The bit mask of the last override fields of full configuration. */
-    private int mLastOverrideConfigurationChanges;
-
     /**
      * Contains merged override configuration settings from the top of the hierarchy down to this
      * particular instance. It is different from {@link #mFullConfiguration} because it starts from
@@ -90,7 +91,8 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
     private ArrayList<ConfigurationContainerListener> mChangeListeners = new ArrayList<>();
 
     // TODO: Can't have ag/2592611 soon enough!
-    private final Configuration mTmpConfig = new Configuration();
+    private final Configuration mRequestsTmpConfig = new Configuration();
+    private final Configuration mResolvedTmpConfig = new Configuration();
 
     // Used for setting bounds
     private final Rect mTmpRect = new Rect();
@@ -101,6 +103,11 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
     // Return value from {@link setBounds} indicating the size of the override bounds changed.
     static final int BOUNDS_CHANGE_SIZE = 1 << 1;
 
+    /**
+     * Used as a unique, cross-process identifier for this Container. It also serves a minimal
+     * interface to other processes.
+     */
+    RemoteToken mRemoteToken = null;
 
     /**
      * Returns full configuration applied to this configuration container.
@@ -111,22 +118,23 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         return mFullConfiguration;
     }
 
-    /** Returns the last changes from applying override configuration. */
-    int getLastOverrideConfigurationChanges() {
-        return mLastOverrideConfigurationChanges;
-    }
-
     /**
      * Notify that parent config changed and we need to update full configuration.
      * @see #mFullConfiguration
      */
     public void onConfigurationChanged(Configuration newParentConfig) {
-        mTmpConfig.setTo(mResolvedOverrideConfiguration);
+        onConfigurationChanged(newParentConfig, true /*forwardToChildren*/);
+    }
+
+    // TODO(root-unify): Consolidate with onConfigurationChanged() method above once unification is
+    //  done. This is only currently need during the process of unification where we don't want
+    //  configuration forwarded to a child from both parents.
+    public void onConfigurationChanged(Configuration newParentConfig, boolean forwardToChildren) {
+        mResolvedTmpConfig.setTo(mResolvedOverrideConfiguration);
         resolveOverrideConfiguration(newParentConfig);
         mFullConfiguration.setTo(newParentConfig);
-        mLastOverrideConfigurationChanges =
-                mFullConfiguration.updateFrom(mResolvedOverrideConfiguration);
-        if (!mTmpConfig.equals(mResolvedOverrideConfiguration)) {
+        mFullConfiguration.updateFrom(mResolvedOverrideConfiguration);
+        if (!mResolvedTmpConfig.equals(mResolvedOverrideConfiguration)) {
             onMergedOverrideConfigurationChanged();
             // This depends on the assumption that change-listeners don't do
             // their own override resolution. This way, dependent hierarchies
@@ -139,9 +147,11 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
                         mResolvedOverrideConfiguration);
             }
         }
-        for (int i = getChildCount() - 1; i >= 0; --i) {
-            final ConfigurationContainer child = getChildAt(i);
-            child.onConfigurationChanged(mFullConfiguration);
+        if (forwardToChildren) {
+            for (int i = getChildCount() - 1; i >= 0; --i) {
+                final ConfigurationContainer child = getChildAt(i);
+                child.onConfigurationChanged(mFullConfiguration);
+            }
         }
     }
 
@@ -262,6 +272,11 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         out.set(bounds.left, bounds.top);
     }
 
+    Rect getResolvedOverrideBounds() {
+        mReturnBounds.set(getResolvedOverrideConfiguration().windowConfiguration.getBounds());
+        return mReturnBounds;
+    }
+
     /**
      * Returns the bounds requested on this container. These may not be the actual bounds the
      * container ends up with due to policy constraints. The {@link Rect} handed back is
@@ -306,9 +321,9 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         }
 
 
-        mTmpConfig.setTo(getRequestedOverrideConfiguration());
-        mTmpConfig.windowConfiguration.setBounds(bounds);
-        onRequestedOverrideConfigurationChanged(mTmpConfig);
+        mRequestsTmpConfig.setTo(getRequestedOverrideConfiguration());
+        mRequestsTmpConfig.windowConfiguration.setBounds(bounds);
+        onRequestedOverrideConfigurationChanged(mRequestsTmpConfig);
 
         return boundsChange;
     }
@@ -360,28 +375,27 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
 
     /** Sets the requested windowing mode override for the configuration container. */
     public void setWindowingMode(/*@WindowConfiguration.WindowingMode*/ int windowingMode) {
-        mTmpConfig.setTo(getRequestedOverrideConfiguration());
-        mTmpConfig.windowConfiguration.setWindowingMode(windowingMode);
-        onRequestedOverrideConfigurationChanged(mTmpConfig);
+        mRequestsTmpConfig.setTo(getRequestedOverrideConfiguration());
+        mRequestsTmpConfig.windowConfiguration.setWindowingMode(windowingMode);
+        onRequestedOverrideConfigurationChanged(mRequestsTmpConfig);
     }
 
     /** Sets the always on top flag for this configuration container.
      *  When you call this function, make sure that the following functions are called as well to
      *  keep proper z-order.
      *  - {@Link DisplayContent#positionStackAt(POSITION_TOP, TaskStack)};
-     *  - {@Link ActivityDisplay#positionChildAtTop(ActivityStack)};
      * */
     public void setAlwaysOnTop(boolean alwaysOnTop) {
-        mTmpConfig.setTo(getRequestedOverrideConfiguration());
-        mTmpConfig.windowConfiguration.setAlwaysOnTop(alwaysOnTop);
-        onRequestedOverrideConfigurationChanged(mTmpConfig);
+        mRequestsTmpConfig.setTo(getRequestedOverrideConfiguration());
+        mRequestsTmpConfig.windowConfiguration.setAlwaysOnTop(alwaysOnTop);
+        onRequestedOverrideConfigurationChanged(mRequestsTmpConfig);
     }
 
     /** Sets the windowing mode for the configuration container. */
     void setDisplayWindowingMode(int windowingMode) {
-        mTmpConfig.setTo(getRequestedOverrideConfiguration());
-        mTmpConfig.windowConfiguration.setDisplayWindowingMode(windowingMode);
-        onRequestedOverrideConfigurationChanged(mTmpConfig);
+        mRequestsTmpConfig.setTo(getRequestedOverrideConfiguration());
+        mRequestsTmpConfig.windowConfiguration.setDisplayWindowingMode(windowingMode);
+        onRequestedOverrideConfigurationChanged(mRequestsTmpConfig);
     }
 
     /**
@@ -451,9 +465,9 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
             throw new IllegalStateException("Can't change activity type once set: " + this
                     + " activityType=" + activityTypeToString(activityType));
         }
-        mTmpConfig.setTo(getRequestedOverrideConfiguration());
-        mTmpConfig.windowConfiguration.setActivityType(activityType);
-        onRequestedOverrideConfigurationChanged(mTmpConfig);
+        mRequestsTmpConfig.setTo(getRequestedOverrideConfiguration());
+        mRequestsTmpConfig.windowConfiguration.setActivityType(activityType);
+        onRequestedOverrideConfigurationChanged(mRequestsTmpConfig);
     }
 
     public boolean isActivityTypeHome() {
@@ -525,7 +539,7 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         return sameWindowingMode;
     }
 
-    public void registerConfigurationChangeListener(ConfigurationContainerListener listener) {
+    void registerConfigurationChangeListener(ConfigurationContainerListener listener) {
         if (mChangeListeners.contains(listener)) {
             return;
         }
@@ -533,7 +547,7 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         listener.onRequestedOverrideConfigurationChanged(mResolvedOverrideConfiguration);
     }
 
-    public void unregisterConfigurationChangeListener(ConfigurationContainerListener listener) {
+    void unregisterConfigurationChangeListener(ConfigurationContainerListener listener) {
         mChangeListeners.remove(listener);
     }
 
@@ -545,13 +559,12 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
     /**
      * Must be called when new parent for the container was set.
      */
-    void onParentChanged() {
-        final ConfigurationContainer parent = getParent();
+    void onParentChanged(ConfigurationContainer newParent, ConfigurationContainer oldParent) {
         // Removing parent usually means that we've detached this entity to destroy it or to attach
         // to another parent. In both cases we don't need to update the configuration now.
-        if (parent != null) {
+        if (newParent != null) {
             // Update full configuration of this container and all its children.
-            onConfigurationChanged(parent.mFullConfiguration);
+            onConfigurationChanged(newParent.mFullConfiguration);
             // Update merged override configuration of this container and all its children.
             onMergedOverrideConfigurationChanged();
         }
@@ -568,7 +581,7 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
      * @hide
      */
     @CallSuper
-    protected void writeToProto(ProtoOutputStream proto, long fieldId,
+    protected void dumpDebug(ProtoOutputStream proto, long fieldId,
             @WindowTraceLogLevel int logLevel) {
         // Critical log level logs only visible elements to mitigate performance overheard
         if (logLevel != WindowTraceLogLevel.ALL && !mHasOverrideConfiguration) {
@@ -576,11 +589,11 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         }
 
         final long token = proto.start(fieldId);
-        mRequestedOverrideConfiguration.writeToProto(proto, OVERRIDE_CONFIGURATION,
+        mRequestedOverrideConfiguration.dumpDebug(proto, OVERRIDE_CONFIGURATION,
                 logLevel == WindowTraceLogLevel.CRITICAL);
         if (logLevel == WindowTraceLogLevel.ALL) {
-            mFullConfiguration.writeToProto(proto, FULL_CONFIGURATION, false /* critical */);
-            mMergedOverrideConfiguration.writeToProto(proto, MERGED_OVERRIDE_CONFIGURATION,
+            mFullConfiguration.dumpDebug(proto, FULL_CONFIGURATION, false /* critical */);
+            mMergedOverrideConfiguration.dumpDebug(proto, MERGED_OVERRIDE_CONFIGURATION,
                     false /* critical */);
         }
         proto.end(token);
@@ -611,9 +624,46 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         return mFullConfiguration.windowConfiguration.isAlwaysOnTop();
     }
 
+    boolean hasChild() {
+        return getChildCount() > 0;
+    }
+
     abstract protected int getChildCount();
 
     abstract protected E getChildAt(int index);
 
     abstract protected ConfigurationContainer getParent();
+
+    // TODO: Consider moving to WindowContainer once hierarchies and Task/Stack are merged.
+    static class RemoteToken extends IWindowContainer.Stub {
+        final WeakReference<ConfigurationContainer> mWeakRef;
+
+        RemoteToken(ConfigurationContainer container) {
+            mWeakRef = new WeakReference<>(container);
+        }
+
+        ConfigurationContainer getContainer() {
+            return mWeakRef.get();
+        }
+
+        static RemoteToken fromBinder(IBinder binder) {
+            return (RemoteToken) binder;
+        }
+
+        @Override
+        public SurfaceControl getLeash() {
+            throw new RuntimeException("Not implemented");
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder(128);
+            sb.append("RemoteToken{");
+            sb.append(Integer.toHexString(System.identityHashCode(this)));
+            sb.append(' ');
+            sb.append(mWeakRef.get());
+            sb.append('}');
+            return sb.toString();
+        }
+    }
 }

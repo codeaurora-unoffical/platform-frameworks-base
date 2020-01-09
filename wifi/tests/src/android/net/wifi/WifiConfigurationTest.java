@@ -19,7 +19,7 @@ package android.net.wifi;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.net.MacAddress;
@@ -62,7 +62,8 @@ public class WifiConfigurationTest {
         config.updateIdentifier = "1234";
         config.fromWifiNetworkSpecifier = true;
         config.fromWifiNetworkSuggestion = true;
-        MacAddress macBeforeParcel = config.getOrCreateRandomizedMacAddress();
+        config.setRandomizedMacAddress(MacAddress.createRandomUnicastAddress());
+        MacAddress macBeforeParcel = config.getRandomizedMacAddress();
         Parcel parcelW = Parcel.obtain();
         config.writeToParcel(parcelW, 0);
         byte[] bytes = parcelW.marshall();
@@ -75,7 +76,7 @@ public class WifiConfigurationTest {
 
         // lacking a useful config.equals, check two fields near the end.
         assertEquals(cookie, reconfig.getMoTree());
-        assertEquals(macBeforeParcel, reconfig.getOrCreateRandomizedMacAddress());
+        assertEquals(macBeforeParcel, reconfig.getRandomizedMacAddress());
         assertEquals(config.updateIdentifier, reconfig.updateIdentifier);
         assertFalse(reconfig.trusted);
         assertTrue(config.fromWifiNetworkSpecifier);
@@ -87,37 +88,6 @@ public class WifiConfigurationTest {
         parcelWW.recycle();
 
         assertArrayEquals(bytes, rebytes);
-    }
-
-    @Test
-    public void testNetworkSelectionStatusCopy() {
-        NetworkSelectionStatus networkSelectionStatus = new NetworkSelectionStatus();
-        networkSelectionStatus.setNotRecommended(true);
-
-        NetworkSelectionStatus copy = new NetworkSelectionStatus();
-        copy.copy(networkSelectionStatus);
-
-        assertEquals(networkSelectionStatus.isNotRecommended(), copy.isNotRecommended());
-    }
-
-    @Test
-    public void testNetworkSelectionStatusParcel() {
-        NetworkSelectionStatus networkSelectionStatus = new NetworkSelectionStatus();
-        networkSelectionStatus.setNotRecommended(true);
-
-        Parcel parcelW = Parcel.obtain();
-        networkSelectionStatus.writeToParcel(parcelW);
-        byte[] bytes = parcelW.marshall();
-        parcelW.recycle();
-
-        Parcel parcelR = Parcel.obtain();
-        parcelR.unmarshall(bytes, 0, bytes.length);
-        parcelR.setDataPosition(0);
-
-        NetworkSelectionStatus copy = new NetworkSelectionStatus();
-        copy.readFromParcel(parcelR);
-
-        assertEquals(networkSelectionStatus.isNotRecommended(), copy.isNotRecommended());
     }
 
     @Test
@@ -193,19 +163,6 @@ public class WifiConfigurationTest {
     }
 
     @Test
-    public void testGetOrCreateRandomizedMacAddress_SavesAndReturnsSameAddress() {
-        WifiConfiguration config = new WifiConfiguration();
-        MacAddress defaultMac = MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
-        assertEquals(defaultMac, config.getRandomizedMacAddress());
-
-        MacAddress firstMacAddress = config.getOrCreateRandomizedMacAddress();
-        MacAddress secondMacAddress = config.getOrCreateRandomizedMacAddress();
-
-        assertNotEquals(defaultMac, firstMacAddress);
-        assertEquals(firstMacAddress, secondMacAddress);
-    }
-
-    @Test
     public void testSetRandomizedMacAddress_ChangesSavedAddress() {
         WifiConfiguration config = new WifiConfiguration();
         MacAddress defaultMac = MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
@@ -216,36 +173,6 @@ public class WifiConfigurationTest {
         MacAddress macAfterChange = config.getRandomizedMacAddress();
 
         assertEquals(macToChangeInto, macAfterChange);
-    }
-
-    @Test
-    public void testGetOrCreateRandomizedMacAddress_ReRandomizesInvalidAddress() {
-        WifiConfiguration config =  new WifiConfiguration();
-
-        MacAddress defaultMac = MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
-        MacAddress macAddressZeroes = MacAddress.ALL_ZEROS_ADDRESS;
-        MacAddress macAddressMulticast = MacAddress.fromString("03:ff:ff:ff:ff:ff");
-        MacAddress macAddressGlobal = MacAddress.fromString("fc:ff:ff:ff:ff:ff");
-
-        config.setRandomizedMacAddress(null);
-        MacAddress macAfterChange = config.getOrCreateRandomizedMacAddress();
-        assertNotEquals(macAfterChange, null);
-
-        config.setRandomizedMacAddress(defaultMac);
-        macAfterChange = config.getOrCreateRandomizedMacAddress();
-        assertNotEquals(macAfterChange, defaultMac);
-
-        config.setRandomizedMacAddress(macAddressZeroes);
-        macAfterChange = config.getOrCreateRandomizedMacAddress();
-        assertNotEquals(macAfterChange, macAddressZeroes);
-
-        config.setRandomizedMacAddress(macAddressMulticast);
-        macAfterChange = config.getOrCreateRandomizedMacAddress();
-        assertNotEquals(macAfterChange, macAddressMulticast);
-
-        config.setRandomizedMacAddress(macAddressGlobal);
-        macAfterChange = config.getOrCreateRandomizedMacAddress();
-        assertNotEquals(macAfterChange, macAddressGlobal);
     }
 
     @Test
@@ -390,5 +317,19 @@ public class WifiConfigurationTest {
         config.allowedKeyManagement.clear();
         config.allowedKeyManagement.set(KeyMgmt.NONE);
         assertEquals(mSsid + KeyMgmt.strings[KeyMgmt.NONE], config.getSsidAndSecurityTypeString());
+    }
+
+    /**
+     * Ensure that the {@link NetworkSelectionStatus.DisableReasonInfo}s are populated in
+     * {@link NetworkSelectionStatus#DISABLE_REASON_INFOS} for reason codes from 0 to
+     * {@link NetworkSelectionStatus#NETWORK_SELECTION_DISABLED_MAX} - 1.
+     */
+    @Test
+    public void testNetworkSelectionDisableReasonInfosPopulated() {
+        assertEquals(NetworkSelectionStatus.NETWORK_SELECTION_DISABLED_MAX,
+                NetworkSelectionStatus.DISABLE_REASON_INFOS.size());
+        for (int i = 0; i < NetworkSelectionStatus.NETWORK_SELECTION_DISABLED_MAX; i++) {
+            assertNotNull(NetworkSelectionStatus.DISABLE_REASON_INFOS.get(i));
+        }
     }
 }

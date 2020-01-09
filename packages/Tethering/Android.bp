@@ -1,0 +1,120 @@
+//
+// Copyright (C) 2019 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+java_defaults {
+    name: "TetheringAndroidLibraryDefaults",
+    platform_apis: true,
+    srcs: [
+        "src/**/*.java",
+        ":framework-tethering-shared-srcs",
+        ":net-module-utils-srcs",
+        ":services-tethering-shared-srcs",
+    ],
+    static_libs: [
+        "androidx.annotation_annotation",
+        "netd_aidl_interface-unstable-java",
+        "netlink-client",
+        "networkstack-aidl-interfaces-unstable-java",
+        "android.hardware.tetheroffload.control-V1.0-java",
+        "tethering-client",
+    ],
+    libs: ["unsupportedappusage"],
+    manifest: "AndroidManifestBase.xml",
+}
+
+// Build tethering static library, used to compile both variants of the tethering.
+android_library {
+    name: "TetheringApiCurrentLib",
+    defaults: ["TetheringAndroidLibraryDefaults"],
+}
+
+// Due to b/143733063, APK can't access a jni lib that is in APEX (but not in the APK).
+cc_library {
+    name: "libtetheroffloadjni",
+    srcs: [
+        "jni/com_android_server_connectivity_tethering_OffloadHardwareInterface.cpp",
+    ],
+    shared_libs: [
+        "libcgrouprc",
+        "libnativehelper_compat_libc++",
+        "libvndksupport",
+    ],
+    static_libs: [
+        "android.hardware.tetheroffload.config@1.0",
+        "liblog",
+        "libbase",
+        "libbinderthreadstate",
+        "libcutils",
+        "libhidlbase",
+        "libjsoncpp",
+        "libprocessgroup",
+        "libutils",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-Wthread-safety",
+    ],
+
+    ldflags: ["-Wl,--exclude-libs=ALL,-error-limit=0"],
+}
+
+// Common defaults for compiling the actual APK.
+java_defaults {
+    name: "TetheringAppDefaults",
+    platform_apis: true,
+    privileged: true,
+    // Build system doesn't track transitive dependeicies for jni_libs, list all the dependencies
+    // explicitly.
+    jni_libs: [
+        "libcgrouprc",
+        "libnativehelper_compat_libc++",
+        "libvndksupport",
+        "libtetheroffloadjni",
+    ],
+    resource_dirs: [
+        "res",
+    ],
+    optimize: {
+        proguard_flags_files: ["proguard.flags"],
+    },
+}
+
+// Non-updatable tethering running in the system server process for devices not using the module
+android_app {
+    name: "InProcessTethering",
+    defaults: ["TetheringAppDefaults"],
+    static_libs: ["TetheringApiCurrentLib"],
+    certificate: "platform",
+    manifest: "AndroidManifest_InProcess.xml",
+    // InProcessTethering is a replacement for Tethering
+    overrides: ["Tethering"],
+    // TODO: use PlatformNetworkPermissionConfig.
+}
+
+// Updatable tethering packaged as an application
+android_app {
+    name: "Tethering",
+    defaults: ["TetheringAppDefaults"],
+    static_libs: ["TetheringApiCurrentLib"],
+    certificate: "networkstack",
+    manifest: "AndroidManifest.xml",
+    use_embedded_native_libs: true,
+    // The permission configuration *must* be included to ensure security of the device
+    required: ["NetworkPermissionConfig"],
+}

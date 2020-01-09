@@ -17,19 +17,20 @@
 #ifndef METRIC_PRODUCER_H
 #define METRIC_PRODUCER_H
 
-#include <shared_mutex>
-
 #include <frameworks/base/cmds/statsd/src/active_config_list.pb.h>
+#include <log/logprint.h>
+#include <utils/RefBase.h>
+
+#include <unordered_map>
+
 #include "HashableDimensionKey.h"
 #include "anomaly/AnomalyTracker.h"
 #include "condition/ConditionWizard.h"
 #include "config/ConfigKey.h"
 #include "matchers/matcher_util.h"
 #include "packages/PackageInfoListener.h"
-
-#include <log/logprint.h>
-#include <utils/RefBase.h>
-#include <unordered_map>
+#include "state/StateListener.h"
+#include "state/StateManager.h"
 
 namespace android {
 namespace os {
@@ -69,28 +70,32 @@ enum DumpLatency {
     NO_TIME_CONSTRAINTS = 2
 };
 
+struct Activation {
+    Activation(const ActivationType& activationType, const int64_t ttlNs)
+        : ttl_ns(ttlNs),
+          start_ns(0),
+          state(ActivationState::kNotActive),
+          activationType(activationType) {}
+
+    const int64_t ttl_ns;
+    int64_t start_ns;
+    ActivationState state;
+    const ActivationType activationType;
+};
+
 // A MetricProducer is responsible for compute one single metrics, creating stats log report, and
 // writing the report to dropbox. MetricProducers should respond to package changes as required in
 // PackageInfoListener, but if none of the metrics are slicing by package name, then the update can
 // be a no-op.
-class MetricProducer : public virtual PackageInfoListener {
+class MetricProducer : public virtual android::RefBase, public virtual StateListener {
 public:
     MetricProducer(const int64_t& metricId, const ConfigKey& key, const int64_t timeBaseNs,
-                   const int conditionIndex, const sp<ConditionWizard>& wizard)
-        : mMetricId(metricId),
-          mConfigKey(key),
-          mTimeBaseNs(timeBaseNs),
-          mCurrentBucketStartTimeNs(timeBaseNs),
-          mCurrentBucketNum(0),
-          mCondition(initialCondition(conditionIndex)),
-          mConditionSliced(false),
-          mWizard(wizard),
-          mConditionTrackerIndex(conditionIndex),
-          mContainANYPositionInDimensionsInWhat(false),
-          mSliceByPositionALL(false),
-          mHasLinksToAllConditionDimensionsInTracker(false),
-          mIsActive(true) {
-    }
+                   const int conditionIndex, const sp<ConditionWizard>& wizard,
+                   const std::unordered_map<int, std::shared_ptr<Activation>>& eventActivationMap,
+                   const std::unordered_map<int, std::vector<std::shared_ptr<Activation>>>&
+                           eventDeactivationMap,
+                   const vector<int>& slicedStateAtoms,
+                   const unordered_map<int, unordered_map<int, int64_t>>& stateGroupMap);
 
     virtual ~MetricProducer(){};
 
@@ -104,8 +109,8 @@ public:
      * the flush again when the end timestamp is forced to be now, and then after flushing, update
      * the start timestamp to be now.
      */
-    void notifyAppUpgrade(const int64_t& eventTimeNs, const string& apk, const int uid,
-                          const int64_t version) override {
+    virtual void notifyAppUpgrade(const int64_t& eventTimeNs, const string& apk, const int uid,
+                          const int64_t version) {
         std::lock_guard<std::mutex> lock(mMutex);
 
         if (eventTimeNs > getCurrentBucketEndTimeNs()) {
@@ -118,14 +123,9 @@ public:
         // is a partial bucket and can merge it with the previous bucket.
     };
 
-    void notifyAppRemoved(const int64_t& eventTimeNs, const string& apk, const int uid) override{
+    void notifyAppRemoved(const int64_t& eventTimeNs, const string& apk, const int uid) {
         // Force buckets to split on removal also.
         notifyAppUpgrade(eventTimeNs, apk, uid, 0);
-    };
-
-    void onUidMapReceived(const int64_t& eventTimeNs) override{
-            // Purposefully don't flush partial buckets on a new snapshot.
-            // This occurs if a new user is added/removed or statsd crashes.
     };
 
     // Consume the parsed stats log entry that already matched the "what" of the metric.
@@ -149,6 +149,9 @@ public:
         return mConditionSliced;
     };
 
+    void onStateChanged(const int64_t eventTimeNs, const int32_t atomId,
+                        const HashableDimensionKey& primaryKey, int oldState, int newState){};
+
     // Output the metrics data to [protoOutput]. All metrics reports end with the same timestamp.
     // This method clears all the past buckets.
     void onDumpReport(const int64_t dumpTimeNs,
@@ -167,11 +170,6 @@ public:
         return clearPastBucketsLocked(dumpTimeNs);
     }
 
-    void dumpStates(FILE* out, bool verbose) const {
-        std::lock_guard<std::mutex> lock(mMutex);
-        dumpStatesLocked(out, verbose);
-    }
-
     // Returns the memory in bytes currently used to store this metric's data. Does not change
     // state.
     size_t byteSize() const {
@@ -179,34 +177,9 @@ public:
         return byteSizeLocked();
     }
 
-    /* If alert is valid, adds an AnomalyTracker and returns it. If invalid, returns nullptr. */
-    virtual sp<AnomalyTracker> addAnomalyTracker(const Alert &alert,
-                                                 const sp<AlarmMonitor>& anomalyAlarmMonitor) {
+    void dumpStates(FILE* out, bool verbose) const {
         std::lock_guard<std::mutex> lock(mMutex);
-        sp<AnomalyTracker> anomalyTracker = new AnomalyTracker(alert, mConfigKey);
-        if (anomalyTracker != nullptr) {
-            mAnomalyTrackers.push_back(anomalyTracker);
-        }
-        return anomalyTracker;
-    }
-
-    int64_t getBuckeSizeInNs() const {
-        std::lock_guard<std::mutex> lock(mMutex);
-        return mBucketSizeNs;
-    }
-
-    // Only needed for unit-testing to override guardrail.
-    void setBucketSize(int64_t bucketSize) {
-        mBucketSizeNs = bucketSize;
-    }
-
-    inline const int64_t& getMetricId() const {
-        return mMetricId;
-    }
-
-    void loadActiveMetric(const ActiveMetric& activeMetric, int64_t currentTimeNs) {
-        std::lock_guard<std::mutex> lock(mMutex);
-        loadActiveMetricLocked(activeMetric, currentTimeNs);
+        dumpStatesLocked(out, verbose);
     }
 
     // Let MetricProducer drop in-memory data to save memory.
@@ -218,9 +191,9 @@ public:
         dropDataLocked(dropTimeNs);
     }
 
-    // For test only.
-    inline int64_t getCurrentBucketNum() const {
-        return mCurrentBucketNum;
+    void loadActiveMetric(const ActiveMetric& activeMetric, int64_t currentTimeNs) {
+        std::lock_guard<std::mutex> lock(mMutex);
+        loadActiveMetricLocked(activeMetric, currentTimeNs);
     }
 
     void activate(int activationTrackerIndex, int64_t elapsedTimestampNs) {
@@ -238,57 +211,48 @@ public:
         return isActiveLocked();
     }
 
-    void addActivation(int activationTrackerIndex, const ActivationType& activationType,
-            int64_t ttl_seconds, int deactivationTrackerIndex = -1);
-
-    void prepareFirstBucket() {
-        std::lock_guard<std::mutex> lock(mMutex);
-        prepareFirstBucketLocked();
-    }
-
     void flushIfExpire(int64_t elapsedTimestampNs);
 
     void writeActiveMetricToProtoOutputStream(
             int64_t currentTimeNs, const DumpReportReason reason, ProtoOutputStream* proto);
-protected:
-    virtual void onConditionChangedLocked(const bool condition, const int64_t eventTime) = 0;
-    virtual void onSlicedConditionMayChangeLocked(bool overallCondition,
-                                                  const int64_t eventTime) = 0;
-    virtual void onDumpReportLocked(const int64_t dumpTimeNs,
-                                    const bool include_current_partial_bucket,
-                                    const bool erase_data,
-                                    const DumpLatency dumpLatency,
-                                    std::set<string> *str_set,
-                                    android::util::ProtoOutputStream* protoOutput) = 0;
-    virtual void clearPastBucketsLocked(const int64_t dumpTimeNs) = 0;
-    virtual size_t byteSizeLocked() const = 0;
-    virtual void dumpStatesLocked(FILE* out, bool verbose) const = 0;
 
-    bool evaluateActiveStateLocked(int64_t elapsedTimestampNs);
-
-    void activateLocked(int activationTrackerIndex, int64_t elapsedTimestampNs);
-    void cancelEventActivationLocked(int deactivationTrackerIndex);
-
-    inline bool isActiveLocked() const {
-        return mIsActive;
+    // Start: getters/setters
+    inline const int64_t& getMetricId() const {
+        return mMetricId;
     }
 
-    void loadActiveMetricLocked(const ActiveMetric& activeMetric, int64_t currentTimeNs);
+    // For test only.
+    inline int64_t getCurrentBucketNum() const {
+        return mCurrentBucketNum;
+    }
 
-    virtual void prepareFirstBucketLocked() {};
+    int64_t getBucketSizeInNs() const {
+        std::lock_guard<std::mutex> lock(mMutex);
+        return mBucketSizeNs;
+    }
+
+    inline const std::vector<int> getSlicedStateAtoms() {
+        std::lock_guard<std::mutex> lock(mMutex);
+        return mSlicedStateAtoms;
+    }
+
+    /* If alert is valid, adds an AnomalyTracker and returns it. If invalid, returns nullptr. */
+    virtual sp<AnomalyTracker> addAnomalyTracker(const Alert &alert,
+                                                 const sp<AlarmMonitor>& anomalyAlarmMonitor) {
+        std::lock_guard<std::mutex> lock(mMutex);
+        sp<AnomalyTracker> anomalyTracker = new AnomalyTracker(alert, mConfigKey);
+        if (anomalyTracker != nullptr) {
+            mAnomalyTrackers.push_back(anomalyTracker);
+        }
+        return anomalyTracker;
+    }
+    // End: getters/setters
+protected:
     /**
      * Flushes the current bucket if the eventTime is after the current bucket's end time. This will
        also flush the current partial bucket in memory.
      */
     virtual void flushIfNeededLocked(const int64_t& eventTime){};
-
-    /**
-     * Flushes all the data including the current partial bucket.
-     */
-    virtual void flushLocked(const int64_t& eventTimeNs) {
-        flushIfNeededLocked(eventTimeNs);
-        flushCurrentBucketLocked(eventTimeNs, eventTimeNs);
-    };
 
     /**
      * For metrics that aggregate (ie, every metric producer except for EventMetricProducer),
@@ -303,62 +267,13 @@ protected:
     virtual void flushCurrentBucketLocked(const int64_t& eventTimeNs,
                                           const int64_t& nextBucketStartTimeNs) {};
 
-    virtual void onActiveStateChangedLocked(const int64_t& eventTimeNs) {
-        if (!mIsActive) {
-            flushLocked(eventTimeNs);
-        }
-    }
-
-    // Convenience to compute the current bucket's end time, which is always aligned with the
-    // start time of the metric.
-    int64_t getCurrentBucketEndTimeNs() const {
-        return mTimeBaseNs + (mCurrentBucketNum + 1) * mBucketSizeNs;
-    }
-
-    int64_t getBucketNumFromEndTimeNs(const int64_t endNs) {
-        return (endNs - mTimeBaseNs) / mBucketSizeNs - 1;
-    }
-
-    virtual void dropDataLocked(const int64_t dropTimeNs) = 0;
-
-    const int64_t mMetricId;
-
-    const ConfigKey mConfigKey;
-
-    // The time when this metric producer was first created. The end time for the current bucket
-    // can be computed from this based on mCurrentBucketNum.
-    int64_t mTimeBaseNs;
-
-    // Start time may not be aligned with the start of statsd if there is an app upgrade in the
-    // middle of a bucket.
-    int64_t mCurrentBucketStartTimeNs;
-
-    // Used by anomaly detector to track which bucket we are in. This is not sent with the produced
-    // report.
-    int64_t mCurrentBucketNum;
-
-    int64_t mBucketSizeNs;
-
-    ConditionState mCondition;
-
-    bool mConditionSliced;
-
-    sp<ConditionWizard> mWizard;
-
-    int mConditionTrackerIndex;
-
-    vector<Matcher> mDimensionsInWhat;       // The dimensions_in_what defined in statsd_config
-
-    bool mContainANYPositionInDimensionsInWhat;
-    bool mSliceByPositionALL;
-
-    // True iff the metric to condition links cover all dimension fields in the condition tracker.
-    // This field is always false for combinational condition trackers.
-    bool mHasLinksToAllConditionDimensionsInTracker;
-
-    std::vector<Metric2Condition> mMetric2ConditionLinks;
-
-    std::vector<sp<AnomalyTracker>> mAnomalyTrackers;
+    /**
+     * Flushes all the data including the current partial bucket.
+     */
+    virtual void flushLocked(const int64_t& eventTimeNs) {
+        flushIfNeededLocked(eventTimeNs);
+        flushCurrentBucketLocked(eventTimeNs, eventTimeNs);
+    };
 
     /*
      * Individual metrics can implement their own business logic here. All pre-processing is done.
@@ -382,21 +297,93 @@ protected:
 
     // Consume the parsed stats log entry that already matched the "what" of the metric.
     virtual void onMatchedLogEventLocked(const size_t matcherIndex, const LogEvent& event);
+    virtual void onConditionChangedLocked(const bool condition, const int64_t eventTime) = 0;
+    virtual void onSlicedConditionMayChangeLocked(bool overallCondition,
+                                                  const int64_t eventTime) = 0;
+    virtual void onDumpReportLocked(const int64_t dumpTimeNs,
+                                    const bool include_current_partial_bucket,
+                                    const bool erase_data,
+                                    const DumpLatency dumpLatency,
+                                    std::set<string> *str_set,
+                                    android::util::ProtoOutputStream* protoOutput) = 0;
+    virtual void clearPastBucketsLocked(const int64_t dumpTimeNs) = 0;
+    virtual size_t byteSizeLocked() const = 0;
+    virtual void dumpStatesLocked(FILE* out, bool verbose) const = 0;
+    virtual void dropDataLocked(const int64_t dropTimeNs) = 0;
+    void loadActiveMetricLocked(const ActiveMetric& activeMetric, int64_t currentTimeNs);
+    void activateLocked(int activationTrackerIndex, int64_t elapsedTimestampNs);
+    void cancelEventActivationLocked(int deactivationTrackerIndex);
+
+    bool evaluateActiveStateLocked(int64_t elapsedTimestampNs);
+
+    virtual void onActiveStateChangedLocked(const int64_t& eventTimeNs) {
+        if (!mIsActive) {
+            flushLocked(eventTimeNs);
+        }
+    }
+
+    inline bool isActiveLocked() const {
+        return mIsActive;
+    }
+
+    // Convenience to compute the current bucket's end time, which is always aligned with the
+    // start time of the metric.
+    int64_t getCurrentBucketEndTimeNs() const {
+        return mTimeBaseNs + (mCurrentBucketNum + 1) * mBucketSizeNs;
+    }
+
+    int64_t getBucketNumFromEndTimeNs(const int64_t endNs) {
+        return (endNs - mTimeBaseNs) / mBucketSizeNs - 1;
+    }
+
+    // Query StateManager for original state value.
+    // If no state map exists for this atom, return the original value.
+    // Otherwise, return the group_id mapped to the atom and original value.
+    void getMappedStateValue(const int32_t atomId, const HashableDimensionKey& queryKey,
+                             FieldValue* value);
+
+    const int64_t mMetricId;
+
+    const ConfigKey mConfigKey;
+
+    // The time when this metric producer was first created. The end time for the current bucket
+    // can be computed from this based on mCurrentBucketNum.
+    int64_t mTimeBaseNs;
+
+    // Start time may not be aligned with the start of statsd if there is an app upgrade in the
+    // middle of a bucket.
+    int64_t mCurrentBucketStartTimeNs;
+
+    // Used by anomaly detector to track which bucket we are in. This is not sent with the produced
+    // report.
+    int64_t mCurrentBucketNum;
+
+    int64_t mBucketSizeNs;
+
+    ConditionState mCondition;
+
+    int mConditionTrackerIndex;
+
+    bool mConditionSliced;
+
+    sp<ConditionWizard> mWizard;
+
+    bool mContainANYPositionInDimensionsInWhat;
+
+    bool mSliceByPositionALL;
+
+    vector<Matcher> mDimensionsInWhat;  // The dimensions_in_what defined in statsd_config
+
+    // True iff the metric to condition links cover all dimension fields in the condition tracker.
+    // This field is always false for combinational condition trackers.
+    bool mHasLinksToAllConditionDimensionsInTracker;
+
+    std::vector<Metric2Condition> mMetric2ConditionLinks;
+
+    std::vector<sp<AnomalyTracker>> mAnomalyTrackers;
 
     mutable std::mutex mMutex;
 
-    struct Activation {
-        Activation(const ActivationType& activationType, const int64_t ttlNs)
-            : ttl_ns(ttlNs),
-              start_ns(0),
-              state(ActivationState::kNotActive),
-              activationType(activationType) {}
-
-        const int64_t ttl_ns;
-        int64_t start_ns;
-        ActivationState state;
-        const ActivationType activationType;
-    };
     // When the metric producer has multiple activations, these activations are ORed to determine
     // whether the metric producer is ready to generate metrics.
     std::unordered_map<int, std::shared_ptr<Activation>> mEventActivationMap;
@@ -405,6 +392,21 @@ protected:
     std::unordered_map<int, std::vector<std::shared_ptr<Activation>>> mEventDeactivationMap;
 
     bool mIsActive;
+
+    // The slice_by_state atom ids defined in statsd_config.
+    std::vector<int32_t> mSlicedStateAtoms;
+
+    // Maps atom ids and state values to group_ids (<atom_id, <value, group_id>>).
+    std::unordered_map<int32_t, std::unordered_map<int, int64_t>> mStateGroupMap;
+
+    // MetricStateLinks defined in statsd_config that link fields in the state
+    // atom to fields in the "what" atom.
+    std::vector<Metric2State> mMetric2StateLinks;
+
+    FRIEND_TEST(CountMetricE2eTest, TestSlicedState);
+    FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithMap);
+    FRIEND_TEST(CountMetricE2eTest, TestMultipleSlicedStates);
+    FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithPrimaryFields);
 
     FRIEND_TEST(DurationMetricE2eTest, TestOneBucket);
     FRIEND_TEST(DurationMetricE2eTest, TestTwoBuckets);

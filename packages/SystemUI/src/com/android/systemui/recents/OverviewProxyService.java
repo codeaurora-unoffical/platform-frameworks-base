@@ -56,8 +56,8 @@ import android.view.accessibility.AccessibilityManager;
 
 import com.android.internal.policy.ScreenDecorationsUtils;
 import com.android.systemui.Dumpable;
-import com.android.systemui.SysUiServiceProvider;
 import com.android.systemui.model.SysUiState;
+import com.android.systemui.pip.PipUI;
 import com.android.systemui.recents.OverviewProxyService.OverviewProxyListener;
 import com.android.systemui.shared.recents.IOverviewProxy;
 import com.android.systemui.shared.recents.ISystemUiProxy;
@@ -79,9 +79,12 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+
+import dagger.Lazy;
 
 /**
  * Class to send information from overview to launcher with a binder.
@@ -100,6 +103,9 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
     private static final long MAX_BACKOFF_MILLIS = 10 * 60 * 1000;
 
     private final Context mContext;
+    private final PipUI mPipUI;
+    private final Optional<Lazy<StatusBar>> mStatusBarOptionalLazy;
+    private final Optional<Divider> mDividerOptional;
     private SysUiState mSysUiState;
     private final Handler mHandler;
     private final NavigationBarController mNavBarController;
@@ -135,11 +141,9 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             long token = Binder.clearCallingIdentity();
             try {
                 mHandler.post(() -> {
-                    StatusBar statusBar = SysUiServiceProvider.getComponent(mContext,
-                            StatusBar.class);
-                    if (statusBar != null) {
-                        statusBar.showScreenPinningRequest(taskId, false /* allowCancel */);
-                    }
+                    mStatusBarOptionalLazy.ifPresent(
+                            statusBarLazy -> statusBarLazy.get().showScreenPinningRequest(taskId,
+                                    false /* allowCancel */));
                 });
             } finally {
                 Binder.restoreCallingIdentity(token);
@@ -174,25 +178,25 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             long token = Binder.clearCallingIdentity();
             try {
                 // TODO move this logic to message queue
-                mHandler.post(()->{
-                    StatusBar bar = SysUiServiceProvider.getComponent(mContext, StatusBar.class);
-                    if (bar != null) {
-
+                mStatusBarOptionalLazy.ifPresent(statusBarLazy -> {
+                    mHandler.post(()-> {
+                        StatusBar statusBar = statusBarLazy.get();
                         int action = event.getActionMasked();
                         if (action == ACTION_DOWN) {
                             mInputFocusTransferStarted = true;
                             mInputFocusTransferStartY = event.getY();
                             mInputFocusTransferStartMillis = event.getEventTime();
-                            bar.onInputFocusTransfer(mInputFocusTransferStarted, 0 /* velocity */);
+                            statusBar.onInputFocusTransfer(
+                                    mInputFocusTransferStarted, 0 /* velocity */);
                         }
                         if (action == ACTION_UP || action == ACTION_CANCEL) {
                             mInputFocusTransferStarted = false;
-                            bar.onInputFocusTransfer(mInputFocusTransferStarted,
+                            statusBar.onInputFocusTransfer(mInputFocusTransferStarted,
                                     (event.getY() - mInputFocusTransferStartY)
                                     / (event.getEventTime() - mInputFocusTransferStartMillis));
                         }
                         event.recycle();
-                    }
+                    });
                 });
             } finally {
                 Binder.restoreCallingIdentity(token);
@@ -206,10 +210,7 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             }
             long token = Binder.clearCallingIdentity();
             try {
-                Divider divider = SysUiServiceProvider.getComponent(mContext, Divider.class);
-                if (divider != null) {
-                    divider.onDockedFirstAnimationFrame();
-                }
+                mDividerOptional.ifPresent(Divider::onDockedFirstAnimationFrame);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -239,11 +240,9 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             }
             long token = Binder.clearCallingIdentity();
             try {
-                Divider divider = SysUiServiceProvider.getComponent(mContext, Divider.class);
-                if (divider != null) {
-                    return divider.getView().getNonMinimizedSplitScreenSecondaryBounds();
-                }
-                return null;
+                return mDividerOptional.map(
+                        divider -> divider.getView().getNonMinimizedSplitScreenSecondaryBounds())
+                        .orElse(null);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -348,6 +347,19 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
                 Intent intent = new Intent(AccessibilityManager.ACTION_CHOOSE_ACCESSIBILITY_BUTTON);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                 mContext.startActivityAsUser(intent, UserHandle.CURRENT);
+            } finally {
+                Binder.restoreCallingIdentity(token);
+            }
+        }
+
+        @Override
+        public void setShelfHeight(boolean visible, int shelfHeight) {
+            if (!verifyCaller("setShelfHeight")) {
+                return;
+            }
+            long token = Binder.clearCallingIdentity();
+            try {
+                mPipUI.setShelfHeight(visible, shelfHeight);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -460,17 +472,21 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
     private final IBinder.DeathRecipient mOverviewServiceDeathRcpt
             = this::cleanupAfterDeath;
 
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     @Inject
     public OverviewProxyService(Context context, DeviceProvisionedController provisionController,
             NavigationBarController navBarController, NavigationModeController navModeController,
-            StatusBarWindowController statusBarWinController,
-            SysUiState sysUiState) {
+            StatusBarWindowController statusBarWinController, SysUiState sysUiState, PipUI pipUI,
+            Optional<Divider> dividerOptional, Optional<Lazy<StatusBar>> statusBarOptionalLazy) {
         mContext = context;
+        mPipUI = pipUI;
+        mStatusBarOptionalLazy = statusBarOptionalLazy;
         mHandler = new Handler();
         mNavBarController = navBarController;
         mStatusBarWinController = statusBarWinController;
         mDeviceProvisionedController = provisionController;
         mConnectionBackoffAttempts = 0;
+        mDividerOptional = dividerOptional;
         mRecentsComponentName = ComponentName.unflattenFromString(context.getString(
                 com.android.internal.R.string.config_recentsComponentName));
         mQuickStepIntent = new Intent(ACTION_QUICKSTEP)
@@ -579,11 +595,10 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
     public void cleanupAfterDeath() {
         if (mInputFocusTransferStarted) {
             mHandler.post(()-> {
-                StatusBar bar = SysUiServiceProvider.getComponent(mContext, StatusBar.class);
-                if (bar != null) {
+                mStatusBarOptionalLazy.ifPresent(statusBarLazy -> {
                     mInputFocusTransferStarted = false;
-                    bar.onInputFocusTransfer(false, 0 /* velocity */);
-                }
+                    statusBarLazy.get().onInputFocusTransfer(false, 0 /* velocity */);
+                });
             });
         }
         startConnectionToCurrentUser();

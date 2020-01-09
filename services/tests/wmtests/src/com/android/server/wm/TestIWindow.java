@@ -37,8 +37,8 @@ public class TestIWindow extends IWindow.Stub {
     }
 
     @Override
-    public void resized(Rect frame, Rect overscanInsets, Rect contentInsets, Rect visibleInsets,
-            Rect stableInsets, Rect outsets, boolean reportDraw, MergedConfiguration mergedConfig,
+    public void resized(Rect frame, Rect contentInsets, Rect visibleInsets,
+            Rect stableInsets, boolean reportDraw, MergedConfiguration mergedConfig,
             Rect backDropFrame, boolean forceLayout, boolean alwaysConsumeSystemBars, int displayId,
             DisplayCutout.ParcelableWrapper displayCutout) throws RemoteException {
     }
@@ -110,5 +110,13 @@ public class TestIWindow extends IWindow.Stub {
 
     @Override
     public void dispatchPointerCaptureChanged(boolean hasCapture) {
+    }
+
+    @Override
+    public void showInsets(int types, boolean fromIme) throws RemoteException {
+    }
+
+    @Override
+    public void hideInsets(int types, boolean fromIme) throws RemoteException {
     }
 }

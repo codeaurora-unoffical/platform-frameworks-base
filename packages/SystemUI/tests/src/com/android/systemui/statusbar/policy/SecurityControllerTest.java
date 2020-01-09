@@ -45,6 +45,7 @@ import android.test.suitebuilder.annotation.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
 import com.android.systemui.SysuiTestCase;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.statusbar.policy.SecurityController.SecurityControllerCallback;
 
 import org.junit.After;
@@ -93,13 +94,13 @@ public class SecurityControllerTest extends SysuiTestCase implements SecurityCon
         when(mKeyChainService.queryLocalInterface("android.security.IKeyChainService"))
                 .thenReturn(mKeyChainService);
 
-        // Wait for callbacks from 1) the CACertLoader and 2) the onUserSwitched() function in the
+        // Wait for callbacks from the onUserSwitched() function in the
         // constructor of mSecurityController
-        mStateChangedLatch = new CountDownLatch(2);
+        mStateChangedLatch = new CountDownLatch(1);
         // TODO: Migrate this test to TestableLooper and use a handler attached
         // to that.
         mSecurityController = new SecurityControllerImpl(mContext,
-                new Handler(Looper.getMainLooper()), this);
+                new Handler(Looper.getMainLooper()), mock(BroadcastDispatcher.class), this);
     }
 
     @After
@@ -169,7 +170,6 @@ public class SecurityControllerTest extends SysuiTestCase implements SecurityCon
         assertTrue(mSecurityController.hasCACertInCurrentUser());
 
         // Exception
-
         mStateChangedLatch = new CountDownLatch(1);
 
         when(mKeyChainService.getUserCaAliases())
@@ -181,9 +181,12 @@ public class SecurityControllerTest extends SysuiTestCase implements SecurityCon
 
         assertFalse(mStateChangedLatch.await(1, TimeUnit.SECONDS));
         assertTrue(mSecurityController.hasCACertInCurrentUser());
-        // The retry takes 30s
-        //assertTrue(mStateChangedLatch.await(31, TimeUnit.SECONDS));
-        //assertFalse(mSecurityController.hasCACertInCurrentUser());
+
+        mSecurityController.new CACertLoader()
+                           .execute(0);
+
+        assertTrue(mStateChangedLatch.await(1, TimeUnit.SECONDS));
+        assertFalse(mSecurityController.hasCACertInCurrentUser());
     }
 
     @Test

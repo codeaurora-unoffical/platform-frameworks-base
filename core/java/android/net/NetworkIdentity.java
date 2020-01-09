@@ -25,7 +25,6 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.service.NetworkIdentityProto;
-import android.telephony.TelephonyManager;
 import android.util.Slog;
 import android.util.proto.ProtoOutputStream;
 
@@ -98,8 +97,6 @@ public class NetworkIdentity implements Comparable<NetworkIdentity> {
         builder.append(", subType=");
         if (COMBINE_SUBTYPE_ENABLED) {
             builder.append("COMBINED");
-        } else if (ConnectivityManager.isNetworkTypeMobile(mType)) {
-            builder.append(TelephonyManager.getNetworkTypeName(mSubType));
         } else {
             builder.append(mSubType);
         }
@@ -117,7 +114,7 @@ public class NetworkIdentity implements Comparable<NetworkIdentity> {
         return builder.append("}").toString();
     }
 
-    public void writeToProto(ProtoOutputStream proto, long tag) {
+    public void dumpDebug(ProtoOutputStream proto, long tag) {
         final long start = proto.start(tag);
 
         proto.write(NetworkIdentityProto.TYPE, mType);

@@ -19,13 +19,16 @@ package com.android.systemui.pip;
 import android.content.Context;
 import android.content.res.Configuration;
 
+import com.android.systemui.broadcast.BroadcastDispatcher;
+
 import java.io.PrintWriter;
 
 public interface BasePipManager {
-    void initialize(Context context);
+    void initialize(Context context, BroadcastDispatcher broadcastDispatcher);
     void showPictureInPictureMenu();
     default void expandPip() {}
     default void hidePipMenu(Runnable onStartCallback, Runnable onEndCallback) {}
     void onConfigurationChanged(Configuration newConfig);
+    default void setShelfHeight(boolean visible, int height) {}
     default void dump(PrintWriter pw) {}
 }

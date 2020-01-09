@@ -46,6 +46,8 @@ import android.os.RemoteException;
 import android.transition.Scene;
 import android.transition.Transition;
 import android.transition.TransitionManager;
+import android.view.WindowInsets.Side.InsetsSide;
+import android.view.WindowInsets.Type.InsetsType;
 import android.view.accessibility.AccessibilityEvent;
 
 import java.util.Collections;
@@ -127,7 +129,10 @@ public abstract class Window {
     public static final int FEATURE_ACTION_MODE_OVERLAY = 10;
     /**
      * Flag for requesting a decoration-free window that is dismissed by swiping from the left.
+     *
+     * @deprecated Swipe-to-dismiss isn't functional anymore.
      */
+    @Deprecated
     public static final int FEATURE_SWIPE_TO_DISMISS = 11;
     /**
      * Flag for requesting that window content changes should be animated using a
@@ -636,6 +641,16 @@ public abstract class Window {
 
         /** Returns whether the window belongs to the task root. */
         boolean isTaskRoot();
+
+        /**
+         * Update the status bar color to a forced one.
+         */
+        void updateStatusBarColor(int color);
+
+        /**
+         * Update the navigation bar color to a forced one.
+         */
+        void updateNavigationBarColor(int color);
     }
 
     /**
@@ -1157,16 +1172,6 @@ public abstract class Window {
     /**
      * {@hide}
      */
-    @UnsupportedAppUsage
-    protected void setNeedsMenuKey(int value) {
-        final WindowManager.LayoutParams attrs = getAttributes();
-        attrs.needsMenuKey = value;
-        dispatchWindowAttributesChanged(attrs);
-    }
-
-    /**
-     * {@hide}
-     */
     protected void dispatchWindowAttributesChanged(WindowManager.LayoutParams attrs) {
         if (mCallback != null) {
             mCallback.onWindowAttributesChanged(attrs);
@@ -1235,6 +1240,60 @@ public abstract class Window {
         attrs.dimAmount = amount;
         mHaveDimAmount = true;
         dispatchWindowAttributesChanged(attrs);
+    }
+
+    /**
+     * A shortcut for {@link WindowManager.LayoutParams#setFitWindowInsetsTypes(int)}
+     * @hide pending unhide
+     */
+    public void setFitWindowInsetsTypes(@InsetsType int types) {
+        final WindowManager.LayoutParams attrs = getAttributes();
+        attrs.setFitWindowInsetsTypes(types);
+        dispatchWindowAttributesChanged(attrs);
+    }
+
+    /**
+     * A shortcut for {@link WindowManager.LayoutParams#setFitWindowInsetsSides(int)}
+     * @hide pending unhide
+     */
+    public void setFitWindowInsetsSides(@InsetsSide int sides) {
+        final WindowManager.LayoutParams attrs = getAttributes();
+        attrs.setFitWindowInsetsSides(sides);
+        dispatchWindowAttributesChanged(attrs);
+    }
+
+    /**
+     * A shortcut for {@link WindowManager.LayoutParams#setFitIgnoreVisibility(boolean)}
+     * @hide pending unhide
+     */
+    public void setFitIgnoreVisibility(boolean ignore) {
+        final WindowManager.LayoutParams attrs = getAttributes();
+        attrs.setFitIgnoreVisibility(ignore);
+        dispatchWindowAttributesChanged(attrs);
+    }
+
+    /**
+     * A shortcut for {@link WindowManager.LayoutParams#getFitWindowInsetsTypes}
+     * @hide pending unhide
+     */
+    public @InsetsType int getFitWindowInsetsTypes() {
+        return getAttributes().getFitWindowInsetsTypes();
+    }
+
+    /**
+     * A shortcut for {@link WindowManager.LayoutParams#getFitWindowInsetsSides()}
+     * @hide pending unhide
+     */
+    public @InsetsSide int getFitWindowInsetsSides() {
+        return getAttributes().getFitWindowInsetsSides();
+    }
+
+    /**
+     * A shortcut for {@link WindowManager.LayoutParams#getFitIgnoreVisibility()}
+     * @hide pending unhide
+     */
+    public boolean getFitIgnoreVisibility() {
+        return getAttributes().getFitIgnoreVisibility();
     }
 
     /**
@@ -2510,23 +2569,6 @@ public abstract class Window {
      * @hide
      */
     public abstract void reportActivityRelaunched();
-
-    /**
-     * Called to set flag to check if the close on swipe is enabled. This will only function if
-     * FEATURE_SWIPE_TO_DISMISS has been set.
-     * @hide
-     */
-    public void setCloseOnSwipeEnabled(boolean closeOnSwipeEnabled) {
-        mCloseOnSwipeEnabled = closeOnSwipeEnabled;
-    }
-
-    /**
-     * @return {@code true} if the close on swipe is enabled.
-     * @hide
-     */
-    public boolean isCloseOnSwipeEnabled() {
-        return mCloseOnSwipeEnabled;
-    }
 
     /**
      * @return The {@link WindowInsetsController} associated with this window

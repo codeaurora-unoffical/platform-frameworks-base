@@ -48,6 +48,7 @@ import java.util.Objects;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import com.android.systemui.R;
 
 /**
  * Keeps track of active bubbles.
@@ -56,8 +57,6 @@ import javax.inject.Singleton;
 public class BubbleData {
 
     private static final String TAG = TAG_WITH_CLASS_NAME ? "BubbleData" : TAG_BUBBLES;
-
-    private static final int MAX_BUBBLES = 5;
 
     private static final Comparator<Bubble> BUBBLES_BY_SORT_KEY_DESCENDING =
             Comparator.comparing(BubbleData::sortKey).reversed();
@@ -115,6 +114,7 @@ public class BubbleData {
     private final List<Bubble> mBubbles;
     private Bubble mSelectedBubble;
     private boolean mExpanded;
+    private final int mMaxBubbles;
 
     // State tracked during an operation -- keeps track of what listener events to dispatch.
     private Update mStateChange;
@@ -144,6 +144,7 @@ public class BubbleData {
         mContext = context;
         mBubbles = new ArrayList<>();
         mStateChange = new Update(mBubbles);
+        mMaxBubbles = mContext.getResources().getInteger(R.integer.bubbles_max_rendered);
     }
 
     public boolean hasBubbles() {
@@ -179,11 +180,15 @@ public class BubbleData {
         dispatchPendingChanges();
     }
 
-    void notificationEntryUpdated(NotificationEntry entry, boolean suppressFlyout) {
+    void notificationEntryUpdated(NotificationEntry entry, boolean suppressFlyout,
+            boolean showInShade) {
         if (DEBUG_BUBBLE_DATA) {
             Log.d(TAG, "notificationEntryUpdated: " + entry);
         }
-        Bubble bubble = getBubbleWithKey(entry.key);
+
+        Bubble bubble = getBubbleWithKey(entry.getKey());
+        suppressFlyout |= !shouldShowFlyout(entry);
+
         if (bubble == null) {
             // Create a new bubble
             bubble = new Bubble(mContext, entry);
@@ -193,8 +198,10 @@ public class BubbleData {
         } else {
             // Updates an existing bubble
             bubble.updateEntry(entry);
+            bubble.setSuppressFlyout(suppressFlyout);
             doUpdate(bubble);
         }
+
         if (bubble.shouldAutoExpand()) {
             setSelectedBubbleInternal(bubble);
             if (!mExpanded) {
@@ -204,8 +211,8 @@ public class BubbleData {
             setSelectedBubbleInternal(bubble);
         }
         boolean isBubbleExpandedAndSelected = mExpanded && mSelectedBubble == bubble;
-        bubble.setShowInShadeWhenBubble(!isBubbleExpandedAndSelected);
-        bubble.setShowBubbleDot(!isBubbleExpandedAndSelected);
+        bubble.setShowInShade(!isBubbleExpandedAndSelected && showInShade);
+        bubble.setShowDot(!isBubbleExpandedAndSelected /* show */, true /* animate */);
         dispatchPendingChanges();
     }
 
@@ -213,7 +220,7 @@ public class BubbleData {
         if (DEBUG_BUBBLE_DATA) {
             Log.d(TAG, "notificationEntryRemoved: entry=" + entry + " reason=" + reason);
         }
-        doRemove(entry.key, reason);
+        doRemove(entry.getKey(), reason);
         dispatchPendingChanges();
     }
 
@@ -286,11 +293,19 @@ public class BubbleData {
             return bubbleChildren;
         }
         for (Bubble b : mBubbles) {
-            if (groupKey.equals(b.getEntry().notification.getGroupKey())) {
+            if (groupKey.equals(b.getEntry().getSbn().getGroupKey())) {
                 bubbleChildren.add(b);
             }
         }
         return bubbleChildren;
+    }
+
+    private boolean shouldShowFlyout(NotificationEntry notif) {
+        if (notif.getRanking().visuallyInterruptive()) {
+            return true;
+        }
+        return hasBubbleWithKey(notif.getKey())
+                && !getBubbleWithKey(notif.getKey()).showInShade();
     }
 
     private void doAdd(Bubble bubble) {
@@ -315,7 +330,7 @@ public class BubbleData {
     }
 
     private void trim() {
-        if (mBubbles.size() > MAX_BUBBLES) {
+        if (mBubbles.size() > mMaxBubbles) {
             mBubbles.stream()
                     // sort oldest first (ascending lastActivity)
                     .sorted(Comparator.comparingLong(Bubble::getLastActivity))
@@ -390,6 +405,22 @@ public class BubbleData {
             mStateChange.bubbleRemoved(bubble, reason);
         }
         dispatchPendingChanges();
+    }
+
+    /**
+     * Indicates that the provided display is no longer in use and should be cleaned up.
+     *
+     * @param displayId the id of the display to clean up.
+     */
+    void notifyDisplayEmpty(int displayId) {
+        for (Bubble b : mBubbles) {
+            if (b.getDisplayId() == displayId) {
+                if (b.getExpandedView() != null) {
+                    b.getExpandedView().notifyDisplayEmpty();
+                }
+                return;
+            }
+        }
     }
 
     private void dispatchPendingChanges() {
@@ -489,7 +520,7 @@ public class BubbleData {
      * required to keep grouping intact.
      *
      * @param minPosition the first insert point to consider
-     * @param newBubble the bubble to insert
+     * @param newBubble   the bubble to insert
      * @return the position where the bubble was inserted
      */
     private int insertBubble(int minPosition, Bubble newBubble) {
@@ -613,7 +644,8 @@ public class BubbleData {
                 try {
                     deleteIntent.send();
                 } catch (PendingIntent.CanceledException e) {
-                    Log.w(TAG, "Failed to send delete intent for bubble with key: " + entry.key);
+                    Log.w(TAG, "Failed to send delete intent for bubble with key: "
+                            + entry.getKey());
                 }
             }
         }
@@ -661,15 +693,19 @@ public class BubbleData {
      * Description of current bubble data state.
      */
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
-        pw.print("selected: "); pw.println(mSelectedBubble != null
+        pw.print("selected: ");
+        pw.println(mSelectedBubble != null
                 ? mSelectedBubble.getKey()
                 : "null");
-        pw.print("expanded: "); pw.println(mExpanded);
-        pw.print("count:    "); pw.println(mBubbles.size());
+        pw.print("expanded: ");
+        pw.println(mExpanded);
+        pw.print("count:    ");
+        pw.println(mBubbles.size());
         for (Bubble bubble : mBubbles) {
             bubble.dump(fd, pw, args);
         }
-        pw.print("summaryKeys: "); pw.println(mSuppressedGroupKeys.size());
+        pw.print("summaryKeys: ");
+        pw.println(mSuppressedGroupKeys.size());
         for (String key : mSuppressedGroupKeys.keySet()) {
             pw.println("   suppressing: " + key);
         }

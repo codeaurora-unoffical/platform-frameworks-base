@@ -17,14 +17,14 @@
 package android.telephony;
 
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
-
 import android.os.SystemClock;
 import android.util.Range;
+
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -60,20 +60,26 @@ public final class ModemActivityInfo implements Parcelable {
     private int mRxTimeMs;
 
     public ModemActivityInfo(long timestamp, int sleepTimeMs, int idleTimeMs,
-                        @NonNull int[] txTimeMs, int rxTimeMs) {
+                        @Nullable int[] txTimeMs, int rxTimeMs) {
         mTimestamp = timestamp;
         mSleepTimeMs = sleepTimeMs;
         mIdleTimeMs = idleTimeMs;
-        if (txTimeMs != null) {
-            populateTransmitPowerRange(txTimeMs);
-        }
+        populateTransmitPowerRange(txTimeMs);
         mRxTimeMs = rxTimeMs;
     }
 
     /** helper API to populate tx power range for each bucket **/
-    private void populateTransmitPowerRange(@NonNull int[] transmitPowerMs) {
-        for (int i = 0; i < Math.min(transmitPowerMs.length, TX_POWER_LEVELS); i++) {
-            mTransmitPowerInfo.add(i, new TransmitPower(TX_POWER_RANGES[i], transmitPowerMs[i]));
+    private void populateTransmitPowerRange(@Nullable int[] transmitPowerMs) {
+        int i = 0;
+        if (transmitPowerMs != null) {
+            for ( ; i < Math.min(transmitPowerMs.length, TX_POWER_LEVELS); i++) {
+                mTransmitPowerInfo.add(i,
+                        new TransmitPower(TX_POWER_RANGES[i], transmitPowerMs[i]));
+            }
+        }
+        // Make sure that mTransmitPowerInfo is fully initialized.
+        for ( ; i < TX_POWER_LEVELS; i++) {
+            mTransmitPowerInfo.add(i, new TransmitPower(TX_POWER_RANGES[i], 0));
         }
     }
 
@@ -92,7 +98,7 @@ public final class ModemActivityInfo implements Parcelable {
         return 0;
     }
 
-    public static final @android.annotation.NonNull Parcelable.Creator<ModemActivityInfo> CREATOR =
+    public static final @NonNull Parcelable.Creator<ModemActivityInfo> CREATOR =
             new Parcelable.Creator<ModemActivityInfo>() {
         public ModemActivityInfo createFromParcel(Parcel in) {
             long timestamp = in.readLong();
@@ -147,7 +153,7 @@ public final class ModemActivityInfo implements Parcelable {
     }
 
     /** @hide */
-    public void setTransmitTimeMillis(int[] txTimeMs) {
+    public void setTransmitTimeMillis(@Nullable int[] txTimeMs) {
         populateTransmitPowerRange(txTimeMs);
     }
 

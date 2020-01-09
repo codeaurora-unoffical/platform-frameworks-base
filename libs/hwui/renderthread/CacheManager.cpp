@@ -16,6 +16,7 @@
 
 #include "CacheManager.h"
 
+#include "DeviceInfo.h"
 #include "Layer.h"
 #include "Properties.h"
 #include "RenderThread.h"
@@ -39,11 +40,11 @@ namespace renderthread {
 // to the screen resolution. This is meant to be a conservative default based on
 // that analysis. The 4.0f is used because the default pixel format is assumed to
 // be ARGB_8888.
-#define SURFACE_SIZE_MULTIPLIER (12.0f * 4.0f)
+#define SURFACE_SIZE_MULTIPLIER (5.0f * 4.0f)
 #define BACKGROUND_RETENTION_PERCENTAGE (0.5f)
 
-CacheManager::CacheManager(const DisplayInfo& display)
-        : mMaxSurfaceArea(display.w * display.h)
+CacheManager::CacheManager()
+        : mMaxSurfaceArea(DeviceInfo::getWidth() * DeviceInfo::getHeight())
         , mMaxResourceBytes(mMaxSurfaceArea * SURFACE_SIZE_MULTIPLIER)
         , mBackgroundResourceBytes(mMaxResourceBytes * BACKGROUND_RETENTION_PERCENTAGE)
         // This sets the maximum size for a single texture atlas in the GPU font cache. If
@@ -52,14 +53,10 @@ CacheManager::CacheManager(const DisplayInfo& display)
         , mMaxGpuFontAtlasBytes(GrNextSizePow2(mMaxSurfaceArea))
         // This sets the maximum size of the CPU font cache to be at least the same size as the
         // total number of GPU font caches (i.e. 4 separate GPU atlases).
-        , mMaxCpuFontCacheBytes(std::max(mMaxGpuFontAtlasBytes*4, SkGraphics::GetFontCacheLimit()))
+        , mMaxCpuFontCacheBytes(
+                  std::max(mMaxGpuFontAtlasBytes * 4, SkGraphics::GetFontCacheLimit()))
         , mBackgroundCpuFontCacheBytes(mMaxCpuFontCacheBytes * BACKGROUND_RETENTION_PERCENTAGE) {
-
     SkGraphics::SetFontCacheLimit(mMaxCpuFontCacheBytes);
-
-    mVectorDrawableAtlas = new skiapipeline::VectorDrawableAtlas(
-            mMaxSurfaceArea / 2,
-            skiapipeline::VectorDrawableAtlas::StorageMode::disallowSharedSurface);
 }
 
 void CacheManager::reset(sk_sp<GrContext> context) {
@@ -76,9 +73,6 @@ void CacheManager::reset(sk_sp<GrContext> context) {
 void CacheManager::destroy() {
     // cleanup any caches here as the GrContext is about to go away...
     mGrContext.reset(nullptr);
-    mVectorDrawableAtlas = new skiapipeline::VectorDrawableAtlas(
-            mMaxSurfaceArea / 2,
-            skiapipeline::VectorDrawableAtlas::StorageMode::disallowSharedSurface);
 }
 
 class CommonPoolExecutor : public SkExecutor {
@@ -109,7 +103,6 @@ void CacheManager::trimMemory(TrimMemoryMode mode) {
 
     switch (mode) {
         case TrimMemoryMode::Complete:
-            mVectorDrawableAtlas = new skiapipeline::VectorDrawableAtlas(mMaxSurfaceArea / 2);
             mGrContext->freeGpuResources();
             SkGraphics::PurgeAllCaches();
             break;
@@ -136,16 +129,6 @@ void CacheManager::trimStaleResources() {
     }
     mGrContext->flush();
     mGrContext->purgeResourcesNotUsedInMs(std::chrono::seconds(30));
-}
-
-sp<skiapipeline::VectorDrawableAtlas> CacheManager::acquireVectorDrawableAtlas() {
-    LOG_ALWAYS_FATAL_IF(mVectorDrawableAtlas.get() == nullptr);
-    LOG_ALWAYS_FATAL_IF(mGrContext == nullptr);
-
-    /**
-     * TODO: define memory conditions where we clear the cache (e.g. surface->reset())
-     */
-    return mVectorDrawableAtlas;
 }
 
 void CacheManager::dumpMemoryUsage(String8& log, const RenderState* renderState) {
@@ -176,8 +159,6 @@ void CacheManager::dumpMemoryUsage(String8& log, const RenderState* renderState)
 
     log.appendFormat("Other Caches:\n");
     log.appendFormat("                         Current / Maximum\n");
-    log.appendFormat("  VectorDrawableAtlas  %6.2f kB / %6.2f KB (entries = %zu)\n", 0.0f, 0.0f,
-                     (size_t)0);
 
     if (renderState) {
         if (renderState->mActiveLayers.size() > 0) {

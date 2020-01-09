@@ -17,7 +17,6 @@
 package com.android.systemui.statusbar.policy;
 
 import static com.android.settingslib.Utils.updateLocationEnabled;
-import static com.android.systemui.Dependency.BG_LOOPER_NAME;
 
 import android.app.ActivityManager;
 import android.app.AppOpsManager;
@@ -36,13 +35,15 @@ import android.provider.Settings;
 
 import androidx.annotation.VisibleForTesting;
 
+import com.android.systemui.BootCompleteCache;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dagger.qualifiers.BgLooper;
 import com.android.systemui.util.Utils;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
 
 /**
@@ -58,6 +59,8 @@ public class LocationControllerImpl extends BroadcastReceiver implements Locatio
 
     private AppOpsManager mAppOpsManager;
     private StatusBarManager mStatusBarManager;
+    private BroadcastDispatcher mBroadcastDispatcher;
+    private BootCompleteCache mBootCompleteCache;
 
     private boolean mAreActiveLocationRequests;
 
@@ -66,14 +69,17 @@ public class LocationControllerImpl extends BroadcastReceiver implements Locatio
     private final H mHandler = new H();
 
     @Inject
-    public LocationControllerImpl(Context context, @Named(BG_LOOPER_NAME) Looper bgLooper) {
+    public LocationControllerImpl(Context context, @BgLooper Looper bgLooper,
+            BroadcastDispatcher broadcastDispatcher, BootCompleteCache bootCompleteCache) {
         mContext = context;
+        mBroadcastDispatcher = broadcastDispatcher;
+        mBootCompleteCache = bootCompleteCache;
 
         // Register to listen for changes in location settings.
         IntentFilter filter = new IntentFilter();
         filter.addAction(LocationManager.HIGH_POWER_REQUEST_CHANGE_ACTION);
         filter.addAction(LocationManager.MODE_CHANGED_ACTION);
-        context.registerReceiverAsUser(this, UserHandle.ALL, filter, null, new Handler(bgLooper));
+        mBroadcastDispatcher.registerReceiver(this, filter, new Handler(bgLooper), UserHandle.ALL);
 
         mAppOpsManager = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
         mStatusBarManager
@@ -121,14 +127,15 @@ public class LocationControllerImpl extends BroadcastReceiver implements Locatio
     }
 
     /**
-     * Returns true if location is enabled in settings.
+     * Returns true if location is enabled in settings. Will return false if
+     * {@link LocationManager} service has not been completely initialized
      */
     public boolean isLocationEnabled() {
         // QuickSettings always runs as the owner, so specifically retrieve the settings
         // for the current foreground user.
         LocationManager locationManager =
                 (LocationManager) mContext.getSystemService(Context.LOCATION_SERVICE);
-        return locationManager.isLocationEnabledForUser(
+        return mBootCompleteCache.isBootComplete() && locationManager.isLocationEnabledForUser(
                 UserHandle.of(ActivityManager.getCurrentUser()));
     }
 

@@ -56,8 +56,6 @@ class SettingsProtoDumpUtil {
                 ConfigSettingsProto.CONNECTIVITY_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_CONTENT_CAPTURE,
                 ConfigSettingsProto.CONTENT_CAPTURE_SETTINGS);
-        namespaceToFieldMap.put(DeviceConfig.NAMESPACE_DEX_BOOT,
-                ConfigSettingsProto.DEX_BOOT_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_GAME_DRIVER,
                 ConfigSettingsProto.GAME_DRIVER_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_INPUT_NATIVE_BOOT,
@@ -76,7 +74,7 @@ class SettingsProtoDumpUtil {
                 ConfigSettingsProto.RUNTIME_NATIVE_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_RUNTIME_NATIVE_BOOT,
                 ConfigSettingsProto.RUNTIME_NATIVE_BOOT_SETTINGS);
-        namespaceToFieldMap.put(DeviceConfig.NAMESPACE_STORAGE,
+        namespaceToFieldMap.put(DeviceConfig.NAMESPACE_STORAGE_NATIVE_BOOT,
                 ConfigSettingsProto.STORAGE_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_SYSTEMUI,
                 ConfigSettingsProto.SYSTEMUI_SETTINGS);
@@ -548,6 +546,9 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Global.DEVELOPMENT_FORCE_DESKTOP_MODE_ON_EXTERNAL_DISPLAYS,
                 GlobalSettingsProto.Development.FORCE_DESKTOP_MODE_ON_EXTERNAL_DISPLAYS);
+        dumpSetting(s, p,
+                Settings.Global.DEVELOPMENT_ENABLE_SIZECOMPAT_FREEFORM,
+                GlobalSettingsProto.Development.ENABLE_SIZECOMPAT_FREEFORM);
         p.end(developmentToken);
 
         final long deviceToken = p.start(GlobalSettingsProto.DEVICE);
@@ -690,6 +691,9 @@ class SettingsProtoDumpUtil {
         dumpRepeatedSetting(s, p,
                 Settings.Global.ERROR_LOGCAT_PREFIX,
                 GlobalSettingsProto.ERROR_LOGCAT_LINES);
+        dumpRepeatedSetting(s, p,
+                Settings.Global.MAX_ERROR_BYTES_PREFIX,
+                GlobalSettingsProto.MAX_ERROR_BYTES);
 
         final long euiccToken = p.start(GlobalSettingsProto.EUICC);
         dumpSetting(s, p,
@@ -1161,9 +1165,6 @@ class SettingsProtoDumpUtil {
 
         final long pkgVerifierToken = p.start(GlobalSettingsProto.PACKAGE_VERIFIER);
         dumpSetting(s, p,
-                Settings.Global.PACKAGE_VERIFIER_ENABLE,
-                GlobalSettingsProto.PackageVerifier.ENABLED);
-        dumpSetting(s, p,
                 Settings.Global.PACKAGE_VERIFIER_TIMEOUT,
                 GlobalSettingsProto.PackageVerifier.TIMEOUT);
         dumpSetting(s, p,
@@ -1347,6 +1348,9 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Global.CHARGING_STARTED_SOUND,
                 GlobalSettingsProto.Sounds.CHARGING_STARTED);
+        dumpSetting(s, p,
+                Settings.Global.WIRELESS_CHARGING_STARTED_SOUND,
+                GlobalSettingsProto.Sounds.WIRELESS_CHARGING_STARTED);
         p.end(soundsToken);
 
         final long soundTriggerToken = p.start(GlobalSettingsProto.SOUND_TRIGGER);
@@ -2047,6 +2051,12 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Secure.SKIP_TOUCH_COUNT,
                 SecureSettingsProto.Gesture.SKIP_TOUCH_COUNT);
+        dumpSetting(s, p,
+                Settings.Secure.AWARE_TAP_PAUSE_GESTURE_COUNT,
+                SecureSettingsProto.Gesture.AWARE_TAP_PAUSE_GESTURE_COUNT);
+        dumpSetting(s, p,
+                Settings.Secure.AWARE_TAP_PAUSE_TOUCH_COUNT,
+                SecureSettingsProto.Gesture.AWARE_TAP_PAUSE_TOUCH_COUNT);
         p.end(gestureToken);
 
         dumpSetting(s, p,
@@ -2237,15 +2247,6 @@ class SettingsProtoDumpUtil {
                 Settings.Secure.IN_CALL_NOTIFICATION_ENABLED,
                 SecureSettingsProto.Notification.IN_CALL_NOTIFICATION_ENABLED);
         p.end(notificationToken);
-
-        final long packageVerifierToken = p.start(SecureSettingsProto.PACKAGE_VERIFIER);
-        dumpSetting(s, p,
-                Settings.Secure.PACKAGE_VERIFIER_USER_CONSENT,
-                SecureSettingsProto.PackageVerifier.USER_CONSENT);
-        dumpSetting(s, p,
-                Settings.Secure.PACKAGE_VERIFIER_STATE,
-                SecureSettingsProto.PackageVerifier.STATE);
-        p.end(packageVerifierToken);
 
         final long parentalControlToken = p.start(SecureSettingsProto.PARENTAL_CONTROL);
         dumpSetting(s, p,

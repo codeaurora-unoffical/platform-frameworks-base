@@ -435,6 +435,12 @@ public final class MediaRouterService extends IMediaRouterService.Stub
 
     // Binder call
     @Override
+    public List<MediaRoute2Info> getSystemRoutes() {
+        return mService2.getSystemRoutes();
+    }
+
+    // Binder call
+    @Override
     public void registerClient2(IMediaRouter2Client client, String packageName) {
         final int uid = Binder.getCallingUid();
         if (!validatePackageName(uid, packageName)) {
@@ -451,8 +457,8 @@ public final class MediaRouterService extends IMediaRouterService.Stub
 
     // Binder call
     @Override
-    public void selectRoute2(IMediaRouter2Client client, MediaRoute2Info route) {
-        mService2.selectRoute2(client, route);
+    public void requestSelectRoute2(IMediaRouter2Client client, MediaRoute2Info route) {
+        mService2.requestSelectRoute2(client, route);
     }
 
     // Binder call
@@ -489,6 +495,32 @@ public final class MediaRouterService extends IMediaRouterService.Stub
     @Override
     public void setControlCategories(IMediaRouter2Client client, List<String> categories) {
         mService2.setControlCategories(client, categories);
+    }
+
+    // Binder call
+    @Override
+    public void requestSetVolume2(IMediaRouter2Client client, MediaRoute2Info route, int volume) {
+        mService2.requestSetVolume2(client, route, volume);
+    }
+
+    // Binder call
+    @Override
+    public void requestUpdateVolume2(IMediaRouter2Client client, MediaRoute2Info route, int delta) {
+        mService2.requestUpdateVolume2(client, route, delta);
+    }
+
+    // Binder call
+    @Override
+    public void requestSetVolume2Manager(IMediaRouter2Manager manager,
+            MediaRoute2Info route, int volume) {
+        mService2.requestSetVolume2Manager(manager, route, volume);
+    }
+
+    // Binder call
+    @Override
+    public void requestUpdateVolume2Manager(IMediaRouter2Manager manager,
+            MediaRoute2Info route, int delta) {
+        mService2.requestUpdateVolume2Manager(manager, route, delta);
     }
 
     void restoreBluetoothA2dp() {

@@ -24,7 +24,6 @@
 #include "Readback.h"
 #include "Rect.h"
 #include "WebViewFunctorManager.h"
-#include "pipeline/skia/VectorDrawableAtlas.h"
 #include "renderthread/CanvasContext.h"
 #include "renderthread/RenderTask.h"
 #include "renderthread/RenderThread.h"
@@ -79,9 +78,10 @@ void RenderProxy::setName(const char* name) {
     mRenderThread.queue().runSync([this, name]() { mContext->setName(std::string(name)); });
 }
 
-void RenderProxy::setSurface(const sp<Surface>& surface) {
-    mRenderThread.queue().post(
-            [this, surf = surface]() mutable { mContext->setSurface(std::move(surf)); });
+void RenderProxy::setSurface(const sp<Surface>& surface, bool enableTimeout) {
+    mRenderThread.queue().post([this, surf = surface, enableTimeout]() mutable {
+        mContext->setSurface(std::move(surf), enableTimeout);
+    });
 }
 
 void RenderProxy::allocateBuffers() {
@@ -363,27 +363,6 @@ int RenderProxy::copyHWBitmapInto(Bitmap* hwBitmap, SkBitmap* bitmap) {
 
 void RenderProxy::disableVsync() {
     Properties::disableVsync = true;
-}
-
-void RenderProxy::repackVectorDrawableAtlas() {
-    RenderThread& thread = RenderThread::getInstance();
-    thread.queue().post([&thread]() {
-        // The context may be null if trimMemory executed, but then the atlas was deleted too.
-        if (thread.getGrContext() != nullptr) {
-            thread.cacheManager().acquireVectorDrawableAtlas()->repackIfNeeded(
-                    thread.getGrContext());
-        }
-    });
-}
-
-void RenderProxy::releaseVDAtlasEntries() {
-    RenderThread& thread = RenderThread::getInstance();
-    thread.queue().post([&thread]() {
-        // The context may be null if trimMemory executed, but then the atlas was deleted too.
-        if (thread.getGrContext() != nullptr) {
-            thread.cacheManager().acquireVectorDrawableAtlas()->delayedReleaseEntries();
-        }
-    });
 }
 
 void RenderProxy::preload() {

@@ -24,6 +24,7 @@ import android.net.wifi.hotspot2.pps.UpdateParameter;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -65,6 +66,7 @@ public final class PasspointConfiguration implements Parcelable {
      * Configurations under HomeSp subtree.
      */
     private HomeSp mHomeSp = null;
+
     /**
      * Set the Home SP (Service Provider) information.
      *
@@ -248,7 +250,10 @@ public final class PasspointConfiguration implements Parcelable {
         mSubscriptionExpirationTimeInMillis = subscriptionExpirationTimeInMillis;
     }
     /**
-     * @hide
+     *  Utility method to get the time this subscription will expire. It is in the format of number
+     *  of milliseconds since January 1, 1970, 00:00:00 GMT.
+     *
+     *  @return The time this subscription will expire, or Long.MIN_VALUE to indicate unset value
      */
     public long getSubscriptionExpirationTimeInMillis() {
         return mSubscriptionExpirationTimeInMillis;
@@ -394,6 +399,30 @@ public final class PasspointConfiguration implements Parcelable {
     }
 
     /**
+     * The carrier ID identifies the operator who provides this network configuration.
+     *    see {@link TelephonyManager#getSimCarrierId()}
+     */
+    private int mCarrierId = TelephonyManager.UNKNOWN_CARRIER_ID;
+
+    /**
+     * Set the carrier ID associated with current configuration.
+     * @param carrierId {@code mCarrierId}
+     * @hide
+     */
+    public void setCarrierId(int carrierId) {
+        this.mCarrierId = carrierId;
+    }
+
+    /**
+     * Get the carrier ID associated with current configuration.
+     * @return {@code mCarrierId}
+     * @hide
+     */
+    public int getCarrierId() {
+        return mCarrierId;
+    }
+
+    /**
      * Constructor for creating PasspointConfiguration with default values.
      */
     public PasspointConfiguration() {}
@@ -434,6 +463,7 @@ public final class PasspointConfiguration implements Parcelable {
         mUsageLimitUsageTimePeriodInMinutes = source.mUsageLimitUsageTimePeriodInMinutes;
         mServiceFriendlyNames = source.mServiceFriendlyNames;
         mAaaServerTrustedNames = source.mAaaServerTrustedNames;
+        mCarrierId = source.mCarrierId;
     }
 
     @Override
@@ -462,6 +492,7 @@ public final class PasspointConfiguration implements Parcelable {
         bundle.putSerializable("serviceFriendlyNames",
                 (HashMap<String, String>) mServiceFriendlyNames);
         dest.writeBundle(bundle);
+        dest.writeInt(mCarrierId);
     }
 
     @Override
@@ -491,6 +522,7 @@ public final class PasspointConfiguration implements Parcelable {
                 && mUsageLimitStartTimeInMillis == that.mUsageLimitStartTimeInMillis
                 && mUsageLimitDataLimit == that.mUsageLimitDataLimit
                 && mUsageLimitTimeLimitInMinutes == that.mUsageLimitTimeLimitInMinutes
+                && mCarrierId == that.mCarrierId
                 && (mServiceFriendlyNames == null ? that.mServiceFriendlyNames == null
                 : mServiceFriendlyNames.equals(that.mServiceFriendlyNames));
     }
@@ -501,7 +533,7 @@ public final class PasspointConfiguration implements Parcelable {
                 mUpdateIdentifier, mCredentialPriority, mSubscriptionCreationTimeInMillis,
                 mSubscriptionExpirationTimeInMillis, mUsageLimitUsageTimePeriodInMinutes,
                 mUsageLimitStartTimeInMillis, mUsageLimitDataLimit, mUsageLimitTimeLimitInMinutes,
-                mServiceFriendlyNames);
+                mServiceFriendlyNames, mCarrierId);
     }
 
     @Override
@@ -521,6 +553,8 @@ public final class PasspointConfiguration implements Parcelable {
                 .append("\n");
         builder.append("UsageLimitDataLimit: ").append(mUsageLimitDataLimit).append("\n");
         builder.append("UsageLimitTimeLimit: ").append(mUsageLimitTimeLimitInMinutes).append("\n");
+        builder.append("Provisioned by a subscription server: ")
+                .append(isOsuProvisioned() ? "Yes" : "No").append("\n");
         if (mHomeSp != null) {
             builder.append("HomeSP Begin ---\n");
             builder.append(mHomeSp);
@@ -552,6 +586,7 @@ public final class PasspointConfiguration implements Parcelable {
         if (mServiceFriendlyNames != null) {
             builder.append("ServiceFriendlyNames: ").append(mServiceFriendlyNames);
         }
+        builder.append("CarrierId:" + mCarrierId);
         return builder.toString();
     }
 
@@ -656,6 +691,7 @@ public final class PasspointConfiguration implements Parcelable {
                 Map<String, String> friendlyNamesMap = (HashMap) bundle.getSerializable(
                         "serviceFriendlyNames");
                 config.setServiceFriendlyNames(friendlyNamesMap);
+                config.mCarrierId = in.readInt();
                 return config;
             }
 
@@ -727,5 +763,15 @@ public final class PasspointConfiguration implements Parcelable {
             }
         }
         return true;
+    }
+
+    /**
+     * Indicates if the Passpoint Configuration was provisioned by a subscription (OSU) server,
+     * which means that it's an R2 (or R3) profile.
+     *
+     * @return true if the Passpoint Configuration was provisioned by a subscription server.
+     */
+    public boolean isOsuProvisioned() {
+        return getUpdateIdentifier() != Integer.MIN_VALUE;
     }
 }

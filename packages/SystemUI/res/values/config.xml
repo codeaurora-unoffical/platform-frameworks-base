@@ -117,7 +117,7 @@
 
     <!-- Tiles native to System UI. Order should match "quick_settings_tiles_default" -->
     <string name="quick_settings_tiles_stock" translatable="false">
-        wifi,cell,battery,dnd,flashlight,rotation,bt,airplane,location,hotspot,inversion,saver,dark,work,cast,night
+        wifi,cell,battery,dnd,flashlight,rotation,bt,airplane,location,hotspot,inversion,saver,dark,work,cast,night,controls
     </string>
 
     <!-- The tiles to display in QuickSettings -->
@@ -125,7 +125,7 @@
 
     <!-- The tiles to display in QuickSettings in retail mode -->
     <string name="quick_settings_tiles_retail_mode" translatable="false">
-        cell,battery,dnd,flashlight,rotation,location
+        night,dark,dnd,flashlight,rotation,location
     </string>
 
     <!-- Whether or not the RSSI tile is capitalized or not. -->
@@ -274,12 +274,11 @@
     <!-- SystemUI Services: The classes of the stuff to start. -->
     <string-array name="config_systemUIServiceComponents" translatable="false">
         <item>com.android.systemui.util.NotificationChannels</item>
-        <item>com.android.systemui.statusbar.CommandQueue$CommandQueueStart</item>
         <item>com.android.systemui.keyguard.KeyguardViewMediator</item>
         <item>com.android.systemui.recents.Recents</item>
         <item>com.android.systemui.volume.VolumeUI</item>
         <item>com.android.systemui.stackdivider.Divider</item>
-        <item>com.android.systemui.SystemBars</item>
+        <item>com.android.systemui.statusbar.phone.StatusBar</item>
         <item>com.android.systemui.usb.StorageNotification</item>
         <item>com.android.systemui.power.PowerUI</item>
         <item>com.android.systemui.media.RingtonePlayer</item>
@@ -463,8 +462,6 @@
         <item>com.android.systemui</item>
     </string-array>
 
-    <integer name="ongoing_appops_dialog_max_apps">5</integer>
-
     <!-- Launcher package name for overlaying icons. -->
     <string name="launcher_overlayable_package" translatable="false">com.android.launcher3</string>
 
@@ -479,5 +476,11 @@
 
     <!-- Preferred refresh rate at keyguard, if supported by the display -->
     <integer name="config_keyguardRefreshRate">-1</integer>
+
+    <!-- Whether or not to add a "people" notifications section -->
+    <bool name="config_usePeopleFiltering">false</bool>
+
+    <!-- Package name for controls plugin -->
+    <string name="config_controlsPluginPackageName" translatable="false">com.android.systemui.controls.panel</string>
 
 </resources>

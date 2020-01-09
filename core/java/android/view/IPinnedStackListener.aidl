@@ -55,14 +55,6 @@ oneway interface IPinnedStackListener {
     void onImeVisibilityChanged(boolean imeVisible, int imeHeight);
 
     /**
-     * Called when window manager decides to adjust the pinned stack bounds because of the shelf, or
-     * when the listener is first registered to allow the listener to synchronized its state with
-     * the controller.  This call will always be followed by a onMovementBoundsChanged() call
-     * with fromShelfAdjustment set to {@code true}.
-     */
-    void onShelfVisibilityChanged(boolean shelfVisible, int shelfHeight);
-
-    /**
      * Called when window manager decides to adjust the minimized state, or when the listener
      * is first registered to allow the listener to synchronized its state with the controller.
      */
@@ -75,20 +67,20 @@ oneway interface IPinnedStackListener {
     void onActionsChanged(in ParceledListSlice actions);
 
     /**
-     * Called by the window manager to notify the listener to save the reentry fraction,
+     * Called by the window manager to notify the listener to save the reentry fraction and size,
      * typically when an Activity leaves PiP (picture-in-picture) mode to fullscreen.
      * {@param componentName} represents the application component of PiP window
      * while {@param bounds} is the current PiP bounds used to calculate the
-     * reentry snap fraction.
+     * reentry snap fraction and size.
      */
-    void onSaveReentrySnapFraction(in ComponentName componentName, in Rect bounds);
+    void onSaveReentryBounds(in ComponentName componentName, in Rect bounds);
 
     /**
-     * Called by the window manager to notify the listener to reset saved reentry fraction,
+     * Called by the window manager to notify the listener to reset saved reentry fraction and size,
      * typically when an Activity enters PiP (picture-in-picture) mode from fullscreen.
      * {@param componentName} represents the application component of PiP window.
      */
-    void onResetReentrySnapFraction(in ComponentName componentName);
+    void onResetReentryBounds(in ComponentName componentName);
 
     /**
      * Called when the window manager has detected change on DisplayInfo,  or

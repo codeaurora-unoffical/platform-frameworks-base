@@ -37,6 +37,7 @@ import android.view.IPinnedStackController;
 
 import com.android.systemui.Dependency;
 import com.android.systemui.UiOffloadThread;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.pip.BasePipManager;
 import com.android.systemui.pip.PipBoundsHandler;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
@@ -64,6 +65,7 @@ public class PipManager implements BasePipManager {
     private final DisplayInfo mTmpDisplayInfo = new DisplayInfo();
     private final Rect mTmpInsetBounds = new Rect();
     private final Rect mTmpNormalBounds = new Rect();
+    private final Rect mReentryBounds = new Rect();
 
     private PipBoundsHandler mPipBoundsHandler;
     private InputConsumerController mInputConsumerController;
@@ -143,14 +145,6 @@ public class PipManager implements BasePipManager {
         }
 
         @Override
-        public void onShelfVisibilityChanged(boolean shelfVisible, int shelfHeight) {
-            mHandler.post(() -> {
-                mPipBoundsHandler.onShelfVisibilityChanged(shelfVisible, shelfHeight);
-                mTouchHandler.onShelfVisibilityChanged(shelfVisible, shelfHeight);
-            });
-        }
-
-        @Override
         public void onMinimizedStateChanged(boolean isMinimized) {
             mHandler.post(() -> {
                 mPipBoundsHandler.onMinimizedStateChanged(isMinimized);
@@ -161,14 +155,8 @@ public class PipManager implements BasePipManager {
         @Override
         public void onMovementBoundsChanged(Rect animatingBounds, boolean fromImeAdjustment,
                 boolean fromShelfAdjustment) {
-            mHandler.post(() -> {
-                // Populate the inset / normal bounds and DisplayInfo from mPipBoundsHandler first.
-                mPipBoundsHandler.onMovementBoundsChanged(mTmpInsetBounds, mTmpNormalBounds,
-                        animatingBounds, mTmpDisplayInfo);
-                mTouchHandler.onMovementBoundsChanged(mTmpInsetBounds, mTmpNormalBounds,
-                        animatingBounds, fromImeAdjustment, fromShelfAdjustment,
-                        mTmpDisplayInfo.rotation);
-            });
+            mHandler.post(() -> updateMovementBounds(animatingBounds, fromImeAdjustment,
+                    fromShelfAdjustment));
         }
 
         @Override
@@ -177,13 +165,25 @@ public class PipManager implements BasePipManager {
         }
 
         @Override
-        public void onSaveReentrySnapFraction(ComponentName componentName, Rect bounds) {
-            mHandler.post(() -> mPipBoundsHandler.onSaveReentrySnapFraction(componentName, bounds));
+        public void onSaveReentryBounds(ComponentName componentName, Rect bounds) {
+            mHandler.post(() -> {
+                // On phones, the expansion animation that happens on pip tap before restoring
+                // to fullscreen makes it so that the bounds received here are the expanded
+                // bounds. We want to restore to the unexpanded bounds when re-entering pip,
+                // so we save the bounds before expansion (normal) instead of the current
+                // bounds.
+                mReentryBounds.set(mTouchHandler.getNormalBounds());
+                // Apply the snap fraction of the current bounds to the normal bounds.
+                float snapFraction = mPipBoundsHandler.getSnapFraction(bounds);
+                mPipBoundsHandler.applySnapFraction(mReentryBounds, snapFraction);
+                // Save reentry bounds (normal non-expand bounds with current position applied).
+                mPipBoundsHandler.onSaveReentryBounds(componentName, mReentryBounds);
+            });
         }
 
         @Override
-        public void onResetReentrySnapFraction(ComponentName componentName) {
-            mHandler.post(() -> mPipBoundsHandler.onResetReentrySnapFraction(componentName));
+        public void onResetReentryBounds(ComponentName componentName) {
+            mHandler.post(() -> mPipBoundsHandler.onResetReentryBounds(componentName));
         }
 
         @Override
@@ -214,7 +214,7 @@ public class PipManager implements BasePipManager {
     /**
      * Initializes {@link PipManager}.
      */
-    public void initialize(Context context) {
+    public void initialize(Context context, BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mActivityManager = ActivityManager.getService();
         mActivityTaskManager = ActivityTaskManager.getService();
@@ -228,7 +228,7 @@ public class PipManager implements BasePipManager {
 
         mPipBoundsHandler = new PipBoundsHandler(context);
         mInputConsumerController = InputConsumerController.getPipInputConsumer();
-        mMediaController = new PipMediaController(context, mActivityManager);
+        mMediaController = new PipMediaController(context, mActivityManager, broadcastDispatcher);
         mMenuController = new PipMenuActivityController(context, mActivityManager, mMediaController,
                 mInputConsumerController);
         mTouchHandler = new PipTouchHandler(context, mActivityManager, mActivityTaskManager,
@@ -277,6 +277,31 @@ public class PipManager implements BasePipManager {
      */
     public void showPictureInPictureMenu() {
         mTouchHandler.showPictureInPictureMenu();
+    }
+
+    /**
+     * Sets both shelf visibility and its height.
+     */
+    @Override
+    public void setShelfHeight(boolean visible, int height) {
+        mHandler.post(() -> {
+            final boolean changed = mPipBoundsHandler.setShelfHeight(visible, height);
+            if (changed) {
+                mTouchHandler.onShelfVisibilityChanged(visible, height);
+                updateMovementBounds(mPipBoundsHandler.getLastDestinationBounds(),
+                        false /* fromImeAdjustment */, true /* fromShelfAdjustment */);
+            }
+        });
+    }
+
+    private void updateMovementBounds(Rect animatingBounds, boolean fromImeAdjustment,
+            boolean fromShelfAdjustment) {
+        // Populate inset / normal bounds and DisplayInfo from mPipBoundsHandler first.
+        mPipBoundsHandler.onMovementBoundsChanged(mTmpInsetBounds, mTmpNormalBounds,
+                animatingBounds, mTmpDisplayInfo);
+        mTouchHandler.onMovementBoundsChanged(mTmpInsetBounds, mTmpNormalBounds,
+                animatingBounds, fromImeAdjustment, fromShelfAdjustment,
+                mTmpDisplayInfo.rotation);
     }
 
     /**

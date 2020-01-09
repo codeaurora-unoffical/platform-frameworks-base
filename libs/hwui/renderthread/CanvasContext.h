@@ -111,7 +111,7 @@ public:
     // Won't take effect until next EGLSurface creation
     void setSwapBehavior(SwapBehavior swapBehavior);
 
-    void setSurface(sp<Surface>&& surface);
+    void setSurface(sp<Surface>&& surface, bool enableTimeout = true);
     bool pauseSurface();
     void setStopped(bool stopped);
     bool hasSurface() const { return mNativeSurface.get(); }
@@ -242,8 +242,10 @@ private:
         nsecs_t queueDuration;
     };
 
-    RingBuffer<SwapHistory, 3> mSwapHistory;
+    // Need at least 4 because we do quad buffer. Add a 5th for good measure.
+    RingBuffer<SwapHistory, 5> mSwapHistory;
     int64_t mFrameNumber = -1;
+    int64_t mDamageId = 0;
 
     // last vsync for a dropped frame due to stuffed queue
     nsecs_t mLastDropVsync = 0;

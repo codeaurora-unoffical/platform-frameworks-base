@@ -36,17 +36,19 @@ import android.view.SurfaceSession;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Build/Install/Run:
  *  atest FrameworksServicesTests:DimmerTests
  */
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class DimmerTests extends WindowTestsBase {
 
     private static class TestWindowContainer extends WindowContainer<TestWindowContainer> {
         final SurfaceControl mControl = mock(SurfaceControl.class);
-        final SurfaceControl.Transaction mTransaction = mock(SurfaceControl.Transaction.class);
+        final SurfaceControl.Transaction mTransaction = spy(StubTransaction.class);
 
         TestWindowContainer(WindowManagerService wm) {
             super(wm);
@@ -66,7 +68,7 @@ public class DimmerTests extends WindowTestsBase {
     private static class MockSurfaceBuildingContainer extends WindowContainer<TestWindowContainer> {
         final SurfaceSession mSession = new SurfaceSession();
         final SurfaceControl mHostControl = mock(SurfaceControl.class);
-        final SurfaceControl.Transaction mHostTransaction = mock(SurfaceControl.Transaction.class);
+        final SurfaceControl.Transaction mHostTransaction = spy(StubTransaction.class);
 
         MockSurfaceBuildingContainer(WindowManagerService wm) {
             super(wm);
@@ -118,7 +120,7 @@ public class DimmerTests extends WindowTestsBase {
     public void setUp() throws Exception {
         mHost = new MockSurfaceBuildingContainer(mWm);
         mSurfaceAnimatorStarter = spy(new SurfaceAnimatorStarterImpl());
-        mTransaction = mock(SurfaceControl.Transaction.class);
+        mTransaction = spy(StubTransaction.class);
         mDimmer = new Dimmer(mHost, mSurfaceAnimatorStarter);
     }
 

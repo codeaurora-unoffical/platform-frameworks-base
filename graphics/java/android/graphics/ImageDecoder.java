@@ -286,6 +286,9 @@ public final class ImageDecoder implements AutoCloseable {
 
                 return createFromStream(is, true, preferAnimation, this);
             }
+            if (assetFd == null) {
+                throw new FileNotFoundException(mUri.toString());
+            }
             return createFromAssetFileDescriptor(assetFd, preferAnimation, this);
         }
     }
@@ -341,6 +344,9 @@ public final class ImageDecoder implements AutoCloseable {
     @NonNull
     private static ImageDecoder createFromAssetFileDescriptor(@NonNull AssetFileDescriptor assetFd,
             boolean preferAnimation, Source source) throws IOException {
+        if (assetFd == null) {
+            throw new FileNotFoundException();
+        }
         final FileDescriptor fd = assetFd.getFileDescriptor();
         final long offset = assetFd.getStartOffset();
 
@@ -1668,6 +1674,9 @@ public final class ImageDecoder implements AutoCloseable {
     private static void checkSubset(int width, int height, Rect r) {
         if (r == null) {
             return;
+        }
+        if (r.width() <= 0 || r.height() <= 0) {
+            throw new IllegalStateException("Subset " + r + " is empty/unsorted");
         }
         if (r.left < 0 || r.top < 0 || r.right > width || r.bottom > height) {
             throw new IllegalStateException("Subset " + r + " not contained by "

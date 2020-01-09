@@ -51,6 +51,7 @@ public class RankingBuilder {
     private ArrayList<Notification.Action> mSmartActions = new ArrayList<>();
     private ArrayList<CharSequence> mSmartReplies = new ArrayList<>();
     private boolean mCanBubble = false;
+    private boolean mIsVisuallyInterruptive = false;
 
     public RankingBuilder() {
     }
@@ -98,7 +99,8 @@ public class RankingBuilder {
                 mNoisy,
                 mSmartActions,
                 mSmartReplies,
-                mCanBubble);
+                mCanBubble,
+                mIsVisuallyInterruptive);
         return ranking;
     }
 
@@ -170,6 +172,11 @@ public class RankingBuilder {
 
     public RankingBuilder setCanBubble(boolean canBubble) {
         mCanBubble = canBubble;
+        return this;
+    }
+
+    public RankingBuilder setVisuallyInterruptive(boolean interruptive) {
+        mIsVisuallyInterruptive = interruptive;
         return this;
     }
 

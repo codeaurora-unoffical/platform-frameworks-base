@@ -20,7 +20,7 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.text.format.DateFormat;
 import android.util.FloatProperty;
-import android.view.View;
+import android.util.Log;
 import android.view.animation.Interpolator;
 
 import com.android.internal.annotations.GuardedBy;
@@ -79,9 +79,14 @@ public class StatusBarStateControllerImpl implements SysuiStatusBarStateControll
     private HistoricalState[] mHistoricalRecords = new HistoricalState[HISTORY_SIZE];
 
     /**
-     * Current SystemUiVisibility
+     * If any of the system bars is hidden.
      */
-    private int mSystemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE;
+    private boolean mIsFullscreen = false;
+
+    /**
+     * If the navigation bar can stay hidden when the display gets tapped.
+     */
+    private boolean mIsImmersive = false;
 
     /**
      * If the device is currently pulsing (AOD2).
@@ -136,6 +141,11 @@ public class StatusBarStateControllerImpl implements SysuiStatusBarStateControll
 
         // Record the to-be mState and mLastState
         recordHistoricalState(state, mState);
+
+        // b/139259891
+        if (mState == StatusBarState.SHADE && state == StatusBarState.SHADE_LOCKED) {
+            Log.e(TAG, "Invalid state transition: SHADE -> SHADE_LOCKED", new Throwable());
+        }
 
         synchronized (mListeners) {
             String tag = getClass().getSimpleName() + "#setState(" + state + ")";
@@ -314,12 +324,13 @@ public class StatusBarStateControllerImpl implements SysuiStatusBarStateControll
     }
 
     @Override
-    public void setSystemUiVisibility(int visibility) {
-        if (mSystemUiVisibility != visibility) {
-            mSystemUiVisibility = visibility;
+    public void setFullscreenState(boolean isFullscreen, boolean isImmersive) {
+        if (mIsFullscreen != isFullscreen || mIsImmersive != isImmersive) {
+            mIsFullscreen = isFullscreen;
+            mIsImmersive = isImmersive;
             synchronized (mListeners) {
                 for (RankedListener rl : new ArrayList<>(mListeners)) {
-                    rl.mListener.onSystemUiVisibilityChanged(mSystemUiVisibility);
+                    rl.mListener.onFullscreenStateChanged(isFullscreen, isImmersive);
                 }
             }
         }

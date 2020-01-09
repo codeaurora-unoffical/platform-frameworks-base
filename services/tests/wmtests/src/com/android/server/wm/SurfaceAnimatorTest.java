@@ -44,6 +44,7 @@ import com.android.server.wm.SurfaceAnimator.OnAnimationFinishedCallback;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -56,6 +57,7 @@ import org.mockito.MockitoAnnotations;
  */
 @SmallTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class SurfaceAnimatorTest extends WindowTestsBase {
 
     @Mock AnimationAdapter mSpec;
@@ -134,6 +136,19 @@ public class SurfaceAnimatorTest extends WindowTestsBase {
         assertNotAnimating(mAnimatable);
         verify(mSpec).onAnimationCancelled(any());
         assertTrue(mAnimatable.mFinishedCallbackCalled);
+        verify(mTransaction).remove(eq(mAnimatable.mLeash));
+    }
+
+    @Test
+    public void testCancelWithNullFinishCallbackAnimation() {
+        SurfaceAnimator animator = new SurfaceAnimator(mAnimatable, null, mWm);
+        animator.startAnimation(mTransaction, mSpec, true /* hidden */);
+        assertTrue(animator.isAnimating());
+        assertNotNull(animator.getAnimation());
+        animator.cancelAnimation();
+        assertFalse(animator.isAnimating());
+        assertNull(animator.getAnimation());
+        verify(mSpec).onAnimationCancelled(any());
         verify(mTransaction).remove(eq(mAnimatable.mLeash));
     }
 
@@ -224,7 +239,7 @@ public class SurfaceAnimatorTest extends WindowTestsBase {
         mDeferFinishAnimatable.mFinishedCallbackCalled = false;
 
         // Simulate the first deferred callback is executed from
-        // {@link AnimatingAppWindowTokenRegistry#endDeferringFinished}.
+        // {@link AnimatingActivityRegistry#endDeferringFinished}.
         firstDeferFinishCallback.run();
         // The second animation should not be finished.
         assertFalse(mDeferFinishAnimatable.mFinishedCallbackCalled);

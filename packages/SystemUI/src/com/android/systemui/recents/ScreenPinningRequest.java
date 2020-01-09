@@ -46,7 +46,7 @@ import android.widget.TextView;
 
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
-import com.android.systemui.SysUiServiceProvider;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.shared.system.WindowManagerWrapper;
 import com.android.systemui.statusbar.phone.NavigationBarView;
@@ -55,11 +55,17 @@ import com.android.systemui.statusbar.phone.StatusBar;
 import com.android.systemui.util.leak.RotationUtils;
 
 import java.util.ArrayList;
+import java.util.Optional;
+
+import javax.inject.Inject;
+
+import dagger.Lazy;
 
 public class ScreenPinningRequest implements View.OnClickListener,
         NavigationModeController.ModeChangedListener {
 
     private final Context mContext;
+    private final Optional<Lazy<StatusBar>> mStatusBarOptionalLazy;
 
     private final AccessibilityManager mAccessibilityService;
     private final WindowManager mWindowManager;
@@ -71,8 +77,10 @@ public class ScreenPinningRequest implements View.OnClickListener,
     // Id of task to be pinned or locked.
     private int taskId;
 
-    public ScreenPinningRequest(Context context) {
+    @Inject
+    public ScreenPinningRequest(Context context, Optional<Lazy<StatusBar>> statusBarOptionalLazy) {
         mContext = context;
+        mStatusBarOptionalLazy = statusBarOptionalLazy;
         mAccessibilityService = (AccessibilityManager)
                 mContext.getSystemService(Context.ACCESSIBILITY_SERVICE);
         mWindowManager = (WindowManager)
@@ -127,9 +135,10 @@ public class ScreenPinningRequest implements View.OnClickListener,
                         | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
         lp.token = new Binder();
-        lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
+        lp.privateFlags |= WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
         lp.setTitle("ScreenPinningConfirmation");
         lp.gravity = Gravity.FILL;
+        lp.setFitWindowInsetsTypes(0 /* types */);
         return lp;
     }
 
@@ -159,6 +168,8 @@ public class ScreenPinningRequest implements View.OnClickListener,
         private ValueAnimator mColorAnim;
         private ViewGroup mLayout;
         private boolean mShowCancel;
+        private final BroadcastDispatcher mBroadcastDispatcher =
+                Dependency.get(BroadcastDispatcher.class);
 
         public RequestWindowView(Context context, boolean showCancel) {
             super(context);
@@ -212,7 +223,7 @@ public class ScreenPinningRequest implements View.OnClickListener,
             IntentFilter filter = new IntentFilter(Intent.ACTION_CONFIGURATION_CHANGED);
             filter.addAction(Intent.ACTION_USER_SWITCHED);
             filter.addAction(Intent.ACTION_SCREEN_OFF);
-            mContext.registerReceiver(mReceiver, filter);
+            mBroadcastDispatcher.registerReceiver(mReceiver, filter);
         }
 
         private void inflateView(int rotation) {
@@ -251,9 +262,8 @@ public class ScreenPinningRequest implements View.OnClickListener,
                         .setVisibility(View.INVISIBLE);
             }
 
-            StatusBar statusBar = SysUiServiceProvider.getComponent(mContext, StatusBar.class);
-            NavigationBarView navigationBarView =
-                    statusBar != null ? statusBar.getNavigationBarView() : null;
+            NavigationBarView navigationBarView = mStatusBarOptionalLazy.map(
+                    statusBarLazy -> statusBarLazy.get().getNavigationBarView()).orElse(null);
             final boolean recentsVisible = navigationBarView != null
                     && navigationBarView.isRecentsButtonVisible();
             boolean touchExplorationEnabled = mAccessibilityService.isTouchExplorationEnabled();
@@ -313,7 +323,7 @@ public class ScreenPinningRequest implements View.OnClickListener,
 
         @Override
         public void onDetachedFromWindow() {
-            mContext.unregisterReceiver(mReceiver);
+            mBroadcastDispatcher.unregisterReceiver(mReceiver);
         }
 
         protected void onConfigurationChanged() {

@@ -306,6 +306,12 @@ class ZygoteConnection {
     }
 
     private void handleBootCompleted() {
+        try {
+            mSocketOutStream.writeInt(0);
+        } catch (IOException ioe) {
+            throw new IllegalStateException("Error writing to command socket", ioe);
+        }
+
         VMRuntime.bootCompleted();
     }
 
@@ -495,6 +501,7 @@ class ZygoteConnection {
         } else {
             if (!isZygote) {
                 return ZygoteInit.zygoteInit(parsedArgs.mTargetSdkVersion,
+                        parsedArgs.mDisabledCompatChanges,
                         parsedArgs.mRemainingArgs, null /* classLoader */);
             } else {
                 return ZygoteInit.childZygoteInit(parsedArgs.mTargetSdkVersion,

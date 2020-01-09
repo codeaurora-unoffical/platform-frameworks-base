@@ -16,9 +16,10 @@
 
 package android.provider;
 
-import static com.google.android.collect.Sets.newHashSet;
+import static android.provider.settings.backup.DeviceSpecificSettings.DEVICE_SPECIFIC_SETTINGS_TO_BACKUP;
 
-import static junit.framework.Assert.assertTrue;
+import static com.google.android.collect.Sets.newHashSet;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 import static java.lang.reflect.Modifier.isFinal;
 import static java.lang.reflect.Modifier.isPublic;
@@ -221,7 +222,7 @@ public class SettingsBackupTest {
                     Settings.Global.DEVELOPMENT_FORCE_DESKTOP_MODE_ON_EXTERNAL_DISPLAYS,
                     Settings.Global.DEVELOPMENT_FORCE_RESIZABLE_ACTIVITIES,
                     Settings.Global.DEVELOPMENT_FORCE_RTL,
-                    Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
+                    Settings.Global.DEVELOPMENT_ENABLE_SIZECOMPAT_FREEFORM,
                     Settings.Global.DEVICE_DEMO_MODE,
                     Settings.Global.DEVICE_IDLE_CONSTANTS,
                     Settings.Global.BATTERY_SAVER_ADAPTIVE_CONSTANTS,
@@ -266,6 +267,7 @@ public class SettingsBackupTest {
                     Settings.Global.ERROR_LOGCAT_PREFIX,
                     Settings.Global.EUICC_PROVISIONED,
                     Settings.Global.EUICC_SUPPORTED_COUNTRIES,
+                    Settings.Global.EUICC_UNSUPPORTED_COUNTRIES,
                     Settings.Global.EUICC_FACTORY_RESET_TIMEOUT_MILLIS,
                     Settings.Global.EUICC_REMOVING_INVISIBLE_PROFILES_TIMEOUT_MILLIS,
                     Settings.Global.FANCY_IME_ANIMATIONS,
@@ -321,6 +323,7 @@ public class SettingsBackupTest {
                     Settings.Global.LOW_POWER_MODE_SUGGESTION_PARAMS,
                     Settings.Global.LTE_SERVICE_FORCED,
                     Settings.Global.LID_BEHAVIOR,
+                    Settings.Global.MAX_ERROR_BYTES_PREFIX,
                     Settings.Global.MAX_NOTIFICATION_ENQUEUE_RATE,
                     Settings.Global.MAX_SOUND_TRIGGER_DETECTION_SERVICE_OPS_PER_DAY,
                     Settings.Global.MDC_INITIAL_MAX_RETRY,
@@ -385,7 +388,6 @@ public class SettingsBackupTest {
                     Settings.Global.OVERLAY_DISPLAY_DEVICES,
                     Settings.Global.PAC_CHANGE_DELAY,
                     Settings.Global.PACKAGE_VERIFIER_DEFAULT_RESPONSE,
-                    Settings.Global.PACKAGE_VERIFIER_ENABLE,
                     Settings.Global.PACKAGE_VERIFIER_INCLUDE_ADB,
                     Settings.Global.PACKAGE_VERIFIER_SETTING_VISIBLE,
                     Settings.Global.PACKAGE_VERIFIER_TIMEOUT,
@@ -558,6 +560,7 @@ public class SettingsBackupTest {
                     Settings.Global.WIFI_WATCHDOG_ON,
                     Settings.Global.WIMAX_NETWORKS_AVAILABLE_NOTIFICATION_ON,
                     Settings.Global.CHARGING_STARTED_SOUND,
+                    Settings.Global.WIRELESS_CHARGING_STARTED_SOUND,
                     Settings.Global.WINDOW_ANIMATION_SCALE,
                     Settings.Global.WTF_IS_FATAL,
                     Settings.Global.ZEN_MODE,
@@ -595,10 +598,14 @@ public class SettingsBackupTest {
                  Settings.Secure.ANR_SHOW_BACKGROUND,
                  Settings.Secure.ASSISTANT,
                  Settings.Secure.ASSIST_DISCLOSURE_ENABLED,
+                 Settings.Secure.ASSIST_GESTURE_ENABLED,
                  Settings.Secure.ASSIST_GESTURE_SENSITIVITY,
+                 Settings.Secure.ASSIST_GESTURE_WAKE_ENABLED,
+                 Settings.Secure.ASSIST_GESTURE_SILENCE_ALERTS_ENABLED,
                  Settings.Secure.ASSIST_GESTURE_SETUP_COMPLETE,
                  Settings.Secure.ASSIST_SCREENSHOT_ENABLED,
                  Settings.Secure.ASSIST_STRUCTURE_ENABLED,
+                 Settings.Secure.ATTENTIVE_TIMEOUT,
                  Settings.Secure.AUTOFILL_FEATURE_FIELD_CLASSIFICATION,
                  Settings.Secure.AUTOFILL_USER_DATA_MAX_CATEGORY_COUNT,
                  Settings.Secure.AUTOFILL_USER_DATA_MAX_FIELD_CLASSIFICATION_IDS_SIZE,
@@ -655,8 +662,6 @@ public class SettingsBackupTest {
                  Settings.Secure.NIGHT_DISPLAY_LAST_ACTIVATED_TIME,
                  Settings.Secure.NUM_ROTATION_SUGGESTIONS_ACCEPTED,
                  Settings.Secure.ODI_CAPTIONS_ENABLED,
-                 Settings.Secure.PACKAGE_VERIFIER_STATE,
-                 Settings.Secure.PACKAGE_VERIFIER_USER_CONSENT,
                  Settings.Secure.PARENTAL_CONTROL_LAST_UPDATE,
                  Settings.Secure.PAYMENT_SERVICE_SEARCH_URI,
                  Settings.Secure.PRINT_SERVICE_SEARCH_URI,
@@ -679,6 +684,7 @@ public class SettingsBackupTest {
                  Settings.Secure.SEARCH_SHORTCUT_REFRESH_MAX_POOL_SIZE,
                  Settings.Secure.SEARCH_SOURCE_TIMEOUT_MILLIS,
                  Settings.Secure.SEARCH_THREAD_KEEPALIVE_SECONDS,
+                 Settings.Secure.SECURE_FRP_MODE,
                  Settings.Secure.SEARCH_WEB_RESULTS_OVERRIDE_LIMIT,
                  Settings.Secure.SELECTED_INPUT_METHOD_SUBTYPE,
                  Settings.Secure.SELECTED_SPELL_CHECKER,  // Intentionally removed in Q
@@ -721,7 +727,14 @@ public class SettingsBackupTest {
                  Settings.Secure.BIOMETRIC_DEBUG_ENABLED,
                  Settings.Secure.FACE_UNLOCK_ATTENTION_REQUIRED,
                  Settings.Secure.FACE_UNLOCK_DIVERSITY_REQUIRED,
-                 Settings.Secure.MANAGED_PROVISIONING_DPC_DOWNLOADED);
+                 Settings.Secure.MANAGED_PROVISIONING_DPC_DOWNLOADED,
+                 Settings.Secure.AWARE_ENABLED,
+                 Settings.Secure.SKIP_GESTURE,
+                 Settings.Secure.SILENCE_GESTURE,
+                 Settings.Secure.DOZE_WAKE_LOCK_SCREEN_GESTURE,
+                 Settings.Secure.DOZE_WAKE_DISPLAY_GESTURE,
+                 Settings.Secure.FACE_UNLOCK_RE_ENROLL,
+                 Settings.Secure.TAP_GESTURE);
 
     @Test
     public void systemSettingsBackedUpOrBlacklisted() {
@@ -743,7 +756,7 @@ public class SettingsBackupTest {
     public void secureSettingsBackedUpOrBlacklisted() {
         HashSet<String> keys = new HashSet<String>();
         Collections.addAll(keys, SecureSettings.SETTINGS_TO_BACKUP);
-        Collections.addAll(keys, Settings.Secure.DEVICE_SPECIFIC_SETTINGS_TO_BACKUP);
+        Collections.addAll(keys, DEVICE_SPECIFIC_SETTINGS_TO_BACKUP);
         checkSettingsBackedUpOrBlacklisted(
                 getCandidateSettings(Settings.Secure.class),
                 keys,
@@ -754,12 +767,11 @@ public class SettingsBackupTest {
             Set<String> settings, Set<String> settingsToBackup, Set<String> blacklist) {
         Set<String> settingsNotBackedUp = difference(settings, settingsToBackup);
         Set<String> settingsNotBackedUpOrBlacklisted = difference(settingsNotBackedUp, blacklist);
-        assertTrue(
-                "Settings not backed up or blacklisted",
-                settingsNotBackedUpOrBlacklisted.isEmpty());
+        assertWithMessage("Settings not backed up or blacklisted")
+                .that(settingsNotBackedUpOrBlacklisted).isEmpty();
 
-        assertTrue(
-                "blacklisted settings backed up", intersect(settingsToBackup, blacklist).isEmpty());
+        assertWithMessage("blacklisted settings backed up")
+                .that(intersect(settingsToBackup, blacklist)).isEmpty();
     }
 
     private static Set<String> getCandidateSettings(

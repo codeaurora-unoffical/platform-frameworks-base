@@ -18,18 +18,27 @@ package com.android.systemui.statusbar.car;
 
 import static android.content.DialogInterface.BUTTON_NEGATIVE;
 import static android.content.DialogInterface.BUTTON_POSITIVE;
+import static android.os.UserManager.DISALLOW_ADD_USER;
+import static android.os.UserManager.SWITCHABILITY_STATUS_OK;
 
+import android.annotation.IntDef;
+import android.annotation.Nullable;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.app.Dialog;
 import android.car.userlib.CarUserManagerHelper;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.UserInfo;
 import android.content.res.Resources;
-import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.os.AsyncTask;
+import android.os.UserHandle;
+import android.os.UserManager;
 import android.util.AttributeSet;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -46,26 +55,39 @@ import com.android.internal.util.UserIcons;
 import com.android.systemui.R;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Displays a GridLayout with icons for the users in the system to allow switching between users.
  * One of the uses of this is for the lock screen in auto.
  */
-public class UserGridRecyclerView extends RecyclerView implements
-        CarUserManagerHelper.OnUsersUpdateListener {
+public class UserGridRecyclerView extends RecyclerView {
     private UserSelectionListener mUserSelectionListener;
     private UserAdapter mAdapter;
     private CarUserManagerHelper mCarUserManagerHelper;
+    private UserManager mUserManager;
     private Context mContext;
+    private UserIconProvider mUserIconProvider;
+
+    private final BroadcastReceiver mUserUpdateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            onUsersUpdate();
+        }
+    };
 
     public UserGridRecyclerView(Context context, AttributeSet attrs) {
         super(context, attrs);
         mContext = context;
         mCarUserManagerHelper = new CarUserManagerHelper(mContext);
+        mUserManager = UserManager.get(mContext);
+        mUserIconProvider = new UserIconProvider();
 
-        addItemDecoration(new ItemSpacingDecoration(context.getResources().getDimensionPixelSize(
+        addItemDecoration(new ItemSpacingDecoration(mContext.getResources().getDimensionPixelSize(
                 R.dimen.car_user_switcher_vertical_spacing_between_users)));
     }
 
@@ -75,7 +97,7 @@ public class UserGridRecyclerView extends RecyclerView implements
     @Override
     public void onFinishInflate() {
         super.onFinishInflate();
-        mCarUserManagerHelper.registerOnUsersUpdateListener(this);
+        registerForUserEvents();
     }
 
     /**
@@ -84,7 +106,7 @@ public class UserGridRecyclerView extends RecyclerView implements
     @Override
     public void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        mCarUserManagerHelper.unregisterOnUsersUpdateListener(this);
+        unregisterForUserEvents();
     }
 
     /**
@@ -93,17 +115,25 @@ public class UserGridRecyclerView extends RecyclerView implements
      * @return the adapter
      */
     public void buildAdapter() {
-        List<UserRecord> userRecords = createUserRecords(mCarUserManagerHelper
-                .getAllUsers());
+        List<UserRecord> userRecords = createUserRecords(getUsersForUserGrid());
         mAdapter = new UserAdapter(mContext, userRecords);
         super.setAdapter(mAdapter);
     }
 
+    private List<UserInfo> getUsersForUserGrid() {
+        return mUserManager.getUsers(/* excludeDying= */ true)
+                .stream()
+                .filter(UserInfo::supportsSwitchToByUser)
+                .collect(Collectors.toList());
+    }
+
     private List<UserRecord> createUserRecords(List<UserInfo> userInfoList) {
+        int fgUserId = ActivityManager.getCurrentUser();
+        UserHandle fgUserHandle = UserHandle.of(fgUserId);
         List<UserRecord> userRecords = new ArrayList<>();
 
         // If the foreground user CANNOT switch to other users, only display the foreground user.
-        if (!mCarUserManagerHelper.canForegroundUserSwitchUsers()) {
+        if (mUserManager.getUserSwitchability(fgUserHandle) != SWITCHABILITY_STATUS_OK) {
             userRecords.add(createForegroundUserRecord());
             return userRecords;
         }
@@ -114,10 +144,9 @@ public class UserGridRecyclerView extends RecyclerView implements
                 continue;
             }
 
-            boolean isForeground =
-                    mCarUserManagerHelper.getCurrentForegroundUserId() == userInfo.id;
-            UserRecord record = new UserRecord(userInfo, false /* isStartGuestSession */,
-                    false /* isAddUser */, isForeground);
+            boolean isForeground = fgUserId == userInfo.id;
+            UserRecord record = new UserRecord(userInfo,
+                    isForeground ? UserRecord.FOREGROUND_USER : UserRecord.BACKGROUND_USER);
             userRecords.add(record);
         }
 
@@ -125,7 +154,7 @@ public class UserGridRecyclerView extends RecyclerView implements
         userRecords.add(createStartGuestUserRecord());
 
         // Add add user record if the foreground user can add users
-        if (mCarUserManagerHelper.canForegroundUserAddUsers()) {
+        if (!mUserManager.hasUserRestriction(DISALLOW_ADD_USER, fgUserHandle)) {
             userRecords.add(createAddUserRecord());
         }
 
@@ -133,39 +162,50 @@ public class UserGridRecyclerView extends RecyclerView implements
     }
 
     private UserRecord createForegroundUserRecord() {
-        return new UserRecord(mCarUserManagerHelper.getCurrentForegroundUserInfo(),
-                false /* isStartGuestSession */, false /* isAddUser */, true /* isForeground */);
+        return new UserRecord(mUserManager.getUserInfo(ActivityManager.getCurrentUser()),
+                UserRecord.FOREGROUND_USER);
     }
 
     /**
      * Create guest user record
      */
     private UserRecord createStartGuestUserRecord() {
-        UserInfo userInfo = new UserInfo();
-        userInfo.name = mContext.getString(R.string.start_guest_session);
-        return new UserRecord(userInfo, true /* isStartGuestSession */, false /* isAddUser */,
-                false /* isForeground */);
+        return new UserRecord(null /* userInfo */, UserRecord.START_GUEST);
     }
 
     /**
      * Create add user record
      */
     private UserRecord createAddUserRecord() {
-        UserInfo userInfo = new UserInfo();
-        userInfo.name = mContext.getString(R.string.car_add_user);
-        return new UserRecord(userInfo, false /* isStartGuestSession */,
-                true /* isAddUser */, false /* isForeground */);
+        return new UserRecord(null /* userInfo */, UserRecord.ADD_USER);
     }
 
     public void setUserSelectionListener(UserSelectionListener userSelectionListener) {
         mUserSelectionListener = userSelectionListener;
     }
 
-    @Override
-    public void onUsersUpdate() {
+    private void onUsersUpdate() {
         mAdapter.clearUsers();
-        mAdapter.updateUsers(createUserRecords(mCarUserManagerHelper.getAllUsers()));
+        mAdapter.updateUsers(createUserRecords(getUsersForUserGrid()));
         mAdapter.notifyDataSetChanged();
+    }
+
+    private void registerForUserEvents() {
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_USER_REMOVED);
+        filter.addAction(Intent.ACTION_USER_ADDED);
+        filter.addAction(Intent.ACTION_USER_INFO_CHANGED);
+        filter.addAction(Intent.ACTION_USER_SWITCHED);
+        mContext.registerReceiverAsUser(
+                mUserUpdateReceiver,
+                UserHandle.ALL, // Necessary because CarSystemUi lives in User 0
+                filter,
+                /* broadcastPermission= */ null,
+                /* scheduler= */ null);
+    }
+
+    private void unregisterForUserEvents() {
+        mContext.unregisterReceiver(mUserUpdateReceiver);
     }
 
     /**
@@ -213,47 +253,77 @@ public class UserGridRecyclerView extends RecyclerView implements
         @Override
         public void onBindViewHolder(UserAdapterViewHolder holder, int position) {
             UserRecord userRecord = mUsers.get(position);
-            RoundedBitmapDrawable circleIcon = RoundedBitmapDrawableFactory.create(mRes,
-                    getUserRecordIcon(userRecord));
-            circleIcon.setCircular(true);
+            RoundedBitmapDrawable circleIcon = getCircularUserRecordIcon(userRecord);
             holder.mUserAvatarImageView.setImageDrawable(circleIcon);
-            holder.mUserNameTextView.setText(userRecord.mInfo.name);
+            holder.mUserNameTextView.setText(getUserRecordName(userRecord));
 
             holder.mView.setOnClickListener(v -> {
                 if (userRecord == null) {
                     return;
                 }
 
-                if (userRecord.mIsStartGuestSession) {
-                    notifyUserSelected(userRecord);
-                    mCarUserManagerHelper.startGuestSession(mGuestName);
-                    return;
-                }
+                switch (userRecord.mType) {
+                    case UserRecord.START_GUEST:
+                        notifyUserSelected(userRecord);
+                        UserInfo guest = createNewOrFindExistingGuest(mContext);
+                        if (guest != null) {
+                            mCarUserManagerHelper.switchToUser(guest);
+                        }
+                        break;
+                    case UserRecord.ADD_USER:
+                        // If the user wants to add a user, show dialog to confirm adding a user
+                        // Disable button so it cannot be clicked multiple times
+                        mAddUserView = holder.mView;
+                        mAddUserView.setEnabled(false);
+                        mAddUserRecord = userRecord;
 
-                // If the user wants to add a user, show dialog to confirm adding a user
-                if (userRecord.mIsAddUser) {
-                    // Disable button so it cannot be clicked multiple times
-                    mAddUserView = holder.mView;
-                    mAddUserView.setEnabled(false);
-                    mAddUserRecord = userRecord;
-
-                    handleAddUserClicked();
-                    return;
+                        handleAddUserClicked();
+                        break;
+                    default:
+                        // If the user doesn't want to be a guest or add a user, switch to the user
+                        // selected
+                        notifyUserSelected(userRecord);
+                        mCarUserManagerHelper.switchToUser(userRecord.mInfo);
                 }
-                // If the user doesn't want to be a guest or add a user, switch to the user selected
-                notifyUserSelected(userRecord);
-                mCarUserManagerHelper.switchToUser(userRecord.mInfo);
             });
 
         }
 
         private void handleAddUserClicked() {
-            if (mCarUserManagerHelper.isUserLimitReached()) {
+            if (!mUserManager.canAddMoreUsers()) {
                 mAddUserView.setEnabled(true);
                 showMaxUserLimitReachedDialog();
             } else {
                 showConfirmAddUserDialog();
             }
+        }
+
+        /**
+         * Get the maximum number of real (non-guest, non-managed profile) users that can be created
+         * on the device. This is a dynamic value and it decreases with the increase of the number
+         * of managed profiles on the device.
+         *
+         * <p> It excludes system user in headless system user model.
+         *
+         * @return Maximum number of real users that can be created.
+         */
+        private int getMaxSupportedRealUsers() {
+            int maxSupportedUsers = UserManager.getMaxSupportedUsers();
+            if (UserManager.isHeadlessSystemUserMode()) {
+                maxSupportedUsers -= 1;
+            }
+
+            List<UserInfo> users = mUserManager.getUsers(/* excludeDying= */ true);
+
+            // Count all users that are managed profiles of another user.
+            int managedProfilesCount = 0;
+            for (UserInfo user : users) {
+                if (user.isManagedProfile()) {
+                    managedProfilesCount++;
+                }
+            }
+
+            return maxSupportedUsers - managedProfilesCount;
         }
 
         private void showMaxUserLimitReachedDialog() {
@@ -262,8 +332,8 @@ public class UserGridRecyclerView extends RecyclerView implements
                     .setTitle(R.string.user_limit_reached_title)
                     .setMessage(getResources().getQuantityString(
                             R.plurals.user_limit_reached_message,
-                            mCarUserManagerHelper.getMaxSupportedRealUsers(),
-                            mCarUserManagerHelper.getMaxSupportedRealUsers()))
+                            getMaxSupportedRealUsers(),
+                            getMaxSupportedRealUsers()))
                     .setPositiveButton(android.R.string.ok, null)
                     .create();
             // Sets window flags for the SysUI dialog
@@ -297,17 +367,63 @@ public class UserGridRecyclerView extends RecyclerView implements
             }
         }
 
-        private Bitmap getUserRecordIcon(UserRecord userRecord) {
-            if (userRecord.mIsStartGuestSession) {
-                return mCarUserManagerHelper.getGuestDefaultIcon();
+        private RoundedBitmapDrawable getCircularUserRecordIcon(UserRecord userRecord) {
+            Resources resources = mContext.getResources();
+            RoundedBitmapDrawable circleIcon;
+            switch (userRecord.mType) {
+                case UserRecord.START_GUEST:
+                    circleIcon = mUserIconProvider.getRoundedGuestDefaultIcon(resources);
+                    break;
+                case UserRecord.ADD_USER:
+                    circleIcon = getCircularAddUserIcon();
+                    break;
+                default:
+                    circleIcon = mUserIconProvider.getRoundedUserIcon(userRecord.mInfo, mContext);
+                    break;
+            }
+            return circleIcon;
+        }
+
+        private RoundedBitmapDrawable getCircularAddUserIcon() {
+            RoundedBitmapDrawable circleIcon =
+                    RoundedBitmapDrawableFactory.create(mRes, UserIcons.convertToBitmap(
+                    mContext.getDrawable(R.drawable.car_add_circle_round)));
+            circleIcon.setCircular(true);
+            return circleIcon;
+        }
+
+        private String getUserRecordName(UserRecord userRecord) {
+            String recordName;
+            switch (userRecord.mType) {
+                case UserRecord.START_GUEST:
+                    recordName = mContext.getString(R.string.start_guest_session);
+                    break;
+                case UserRecord.ADD_USER:
+                    recordName = mContext.getString(R.string.car_add_user);
+                    break;
+                default:
+                    recordName = userRecord.mInfo.name;
+                    break;
+            }
+            return recordName;
+        }
+
+        /**
+         * Finds the existing Guest user, or creates one if it doesn't exist.
+         * @param context App context
+         * @return UserInfo representing the Guest user
+         */
+        @Nullable
+        public UserInfo createNewOrFindExistingGuest(Context context) {
+            // CreateGuest will return null if a guest already exists.
+            UserInfo newGuest = mUserManager.createGuest(context, mGuestName);
+            if (newGuest != null) {
+                new UserIconProvider().assignDefaultIcon(
+                        mUserManager, context.getResources(), newGuest);
+                return newGuest;
             }
 
-            if (userRecord.mIsAddUser) {
-                return UserIcons.convertToBitmap(mContext
-                        .getDrawable(R.drawable.car_add_circle_round));
-            }
-
-            return mCarUserManagerHelper.getUserIcon(userRecord.mInfo);
+            return mUserManager.findCurrentGuestUser();
         }
 
         @Override
@@ -375,18 +491,21 @@ public class UserGridRecyclerView extends RecyclerView implements
      * guest profile, add user profile, or the foreground user.
      */
     public static final class UserRecord {
-
         public final UserInfo mInfo;
-        public final boolean mIsStartGuestSession;
-        public final boolean mIsAddUser;
-        public final boolean mIsForeground;
+        public final @UserRecordType int mType;
 
-        public UserRecord(UserInfo userInfo, boolean isStartGuestSession, boolean isAddUser,
-                boolean isForeground) {
+        public static final int START_GUEST = 0;
+        public static final int ADD_USER = 1;
+        public static final int FOREGROUND_USER = 2;
+        public static final int BACKGROUND_USER = 3;
+
+        @IntDef({START_GUEST, ADD_USER, FOREGROUND_USER, BACKGROUND_USER})
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface UserRecordType{}
+
+        public UserRecord(@Nullable UserInfo userInfo, @UserRecordType int recordType) {
             mInfo = userInfo;
-            mIsStartGuestSession = isStartGuestSession;
-            mIsAddUser = isAddUser;
-            mIsForeground = isForeground;
+            mType = recordType;
         }
     }
 

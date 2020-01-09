@@ -18,6 +18,9 @@ package com.android.systemui.statusbar.notification.stack;
 
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
+import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_ALERTING;
+import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_SILENT;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -41,6 +44,7 @@ import com.android.systemui.ActivityStarterDelegate;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.StatusBarState;
+import com.android.systemui.statusbar.notification.people.PeopleHubSectionFooterViewAdapter;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 
@@ -63,6 +67,7 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     @Mock private ActivityStarterDelegate mActivityStarterDelegate;
     @Mock private StatusBarStateController mStatusBarStateController;
     @Mock private ConfigurationController mConfigurationController;
+    @Mock private PeopleHubSectionFooterViewAdapter mPeopleHubAdapter;
 
     private NotificationSectionsManager mSectionsManager;
 
@@ -74,7 +79,8 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
                         mActivityStarterDelegate,
                         mStatusBarStateController,
                         mConfigurationController,
-                        true);
+                        mPeopleHubAdapter,
+                        2);
         // Required in order for the header inflation to work properly
         when(mNssl.generateLayoutParams(any(AttributeSet.class)))
                 .thenReturn(new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
@@ -263,8 +269,8 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
                     when(notifRow.getVisibility()).thenReturn(View.VISIBLE);
                     when(notifRow.getEntry().isHighPriority())
                             .thenReturn(children[i] == ChildType.HIPRI);
-                    when(notifRow.getEntry().isTopBucket())
-                            .thenReturn(children[i] == ChildType.HIPRI);
+                    when(notifRow.getEntry().getBucket()).thenReturn(
+                            children[i] == ChildType.HIPRI ? BUCKET_ALERTING : BUCKET_SILENT);
                     when(notifRow.getParent()).thenReturn(mNssl);
                     child = notifRow;
                     break;

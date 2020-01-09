@@ -215,6 +215,12 @@ class ZygoteArguments {
     boolean mIsTopApp;
 
     /**
+     * A set of disabled app compatibility changes for the running app. From
+     * --disabled-compat-changes.
+     */
+    long[] mDisabledCompatChanges = null;
+
+    /**
      * Constructs instance and parses args
      *
      * @param args zygote command-line args
@@ -362,6 +368,8 @@ class ZygoteArguments {
                 mMountExternal = Zygote.MOUNT_EXTERNAL_INSTALLER;
             }  else if (arg.equals("--mount-external-legacy")) {
                 mMountExternal = Zygote.MOUNT_EXTERNAL_LEGACY;
+            } else if (arg.equals("--mount-external-pass-through")) {
+                mMountExternal = Zygote.MOUNT_EXTERNAL_PASS_THROUGH;
             } else if (arg.equals("--query-abi-list")) {
                 mAbiListQuery = true;
             } else if (arg.equals("--get-pid")) {
@@ -419,6 +427,16 @@ class ZygoteArguments {
                 expectRuntimeArgs = false;
             } else if (arg.startsWith(Zygote.START_AS_TOP_APP_ARG)) {
                 mIsTopApp = true;
+            } else if (arg.startsWith("--disabled-compat-changes=")) {
+                if (mDisabledCompatChanges != null) {
+                    throw new IllegalArgumentException("Duplicate arg specified");
+                }
+                final String[] params = getAssignmentList(arg);
+                final int length = params.length;
+                mDisabledCompatChanges = new long[length];
+                for (int i = 0; i < length; i++) {
+                    mDisabledCompatChanges[i] = Long.parseLong(params[i]);
+                }
             } else {
                 break;
             }

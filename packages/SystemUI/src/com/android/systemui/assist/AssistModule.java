@@ -16,16 +16,17 @@
 
 package com.android.systemui.assist;
 
+import android.app.Service;
 import android.content.Context;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
 
+import androidx.annotation.Nullable;
 import androidx.slice.Clock;
 
 import com.android.internal.app.AssistUtils;
-import com.android.systemui.ScreenDecorations;
-import com.android.systemui.SysUiServiceProvider;
+import com.android.systemui.statusbar.NavigationBarController;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -33,8 +34,11 @@ import java.util.Map;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
+import dagger.Binds;
 import dagger.Module;
 import dagger.Provides;
+import dagger.multibindings.ClassKey;
+import dagger.multibindings.IntoMap;
 
 /** Module for dagger injections related to the Assistant. */
 @Module
@@ -69,8 +73,10 @@ public abstract class AssistModule {
     }
 
     @Provides
-    static ScreenDecorations provideScreenDecorations(Context context) {
-        return SysUiServiceProvider.getComponent(context, ScreenDecorations.class);
+    @Nullable
+    static AssistHandleViewController provideAssistHandleViewController(
+            NavigationBarController navigationBarController) {
+        return navigationBarController.getAssistHandlerViewController();
     }
 
     @Provides
@@ -85,4 +91,9 @@ public abstract class AssistModule {
     static Clock provideSystemClock() {
         return SystemClock::uptimeMillis;
     }
+
+    @Binds
+    @IntoMap
+    @ClassKey(AssistHandleService.class)
+    abstract Service bindAssistHandleService(AssistHandleService assistHandleService);
 }

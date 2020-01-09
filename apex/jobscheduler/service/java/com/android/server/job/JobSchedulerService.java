@@ -37,7 +37,6 @@ import android.app.job.JobSnapshot;
 import android.app.job.JobWorkItem;
 import android.app.usage.UsageStatsManager;
 import android.app.usage.UsageStatsManagerInternal;
-import android.app.usage.UsageStatsManagerInternal.AppIdleStateChangeListener;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.ContentResolver;
@@ -56,17 +55,13 @@ import android.os.BatteryStats;
 import android.os.BatteryStatsInternal;
 import android.os.Binder;
 import android.os.Handler;
-import android.os.IThermalService;
-import android.os.IThermalStatusListener;
 import android.os.Looper;
 import android.os.Message;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.RemoteException;
-import android.os.ResultReceiver;
 import android.os.ServiceManager;
-import android.os.ShellCallback;
 import android.os.SystemClock;
-import android.os.Temperature;
 import android.os.UserHandle;
 import android.os.UserManagerInternal;
 import android.os.WorkSource;
@@ -81,7 +76,6 @@ import android.util.StatsLog;
 import android.util.TimeUtils;
 import android.util.proto.ProtoOutputStream;
 
-import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.util.ArrayUtils;
@@ -105,12 +99,19 @@ import com.android.server.job.controllers.QuotaController;
 import com.android.server.job.controllers.StateController;
 import com.android.server.job.controllers.StorageController;
 import com.android.server.job.controllers.TimeController;
+import com.android.server.job.restrictions.JobRestriction;
+import com.android.server.job.restrictions.ThermalStatusRestriction;
+import com.android.server.usage.AppStandbyInternal;
+import com.android.server.usage.AppStandbyInternal.AppIdleStateChangeListener;
 
 import libcore.util.EmptyArray;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -146,10 +147,53 @@ public class JobSchedulerService extends com.android.server.SystemService
 
     @VisibleForTesting
     public static Clock sSystemClock = Clock.systemUTC();
+
+    private abstract static class MySimpleClock extends Clock {
+        private final ZoneId mZoneId;
+
+        MySimpleClock(ZoneId zoneId) {
+            this.mZoneId = zoneId;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return mZoneId;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return new MySimpleClock(zone) {
+                @Override
+                public long millis() {
+                    return MySimpleClock.this.millis();
+                }
+            };
+        }
+
+        @Override
+        public abstract long millis();
+
+        @Override
+        public Instant instant() {
+            return Instant.ofEpochMilli(millis());
+        }
+    }
+
     @VisibleForTesting
-    public static Clock sUptimeMillisClock = SystemClock.uptimeClock();
+    public static Clock sUptimeMillisClock = new MySimpleClock(ZoneOffset.UTC) {
+        @Override
+        public long millis() {
+            return SystemClock.uptimeMillis();
+        }
+    };
+
     @VisibleForTesting
-    public static Clock sElapsedRealtimeClock = SystemClock.elapsedRealtimeClock();
+    public static Clock sElapsedRealtimeClock =  new MySimpleClock(ZoneOffset.UTC) {
+        @Override
+        public long millis() {
+            return SystemClock.elapsedRealtime();
+        }
+    };
 
     /** Global local for all job scheduler state. */
     final Object mLock = new Object();
@@ -186,12 +230,12 @@ public class JobSchedulerService extends com.android.server.SystemService
     private final DeviceIdleJobsController mDeviceIdleJobsController;
     /** Needed to get remaining quota time. */
     private final QuotaController mQuotaController;
-
-    /** Need directly for receiving thermal events */
-    private IThermalService mThermalService;
-    /** Thermal constraint. */
-    @GuardedBy("mLock")
-    private boolean mThermalConstraint = false;
+    /**
+     * List of restrictions.
+     * Note: do not add to or remove from this list at runtime except in the constructor, because we
+     * do not synchronize access to this list.
+     */
+    private final List<JobRestriction> mJobRestrictions;
 
     /**
      * Queue of pending jobs. The JobServiceContext class will receive jobs from this list
@@ -220,11 +264,6 @@ public class JobSchedulerService extends com.android.server.SystemService
      * What we last reported to DeviceIdleController about whether we are active.
      */
     boolean mReportedActive;
-
-    /**
-     * Are we currently in device-wide standby parole?
-     */
-    volatile boolean mInParole;
 
     /**
      * A mapping of which uids are currently in the foreground to their effective priority.
@@ -282,19 +321,6 @@ public class JobSchedulerService extends com.android.server.SystemService
                     Slog.e(TAG, "Bad jobscheduler settings", e);
                 }
             }
-        }
-    }
-
-    /**
-     *  Thermal event received from Thermal Service
-     */
-    private final class ThermalStatusListener extends IThermalStatusListener.Stub {
-        @Override public void onStatusChange(int status) {
-            // Throttle for Temperature.THROTTLING_SEVERE and above
-            synchronized (mLock) {
-                mThermalConstraint = status >= Temperature.THROTTLING_SEVERE;
-            }
-            onControllerStateChanged();
         }
     }
 
@@ -872,7 +898,8 @@ public class JobSchedulerService extends com.android.server.SystemService
     }
 
     final private IUidObserver mUidObserver = new IUidObserver.Stub() {
-        @Override public void onUidStateChanged(int uid, int procState, long procStateSeq) {
+        @Override public void onUidStateChanged(int uid, int procState, long procStateSeq,
+                int capability) {
             mHandler.obtainMessage(MSG_UID_STATE_CHANGED, uid, procState).sendToTarget();
         }
 
@@ -994,17 +1021,18 @@ public class JobSchedulerService extends com.android.server.SystemService
             // This may throw a SecurityException.
             jobStatus.prepareLocked();
 
-            if (work != null) {
-                // If work has been supplied, enqueue it into the new job.
-                jobStatus.enqueueWorkLocked(work);
-            }
-
             if (toCancel != null) {
                 // Implicitly replaces the existing job record with the new instance
                 cancelJobImplLocked(toCancel, jobStatus, "job rescheduled by app");
             } else {
                 startTrackingJobLocked(jobStatus, null);
             }
+
+            if (work != null) {
+                // If work has been supplied, enqueue it into the new job.
+                jobStatus.enqueueWorkLocked(work);
+            }
+
             StatsLog.write_non_chained(StatsLog.SCHEDULED_JOB_STATE_CHANGED,
                     uId, null, jobStatus.getBatteryName(),
                     StatsLog.SCHEDULED_JOB_STATE_CHANGED__STATE__SCHEDULED,
@@ -1268,7 +1296,9 @@ public class JobSchedulerService extends com.android.server.SystemService
         // Set up the app standby bucketing tracker
         mStandbyTracker = new StandbyTracker();
         mUsageStats = LocalServices.getService(UsageStatsManagerInternal.class);
-        mUsageStats.addAppIdleStateChangeListener(mStandbyTracker);
+
+        AppStandbyInternal appStandby = LocalServices.getService(AppStandbyInternal.class);
+        appStandby.addListener(mStandbyTracker);
 
         // The job store needs to call back
         publishLocalService(JobSchedulerInternal.class, new LocalService());
@@ -1291,6 +1321,10 @@ public class JobSchedulerService extends com.android.server.SystemService
         mControllers.add(mDeviceIdleJobsController);
         mQuotaController = new QuotaController(this);
         mControllers.add(mQuotaController);
+
+        // Create restrictions
+        mJobRestrictions = new ArrayList<>();
+        mJobRestrictions.add(new ThermalStatusRestriction(this));
 
         // If the job store determined that it can't yet reschedule persisted jobs,
         // we need to start watching the clock.
@@ -1383,15 +1417,9 @@ public class JobSchedulerService extends com.android.server.SystemService
 
             // Remove any jobs that are not associated with any of the current users.
             cancelJobsForNonExistentUsers();
-            // Register thermal callback
-            mThermalService = IThermalService.Stub.asInterface(
-                    ServiceManager.getService(Context.THERMAL_SERVICE));
-            if (mThermalService != null) {
-                try {
-                    mThermalService.registerThermalStatusListener(new ThermalStatusListener());
-                } catch (RemoteException e) {
-                    Slog.e(TAG, "Failed to register thermal callback.", e);
-                }
+
+            for (int i = mJobRestrictions.size() - 1; i >= 0; i--) {
+                mJobRestrictions.get(i).onSystemServicesReady();
             }
         } else if (phase == PHASE_THIRD_PARTY_APPS_CAN_START) {
             synchronized (mLock) {
@@ -1833,9 +1861,28 @@ public class JobSchedulerService extends com.android.server.SystemService
         }
     }
 
-    private boolean isJobThermalConstrainedLocked(JobStatus job) {
-        return mThermalConstraint && job.hasConnectivityConstraint()
-                && (evaluateJobPriorityLocked(job) < JobInfo.PRIORITY_FOREGROUND_APP);
+    /**
+     * Check if a job is restricted by any of the declared {@link JobRestriction}s.
+     * Note, that the jobs with {@link JobInfo#PRIORITY_FOREGROUND_APP} priority or higher may not
+     * be restricted, thus we won't even perform the check, but simply return null early.
+     *
+     * @param job to be checked
+     * @return the first {@link JobRestriction} restricting the given job that has been found; null
+     * - if passes all the restrictions or has priority {@link JobInfo#PRIORITY_FOREGROUND_APP}
+     * or higher.
+     */
+    private JobRestriction checkIfRestricted(JobStatus job) {
+        if (evaluateJobPriorityLocked(job) >= JobInfo.PRIORITY_FOREGROUND_APP) {
+            // Jobs with PRIORITY_FOREGROUND_APP or higher should not be restricted
+            return null;
+        }
+        for (int i = mJobRestrictions.size() - 1; i >= 0; i--) {
+            final JobRestriction restriction = mJobRestrictions.get(i);
+            if (restriction.isJobRestricted(job)) {
+                return restriction;
+            }
+        }
+        return null;
     }
 
     private void stopNonReadyActiveJobsLocked() {
@@ -1849,10 +1896,13 @@ public class JobSchedulerService extends com.android.server.SystemService
                 serviceContext.cancelExecutingJobLocked(
                         JobParameters.REASON_CONSTRAINTS_NOT_SATISFIED,
                         "cancelled due to unsatisfied constraints");
-            } else if (isJobThermalConstrainedLocked(running)) {
-                serviceContext.cancelExecutingJobLocked(
-                        JobParameters.REASON_DEVICE_THERMAL,
-                        "cancelled due to thermal condition");
+            } else {
+                final JobRestriction restriction = checkIfRestricted(running);
+                if (restriction != null) {
+                    final int reason = restriction.getReason();
+                    serviceContext.cancelExecutingJobLocked(reason,
+                            "restricted due to " + JobParameters.getReasonName(reason));
+                }
             }
         }
     }
@@ -2089,7 +2139,7 @@ public class JobSchedulerService extends com.android.server.SystemService
             return false;
         }
 
-        if (isJobThermalConstrainedLocked(job)) {
+        if (checkIfRestricted(job) != null) {
             return false;
         }
 
@@ -2121,7 +2171,7 @@ public class JobSchedulerService extends com.android.server.SystemService
                     job.getServiceComponent(), PackageManager.MATCH_DEBUG_TRIAGED_MISSING,
                     job.getUserId());
         } catch (RemoteException e) {
-            throw e.rethrowAsRuntimeException();
+            throw new RuntimeException(e);
         }
 
         if (service == null) {
@@ -2170,7 +2220,7 @@ public class JobSchedulerService extends com.android.server.SystemService
             return false;
         }
 
-        if (isJobThermalConstrainedLocked(job)) {
+        if (checkIfRestricted(job) != null) {
             return false;
         }
 
@@ -2306,14 +2356,6 @@ public class JobSchedulerService extends com.android.server.SystemService
         public void onAppIdleStateChanged(final String packageName, final @UserIdInt int userId,
                 boolean idle, int bucket, int reason) {
             // QuotaController handles this now.
-        }
-
-        @Override
-        public void onParoleStateChanged(boolean isParoleOn) {
-            if (DEBUG_STANDBY) {
-                Slog.i(TAG, "Global parole state now " + (isParoleOn ? "ON" : "OFF"));
-            }
-            mInParole = isParoleOn;
         }
 
         @Override
@@ -2647,10 +2689,12 @@ public class JobSchedulerService extends com.android.server.SystemService
         }
 
         @Override
-        public void onShellCommand(FileDescriptor in, FileDescriptor out, FileDescriptor err,
-                String[] args, ShellCallback callback, ResultReceiver resultReceiver) {
-                (new JobSchedulerShellCommand(JobSchedulerService.this)).exec(
-                        this, in, out, err, args, callback, resultReceiver);
+        public int handleShellCommand(@NonNull ParcelFileDescriptor in,
+                @NonNull ParcelFileDescriptor out, @NonNull ParcelFileDescriptor err,
+                @NonNull String[] args) {
+            return (new JobSchedulerShellCommand(JobSchedulerService.this)).exec(
+                    this, in.getFileDescriptor(), out.getFileDescriptor(), err.getFileDescriptor(),
+                    args);
         }
 
         /**
@@ -2979,12 +3023,11 @@ public class JobSchedulerService extends com.android.server.SystemService
             }
             pw.println();
 
-            pw.print("    In parole?: ");
-            pw.print(mInParole);
-            pw.println();
-            pw.print("    In thermal throttling?: ");
-            pw.print(mThermalConstraint);
-            pw.println();
+            for (int i = mJobRestrictions.size() - 1; i >= 0; i--) {
+                pw.print("    ");
+                mJobRestrictions.get(i).dumpConstants(pw);
+                pw.println();
+            }
             pw.println();
 
             pw.println("Started users: " + Arrays.toString(mStartedUsers));
@@ -3005,14 +3048,30 @@ public class JobSchedulerService extends com.android.server.SystemService
 
                     job.dump(pw, "    ", true, nowElapsed);
 
+
+                    pw.print("    Restricted due to:");
+                    final boolean isRestricted = checkIfRestricted(job) != null;
+                    if (isRestricted) {
+                        for (int i = mJobRestrictions.size() - 1; i >= 0; i--) {
+                            final JobRestriction restriction = mJobRestrictions.get(i);
+                            if (restriction.isJobRestricted(job)) {
+                                final int reason = restriction.getReason();
+                                pw.write(" " + JobParameters.getReasonName(reason) + "[" + reason + "]");
+                            }
+                        }
+                    } else {
+                        pw.print(" none");
+                    }
+                    pw.println(".");
+
                     pw.print("    Ready: ");
                     pw.print(isReadyToBeExecutedLocked(job));
                     pw.print(" (job=");
                     pw.print(job.isReady());
                     pw.print(" user=");
                     pw.print(areUsersStartedLocked(job));
-                    pw.print(" !thermal=");
-                    pw.print(!isJobThermalConstrainedLocked(job));
+                    pw.print(" !restricted=");
+                    pw.print(!isRestricted);
                     pw.print(" !pending=");
                     pw.print(!mPendingJobs.contains(job));
                     pw.print(" !active=");
@@ -3151,8 +3210,9 @@ public class JobSchedulerService extends com.android.server.SystemService
             }
             proto.end(settingsToken);
 
-            proto.write(JobSchedulerServiceDumpProto.IN_PAROLE, mInParole);
-            proto.write(JobSchedulerServiceDumpProto.IN_THERMAL, mThermalConstraint);
+            for (int i = mJobRestrictions.size() - 1; i >= 0; i--) {
+                mJobRestrictions.get(i).dumpConstants(proto);
+            }
 
             for (int u : mStartedUsers) {
                 proto.write(JobSchedulerServiceDumpProto.STARTED_USERS, u);
@@ -3179,8 +3239,8 @@ public class JobSchedulerService extends com.android.server.SystemService
                     proto.write(JobSchedulerServiceDumpProto.RegisteredJob.ARE_USERS_STARTED,
                             areUsersStartedLocked(job));
                     proto.write(
-                            JobSchedulerServiceDumpProto.RegisteredJob.IS_JOB_THERMAL_CONSTRAINED,
-                            isJobThermalConstrainedLocked(job));
+                            JobSchedulerServiceDumpProto.RegisteredJob.IS_JOB_RESTRICTED,
+                            checkIfRestricted(job) != null);
                     proto.write(JobSchedulerServiceDumpProto.RegisteredJob.IS_JOB_PENDING,
                             mPendingJobs.contains(job));
                     proto.write(JobSchedulerServiceDumpProto.RegisteredJob.IS_JOB_CURRENTLY_ACTIVE,
@@ -3189,6 +3249,16 @@ public class JobSchedulerService extends com.android.server.SystemService
                             mBackingUpUids.indexOfKey(job.getSourceUid()) >= 0);
                     proto.write(JobSchedulerServiceDumpProto.RegisteredJob.IS_COMPONENT_USABLE,
                             isComponentUsable(job));
+
+                    for (JobRestriction restriction : mJobRestrictions) {
+                        final long restrictionsToken = proto.start(
+                                JobSchedulerServiceDumpProto.RegisteredJob.RESTRICTIONS);
+                        proto.write(JobSchedulerServiceDumpProto.JobRestriction.REASON,
+                                restriction.getReason());
+                        proto.write(JobSchedulerServiceDumpProto.JobRestriction.IS_RESTRICTING,
+                                restriction.isJobRestricted(job));
+                        proto.end(restrictionsToken);
+                    }
 
                     proto.end(rjToken);
                 }
@@ -3275,7 +3345,7 @@ public class JobSchedulerService extends com.android.server.SystemService
             mConcurrencyManager.dumpProtoLocked(proto,
                     JobSchedulerServiceDumpProto.CONCURRENCY_MANAGER, now, nowElapsed);
 
-            mJobs.getPersistStats().writeToProto(proto, JobSchedulerServiceDumpProto.PERSIST_STATS);
+            mJobs.getPersistStats().dumpDebug(proto, JobSchedulerServiceDumpProto.PERSIST_STATS);
         }
 
         proto.flush();

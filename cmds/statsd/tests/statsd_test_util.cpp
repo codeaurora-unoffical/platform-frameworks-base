@@ -251,6 +251,101 @@ Predicate CreateIsInBackgroundPredicate() {
     return predicate;
 }
 
+State CreateScreenState() {
+    State state;
+    state.set_id(StringToId("ScreenState"));
+    state.set_atom_id(android::util::SCREEN_STATE_CHANGED);
+    return state;
+}
+
+State CreateUidProcessState() {
+    State state;
+    state.set_id(StringToId("UidProcessState"));
+    state.set_atom_id(android::util::UID_PROCESS_STATE_CHANGED);
+    return state;
+}
+
+State CreateOverlayState() {
+    State state;
+    state.set_id(StringToId("OverlayState"));
+    state.set_atom_id(android::util::OVERLAY_STATE_CHANGED);
+    return state;
+}
+
+State CreateScreenStateWithOnOffMap() {
+    State state;
+    state.set_id(StringToId("ScreenStateOnOff"));
+    state.set_atom_id(android::util::SCREEN_STATE_CHANGED);
+
+    auto map = CreateScreenStateOnOffMap();
+    *state.mutable_map() = map;
+
+    return state;
+}
+
+State CreateScreenStateWithInDozeMap() {
+    State state;
+    state.set_id(StringToId("ScreenStateInDoze"));
+    state.set_atom_id(android::util::SCREEN_STATE_CHANGED);
+
+    auto map = CreateScreenStateInDozeMap();
+    *state.mutable_map() = map;
+
+    return state;
+}
+
+StateMap_StateGroup CreateScreenStateOnGroup() {
+    StateMap_StateGroup group;
+    group.set_group_id(StringToId("SCREEN_ON"));
+    group.add_value(2);
+    group.add_value(5);
+    group.add_value(6);
+    return group;
+}
+
+StateMap_StateGroup CreateScreenStateOffGroup() {
+    StateMap_StateGroup group;
+    group.set_group_id(StringToId("SCREEN_OFF"));
+    group.add_value(0);
+    group.add_value(1);
+    group.add_value(3);
+    group.add_value(4);
+    return group;
+}
+
+StateMap CreateScreenStateOnOffMap() {
+    StateMap map;
+    *map.add_group() = CreateScreenStateOnGroup();
+    *map.add_group() = CreateScreenStateOffGroup();
+    return map;
+}
+
+StateMap_StateGroup CreateScreenStateInDozeGroup() {
+    StateMap_StateGroup group;
+    group.set_group_id(StringToId("SCREEN_DOZE"));
+    group.add_value(3);
+    group.add_value(4);
+    return group;
+}
+
+StateMap_StateGroup CreateScreenStateNotDozeGroup() {
+    StateMap_StateGroup group;
+    group.set_group_id(StringToId("SCREEN_NOT_DOZE"));
+    group.add_value(0);
+    group.add_value(1);
+    group.add_value(2);
+    group.add_value(5);
+    group.add_value(6);
+    return group;
+}
+
+StateMap CreateScreenStateInDozeMap() {
+    StateMap map;
+    *map.add_group() = CreateScreenStateInDozeGroup();
+    *map.add_group() = CreateScreenStateNotDozeGroup();
+    return map;
+}
+
 void addPredicateToPredicateCombination(const Predicate& predicate,
                                         Predicate* combinationPredicate) {
     combinationPredicate->mutable_combination()->add_predicate(predicate.id());
@@ -438,6 +533,15 @@ std::unique_ptr<LogEvent> CreateAppCrashEvent(const int uid, uint64_t timestampN
         uid, ProcessLifeCycleStateChanged::CRASHED, timestampNs);
 }
 
+std::unique_ptr<LogEvent> CreateAppCrashOccurredEvent(const int uid, uint64_t timestampNs) {
+    auto event = std::make_unique<LogEvent>(android::util::APP_CRASH_OCCURRED, timestampNs);
+    event->write(uid);
+    event->write("eventType");
+    event->write("processName");
+    event->init();
+    return event;
+}
+
 std::unique_ptr<LogEvent> CreateIsolatedUidChangedEvent(
     int isolatedUid, int hostUid, bool is_create, uint64_t timestampNs) {
     auto logEvent = std::make_unique<LogEvent>(
@@ -447,6 +551,15 @@ std::unique_ptr<LogEvent> CreateIsolatedUidChangedEvent(
     logEvent->write(is_create);
     logEvent->init();
     return logEvent;
+}
+
+std::unique_ptr<LogEvent> CreateUidProcessStateChangedEvent(
+        int uid, const android::app::ProcessStateEnum state, uint64_t timestampNs) {
+    auto event = std::make_unique<LogEvent>(android::util::UID_PROCESS_STATE_CHANGED, timestampNs);
+    event->write(uid);
+    event->write(state);
+    event->init();
+    return event;
 }
 
 sp<StatsLogProcessor> CreateStatsLogProcessor(const int64_t timeBaseNs, const int64_t currentTimeNs,

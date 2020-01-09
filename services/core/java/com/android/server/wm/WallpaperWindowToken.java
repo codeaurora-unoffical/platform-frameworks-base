@@ -17,6 +17,7 @@
 package com.android.server.wm;
 
 import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
+
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_LAYERS;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_WALLPAPER_LIGHT;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
@@ -28,6 +29,8 @@ import android.os.RemoteException;
 import android.util.Slog;
 import android.view.DisplayInfo;
 import android.view.animation.Animation;
+
+import java.util.function.Consumer;
 
 /**
  * A token that represents a set of wallpaper windows.
@@ -53,7 +56,6 @@ class WallpaperWindowToken extends WindowToken {
             final WindowState wallpaper = mChildren.get(j);
             wallpaper.hideWallpaperWindow(wasDeferred, reason);
         }
-        setHidden(true);
     }
 
     void sendWindowWallpaperCommand(
@@ -85,9 +87,7 @@ class WallpaperWindowToken extends WindowToken {
         final int dw = displayInfo.logicalWidth;
         final int dh = displayInfo.logicalHeight;
 
-        if (isHidden() == visible) {
-            setHidden(!visible);
-
+        if (isVisible() != visible) {
             // Need to do a layout to ensure the wallpaper now has the correct size.
             mDisplayContent.setLayoutNeeded();
         }
@@ -115,10 +115,9 @@ class WallpaperWindowToken extends WindowToken {
 
     void updateWallpaperWindows(boolean visible) {
 
-        if (isHidden() == visible) {
+        if (isVisible() != visible) {
             if (DEBUG_WALLPAPER_LIGHT) Slog.d(TAG,
-                    "Wallpaper token " + token + " hidden=" + !visible);
-            setHidden(!visible);
+                    "Wallpaper token " + token + " visible=" + visible);
             // Need to do a layout to ensure the wallpaper now has the correct size.
             mDisplayContent.setLayoutNeeded();
         }
@@ -150,6 +149,11 @@ class WallpaperWindowToken extends WindowToken {
             }
         }
         return false;
+    }
+
+    @Override
+    void forAllWallpaperWindows(Consumer<WallpaperWindowToken> callback) {
+        callback.accept(this);
     }
 
     @Override

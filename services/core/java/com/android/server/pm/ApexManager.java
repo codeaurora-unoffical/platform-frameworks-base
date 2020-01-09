@@ -17,11 +17,11 @@
 package com.android.server.pm;
 
 import android.annotation.IntDef;
-import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.apex.ApexInfo;
 import android.apex.ApexInfoList;
 import android.apex.ApexSessionInfo;
+import android.apex.ApexSessionParams;
 import android.apex.IApexService;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -32,12 +32,15 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageParser;
+import android.os.Environment;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.sysprop.ApexProperties;
+import android.util.Singleton;
 import android.util.Slog;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.os.BackgroundThread;
 import com.android.internal.util.IndentingPrintWriter;
 
@@ -46,6 +49,7 @@ import java.io.PrintWriter;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -62,25 +66,52 @@ abstract class ApexManager {
     static final int MATCH_ACTIVE_PACKAGE = 1 << 0;
     static final int MATCH_FACTORY_PACKAGE = 1 << 1;
 
+    private static final Singleton<ApexManager> sApexManagerSingleton =
+            new Singleton<ApexManager>() {
+                @Override
+                protected ApexManager create() {
+                    if (ApexProperties.updatable().orElse(false)) {
+                        try {
+                            return new ApexManagerImpl(IApexService.Stub.asInterface(
+                                    ServiceManager.getServiceOrThrow("apexservice")));
+                        } catch (ServiceManager.ServiceNotFoundException e) {
+                            throw new IllegalStateException(
+                                    "Required service apexservice not available");
+                        }
+                    } else {
+                        return new ApexManagerFlattenedApex();
+                    }
+                }
+            };
+
     /**
-     * Returns an instance of either {@link ApexManagerImpl} or {@link ApexManagerNoOp} depending
-     * on whenever this device supports APEX, i.e. {@link ApexProperties#updatable()} evaluates to
-     * {@code true}.
+     * Returns an instance of either {@link ApexManagerImpl} or {@link ApexManagerFlattenedApex}
+     * depending on whether this device supports APEX, i.e. {@link ApexProperties#updatable()}
+     * evaluates to {@code true}.
      */
-    static ApexManager create(Context systemContext) {
-        if (ApexProperties.updatable().orElse(false)) {
-            try {
-                return new ApexManagerImpl(systemContext, IApexService.Stub.asInterface(
-                        ServiceManager.getServiceOrThrow("apexservice")));
-            } catch (ServiceManager.ServiceNotFoundException e) {
-                throw new IllegalStateException("Required service apexservice not available");
-            }
-        } else {
-            return new ApexManagerNoOp();
+    static ApexManager getInstance() {
+        return sApexManagerSingleton.get();
+    }
+
+    /**
+     * Minimal information about APEX mount points and the original APEX package they refer to.
+     */
+    static class ActiveApexInfo {
+        public final File apexDirectory;
+        public final File preinstalledApexPath;
+
+        private ActiveApexInfo(File apexDirectory, File preinstalledApexPath) {
+            this.apexDirectory = apexDirectory;
+            this.preinstalledApexPath = preinstalledApexPath;
         }
     }
 
-    abstract void systemReady();
+    /**
+     * Returns {@link ActiveApexInfo} records relative to all active APEX packages.
+     */
+    abstract List<ActiveApexInfo> getActiveApexInfos();
+
+    abstract void systemReady(Context context);
 
     /**
      * Retrieves information about an APEX package.
@@ -145,13 +176,9 @@ abstract class ApexManager {
      * enough for it to be activated at the next boot, the caller needs to call
      * {@link #markStagedSessionReady(int)}.
      *
-     * @param sessionId the identifier of the {@link PackageInstallerSession} being submitted.
-     * @param childSessionIds if {@code sessionId} is a multi-package session, this should contain
-     *                        an array of identifiers of all the child sessions. Otherwise it should
-     *                        be an empty array.
      * @throws PackageManagerException if call to apexd fails
      */
-    abstract ApexInfoList submitStagedSession(int sessionId, @NonNull int[] childSessionIds)
+    abstract ApexInfoList submitStagedSession(ApexSessionParams params)
             throws PackageManagerException;
 
     /**
@@ -185,7 +212,14 @@ abstract class ApexManager {
      *
      * @return {@code true} upon success, {@code false} if any remote exception occurs
      */
-    abstract boolean abortActiveSession();
+    abstract boolean revertActiveSessions();
+
+    /**
+     * Abandons the staged session with the given sessionId.
+     *
+     * @return {@code true} upon success, {@code false} if any remote exception occurs
+     */
+    abstract boolean abortStagedSession(int sessionId) throws PackageManagerException;
 
     /**
      * Uninstalls given {@code apexPackage}.
@@ -217,9 +251,9 @@ abstract class ApexManager {
      * An implementation of {@link ApexManager} that should be used in case device supports updating
      * APEX packages.
      */
-    private static class ApexManagerImpl extends ApexManager {
+    @VisibleForTesting
+    static class ApexManagerImpl extends ApexManager {
         private final IApexService mApexService;
-        private final Context mContext;
         private final Object mLock = new Object();
         /**
          * A map from {@code APEX packageName} to the {@Link PackageInfo} generated from the {@code
@@ -231,8 +265,7 @@ abstract class ApexManager {
         @GuardedBy("mLock")
         private List<PackageInfo> mAllPackagesCache;
 
-        ApexManagerImpl(Context context, IApexService apexService) {
-            mContext = context;
+        ApexManagerImpl(IApexService apexService) {
             mApexService = apexService;
         }
 
@@ -257,14 +290,30 @@ abstract class ApexManager {
         }
 
         @Override
-        void systemReady() {
-            mContext.registerReceiver(new BroadcastReceiver() {
+        List<ActiveApexInfo> getActiveApexInfos() {
+            try {
+                return Arrays.stream(mApexService.getActivePackages())
+                        .map(apexInfo -> new ActiveApexInfo(
+                                new File(
+                                Environment.getApexDirectory() + File.separator
+                                        + apexInfo.moduleName),
+                                new File(apexInfo.preinstalledModulePath))).collect(
+                                Collectors.toList());
+            } catch (RemoteException e) {
+                Slog.e(TAG, "Unable to retrieve packages from apexservice", e);
+            }
+            return Collections.emptyList();
+        }
+
+        @Override
+        void systemReady(Context context) {
+            context.registerReceiver(new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context context, Intent intent) {
                     // Post populateAllPackagesCacheIfNeeded to a background thread, since it's
                     // expensive to run it in broadcast handler thread.
                     BackgroundThread.getHandler().post(() -> populateAllPackagesCacheIfNeeded());
-                    mContext.unregisterReceiver(this);
+                    context.unregisterReceiver(this);
                 }
             }, new IntentFilter(Intent.ACTION_BOOT_COMPLETED));
         }
@@ -335,8 +384,8 @@ abstract class ApexManager {
                 if (!packageInfo.packageName.equals(packageName)) {
                     continue;
                 }
-                if ((!matchActive || isActive(packageInfo))
-                        && (!matchFactory || isFactory(packageInfo))) {
+                if ((matchActive && isActive(packageInfo))
+                        || (matchFactory && isFactory(packageInfo))) {
                     return packageInfo;
                 }
             }
@@ -397,11 +446,10 @@ abstract class ApexManager {
         }
 
         @Override
-        ApexInfoList submitStagedSession(int sessionId, @NonNull int[] childSessionIds)
-                throws PackageManagerException {
+        ApexInfoList submitStagedSession(ApexSessionParams params) throws PackageManagerException {
             try {
                 final ApexInfoList apexInfoList = new ApexInfoList();
-                mApexService.submitStagedSession(sessionId, childSessionIds, apexInfoList);
+                mApexService.submitStagedSession(params, apexInfoList);
                 return apexInfoList;
             } catch (RemoteException re) {
                 Slog.e(TAG, "Unable to contact apexservice", re);
@@ -447,13 +495,28 @@ abstract class ApexManager {
         }
 
         @Override
-        boolean abortActiveSession() {
+        boolean revertActiveSessions() {
             try {
-                mApexService.abortActiveSession();
+                mApexService.revertActiveSessions();
                 return true;
             } catch (RemoteException re) {
                 Slog.e(TAG, "Unable to contact apexservice", re);
                 return false;
+            }
+        }
+
+        @Override
+        boolean abortStagedSession(int sessionId) throws PackageManagerException {
+            try {
+                mApexService.abortStagedSession(sessionId);
+                return true;
+            } catch (RemoteException re) {
+                Slog.e(TAG, "Unable to contact apexservice", re);
+                return false;
+            } catch (Exception e) {
+                throw new PackageManagerException(
+                        PackageInstaller.SessionInfo.STAGED_SESSION_VERIFICATION_FAILED,
+                        "Failed to abort staged session : " + e.getMessage());
             }
         }
 
@@ -527,12 +590,12 @@ abstract class ApexManager {
                         ipw.println("State: ACTIVATION FAILED");
                     } else if (si.isSuccess) {
                         ipw.println("State: SUCCESS");
-                    } else if (si.isRollbackInProgress) {
-                        ipw.println("State: ROLLBACK IN PROGRESS");
-                    } else if (si.isRolledBack) {
-                        ipw.println("State: ROLLED BACK");
-                    } else if (si.isRollbackFailed) {
-                        ipw.println("State: ROLLBACK FAILED");
+                    } else if (si.isRevertInProgress) {
+                        ipw.println("State: REVERT IN PROGRESS");
+                    } else if (si.isReverted) {
+                        ipw.println("State: REVERTED");
+                    } else if (si.isRevertFailed) {
+                        ipw.println("State: REVERT FAILED");
                     }
                     ipw.decreaseIndent();
                 }
@@ -547,10 +610,43 @@ abstract class ApexManager {
      * An implementation of {@link ApexManager} that should be used in case device does not support
      * updating APEX packages.
      */
-    private static final class ApexManagerNoOp extends ApexManager {
+    private static final class ApexManagerFlattenedApex extends ApexManager {
 
         @Override
-        void systemReady() {
+        List<ActiveApexInfo> getActiveApexInfos() {
+            // There is no apexd running in case of flattened apex
+            // We look up the /apex directory and identify the active APEX modules from there.
+            // As "preinstalled" path, we just report /system since in the case of flattened APEX
+            // the /apex directory is just a symlink to /system/apex.
+            List<ActiveApexInfo> result = new ArrayList<>();
+            File apexDir = Environment.getApexDirectory();
+            // In flattened configuration, init special-case the art directory and bind-mounts
+            // com.android.art.{release|debug} to com.android.art. At the time of writing, these
+            // directories are copied from the kArtApexDirNames variable in
+            // system/core/init/mount_namespace.cpp.
+            String[] skipDirs = {"com.android.art.release", "com.android.art.debug"};
+            if (apexDir.isDirectory()) {
+                File[] files = apexDir.listFiles();
+                // listFiles might be null if system server doesn't have permission to read
+                // a directory.
+                if (files != null) {
+                    for (File file : files) {
+                        if (file.isDirectory() && !file.getName().contains("@")) {
+                            for (String skipDir : skipDirs) {
+                                if (file.getName().equals(skipDir)) {
+                                    continue;
+                                }
+                            }
+                            result.add(new ActiveApexInfo(file, Environment.getRootDirectory()));
+                        }
+                    }
+                }
+            }
+            return result;
+        }
+
+        @Override
+        void systemReady(Context context) {
             // No-op
         }
 
@@ -585,7 +681,7 @@ abstract class ApexManager {
         }
 
         @Override
-        ApexInfoList submitStagedSession(int sessionId, int[] childSessionIds)
+        ApexInfoList submitStagedSession(ApexSessionParams params)
                 throws PackageManagerException {
             throw new PackageManagerException(PackageManager.INSTALL_FAILED_INTERNAL_ERROR,
                     "Device doesn't support updating APEX");
@@ -607,7 +703,12 @@ abstract class ApexManager {
         }
 
         @Override
-        boolean abortActiveSession() {
+        boolean revertActiveSessions() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        boolean abortStagedSession(int sessionId) throws PackageManagerException {
             throw new UnsupportedOperationException();
         }
 

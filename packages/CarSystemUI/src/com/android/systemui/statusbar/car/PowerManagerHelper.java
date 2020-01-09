@@ -18,51 +18,47 @@ package com.android.systemui.statusbar.car;
 
 import android.annotation.NonNull;
 import android.car.Car;
-import android.car.CarNotConnectedException;
 import android.car.hardware.power.CarPowerManager;
 import android.car.hardware.power.CarPowerManager.CarPowerStateListener;
-import android.content.ComponentName;
-import android.content.Context;
-import android.content.ServiceConnection;
-import android.os.IBinder;
 import android.util.Log;
+
+import com.android.systemui.car.CarServiceProvider;
+
+import javax.inject.Inject;
+import javax.inject.Singleton;
 
 /**
  * Helper class for connecting to the {@link CarPowerManager} and listening for power state changes.
  */
+@Singleton
 public class PowerManagerHelper {
     public static final String TAG = "PowerManagerHelper";
 
-    private final Context mContext;
-    private final CarPowerStateListener mCarPowerStateListener;
+    private final CarServiceProvider mCarServiceProvider;
 
-    private Car mCar;
     private CarPowerManager mCarPowerManager;
+    private CarPowerStateListener mCarPowerStateListener;
 
-    private final ServiceConnection mCarConnectionListener =
-            new ServiceConnection() {
-                public void onServiceConnected(ComponentName name, IBinder service) {
-                    Log.d(TAG, "Car Service connected");
-                    try {
-                        mCarPowerManager = (CarPowerManager) mCar.getCarManager(Car.POWER_SERVICE);
-                        if (mCarPowerManager != null) {
-                            mCarPowerManager.setListener(mCarPowerStateListener);
-                        } else {
-                            Log.e(TAG, "CarPowerManager service not available");
-                        }
-                    } catch (CarNotConnectedException e) {
-                        Log.e(TAG, "Car not connected", e);
-                    }
-                }
+    private final CarServiceProvider.CarServiceOnConnectedListener mCarServiceLifecycleListener;
 
-                @Override
-                public void onServiceDisconnected(ComponentName name) {
-                    destroyCarPowerManager();
-                }
-            };
+    @Inject
+    PowerManagerHelper(CarServiceProvider carServiceProvider) {
+        mCarServiceProvider = carServiceProvider;
+        mCarServiceLifecycleListener = car -> {
+            Log.d(TAG, "Car Service connected");
+            mCarPowerManager = (CarPowerManager) car.getCarManager(Car.POWER_SERVICE);
+            if (mCarPowerManager != null) {
+                mCarPowerManager.setListener(mCarPowerStateListener);
+            } else {
+                Log.e(TAG, "CarPowerManager service not available");
+            }
+        };
+    }
 
-    PowerManagerHelper(Context context, @NonNull CarPowerStateListener listener) {
-        mContext = context;
+    /**
+     * Sets a {@link CarPowerStateListener}. Should be set before {@link #connectToCarService()}.
+     */
+    void setCarPowerStateListener(@NonNull CarPowerStateListener listener) {
         mCarPowerStateListener = listener;
     }
 
@@ -70,24 +66,6 @@ public class PowerManagerHelper {
      * Connect to Car service.
      */
     void connectToCarService() {
-        mCar = Car.createCar(mContext, mCarConnectionListener);
-        if (mCar != null) {
-            mCar.connect();
-        }
-    }
-
-    /**
-     * Disconnects from Car service.
-     */
-    void disconnectFromCarService() {
-        if (mCar != null) {
-            mCar.disconnect();
-        }
-    }
-
-    private void destroyCarPowerManager() {
-        if (mCarPowerManager != null) {
-            mCarPowerManager.clearListener();
-        }
+        mCarServiceProvider.addListener(mCarServiceLifecycleListener);
     }
 }

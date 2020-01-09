@@ -39,6 +39,7 @@ import android.testing.TestableLooper;
 
 import androidx.test.filters.SmallTest;
 
+import com.android.systemui.DumpController;
 import com.android.systemui.SysuiTestCase;
 
 import org.junit.Before;
@@ -46,6 +47,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+
+import java.util.List;
 
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
@@ -66,6 +69,8 @@ public class AppOpsControllerTest extends SysuiTestCase {
     private AppOpsControllerImpl.H mMockHandler;
     @Mock
     private PermissionFlagsCache mFlagsCache;
+    @Mock
+    private DumpController mDumpController;
 
     private AppOpsControllerImpl mController;
     private TestableLooper mTestableLooper;
@@ -89,7 +94,8 @@ public class AppOpsControllerTest extends SysuiTestCase {
         when(mFlagsCache.getPermissionFlags(anyString(), anyString(),
                 eq(UserHandle.getUserHandleForUid(TEST_UID_NON_USER_SENSITIVE)))).thenReturn(0);
 
-        mController = new AppOpsControllerImpl(mContext, mTestableLooper.getLooper(), mFlagsCache);
+        mController = new AppOpsControllerImpl(mContext, mTestableLooper.getLooper(), mFlagsCache,
+                mDumpController);
     }
 
     @Test
@@ -215,5 +221,34 @@ public class AppOpsControllerTest extends SysuiTestCase {
 
         verify(mMockHandler).removeCallbacksAndMessages(null);
         assertTrue(mController.getActiveAppOps().isEmpty());
+    }
+
+    @Test
+    public void noDoubleUpdateOnOpNoted() {
+        mController.setBGHandler(mMockHandler);
+
+        mController.onOpNoted(AppOpsManager.OP_FINE_LOCATION, TEST_UID, TEST_PACKAGE_NAME,
+                AppOpsManager.MODE_ALLOWED);
+        mController.onOpNoted(AppOpsManager.OP_FINE_LOCATION, TEST_UID, TEST_PACKAGE_NAME,
+                AppOpsManager.MODE_ALLOWED);
+
+        // Only one post to notify subscribers
+        verify(mMockHandler, times(1)).post(any());
+
+        List<AppOpItem> list = mController.getActiveAppOps();
+        assertEquals(1, list.size());
+    }
+
+    @Test
+    public void onDoubleOPNoted_scheduleTwiceForRemoval() {
+        mController.setBGHandler(mMockHandler);
+
+        mController.onOpNoted(AppOpsManager.OP_FINE_LOCATION, TEST_UID, TEST_PACKAGE_NAME,
+                AppOpsManager.MODE_ALLOWED);
+        mController.onOpNoted(AppOpsManager.OP_FINE_LOCATION, TEST_UID, TEST_PACKAGE_NAME,
+                AppOpsManager.MODE_ALLOWED);
+
+        // Only one post to notify subscribers
+        verify(mMockHandler, times(2)).scheduleRemoval(any(), anyLong());
     }
 }

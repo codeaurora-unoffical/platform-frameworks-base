@@ -29,9 +29,9 @@
 
 #include <android/frameworks/stats/1.0/IStats.h>
 #include <android/frameworks/stats/1.0/types.h>
-#include <android/os/BnStatsManager.h>
+#include <android/os/BnStatsd.h>
 #include <android/os/IStatsCompanionService.h>
-#include <android/os/IStatsManager.h>
+#include <android/os/IStatsd.h>
 #include <binder/IResultReceiver.h>
 #include <binder/ParcelFileDescriptor.h>
 #include <utils/Looper.h>
@@ -52,7 +52,7 @@ namespace statsd {
 
 using android::hardware::Return;
 
-class StatsService : public BnStatsManager,
+class StatsService : public BnStatsd,
                      public IStats,
                      public IBinder::DeathRecipient {
 public:
@@ -180,6 +180,20 @@ public:
         const String16& packageName) override;
 
     /**
+     * Binder call to register a callback function for a pulled atom.
+     */
+    virtual Status registerPullAtomCallback(int32_t uid, int32_t atomTag, int64_t coolDownNs,
+            int64_t timeoutNs, const std::vector<int32_t>& additiveFields,
+            const sp<android::os::IPullAtomCallback>& pullerCallback) override;
+
+    /**
+     * Binder call to register a callback function for a pulled atom.
+     */
+    virtual Status registerNativePullAtomCallback(int32_t atomTag, int64_t coolDownNs,
+            int64_t timeoutNs, const std::vector<int32_t>& additiveFields,
+            const sp<android::os::IPullAtomCallback>& pullerCallback) override;
+
+    /**
      * Binder call to unregister any existing callback function for a vendor pulled atom.
      */
     virtual Status unregisterPullerCallback(int32_t atomTag, const String16& packageName) override;
@@ -200,7 +214,9 @@ public:
     virtual Status sendWatchdogRollbackOccurredAtom(
             const int32_t rollbackTypeIn,
             const android::String16& packageNameIn,
-            const int64_t packageVersionCodeIn) override;
+            const int64_t packageVersionCodeIn,
+            const int32_t rollbackReasonIn,
+            const android::String16& failingPackageNameIn) override;
 
     /**
      * Binder call to get registered experiment IDs.
@@ -432,6 +448,10 @@ private:
 
     sp<ShellSubscriber> mShellSubscriber;
 
+    /**
+     * Mutex for setting the shell subscriber
+     */
+    mutable mutex mShellSubscriberMutex;
     std::shared_ptr<LogEventQueue> mEventQueue;
 
     FRIEND_TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart);

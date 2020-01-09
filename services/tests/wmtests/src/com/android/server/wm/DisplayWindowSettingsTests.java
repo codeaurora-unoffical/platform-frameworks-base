@@ -18,6 +18,9 @@ package com.android.server.wm;
 
 import static android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM;
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
+import static android.view.IWindowManager.FIXED_TO_USER_ROTATION_DEFAULT;
+import static android.view.IWindowManager.FIXED_TO_USER_ROTATION_DISABLED;
+import static android.view.IWindowManager.FIXED_TO_USER_ROTATION_ENABLED;
 import static android.view.WindowManager.REMOVE_CONTENT_MODE_DESTROY;
 import static android.view.WindowManager.REMOVE_CONTENT_MODE_MOVE_TO_PRIMARY;
 
@@ -28,9 +31,6 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
-import static com.android.server.wm.DisplayRotation.FIXED_TO_USER_ROTATION_DEFAULT;
-import static com.android.server.wm.DisplayRotation.FIXED_TO_USER_ROTATION_DISABLED;
-import static com.android.server.wm.DisplayRotation.FIXED_TO_USER_ROTATION_ENABLED;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -79,6 +79,9 @@ import java.nio.charset.StandardCharsets;
 @Presubmit
 @RunWith(WindowTestRunner.class)
 public class DisplayWindowSettingsTests extends WindowTestsBase {
+
+    private static final byte DISPLAY_PORT = (byte) 0xFF;
+    private static final long DISPLAY_MODEL = 0xEEEEEEEEL;
 
     private static final File TEST_FOLDER = getInstrumentation().getTargetContext().getCacheDir();
     private DisplayWindowSettings mTarget;
@@ -274,47 +277,6 @@ public class DisplayWindowSettingsTests extends WindowTestsBase {
         mWm.setForcedDisplayScalingMode(mSecondaryDisplay.getDisplayId(),
                 DisplayContent.FORCE_SCALING_MODE_AUTO);
         assertFalse(mSecondaryDisplay.mDisplayScalingDisabled);
-    }
-
-    @Test
-    public void testDefaultToZeroOverscan() {
-        mTarget.applySettingsToDisplayLocked(mPrimaryDisplay);
-
-        assertOverscan(mPrimaryDisplay, 0 /* left */, 0 /* top */, 0 /* right */, 0 /* bottom */);
-    }
-
-    @Test
-    public void testPersistOverscanInSameInstance() {
-        final DisplayInfo info = mPrimaryDisplay.getDisplayInfo();
-        try {
-            mTarget.setOverscanLocked(info, 1 /* left */, 2 /* top */, 3 /* right */,
-                    4 /* bottom */);
-
-            mTarget.applySettingsToDisplayLocked(mPrimaryDisplay);
-
-            assertOverscan(mPrimaryDisplay, 1 /* left */, 2 /* top */, 3 /* right */,
-                    4 /* bottom */);
-        } finally {
-            mTarget.setOverscanLocked(info, 0, 0, 0, 0);
-            mTarget.applySettingsToDisplayLocked(mPrimaryDisplay);
-        }
-    }
-
-    @Test
-    public void testPersistOverscanAcrossInstances() {
-        final DisplayInfo info = mPrimaryDisplay.getDisplayInfo();
-        try {
-            mTarget.setOverscanLocked(info, 10 /* left */, 20 /* top */, 30 /* right */,
-                    40 /* bottom */);
-
-            applySettingsToDisplayByNewInstance(mPrimaryDisplay);
-
-            assertOverscan(mPrimaryDisplay, 10 /* left */, 20 /* top */, 30 /* right */,
-                    40 /* bottom */);
-        } finally {
-            mTarget.setOverscanLocked(info, 0, 0, 0, 0);
-            mTarget.applySettingsToDisplayLocked(mPrimaryDisplay);
-        }
     }
 
     @Test
@@ -520,10 +482,11 @@ public class DisplayWindowSettingsTests extends WindowTestsBase {
 
     @Test
     public void testReadingDisplaySettingsFromStorage_UsePortAsId() {
-        final DisplayAddress.Physical displayAddress = DisplayAddress.fromPhysicalDisplayId(123456);
+        final DisplayAddress.Physical displayAddress =
+                DisplayAddress.fromPortAndModel(DISPLAY_PORT, DISPLAY_MODEL);
         mPrimaryDisplay.getDisplayInfo().address = displayAddress;
 
-        final String displayIdentifier = "port:" + displayAddress.getPort();
+        final String displayIdentifier = "port:" + Byte.toUnsignedInt(DISPLAY_PORT);
         prepareDisplaySettings(displayIdentifier, true /* usePortAsId */);
 
         readAndAssertDisplaySettings(mPrimaryDisplay);
@@ -562,7 +525,8 @@ public class DisplayWindowSettingsTests extends WindowTestsBase {
     @Test
     public void testWritingDisplaySettingsToStorage_UsePortAsId() throws Exception {
         // Store config to use port as identifier.
-        final DisplayAddress.Physical displayAddress = DisplayAddress.fromPhysicalDisplayId(123456);
+        final DisplayAddress.Physical displayAddress =
+                DisplayAddress.fromPortAndModel(DISPLAY_PORT, DISPLAY_MODEL);
         mSecondaryDisplay.getDisplayInfo().address = displayAddress;
         prepareDisplaySettings(null /* displayIdentifier */, true /* usePortAsId */);
 
@@ -573,7 +537,7 @@ public class DisplayWindowSettingsTests extends WindowTestsBase {
         assertTrue(mStorage.wasWriteSuccessful());
 
         // Verify that settings were stored correctly.
-        assertEquals("Attribute value must be stored", "port:" + displayAddress.getPort(),
+        assertEquals("Attribute value must be stored", "port:" + Byte.toUnsignedInt(DISPLAY_PORT),
                 getStoredDisplayAttributeValue("name"));
         assertEquals("Attribute value must be stored", "true",
                 getStoredDisplayAttributeValue("shouldShowSystemDecors"));
@@ -688,16 +652,6 @@ public class DisplayWindowSettingsTests extends WindowTestsBase {
             mStorage.closeRead();
         }
         return null;
-    }
-
-    private static void assertOverscan(DisplayContent display, int left, int top, int right,
-            int bottom) {
-        final DisplayInfo info = display.getDisplayInfo();
-
-        assertEquals(left, info.overscanLeft);
-        assertEquals(top, info.overscanTop);
-        assertEquals(right, info.overscanRight);
-        assertEquals(bottom, info.overscanBottom);
     }
 
     /**

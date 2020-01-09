@@ -16,6 +16,7 @@
 
 package android.provider.settings.validators;
 
+import static android.provider.settings.validators.SettingsValidators.ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.ANY_INTEGER_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.BOOLEAN_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.COLON_SEPARATED_COMPONENT_LIST_VALIDATOR;
@@ -41,8 +42,8 @@ import java.util.Map;
 public class SecureSettingsValidators {
     /**
      * All settings in {@link Secure.SETTINGS_TO_BACKUP} and {@link
-     * Secure.DEVICE_SPECIFIC_SETTINGS_TO_BACKUP} array *must* have a non-null validator, otherwise
-     * they won't be restored.
+     * DeviceSpecificSettings.DEVICE_SPECIFIC_SETTINGS_TO_BACKUP} array *must* have a non-null
+     * validator, otherwise they won't be restored.
      */
     public static final Map<String, Validator> VALIDATORS = new ArrayMap<>();
 
@@ -71,10 +72,13 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.TOUCH_EXPLORATION_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ACCESSIBILITY_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(
-                Secure.ACCESSIBILITY_SHORTCUT_TARGET_SERVICE, NULLABLE_COMPONENT_NAME_VALIDATOR);
+                Secure.ACCESSIBILITY_SHORTCUT_TARGET_SERVICE,
+                ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR);
         // technically either ComponentName or class name, but there's proper value
         // validation at callsites, so allow any non-null string
-        VALIDATORS.put(Secure.ACCESSIBILITY_BUTTON_TARGET_COMPONENT, value -> value != null);
+        VALIDATORS.put(
+                Secure.ACCESSIBILITY_BUTTON_TARGET_COMPONENT,
+                ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR);
         VALIDATORS.put(Secure.ACCESSIBILITY_SHORTCUT_DIALOG_SHOWN, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ACCESSIBILITY_SHORTCUT_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ACCESSIBILITY_SHORTCUT_ON_LOCK_SCREEN, BOOLEAN_VALIDATOR);
@@ -157,7 +161,6 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.ASSIST_GESTURE_WAKE_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.VR_DISPLAY_MODE, new DiscreteValueValidator(new String[] {"0", "1"}));
         VALIDATORS.put(Secure.NOTIFICATION_BADGING, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.NOTIFICATION_BUBBLES, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.NOTIFICATION_DISMISS_RTL, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.QS_AUTO_ADDED_TILES, TILE_LIST_VALIDATOR);
         VALIDATORS.put(Secure.SCREENSAVER_ENABLED, BOOLEAN_VALIDATOR);
@@ -183,6 +186,7 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.LOCK_SCREEN_SHOW_NOTIFICATIONS, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.LOCK_SCREEN_SHOW_SILENT_NOTIFICATIONS, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.SHOW_NOTIFICATION_SNOOZE, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.NOTIFICATION_HISTORY_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ZEN_DURATION, ANY_INTEGER_VALIDATOR);
         VALIDATORS.put(Secure.SHOW_ZEN_UPGRADE_NOTIFICATION, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.SHOW_ZEN_SETTINGS_SUGGESTION, BOOLEAN_VALIDATOR);
@@ -221,11 +225,15 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.SILENCE_ALARMS_TOUCH_COUNT, NON_NEGATIVE_INTEGER_VALIDATOR);
         VALIDATORS.put(Secure.SILENCE_TIMER_TOUCH_COUNT, NON_NEGATIVE_INTEGER_VALIDATOR);
         VALIDATORS.put(Secure.SILENCE_CALL_TOUCH_COUNT, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(Secure.AWARE_TAP_PAUSE_GESTURE_COUNT, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(Secure.AWARE_TAP_PAUSE_TOUCH_COUNT, NON_NEGATIVE_INTEGER_VALIDATOR);
         VALIDATORS.put(Secure.ODI_CAPTIONS_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DARK_MODE_DIALOG_SEEN, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.UI_NIGHT_MODE, new InclusiveIntegerRangeValidator(0, 2));
         VALIDATORS.put(Secure.GLOBAL_ACTIONS_PANEL_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.AWARE_LOCK_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DISPLAY_DENSITY_FORCED, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(Secure.TAP_GESTURE, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.PEOPLE_STRIP, BOOLEAN_VALIDATOR);
     }
 }

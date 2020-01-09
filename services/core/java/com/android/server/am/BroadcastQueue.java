@@ -309,7 +309,7 @@ public final class BroadcastQueue {
         app.forceProcessStateUpTo(ActivityManager.PROCESS_STATE_RECEIVER);
         mService.mProcessList.updateLruProcessLocked(app, false, null);
         if (!skipOomAdj) {
-            mService.updateOomAdjLocked(OomAdjuster.OOM_ADJ_REASON_NONE);
+            mService.updateOomAdjLocked(app, OomAdjuster.OOM_ADJ_REASON_NONE);
         }
 
         // Tell the application to launch this receiver.
@@ -446,7 +446,9 @@ public final class BroadcastQueue {
         mHandler.removeCallbacksAndMessages(msgToken);
         // ...then schedule the removal of the token after the extended timeout
         mHandler.postAtTime(() -> {
-            app.removeAllowBackgroundActivityStartsToken(r);
+            synchronized (mService) {
+                app.removeAllowBackgroundActivityStartsToken(r);
+            }
         }, msgToken, (r.receiverTime + mConstants.ALLOW_BG_ACTIVITY_START_TIMEOUT));
     }
 
@@ -645,9 +647,10 @@ public final class BroadcastQueue {
                 skip = true;
             } else {
                 final int opCode = AppOpsManager.permissionToOpCode(filter.requiredPermission);
+                // TODO moltmann: Set featureId from caller
                 if (opCode != AppOpsManager.OP_NONE
                         && mService.mAppOpsService.noteOperation(opCode, r.callingUid,
-                                r.callerPackage) != AppOpsManager.MODE_ALLOWED) {
+                                r.callerPackage, null) != AppOpsManager.MODE_ALLOWED) {
                     Slog.w(TAG, "Appop Denial: broadcasting "
                             + r.intent.toString()
                             + " from " + r.callerPackage + " (pid="
@@ -677,9 +680,10 @@ public final class BroadcastQueue {
                     break;
                 }
                 int appOp = AppOpsManager.permissionToOpCode(requiredPermission);
+                // TODO moltmann: Set componentId from caller
                 if (appOp != AppOpsManager.OP_NONE && appOp != r.appOp
                         && mService.mAppOpsService.noteOperation(appOp,
-                        filter.receiverList.uid, filter.packageName)
+                        filter.receiverList.uid, filter.packageName, null)
                         != AppOpsManager.MODE_ALLOWED) {
                     Slog.w(TAG, "Appop Denial: receiving "
                             + r.intent.toString()
@@ -709,9 +713,10 @@ public final class BroadcastQueue {
                 skip = true;
             }
         }
+        // TODO moltmann: Set componentId from caller
         if (!skip && r.appOp != AppOpsManager.OP_NONE
                 && mService.mAppOpsService.noteOperation(r.appOp,
-                filter.receiverList.uid, filter.packageName)
+                filter.receiverList.uid, filter.packageName, null)
                 != AppOpsManager.MODE_ALLOWED) {
             Slog.w(TAG, "Appop Denial: receiving "
                     + r.intent.toString()
@@ -1365,9 +1370,10 @@ public final class BroadcastQueue {
             skip = true;
         } else if (!skip && info.activityInfo.permission != null) {
             final int opCode = AppOpsManager.permissionToOpCode(info.activityInfo.permission);
+            // TODO moltmann: Set componentId from caller
             if (opCode != AppOpsManager.OP_NONE
                     && mService.mAppOpsService.noteOperation(opCode, r.callingUid,
-                            r.callerPackage) != AppOpsManager.MODE_ALLOWED) {
+                            r.callerPackage, null) != AppOpsManager.MODE_ALLOWED) {
                 Slog.w(TAG, "Appop Denial: broadcasting "
                         + r.intent.toString()
                         + " from " + r.callerPackage + " (pid="
@@ -1403,9 +1409,10 @@ public final class BroadcastQueue {
                     break;
                 }
                 int appOp = AppOpsManager.permissionToOpCode(requiredPermission);
+                // TODO moltmann: Set componentId from caller
                 if (appOp != AppOpsManager.OP_NONE && appOp != r.appOp
                         && mService.mAppOpsService.noteOperation(appOp,
-                        info.activityInfo.applicationInfo.uid, info.activityInfo.packageName)
+                        info.activityInfo.applicationInfo.uid, info.activityInfo.packageName, null)
                         != AppOpsManager.MODE_ALLOWED) {
                     Slog.w(TAG, "Appop Denial: receiving "
                             + r.intent + " to "
@@ -1419,9 +1426,10 @@ public final class BroadcastQueue {
                 }
             }
         }
+        // TODO moltmann: Set componentId from caller
         if (!skip && r.appOp != AppOpsManager.OP_NONE
                 && mService.mAppOpsService.noteOperation(r.appOp,
-                info.activityInfo.applicationInfo.uid, info.activityInfo.packageName)
+                info.activityInfo.applicationInfo.uid, info.activityInfo.packageName, null)
                 != AppOpsManager.MODE_ALLOWED) {
             Slog.w(TAG, "Appop Denial: receiving "
                     + r.intent + " to "
@@ -1907,17 +1915,17 @@ public final class BroadcastQueue {
         }
     }
 
-    void writeToProto(ProtoOutputStream proto, long fieldId) {
+    void dumpDebug(ProtoOutputStream proto, long fieldId) {
         long token = proto.start(fieldId);
         proto.write(BroadcastQueueProto.QUEUE_NAME, mQueueName);
         int N;
         N = mParallelBroadcasts.size();
         for (int i = N - 1; i >= 0; i--) {
-            mParallelBroadcasts.get(i).writeToProto(proto, BroadcastQueueProto.PARALLEL_BROADCASTS);
+            mParallelBroadcasts.get(i).dumpDebug(proto, BroadcastQueueProto.PARALLEL_BROADCASTS);
         }
-        mDispatcher.writeToProto(proto, BroadcastQueueProto.ORDERED_BROADCASTS);
+        mDispatcher.dumpDebug(proto, BroadcastQueueProto.ORDERED_BROADCASTS);
         if (mPendingBroadcast != null) {
-            mPendingBroadcast.writeToProto(proto, BroadcastQueueProto.PENDING_BROADCAST);
+            mPendingBroadcast.dumpDebug(proto, BroadcastQueueProto.PENDING_BROADCAST);
         }
 
         int lastIndex = mHistoryNext;
@@ -1928,7 +1936,7 @@ public final class BroadcastQueue {
             ringIndex = ringAdvance(ringIndex, -1, MAX_BROADCAST_HISTORY);
             BroadcastRecord r = mBroadcastHistory[ringIndex];
             if (r != null) {
-                r.writeToProto(proto, BroadcastQueueProto.HISTORICAL_BROADCASTS);
+                r.dumpDebug(proto, BroadcastQueueProto.HISTORICAL_BROADCASTS);
             }
         } while (ringIndex != lastIndex);
 
@@ -1940,7 +1948,7 @@ public final class BroadcastQueue {
                 continue;
             }
             long summaryToken = proto.start(BroadcastQueueProto.HISTORICAL_BROADCASTS_SUMMARY);
-            intent.writeToProto(proto, BroadcastQueueProto.BroadcastSummary.INTENT,
+            intent.dumpDebug(proto, BroadcastQueueProto.BroadcastSummary.INTENT,
                     false, true, true, false);
             proto.write(BroadcastQueueProto.BroadcastSummary.ENQUEUE_CLOCK_TIME_MS,
                     mSummaryHistoryEnqueueTime[ringIndex]);

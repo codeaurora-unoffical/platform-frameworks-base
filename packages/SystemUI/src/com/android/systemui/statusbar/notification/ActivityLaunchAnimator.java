@@ -34,12 +34,11 @@ import android.view.View;
 
 import com.android.internal.policy.ScreenDecorationsUtils;
 import com.android.systemui.Interpolators;
-import com.android.systemui.shared.system.SurfaceControlCompat;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.phone.CollapsedStatusBarFragment;
 import com.android.systemui.statusbar.phone.NotificationPanelView;
-import com.android.systemui.statusbar.phone.StatusBarWindowView;
+import com.android.systemui.statusbar.phone.StatusBarWindowViewController;
 
 /**
  * A class that allows activities to be launched in a seamless way where the notification
@@ -56,8 +55,8 @@ public class ActivityLaunchAnimator {
     private static final long LAUNCH_TIMEOUT = 500;
     private final NotificationPanelView mNotificationPanel;
     private final NotificationListContainer mNotificationContainer;
-    private final StatusBarWindowView mStatusBarWindow;
     private final float mWindowCornerRadius;
+    private final StatusBarWindowViewController mStatusBarWindowViewController;
     private Callback mCallback;
     private final Runnable mTimeoutRunnable = () -> {
         setAnimationPending(false);
@@ -67,16 +66,17 @@ public class ActivityLaunchAnimator {
     private boolean mAnimationRunning;
     private boolean mIsLaunchForActivity;
 
-    public ActivityLaunchAnimator(StatusBarWindowView statusBarWindow,
+    public ActivityLaunchAnimator(
+            StatusBarWindowViewController statusBarWindowViewController,
             Callback callback,
             NotificationPanelView notificationPanel,
             NotificationListContainer container) {
         mNotificationPanel = notificationPanel;
         mNotificationContainer = container;
-        mStatusBarWindow = statusBarWindow;
+        mStatusBarWindowViewController = statusBarWindowViewController;
         mCallback = callback;
         mWindowCornerRadius = ScreenDecorationsUtils
-                .getWindowCornerRadius(statusBarWindow.getResources());
+                .getWindowCornerRadius(mStatusBarWindowViewController.getView().getResources());
     }
 
     public RemoteAnimationAdapter getLaunchAnimation(
@@ -113,11 +113,11 @@ public class ActivityLaunchAnimator {
 
     private void setAnimationPending(boolean pending) {
         mAnimationPending = pending;
-        mStatusBarWindow.setExpandAnimationPending(pending);
+        mStatusBarWindowViewController.setExpandAnimationPending(pending);
         if (pending) {
-            mStatusBarWindow.postDelayed(mTimeoutRunnable, LAUNCH_TIMEOUT);
+            mStatusBarWindowViewController.getView().postDelayed(mTimeoutRunnable, LAUNCH_TIMEOUT);
         } else {
-            mStatusBarWindow.removeCallbacks(mTimeoutRunnable);
+            mStatusBarWindowViewController.getView().removeCallbacks(mTimeoutRunnable);
         }
     }
 
@@ -145,6 +145,7 @@ public class ActivityLaunchAnimator {
 
         @Override
         public void onAnimationStart(RemoteAnimationTarget[] remoteAnimationTargets,
+                RemoteAnimationTarget[] remoteAnimationWallpaperTargets,
                 IRemoteAnimationFinishedCallback iRemoteAnimationFinishedCallback)
                     throws RemoteException {
             mSourceNotification.post(() -> {
@@ -246,7 +247,7 @@ public class ActivityLaunchAnimator {
         private void setExpandAnimationRunning(boolean running) {
             mNotificationPanel.setLaunchingNotification(running);
             mSourceNotification.setExpandAnimationRunning(running);
-            mStatusBarWindow.setExpandAnimationRunning(running);
+            mStatusBarWindowViewController.setExpandAnimationRunning(running);
             mNotificationContainer.setExpandingNotification(running ? mSourceNotification : null);
             mAnimationRunning = running;
             if (!running) {

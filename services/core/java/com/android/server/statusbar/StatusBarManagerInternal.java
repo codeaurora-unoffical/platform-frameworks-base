@@ -16,9 +16,11 @@
 
 package com.android.server.statusbar;
 
-import android.graphics.Rect;
 import android.os.Bundle;
+import android.view.InsetsState.InternalInsetsType;
+import android.view.WindowInsetsController.Appearance;
 
+import com.android.internal.view.AppearanceRegion;
 import com.android.server.notification.NotificationDelegate;
 
 public interface StatusBarManagerInternal {
@@ -75,10 +77,8 @@ public interface StatusBarManagerInternal {
 
     void startAssist(Bundle args);
     void onCameraLaunchGestureDetected(int source);
-    void topAppWindowChanged(int displayId, boolean menuVisible);
-    void setSystemUiVisibility(int displayId, int vis, int fullscreenStackVis, int dockedStackVis,
-            int mask, Rect fullscreenBounds, Rect dockedBounds, boolean isNavbarColorManagedByIme,
-            String cause);
+    void topAppWindowChanged(int displayId, boolean isFullscreen, boolean isImmersive);
+    void setDisableFlags(int displayId, int flags, String cause);
     void toggleSplitScreen();
     void appTransitionFinished(int displayId);
 
@@ -113,4 +113,14 @@ public interface StatusBarManagerInternal {
      * Notifies System UI whether the recents animation is running.
      */
     void onRecentsAnimationStateChanged(boolean running);
+
+    /** @see com.android.internal.statusbar.IStatusBar#onSystemBarAppearanceChanged */
+    void onSystemBarAppearanceChanged(int displayId, @Appearance int appearance,
+            AppearanceRegion[] appearanceRegions, boolean navbarColorManagedByIme);
+
+    /** @see com.android.internal.statusbar.IStatusBar#showTransient */
+    void showTransient(int displayId, @InternalInsetsType int[] types);
+
+    /** @see com.android.internal.statusbar.IStatusBar#abortTransient */
+    void abortTransient(int displayId, @InternalInsetsType int[] types);
 }

@@ -14,8 +14,6 @@
 
 package com.android.systemui.statusbar.policy;
 
-import static com.android.systemui.Dependency.MAIN_HANDLER_NAME;
-
 import android.app.ActivityManager;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -26,12 +24,13 @@ import android.provider.Settings.Global;
 import android.provider.Settings.Secure;
 import android.util.Log;
 
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.settings.CurrentUserTracker;
 
 import java.util.ArrayList;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
 
 /**
@@ -51,9 +50,9 @@ public class DeviceProvisionedControllerImpl extends CurrentUserTracker implemen
     /**
      */
     @Inject
-    public DeviceProvisionedControllerImpl(Context context,
-            @Named(MAIN_HANDLER_NAME) Handler mainHandler) {
-        super(context);
+    public DeviceProvisionedControllerImpl(Context context, @MainHandler Handler mainHandler,
+            BroadcastDispatcher broadcastDispatcher) {
+        super(broadcastDispatcher);
         mContext = context;
         mContentResolver = context.getContentResolver();
         mDeviceProvisionedUri = Global.getUriFor(Global.DEVICE_PROVISIONED);

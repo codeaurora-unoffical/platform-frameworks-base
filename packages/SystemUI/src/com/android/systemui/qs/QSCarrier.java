@@ -65,20 +65,21 @@ public class QSCarrier extends LinearLayout {
         mMobileRoaming = findViewById(R.id.mobile_roaming);
         mCarrierText = findViewById(R.id.qs_carrier_text);
 
+        mMobileSignal.setImageDrawable(new SignalDrawable(mContext));
+
         int colorForeground = Utils.getColorAttrDefaultColor(mContext,
                 android.R.attr.colorForeground);
         mColorForegroundStateList = ColorStateList.valueOf(colorForeground);
         mColorForegroundIntensity = QuickStatusBarHeader.getColorIntensity(colorForeground);
     }
 
-    public void updateState(QSCarrierGroup.CellSignalState state) {
+    public void updateState(QSCarrierGroupController.CellSignalState state) {
         mMobileGroup.setVisibility(state.visible ? View.VISIBLE : View.GONE);
         if (state.visible) {
             mMobileRoaming.setVisibility(state.roaming ? View.VISIBLE : View.GONE);
             ColorStateList colorStateList = ColorStateList.valueOf(
                     mDualToneHandler.getSingleColor(mColorForegroundIntensity));
             mMobileRoaming.setImageTintList(colorStateList);
-            mMobileSignal.setImageDrawable(new SignalDrawable(mContext));
             mMobileSignal.setImageTintList(colorStateList);
             mMobileSignal.setImageLevel(state.mobileSignalIconId);
 

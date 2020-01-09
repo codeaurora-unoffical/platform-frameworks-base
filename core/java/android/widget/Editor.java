@@ -152,6 +152,9 @@ public class Editor {
     // handles.
     private static final boolean FLAG_USE_MAGNIFIER = true;
 
+    private static final int DELAY_BEFORE_HANDLE_FADES_OUT = 4000;
+    private static final int RECENT_CUT_COPY_DURATION_MS = 15 * 1000; // 15 seconds in millis
+
     static final int BLINK = 500;
     private static final int DRAG_SHADOW_MAX_TEXT_LENGTH = 20;
     private static final float LINE_SLOP_MULTIPLIER_FOR_HANDLEVIEWS = 0.5f;
@@ -326,8 +329,6 @@ public class Editor {
     // Global listener that detects changes in the global position of the TextView
     private PositionListener mPositionListener;
 
-    private float mLastDownPositionX, mLastDownPositionY;
-    private float mLastUpPositionX, mLastUpPositionY;
     private float mContextMenuAnchorX, mContextMenuAnchorY;
     Callback mCustomSelectionActionModeCallback;
     Callback mCustomInsertionActionModeCallback;
@@ -336,17 +337,10 @@ public class Editor {
     @UnsupportedAppUsage
     boolean mCreatedWithASelection;
 
-    // Indicates the current tap state (first tap, double tap, or triple click).
-    private int mTapState = TAP_STATE_INITIAL;
-    private long mLastTouchUpTime = 0;
-    private static final int TAP_STATE_INITIAL = 0;
-    private static final int TAP_STATE_FIRST_TAP = 1;
-    private static final int TAP_STATE_DOUBLE_TAP = 2;
-    // Only for mouse input.
-    private static final int TAP_STATE_TRIPLE_CLICK = 3;
-
     // The button state as of the last time #onTouchEvent is called.
     private int mLastButtonState;
+
+    private final EditorTouchState mTouchState = new EditorTouchState();
 
     private Runnable mInsertionActionModeRunnable;
 
@@ -1189,11 +1183,14 @@ public class Editor {
     }
 
     public boolean performLongClick(boolean handled) {
+        if (TextView.DEBUG_CURSOR) {
+            logCursor("performLongClick", "handled=%s", handled);
+        }
         // Long press in empty space moves cursor and starts the insertion action mode.
-        if (!handled && !isPositionOnText(mLastDownPositionX, mLastDownPositionY)
+        if (!handled && !isPositionOnText(mTouchState.getLastDownX(), mTouchState.getLastDownY())
                 && mInsertionControllerEnabled) {
-            final int offset = mTextView.getOffsetForPosition(mLastDownPositionX,
-                    mLastDownPositionY);
+            final int offset = mTextView.getOffsetForPosition(mTouchState.getLastDownX(),
+                    mTouchState.getLastDownY());
             Selection.setSelection((Spannable) mTextView.getText(), offset);
             getInsertionController().show();
             mIsInsertionActionModeStartPending = true;
@@ -1237,11 +1234,11 @@ public class Editor {
     }
 
     float getLastUpPositionX() {
-        return mLastUpPositionX;
+        return mTouchState.getLastUpX();
     }
 
     float getLastUpPositionY() {
-        return mLastUpPositionY;
+        return mTouchState.getLastUpY();
     }
 
     private long getLastTouchOffsets() {
@@ -1252,6 +1249,10 @@ public class Editor {
     }
 
     void onFocusChanged(boolean focused, int direction) {
+        if (TextView.DEBUG_CURSOR) {
+            logCursor("onFocusChanged", "focused=%s", focused);
+        }
+
         mShowCursor = SystemClock.uptimeMillis();
         ensureEndedBatchEdit();
 
@@ -1272,6 +1273,9 @@ public class Editor {
                 // Has to be done before onTakeFocus, which can be overloaded.
                 final int lastTapPosition = getLastTapPosition();
                 if (lastTapPosition >= 0) {
+                    if (TextView.DEBUG_CURSOR) {
+                        logCursor("onFocusChanged", "setting cursor position: %d", lastTapPosition);
+                    }
                     Selection.setSelection((Spannable) mTextView.getText(), lastTapPosition);
                 }
 
@@ -1436,29 +1440,6 @@ public class Editor {
         }
     }
 
-    private void updateTapState(MotionEvent event) {
-        final int action = event.getActionMasked();
-        if (action == MotionEvent.ACTION_DOWN) {
-            final boolean isMouse = event.isFromSource(InputDevice.SOURCE_MOUSE);
-            // Detect double tap and triple click.
-            if (((mTapState == TAP_STATE_FIRST_TAP)
-                    || ((mTapState == TAP_STATE_DOUBLE_TAP) && isMouse))
-                            && (SystemClock.uptimeMillis() - mLastTouchUpTime)
-                                    <= ViewConfiguration.getDoubleTapTimeout()) {
-                if (mTapState == TAP_STATE_FIRST_TAP) {
-                    mTapState = TAP_STATE_DOUBLE_TAP;
-                } else {
-                    mTapState = TAP_STATE_TRIPLE_CLICK;
-                }
-            } else {
-                mTapState = TAP_STATE_FIRST_TAP;
-            }
-        }
-        if (action == MotionEvent.ACTION_UP) {
-            mLastTouchUpTime = SystemClock.uptimeMillis();
-        }
-    }
-
     private boolean shouldFilterOutTouchEvent(MotionEvent event) {
         if (!event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             return false;
@@ -1486,7 +1467,8 @@ public class Editor {
             }
             return;
         }
-        updateTapState(event);
+        ViewConfiguration viewConfiguration = ViewConfiguration.get(mTextView.getContext());
+        mTouchState.update(event, viewConfiguration);
         updateFloatingToolbarVisibility(event);
 
         if (hasSelectionController()) {
@@ -1498,15 +1480,7 @@ public class Editor {
             mShowSuggestionRunnable = null;
         }
 
-        if (event.getActionMasked() == MotionEvent.ACTION_UP) {
-            mLastUpPositionX = event.getX();
-            mLastUpPositionY = event.getY();
-        }
-
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-            mLastDownPositionX = event.getX();
-            mLastDownPositionY = event.getY();
-
             // Reset this state; it will be re-set if super.onTouchEvent
             // causes focus to move to the view.
             mTouchFocusSelected = false;
@@ -2354,6 +2328,9 @@ public class Editor {
     }
 
     void onTouchUpEvent(MotionEvent event) {
+        if (TextView.DEBUG_CURSOR) {
+            logCursor("onTouchUpEvent", null);
+        }
         if (getSelectionActionModeHelper().resetSelection(
                 getTextView().getOffsetForPosition(event.getX(), event.getY()))) {
             return;
@@ -2481,6 +2458,9 @@ public class Editor {
         loadCursorDrawable();
         final int left = clampHorizontalPosition(mDrawableForCursor, horizontal);
         final int width = mDrawableForCursor.getIntrinsicWidth();
+        if (TextView.DEBUG_CURSOR) {
+            logCursor("updateCursorPosition", "left=%s, top=%s", left, (top - mTempRect.top));
+        }
         mDrawableForCursor.setBounds(left, top - mTempRect.top, left + width,
                 bottom + mTempRect.bottom);
     }
@@ -4620,6 +4600,11 @@ public class Editor {
         }
 
         public void show() {
+            if (TextView.DEBUG_CURSOR) {
+                logCursor(getClass().getSimpleName() + ": HandleView: show()", "offset=%s",
+                        getCurrentCursorOffset());
+            }
+
             if (isShowing()) return;
 
             getPositionListener().addSubscriber(this, true /* local position may change */);
@@ -4636,6 +4621,11 @@ public class Editor {
         }
 
         public void hide() {
+            if (TextView.DEBUG_CURSOR) {
+                logCursor(getClass().getSimpleName() + ": HandleView: hide()", "offset=%s",
+                        getCurrentCursorOffset());
+            }
+
             dismiss();
 
             getPositionListener().removeSubscriber(this);
@@ -5032,6 +5022,14 @@ public class Editor {
 
         @Override
         public boolean onTouchEvent(MotionEvent ev) {
+            if (TextView.DEBUG_CURSOR) {
+                logCursor(this.getClass().getSimpleName() + ": HandleView: onTouchEvent",
+                        "%d: %s (%f,%f)",
+                        ev.getSequenceNumber(),
+                        MotionEvent.actionToString(ev.getActionMasked()),
+                        ev.getX(), ev.getY());
+            }
+
             updateFloatingToolbarVisibility(ev);
 
             switch (ev.getActionMasked()) {
@@ -5107,54 +5105,12 @@ public class Editor {
     }
 
     private class InsertionHandleView extends HandleView {
-        private static final int DELAY_BEFORE_HANDLE_FADES_OUT = 4000;
-        private static final int RECENT_CUT_COPY_DURATION = 15 * 1000; // seconds
-
         // Used to detect taps on the insertion handle, which will affect the insertion action mode
-        private float mDownPositionX, mDownPositionY;
+        private float mLastDownRawX, mLastDownRawY;
         private Runnable mHider;
 
         public InsertionHandleView(Drawable drawable) {
             super(drawable, drawable, com.android.internal.R.id.insertion_handle);
-        }
-
-        @Override
-        public void show() {
-            super.show();
-
-            final long durationSinceCutOrCopy =
-                    SystemClock.uptimeMillis() - TextView.sLastCutCopyOrTextChangedTime;
-
-            // Cancel the single tap delayed runnable.
-            if (mInsertionActionModeRunnable != null
-                    && ((mTapState == TAP_STATE_DOUBLE_TAP)
-                            || (mTapState == TAP_STATE_TRIPLE_CLICK)
-                            || isCursorInsideEasyCorrectionSpan())) {
-                mTextView.removeCallbacks(mInsertionActionModeRunnable);
-            }
-
-            // Prepare and schedule the single tap runnable to run exactly after the double tap
-            // timeout has passed.
-            if ((mTapState != TAP_STATE_DOUBLE_TAP) && (mTapState != TAP_STATE_TRIPLE_CLICK)
-                    && !isCursorInsideEasyCorrectionSpan()
-                    && (durationSinceCutOrCopy < RECENT_CUT_COPY_DURATION)) {
-                if (mTextActionMode == null) {
-                    if (mInsertionActionModeRunnable == null) {
-                        mInsertionActionModeRunnable = new Runnable() {
-                            @Override
-                            public void run() {
-                                startInsertionActionMode();
-                            }
-                        };
-                    }
-                    mTextView.postDelayed(
-                            mInsertionActionModeRunnable,
-                            ViewConfiguration.getDoubleTapTimeout() + 1);
-                }
-
-            }
-
-            hideAfterDelay();
         }
 
         private void hideAfterDelay() {
@@ -5212,8 +5168,8 @@ public class Editor {
 
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                    mDownPositionX = ev.getRawX();
-                    mDownPositionY = ev.getRawY();
+                    mLastDownRawX = ev.getRawX();
+                    mLastDownRawY = ev.getRawY();
                     updateMagnifier(ev);
                     break;
 
@@ -5223,8 +5179,8 @@ public class Editor {
 
                 case MotionEvent.ACTION_UP:
                     if (!offsetHasBeenChanged()) {
-                        final float deltaX = mDownPositionX - ev.getRawX();
-                        final float deltaY = mDownPositionY - ev.getRawY();
+                        final float deltaX = mLastDownRawX - ev.getRawX();
+                        final float deltaY = mLastDownRawY - ev.getRawY();
                         final float distanceSquared = deltaX * deltaX + deltaY * deltaY;
 
                         final ViewConfiguration viewConfiguration = ViewConfiguration.get(
@@ -5766,6 +5722,37 @@ public class Editor {
         public void show() {
             getHandle().show();
 
+            final long durationSinceCutOrCopy =
+                    SystemClock.uptimeMillis() - TextView.sLastCutCopyOrTextChangedTime;
+
+            // Cancel the single tap delayed runnable.
+            if (mInsertionActionModeRunnable != null
+                    && (mTouchState.isMultiTap() || isCursorInsideEasyCorrectionSpan())) {
+                mTextView.removeCallbacks(mInsertionActionModeRunnable);
+            }
+
+            // Prepare and schedule the single tap runnable to run exactly after the double tap
+            // timeout has passed.
+            if (!mTouchState.isMultiTap()
+                    && !isCursorInsideEasyCorrectionSpan()
+                    && (durationSinceCutOrCopy < RECENT_CUT_COPY_DURATION_MS)) {
+                if (mTextActionMode == null) {
+                    if (mInsertionActionModeRunnable == null) {
+                        mInsertionActionModeRunnable = new Runnable() {
+                            @Override
+                            public void run() {
+                                startInsertionActionMode();
+                            }
+                        };
+                    }
+                    mTextView.postDelayed(
+                            mInsertionActionModeRunnable,
+                            ViewConfiguration.getDoubleTapTimeout() + 1);
+                }
+            }
+
+            getHandle().hideAfterDelay();
+
             if (mSelectionModifierCursorController != null) {
                 mSelectionModifierCursorController.hide();
             }
@@ -5832,7 +5819,6 @@ public class Editor {
         // The offsets of that last touch down event. Remembered to start selection there.
         private int mMinTouchOffset, mMaxTouchOffset;
 
-        private float mDownPositionX, mDownPositionY;
         private boolean mGestureStayedInTapRegion;
 
         // Where the user first starts the drag motion.
@@ -5902,13 +5888,18 @@ public class Editor {
         }
 
         public void enterDrag(int dragAcceleratorMode) {
+            if (TextView.DEBUG_CURSOR) {
+                logCursor("SelectionModifierCursorController: enterDrag",
+                        "starting selection drag: mode=%s", dragAcceleratorMode);
+            }
+
             // Just need to init the handles / hide insertion cursor.
             show();
             mDragAcceleratorMode = dragAcceleratorMode;
             // Start location of selection.
-            mStartOffset = mTextView.getOffsetForPosition(mLastDownPositionX,
-                    mLastDownPositionY);
-            mLineSelectionIsOn = mTextView.getLineAtCoordinate(mLastDownPositionY);
+            mStartOffset = mTextView.getOffsetForPosition(mTouchState.getLastDownX(),
+                    mTouchState.getLastDownY());
+            mLineSelectionIsOn = mTextView.getLineAtCoordinate(mTouchState.getLastDownY());
             // Don't show the handles until user has lifted finger.
             hide();
 
@@ -5936,32 +5927,20 @@ public class Editor {
                                 eventX, eventY);
 
                         // Double tap detection
-                        if (mGestureStayedInTapRegion) {
-                            if (mTapState == TAP_STATE_DOUBLE_TAP
-                                    || mTapState == TAP_STATE_TRIPLE_CLICK) {
-                                final float deltaX = eventX - mDownPositionX;
-                                final float deltaY = eventY - mDownPositionY;
-                                final float distanceSquared = deltaX * deltaX + deltaY * deltaY;
-
-                                ViewConfiguration viewConfiguration = ViewConfiguration.get(
-                                        mTextView.getContext());
-                                int doubleTapSlop = viewConfiguration.getScaledDoubleTapSlop();
-                                boolean stayedInArea =
-                                        distanceSquared < doubleTapSlop * doubleTapSlop;
-
-                                if (stayedInArea && (isMouse || isPositionOnText(eventX, eventY))) {
-                                    if (mTapState == TAP_STATE_DOUBLE_TAP) {
-                                        selectCurrentWordAndStartDrag();
-                                    } else if (mTapState == TAP_STATE_TRIPLE_CLICK) {
-                                        selectCurrentParagraphAndStartDrag();
-                                    }
-                                    mDiscardNextActionUp = true;
-                                }
+                        if (mGestureStayedInTapRegion
+                                && mTouchState.isMultiTapInSameArea()
+                                && (isMouse || isPositionOnText(eventX, eventY))) {
+                            if (TextView.DEBUG_CURSOR) {
+                                logCursor("SelectionModifierCursorController: onTouchEvent",
+                                        "ACTION_DOWN: select and start drag");
                             }
+                            if (mTouchState.isDoubleTap()) {
+                                selectCurrentWordAndStartDrag();
+                            } else if (mTouchState.isTripleClick()) {
+                                selectCurrentParagraphAndStartDrag();
+                            }
+                            mDiscardNextActionUp = true;
                         }
-
-                        mDownPositionX = eventX;
-                        mDownPositionY = eventY;
                         mGestureStayedInTapRegion = true;
                         mHaventMovedEnoughToStartDrag = true;
                     }
@@ -5983,8 +5962,8 @@ public class Editor {
                     final int touchSlop = viewConfig.getScaledTouchSlop();
 
                     if (mGestureStayedInTapRegion || mHaventMovedEnoughToStartDrag) {
-                        final float deltaX = eventX - mDownPositionX;
-                        final float deltaY = eventY - mDownPositionY;
+                        final float deltaX = eventX - mTouchState.getLastDownX();
+                        final float deltaY = eventY - mTouchState.getLastDownY();
                         final float distanceSquared = deltaX * deltaX + deltaY * deltaY;
 
                         if (mGestureStayedInTapRegion) {
@@ -6027,6 +6006,9 @@ public class Editor {
                     break;
 
                 case MotionEvent.ACTION_UP:
+                    if (TextView.DEBUG_CURSOR) {
+                        logCursor("SelectionModifierCursorController: onTouchEvent", "ACTION_UP");
+                    }
                     if (!isDragAcceleratorActive()) {
                         break;
                     }
@@ -7116,6 +7098,14 @@ public class Editor {
 
         private CharSequence getLabel(ResolveInfo resolveInfo) {
             return resolveInfo.loadLabel(mPackageManager);
+        }
+    }
+
+    static void logCursor(String location, @Nullable String msgFormat, Object ... msgArgs) {
+        if (msgFormat == null) {
+            Log.d(TAG, location);
+        } else {
+            Log.d(TAG, location + ": " + String.format(msgFormat, msgArgs));
         }
     }
 }

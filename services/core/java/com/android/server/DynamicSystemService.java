@@ -18,7 +18,6 @@ package com.android.server;
 
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.gsi.GsiInstallParams;
 import android.gsi.GsiProgress;
 import android.gsi.IGsiService;
 import android.gsi.IGsid;
@@ -47,6 +46,7 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
     private static final int GSID_ROUGH_TIMEOUT_MS = 8192;
     private static final String PATH_DEFAULT = "/data/gsi";
     private Context mContext;
+    private String mInstallPath;
     private volatile IGsiService mGsiService;
 
     DynamicSystemService(Context context) {
@@ -115,7 +115,8 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
     }
 
     @Override
-    public boolean startInstallation(long systemSize, long userdataSize) throws RemoteException {
+    public boolean startInstallation() throws RemoteException {
+        IGsiService service = getGsiService();
         // priority from high to low: sysprop -> sdcard -> /data
         String path = SystemProperties.get("os.aot.path");
         if (path.isEmpty()) {
@@ -137,11 +138,33 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
             }
             Slog.i(TAG, "startInstallation -> " + path);
         }
-        GsiInstallParams installParams = new GsiInstallParams();
-        installParams.installDir = path;
-        installParams.gsiSize = systemSize;
-        installParams.userdataSize = userdataSize;
-        return getGsiService().beginGsiInstall(installParams) == 0;
+        mInstallPath = path;
+        if (service.openInstall(path) != 0) {
+            Slog.i(TAG, "Failed to open " + path);
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean createPartition(String name, long size, boolean readOnly)
+            throws RemoteException {
+        IGsiService service = getGsiService();
+        if (service.createPartition(name, size, readOnly) != 0) {
+            Slog.i(TAG, "Failed to install " + name);
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean finishInstallation() throws RemoteException {
+        IGsiService service = getGsiService();
+        if (service.closeInstall() != 0) {
+            Slog.i(TAG, "Failed to finish installation");
+            return false;
+        }
+        return true;
     }
 
     @Override
@@ -182,6 +205,8 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
 
     @Override
     public boolean remove() throws RemoteException {
+        IGsiService gsiService = getGsiService();
+        String install_dir = gsiService.getInstalledGsiImageDir();
         return getGsiService().removeGsi();
     }
 

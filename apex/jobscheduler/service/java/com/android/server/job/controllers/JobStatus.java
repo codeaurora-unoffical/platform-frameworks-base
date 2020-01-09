@@ -28,7 +28,7 @@ import android.net.Network;
 import android.net.Uri;
 import android.os.RemoteException;
 import android.os.UserHandle;
-import android.text.format.TimeMigrationUtils;
+import android.text.format.DateFormat;
 import android.util.ArraySet;
 import android.util.Pair;
 import android.util.Slog;
@@ -1414,7 +1414,7 @@ public final class JobStatus {
         proto.write(JobStatusDumpProto.JobWorkItem.WORK_ID, work.getWorkId());
         proto.write(JobStatusDumpProto.JobWorkItem.DELIVERY_COUNT, work.getDeliveryCount());
         if (work.getIntent() != null) {
-            work.getIntent().writeToProto(proto, JobStatusDumpProto.JobWorkItem.INTENT);
+            work.getIntent().dumpDebug(proto, JobStatusDumpProto.JobWorkItem.INTENT);
         }
         Object grants = work.getGrants();
         if (grants != null) {
@@ -1518,7 +1518,7 @@ public final class JobStatus {
             if (job.getClipData() != null) {
                 pw.print(prefix); pw.print("  Clip data: ");
                 StringBuilder b = new StringBuilder(128);
-                job.getClipData().toShortString(b);
+                b.append(job.getClipData());
                 pw.println(b);
             }
             if (uriPerms != null) {
@@ -1659,12 +1659,16 @@ public final class JobStatus {
         }
         if (mLastSuccessfulRunTime != 0) {
             pw.print(prefix); pw.print("Last successful run: ");
-            pw.println(TimeMigrationUtils.formatMillisWithFixedFormat(mLastSuccessfulRunTime));
+            pw.println(formatTime(mLastSuccessfulRunTime));
         }
         if (mLastFailedRunTime != 0) {
             pw.print(prefix); pw.print("Last failed run: ");
-            pw.println(TimeMigrationUtils.formatMillisWithFixedFormat(mLastFailedRunTime));
+            pw.println(formatTime(mLastFailedRunTime));
         }
+    }
+
+    private static CharSequence formatTime(long time) {
+        return DateFormat.format("yyyy-MM-dd HH:mm:ss", time);
     }
 
     public void dump(ProtoOutputStream proto, long fieldId, boolean full, long elapsedRealtimeMillis) {
@@ -1679,7 +1683,7 @@ public final class JobStatus {
         if (full) {
             final long jiToken = proto.start(JobStatusDumpProto.JOB_INFO);
 
-            job.getService().writeToProto(proto, JobStatusDumpProto.JobInfo.SERVICE);
+            job.getService().dumpDebug(proto, JobStatusDumpProto.JobInfo.SERVICE);
 
             proto.write(JobStatusDumpProto.JobInfo.IS_PERIODIC, job.isPeriodic());
             proto.write(JobStatusDumpProto.JobInfo.PERIOD_INTERVAL_MS, job.getIntervalMillis());
@@ -1718,19 +1722,19 @@ public final class JobStatus {
                 }
             }
             if (job.getExtras() != null && !job.getExtras().maybeIsEmpty()) {
-                job.getExtras().writeToProto(proto, JobStatusDumpProto.JobInfo.EXTRAS);
+                job.getExtras().dumpDebug(proto, JobStatusDumpProto.JobInfo.EXTRAS);
             }
             if (job.getTransientExtras() != null && !job.getTransientExtras().maybeIsEmpty()) {
-                job.getTransientExtras().writeToProto(proto, JobStatusDumpProto.JobInfo.TRANSIENT_EXTRAS);
+                job.getTransientExtras().dumpDebug(proto, JobStatusDumpProto.JobInfo.TRANSIENT_EXTRAS);
             }
             if (job.getClipData() != null) {
-                job.getClipData().writeToProto(proto, JobStatusDumpProto.JobInfo.CLIP_DATA);
+                job.getClipData().dumpDebug(proto, JobStatusDumpProto.JobInfo.CLIP_DATA);
             }
             if (uriPerms != null) {
                 uriPerms.dump(proto, JobStatusDumpProto.JobInfo.GRANTED_URI_PERMISSIONS);
             }
             if (job.getRequiredNetwork() != null) {
-                job.getRequiredNetwork().writeToProto(proto, JobStatusDumpProto.JobInfo.REQUIRED_NETWORK);
+                job.getRequiredNetwork().dumpDebug(proto, JobStatusDumpProto.JobInfo.REQUIRED_NETWORK);
             }
             if (mTotalNetworkDownloadBytes != JobInfo.NETWORK_BYTES_UNKNOWN) {
                 proto.write(JobStatusDumpProto.JobInfo.TOTAL_NETWORK_DOWNLOAD_BYTES,
@@ -1818,7 +1822,7 @@ public final class JobStatus {
         }
 
         if (network != null) {
-            network.writeToProto(proto, JobStatusDumpProto.NETWORK);
+            network.dumpDebug(proto, JobStatusDumpProto.NETWORK);
         }
 
         if (pendingWork != null) {

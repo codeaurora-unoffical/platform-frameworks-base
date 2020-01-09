@@ -23,7 +23,7 @@ import android.annotation.Nullable;
 import android.annotation.UnsupportedAppUsage;
 import android.mtp.MtpConstants;
 
-import libcore.net.MimeMap;
+import libcore.content.type.MimeMap;
 
 import java.util.HashMap;
 
@@ -78,6 +78,10 @@ public class MediaFile {
     // maps MTP format code to mime type
     @UnsupportedAppUsage
     private static final HashMap<Integer, String> sFormatToMimeTypeMap = new HashMap<>();
+
+    @UnsupportedAppUsage
+    public MediaFile() {
+    }
 
     /** @deprecated file types no longer exist */
     @Deprecated

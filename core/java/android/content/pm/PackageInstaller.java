@@ -29,6 +29,8 @@ import android.annotation.TestApi;
 import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityManager;
 import android.app.AppGlobals;
+import android.content.IIntentReceiver;
+import android.content.IIntentSender;
 import android.content.Intent;
 import android.content.IntentSender;
 import android.content.pm.PackageManager.DeleteFlags;
@@ -36,9 +38,11 @@ import android.content.pm.PackageManager.InstallReason;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.FileBridge;
 import android.os.Handler;
 import android.os.HandlerExecutor;
+import android.os.IBinder;
 import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.Parcelable;
@@ -46,6 +50,8 @@ import android.os.ParcelableException;
 import android.os.RemoteException;
 import android.os.SystemProperties;
 import android.os.UserHandle;
+import android.os.incremental.IncrementalDataLoaderParams;
+import android.os.incremental.IncrementalDataLoaderParamsParcel;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.ArraySet;
@@ -67,7 +73,10 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.stream.Collectors;
 
 /**
  * Offers the ability to install, upgrade, and remove applications on the
@@ -101,19 +110,6 @@ import java.util.concurrent.Executor;
  * <p>
  * The ApiDemos project contains examples of using this API:
  * <code>ApiDemos/src/com/example/android/apis/content/InstallApk*.java</code>.
- * <p>
- * On Android Q or above, an app installed notification will be posted
- * by system after a new app is installed.
- * To customize installer's notification icon, you should declare the following in the manifest
- * &lt;application> as follows: </p>
- * <pre>
- * &lt;meta-data android:name="com.android.packageinstaller.notification.smallIcon"
- * android:resource="@drawable/installer_notification_icon"/>
- * </pre>
- * <pre>
- * &lt;meta-data android:name="com.android.packageinstaller.notification.color"
- * android:resource="@color/installer_notification_color"/>
- * </pre>
  */
 public class PackageInstaller {
     private static final String TAG = "PackageInstaller";
@@ -188,8 +184,9 @@ public class PackageInstaller {
      * {@link #STATUS_PENDING_USER_ACTION}, {@link #STATUS_SUCCESS},
      * {@link #STATUS_FAILURE}, {@link #STATUS_FAILURE_ABORTED},
      * {@link #STATUS_FAILURE_BLOCKED}, {@link #STATUS_FAILURE_CONFLICT},
-     * {@link #STATUS_FAILURE_INCOMPATIBLE}, {@link #STATUS_FAILURE_INVALID}, or
-     * {@link #STATUS_FAILURE_STORAGE}.
+     * {@link #STATUS_FAILURE_INCOMPATIBLE}, {@link #STATUS_FAILURE_INVALID},
+     * {@link #STATUS_FAILURE_STORAGE}, {@link #STATUS_FAILURE_NAME_NOT_FOUND},
+     * {@link #STATUS_FAILURE_ILLEGAL_STATE} or {@link #STATUS_FAILURE_SECURITY}.
      * <p>
      * More information about a status may be available through additional
      * extras; see the individual status documentation for details.
@@ -328,6 +325,34 @@ public class PackageInstaller {
      */
     public static final int STATUS_FAILURE_INCOMPATIBLE = 7;
 
+    /**
+     * The transfer failed because a target package can't be found. For example
+     * transferring a session to a non-existing package.
+     * <p>
+     * The result may also contain {@link #EXTRA_OTHER_PACKAGE_NAME} with the
+     * missing package.
+     *
+     * @see #EXTRA_STATUS_MESSAGE
+     * @see #EXTRA_OTHER_PACKAGE_NAME
+     */
+    public static final int STATUS_FAILURE_NAME_NOT_FOUND = 8;
+
+    /**
+     * The transfer failed because a session is in invalid state. For example
+     * transferring an already committed session.
+     *
+     * @see #EXTRA_STATUS_MESSAGE
+     */
+    public static final int STATUS_FAILURE_ILLEGAL_STATE = 9;
+
+    /**
+     * The transfer failed for security reasons. For example transferring
+     * to a package which does not have INSTALL_PACKAGES permission.
+     *
+     * @see #EXTRA_STATUS_MESSAGE
+     */
+    public static final int STATUS_FAILURE_SECURITY = 10;
+
     private final IPackageInstaller mInstaller;
     private final int mUserId;
     private final String mInstallerPackageName;
@@ -362,14 +387,7 @@ public class PackageInstaller {
      */
     public int createSession(@NonNull SessionParams params) throws IOException {
         try {
-            final String installerPackage;
-            if (params.installerPackageName == null) {
-                installerPackage = mInstallerPackageName;
-            } else {
-                installerPackage = params.installerPackageName;
-            }
-
-            return mInstaller.createSession(params, installerPackage, mUserId);
+            return mInstaller.createSession(params, mInstallerPackageName, mUserId);
         } catch (RuntimeException e) {
             ExceptionUtils.maybeUnwrapIOException(e);
             throw e;
@@ -499,35 +517,30 @@ public class PackageInstaller {
     }
 
     /**
-     * Returns an active staged session, or {@code null} if there is none.
+     * Returns first active staged session, or {@code null} if there is none.
      *
-     * <p>Staged session is active iff:
-     * <ul>
-     *     <li>It is committed, i.e. {@link SessionInfo#isCommitted()} is {@code true}, and
-     *     <li>it is not applied, i.e. {@link SessionInfo#isStagedSessionApplied()} is {@code
-     *     false}, and
-     *     <li>it is not failed, i.e. {@link SessionInfo#isStagedSessionFailed()} is {@code false}.
-     * </ul>
+     * <p>For more information on what sessions are considered active see
+     * {@link SessionInfo#isStagedSessionActive()}.
      *
-     * <p>In case of a multi-apk session, reasoning above is applied to the parent session, since
-     * that is the one that should been {@link Session#commit committed}.
+     * @deprecated Use {@link #getActiveStagedSessions} as there can be more than one active staged
+     * session
      */
+    @Deprecated
     public @Nullable SessionInfo getActiveStagedSession() {
-        final List<SessionInfo> stagedSessions = getStagedSessions();
-        for (SessionInfo s : stagedSessions) {
-            if (s.isStagedSessionApplied() || s.isStagedSessionFailed()) {
-                // Finalized session.
-                continue;
-            }
-            if (s.getParentSessionId() != SessionInfo.INVALID_ID) {
-                // Child session.
-                continue;
-            }
-            if (s.isCommitted()) {
-                return s;
-            }
-        }
-        return null;
+        List<SessionInfo> activeSessions = getActiveStagedSessions();
+        return activeSessions.isEmpty() ? null : activeSessions.get(0);
+    }
+
+    /**
+     * Returns list of active staged sessions. Returns empty list if there is none.
+     *
+     * <p>For more information on what sessions are considered active see
+     *      * {@link SessionInfo#isStagedSessionActive()}.
+     */
+    public @NonNull List<SessionInfo> getActiveStagedSessions() {
+        return getStagedSessions().stream()
+                .filter(s -> s.isStagedSessionActive())
+                .collect(Collectors.toList());
     }
 
     /**
@@ -1076,7 +1089,8 @@ public class PackageInstaller {
         }
 
         /**
-         * Attempt to commit a session that has been {@link #transfer(String) transferred}.
+         * Attempt to commit a session that has been {@link #transfer(String, IntentSender)
+         * transferred}.
          *
          * <p>If the device reboots before the session has been finalized, you may commit the
          * session again.
@@ -1117,6 +1131,43 @@ public class PackageInstaller {
          *
          * @param packageName The package of the new owner. Needs to hold the INSTALL_PACKAGES
          *                    permission.
+         * @param statusReceiver Called when the state of the session changes. Intents sent to
+         *                       this receiver contain {@link #EXTRA_STATUS}. Possible statuses:
+         *                       {@link #STATUS_FAILURE_NAME_NOT_FOUND},
+         *                       {@link #STATUS_FAILURE_ILLEGAL_STATE},
+         *                       {@link #STATUS_FAILURE_SECURITY},
+         *                       {@link #STATUS_FAILURE}.
+         *                       Refer to the individual transfer status codes on how to handle
+         *                       them.
+         *
+         * @throws PackageManager.NameNotFoundException if the new owner could not be found.
+         * @throws SecurityException if called after the session has been committed or abandoned.
+         * @throws SecurityException if the session does not update the original installer
+         * @throws SecurityException if streams opened through
+         *                           {@link #openWrite(String, long, long) are still open.
+         */
+        public void transfer(@NonNull String packageName, @NonNull IntentSender statusReceiver)
+                throws PackageManager.NameNotFoundException {
+            Preconditions.checkNotNull(statusReceiver);
+            Preconditions.checkNotNull(packageName);
+
+            try {
+                mSession.transfer(packageName, statusReceiver);
+            } catch (ParcelableException e) {
+                e.maybeRethrow(PackageManager.NameNotFoundException.class);
+                throw new RuntimeException(e);
+            } catch (RemoteException e) {
+                throw e.rethrowFromSystemServer();
+            }
+        }
+
+        /**
+         * Transfer the session to a new owner.
+         * This is a convenience blocking wrapper around {@link #transfer(String, IntentSender)}.
+         * Converts all statuses into exceptions.
+         *
+         * @param packageName The package of the new owner. Needs to hold the INSTALL_PACKAGES
+         *                    permission.
          *
          * @throws PackageManager.NameNotFoundException if the new owner could not be found.
          * @throws SecurityException if called after the session has been committed or abandoned.
@@ -1128,11 +1179,62 @@ public class PackageInstaller {
                 throws PackageManager.NameNotFoundException {
             Preconditions.checkNotNull(packageName);
 
+            CompletableFuture<Intent> intentFuture = new CompletableFuture<Intent>();
             try {
-                mSession.transfer(packageName);
+                IIntentSender localSender = new IIntentSender.Stub() {
+                    @Override
+                    public void send(int code, Intent intent, String resolvedType,
+                            IBinder whitelistToken,
+                            IIntentReceiver finishedReceiver, String requiredPermission,
+                            Bundle options) {
+                        intentFuture.complete(intent);
+                    }
+                };
+                transfer(packageName, new IntentSender(localSender));
             } catch (ParcelableException e) {
                 e.maybeRethrow(PackageManager.NameNotFoundException.class);
                 throw new RuntimeException(e);
+            }
+
+            try {
+                Intent intent = intentFuture.get();
+                final int status = intent.getIntExtra(EXTRA_STATUS, Integer.MIN_VALUE);
+                final String statusMessage = intent.getStringExtra(EXTRA_STATUS_MESSAGE);
+                switch (status) {
+                    case STATUS_SUCCESS:
+                        break;
+                    case STATUS_FAILURE_NAME_NOT_FOUND:
+                        throw new PackageManager.NameNotFoundException(statusMessage);
+                    case STATUS_FAILURE_ILLEGAL_STATE:
+                        throw new IllegalStateException(statusMessage);
+                    case STATUS_FAILURE_SECURITY:
+                        throw new SecurityException(statusMessage);
+                    default:
+                        throw new RuntimeException(statusMessage);
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        /**
+         * Configure files for an installation session.
+         *
+         * Currently only for Incremental installation session. Once this method is called,
+         * the files and their paths, as specified in the parameters, will be created and properly
+         * configured in the Incremental File System.
+         *
+         * TODO(b/136132412): update this and InstallationFile class with latest API design.
+         *
+         * @throws IllegalStateException if {@link SessionParams#incrementalParams} is null.
+         *
+         * @hide
+         */
+        public void addFile(@NonNull String name, long size, @NonNull byte[] metadata) {
+            try {
+                mSession.addFile(name, size, metadata);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
@@ -1325,6 +1427,8 @@ public class PackageInstaller {
         public boolean isStaged;
         /** {@hide} */
         public long requiredInstalledVersionCode = PackageManager.VERSION_CODE_HIGHEST;
+        /** {@hide} */
+        public IncrementalDataLoaderParams incrementalParams;
 
         /**
          * Construct parameters for a new package install session.
@@ -1358,6 +1462,12 @@ public class PackageInstaller {
             isMultiPackage = source.readBoolean();
             isStaged = source.readBoolean();
             requiredInstalledVersionCode = source.readLong();
+            IncrementalDataLoaderParamsParcel dataLoaderParamsParcel = source.readParcelable(
+                    IncrementalDataLoaderParamsParcel.class.getClassLoader());
+            if (dataLoaderParamsParcel != null) {
+                incrementalParams = new IncrementalDataLoaderParams(
+                        dataLoaderParamsParcel);
+            }
         }
 
         /** {@hide} */
@@ -1381,6 +1491,7 @@ public class PackageInstaller {
             ret.isMultiPackage = isMultiPackage;
             ret.isStaged = isStaged;
             ret.requiredInstalledVersionCode = requiredInstalledVersionCode;
+            ret.incrementalParams = incrementalParams;
             return ret;
         }
 
@@ -1659,7 +1770,8 @@ public class PackageInstaller {
          * @param installerPackageName name of the installer package
          * {@hide}
          */
-        public void setInstallerPackageName(String installerPackageName) {
+        @TestApi
+        public void setInstallerPackageName(@Nullable String installerPackageName) {
             this.installerPackageName = installerPackageName;
         }
 
@@ -1707,6 +1819,16 @@ public class PackageInstaller {
         /** @hide */
         public boolean getEnableRollback() {
             return (installFlags & PackageManager.INSTALL_ENABLE_ROLLBACK) != 0;
+        }
+
+        /**
+         * Set Incremental data loader params.
+         *
+         * {@hide}
+         */
+        @RequiresPermission(Manifest.permission.INSTALL_PACKAGES)
+        public void setIncrementalParams(@NonNull IncrementalDataLoaderParams incrementalParams) {
+            this.incrementalParams = incrementalParams;
         }
 
         /** {@hide} */
@@ -1758,6 +1880,11 @@ public class PackageInstaller {
             dest.writeBoolean(isMultiPackage);
             dest.writeBoolean(isStaged);
             dest.writeLong(requiredInstalledVersionCode);
+            if (incrementalParams != null) {
+                dest.writeParcelable(incrementalParams.getData(), flags);
+            } else {
+                dest.writeParcelable(null, flags);
+            }
         }
 
         public static final Parcelable.Creator<SessionParams>
@@ -2247,10 +2374,33 @@ public class PackageInstaller {
         }
 
         /**
-         * Returns true if this session is a staged session which will be applied at next reboot.
+         * Returns true if this session is a staged session.
          */
         public boolean isStaged() {
             return isStaged;
+        }
+
+        /**
+         * Returns {@code true} if this session is an active staged session.
+         *
+         * We consider a session active if it has been committed and it is either pending
+         * verification, or will be applied at next reboot.
+         *
+         * <p>Staged session is active iff:
+         * <ul>
+         *     <li>It is committed, i.e. {@link SessionInfo#isCommitted()} is {@code true}, and
+         *     <li>it is not applied, i.e. {@link SessionInfo#isStagedSessionApplied()} is {@code
+         *     false}, and
+         *     <li>it is not failed, i.e. {@link SessionInfo#isStagedSessionFailed()} is
+         *     {@code false}.
+         * </ul>
+         *
+         * <p>In case of a multi-package session, reasoning above is applied to the parent session,
+         * since that is the one that should have been {@link Session#commit committed}.
+         */
+        public boolean isStagedSessionActive() {
+            return isStaged && isCommitted && !isStagedSessionApplied && !isStagedSessionFailed
+                    && !hasParentSessionId();
         }
 
         /**
@@ -2259,6 +2409,13 @@ public class PackageInstaller {
          */
         public int getParentSessionId() {
             return parentSessionId;
+        }
+
+        /**
+         * Returns true if session has a valid parent session, otherwise false.
+         */
+        public boolean hasParentSessionId() {
+            return parentSessionId != INVALID_ID;
         }
 
         /**

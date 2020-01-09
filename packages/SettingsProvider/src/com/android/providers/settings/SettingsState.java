@@ -24,7 +24,6 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.PackageManagerInternal;
 import android.content.pm.Signature;
 import android.os.Binder;
 import android.os.Build;
@@ -49,7 +48,6 @@ import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.util.ArrayUtils;
-import com.android.server.LocalServices;
 
 import libcore.io.IoUtils;
 
@@ -64,8 +62,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -418,6 +419,57 @@ final class SettingsState {
     }
 
     // The settings provider must hold its lock when calling here.
+    // Returns the list of keys which changed (added, updated, or deleted).
+    @GuardedBy("mLock")
+    public List<String> setSettingsLocked(String prefix, Map<String, String> keyValues,
+            String packageName) {
+        List<String> changedKeys = new ArrayList<>();
+        // Delete old keys with the prefix that are not part of the new set.
+        for (int i = 0; i < mSettings.keySet().size(); ++i) {
+            String key = mSettings.keyAt(i);
+            if (key.startsWith(prefix) && !keyValues.containsKey(key)) {
+                Setting oldState = mSettings.remove(key);
+
+                StatsLog.write(StatsLog.SETTING_CHANGED, key, /* value= */ "", /* newValue= */ "",
+                        oldState.value, /* tag */ "", false, getUserIdFromKey(mKey),
+                        StatsLog.SETTING_CHANGED__REASON__DELETED);
+                addHistoricalOperationLocked(HISTORICAL_OPERATION_DELETE, oldState);
+                changedKeys.add(key); // key was removed
+            }
+        }
+
+        // Update/add new keys
+        for (String key : keyValues.keySet()) {
+            String value = keyValues.get(key);
+            String oldValue = null;
+            Setting state = mSettings.get(key);
+            if (state == null) {
+                state = new Setting(key, value, false, packageName, null);
+                mSettings.put(key, state);
+                changedKeys.add(key); // key was added
+            } else if (state.value != value) {
+                oldValue = state.value;
+                state.update(value, false, packageName, null, true);
+                changedKeys.add(key); // key was updated
+            } else {
+                // this key/value already exists, no change and no logging necessary
+                continue;
+            }
+
+            StatsLog.write(StatsLog.SETTING_CHANGED, key, value, state.value, oldValue,
+                    /* tag */ null, /* make default */ false,
+                    getUserIdFromKey(mKey), StatsLog.SETTING_CHANGED__REASON__UPDATED);
+            addHistoricalOperationLocked(HISTORICAL_OPERATION_UPDATE, state);
+        }
+
+        if (!changedKeys.isEmpty()) {
+            scheduleWriteIfNeededLocked();
+        }
+
+        return changedKeys;
+    }
+
+    // The settings provider must hold its lock when calling here.
     public void persistSyncLocked() {
         mHandler.removeMessages(MyHandler.MSG_PERSIST_SETTINGS);
         doWriteState();
@@ -716,6 +768,23 @@ final class SettingsState {
                 }
             } catch (Throwable t) {
                 Slog.wtf(LOG_TAG, "Failed to write settings, restoring backup", t);
+                if (t instanceof IOException) {
+                    // we failed to create a directory, so log the permissions and existence
+                    // state for the settings file and directory
+                    logSettingsDirectoryInformation(destination.getBaseFile());
+                    if (t.getMessage().contains("Couldn't create directory")) {
+                        // attempt to create the directory with Files.createDirectories, which
+                        // throws more informative errors than File.mkdirs.
+                        Path parentPath = destination.getBaseFile().getParentFile().toPath();
+                        try {
+                            Files.createDirectories(parentPath);
+                            Slog.i(LOG_TAG, "Successfully created " + parentPath);
+                        } catch (Throwable t2) {
+                            Slog.e(LOG_TAG, "Failed to write " + parentPath
+                                    + " with Files.writeDirectories", t2);
+                        }
+                    }
+                }
                 destination.failWrite(out);
             } finally {
                 IoUtils.closeQuietly(out);
@@ -725,6 +794,33 @@ final class SettingsState {
         if (wroteState) {
             synchronized (mLock) {
                 addHistoricalOperationLocked(HISTORICAL_OPERATION_PERSIST, null);
+            }
+        }
+    }
+
+    private static void logSettingsDirectoryInformation(File settingsFile) {
+        File parent = settingsFile.getParentFile();
+        Slog.i(LOG_TAG, "directory info for directory/file " + settingsFile
+                + " with stacktrace ", new Exception());
+        File ancestorDir = parent;
+        while (ancestorDir != null) {
+            if (!ancestorDir.exists()) {
+                Slog.i(LOG_TAG, "ancestor directory " + ancestorDir
+                        + " does not exist");
+                ancestorDir = ancestorDir.getParentFile();
+            } else {
+                Slog.i(LOG_TAG, "ancestor directory " + ancestorDir
+                        + " exists");
+                Slog.i(LOG_TAG, "ancestor directory " + ancestorDir
+                        + " permissions: r: " + ancestorDir.canRead() + " w: "
+                        + ancestorDir.canWrite() + " x: " + ancestorDir.canExecute());
+                File ancestorParent = ancestorDir.getParentFile();
+                if (ancestorParent != null) {
+                    Slog.i(LOG_TAG, "ancestor's parent directory " + ancestorParent
+                            + " permissions: r: " + ancestorParent.canRead() + " w: "
+                            + ancestorParent.canWrite() + " x: " + ancestorParent.canExecute());
+                }
+                break;
             }
         }
     }
@@ -803,6 +899,7 @@ final class SettingsState {
             in = new AtomicFile(mStatePersistFile).openRead();
         } catch (FileNotFoundException fnfe) {
             Slog.i(LOG_TAG, "No settings state " + mStatePersistFile);
+            logSettingsDirectoryInformation(mStatePersistFile);
             addHistoricalOperationLocked(HISTORICAL_OPERATION_INITIALIZE, null);
             return;
         }
@@ -1175,9 +1272,8 @@ final class SettingsState {
                 }
 
                 // If SetupWizard, done.
-                PackageManagerInternal packageManagerInternal = LocalServices.getService(
-                        PackageManagerInternal.class);
-                if (packageName.equals(packageManagerInternal.getSetupWizardPackageName())) {
+                String setupWizPackage = context.getPackageManager().getSetupWizardPackageName();
+                if (packageName.equals(setupWizPackage)) {
                     sSystemUids.put(uid, uid);
                     return true;
                 }

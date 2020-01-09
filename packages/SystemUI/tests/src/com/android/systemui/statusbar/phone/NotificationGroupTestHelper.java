@@ -87,7 +87,6 @@ public final class NotificationGroupTestHelper {
         ExpandableNotificationRow row = mock(ExpandableNotificationRow.class);
         entry.setRow(row);
         when(row.getEntry()).thenReturn(entry);
-        when(row.getStatusBarNotification()).thenReturn(entry.sbn());
         when(row.isInflationFlagSet(anyInt())).thenReturn(true);
         return entry;
     }

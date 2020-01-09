@@ -41,9 +41,13 @@ import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.widget.MediaNotificationView;
 import com.android.systemui.Dependency;
+import com.android.systemui.qs.QSPanel;
+import com.android.systemui.qs.QuickQSPanel;
 import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.TransformableView;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.phone.StatusBarWindowController;
+import com.android.systemui.util.Utils;
 
 import java.util.Timer;
 import java.util.TimerTask;
@@ -163,20 +167,37 @@ public class NotificationMediaTemplateViewWrapper extends NotificationTemplateVi
         mContext = ctx;
         mMediaManager = Dependency.get(NotificationMediaManager.class);
         mMetricsLogger = Dependency.get(MetricsLogger.class);
-
-        if (mView instanceof MediaNotificationView) {
-            MediaNotificationView mediaView = (MediaNotificationView) mView;
-            mediaView.addVisibilityListener(mVisibilityListener);
-            mView.addOnAttachStateChangeListener(mAttachStateListener);
-        }
     }
 
     private void resolveViews() {
         mActions = mView.findViewById(com.android.internal.R.id.media_actions);
         mIsViewVisible = mView.isShown();
 
-        final MediaSession.Token token = mRow.getEntry().notification.getNotification().extras
+        final MediaSession.Token token = mRow.getEntry().getSbn().getNotification().extras
                 .getParcelable(Notification.EXTRA_MEDIA_SESSION);
+
+        if (Utils.useQsMediaPlayer(mContext)) {
+            final int[] compactActions = mRow.getEntry().getSbn().getNotification().extras
+                    .getIntArray(Notification.EXTRA_COMPACT_ACTIONS);
+            int tintColor = getNotificationHeader().getOriginalIconColor();
+            StatusBarWindowController ctrl = Dependency.get(StatusBarWindowController.class);
+            QuickQSPanel panel = ctrl.getStatusBarView().findViewById(
+                    com.android.systemui.R.id.quick_qs_panel);
+            panel.getMediaPlayer().setMediaSession(token,
+                    mRow.getEntry().getSbn().getNotification().getSmallIcon(),
+                    tintColor,
+                    mBackgroundColor,
+                    mActions,
+                    compactActions);
+            QSPanel bigPanel = ctrl.getStatusBarView().findViewById(
+                    com.android.systemui.R.id.quick_settings_panel);
+            bigPanel.addMediaSession(token,
+                    mRow.getEntry().getSbn().getNotification().getSmallIcon(),
+                    tintColor,
+                    mBackgroundColor,
+                    mActions,
+                    mRow.getEntry().getSbn());
+        }
 
         boolean showCompactSeekbar = mMediaManager.getShowCompactMediaSeekbar();
         if (token == null || (COMPACT_MEDIA_TAG.equals(mView.getTag()) && !showCompactSeekbar)) {
@@ -187,13 +208,13 @@ public class NotificationMediaTemplateViewWrapper extends NotificationTemplateVi
         }
 
         // Check for existing media controller and clean up / create as necessary
-        boolean controllerUpdated = false;
+        boolean shouldUpdateListeners = false;
         if (mMediaController == null || !mMediaController.getSessionToken().equals(token)) {
             if (mMediaController != null) {
                 mMediaController.unregisterCallback(mMediaCallback);
             }
             mMediaController = new MediaController(mContext, token);
-            controllerUpdated = true;
+            shouldUpdateListeners = true;
         }
 
         mMediaMetadata = mMediaController.getMetadata();
@@ -205,7 +226,7 @@ public class NotificationMediaTemplateViewWrapper extends NotificationTemplateVi
                     mSeekBarView.setVisibility(View.GONE);
                     mMetricsLogger.write(newLog(MetricsEvent.TYPE_CLOSE));
                     clearTimer();
-                } else if (mSeekBarView == null && controllerUpdated) {
+                } else if (mSeekBarView == null && shouldUpdateListeners) {
                     // Only log if the controller changed, otherwise we would log multiple times for
                     // the same notification when user pauses/resumes
                     mMetricsLogger.write(newLog(MetricsEvent.TYPE_CLOSE));
@@ -234,6 +255,16 @@ public class NotificationMediaTemplateViewWrapper extends NotificationTemplateVi
 
             mSeekBarElapsedTime = mSeekBarView.findViewById(R.id.notification_media_elapsed_time);
             mSeekBarTotalTime = mSeekBarView.findViewById(R.id.notification_media_total_time);
+
+            shouldUpdateListeners = true;
+        }
+
+        if (shouldUpdateListeners) {
+            if (mView instanceof MediaNotificationView) {
+                MediaNotificationView mediaView = (MediaNotificationView) mView;
+                mediaView.addVisibilityListener(mVisibilityListener);
+                mView.addOnAttachStateChangeListener(mAttachStateListener);
+            }
 
             if (mSeekBarTimer == null) {
                 if (mMediaController != null && canSeekMedia(mMediaController.getPlaybackState())) {
@@ -404,7 +435,7 @@ public class NotificationMediaTemplateViewWrapper extends NotificationTemplateVi
      * @return new LogMaker
      */
     private LogMaker newLog(int event) {
-        String packageName = mRow.getEntry().notification.getPackageName();
+        String packageName = mRow.getEntry().getSbn().getPackageName();
 
         return new LogMaker(MetricsEvent.MEDIA_NOTIFICATION_SEEKBAR)
                 .setType(event)
@@ -416,7 +447,7 @@ public class NotificationMediaTemplateViewWrapper extends NotificationTemplateVi
      * @return new LogMaker
      */
     private LogMaker newLog(int event, int subtype) {
-        String packageName = mRow.getEntry().notification.getPackageName();
+        String packageName = mRow.getEntry().getSbn().getPackageName();
         return new LogMaker(MetricsEvent.MEDIA_NOTIFICATION_SEEKBAR)
                 .setType(event)
                 .setSubtype(subtype)

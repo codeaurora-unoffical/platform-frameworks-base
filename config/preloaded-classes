@@ -200,7 +200,6 @@ android.app.ContentProviderHolder
 android.app.ContextImpl$1
 android.app.ContextImpl$ApplicationContentResolver
 android.app.ContextImpl
-android.app.DeviceIdleFrameworkInitializer
 android.app.DexLoadReporter
 android.app.Dialog$ListenersHandler
 android.app.Dialog
@@ -515,6 +514,7 @@ android.app.admin.SystemUpdateInfo$1
 android.app.admin.SystemUpdateInfo
 android.app.admin.SystemUpdatePolicy$1
 android.app.admin.SystemUpdatePolicy
+android.app.appsearch.AppSearchManagerFrameworkInitializer
 android.app.assist.AssistContent$1
 android.app.assist.AssistContent
 android.app.assist.AssistStructure$1
@@ -547,6 +547,7 @@ android.app.backup.IBackupManager$Stub$Proxy
 android.app.backup.IBackupManager$Stub
 android.app.backup.IBackupManager
 android.app.backup.SharedPreferencesBackupHelper
+android.app.blob.BlobStoreManagerFrameworkInitializer
 android.app.contentsuggestions.ContentSuggestionsManager
 android.app.job.IJobCallback$Stub$Proxy
 android.app.job.IJobCallback$Stub
@@ -877,7 +878,7 @@ android.content.pm.-$$Lambda$jpya2qgMDDEok2GAoKRDqPM5lIE
 android.content.pm.ActivityInfo$1
 android.content.pm.ActivityInfo$WindowLayout
 android.content.pm.ActivityInfo
-android.content.pm.AndroidHidlUpdater
+android.content.pm.parsing.library.AndroidHidlUpdater
 android.content.pm.ApplicationInfo$1
 android.content.pm.ApplicationInfo
 android.content.pm.BaseParceledListSlice
@@ -921,10 +922,10 @@ android.content.pm.LauncherApps$1
 android.content.pm.LauncherApps
 android.content.pm.ModuleInfo$1
 android.content.pm.ModuleInfo
-android.content.pm.OrgApacheHttpLegacyUpdater
-android.content.pm.PackageBackwardCompatibility$AndroidTestRunnerSplitUpdater
-android.content.pm.PackageBackwardCompatibility$RemoveUnnecessaryAndroidTestBaseLibrary
-android.content.pm.PackageBackwardCompatibility
+android.content.pm.parsing.library.OrgApacheHttpLegacyUpdater
+android.content.pm.parsing.library.PackageBackwardCompatibility$AndroidTestRunnerSplitUpdater
+android.content.pm.parsing.library.PackageBackwardCompatibility$RemoveUnnecessaryAndroidTestBaseLibrary
+android.content.pm.parsing.library.PackageBackwardCompatibility
 android.content.pm.PackageInfo$1
 android.content.pm.PackageInfo
 android.content.pm.PackageInstaller$Session
@@ -959,7 +960,7 @@ android.content.pm.PackageParser$SigningDetails$1
 android.content.pm.PackageParser$SigningDetails
 android.content.pm.PackageParser$SplitNameComparator
 android.content.pm.PackageParser
-android.content.pm.PackageSharedLibraryUpdater
+android.content.pm.parsing.library.PackageSharedLibraryUpdater
 android.content.pm.PackageStats$1
 android.content.pm.PackageStats
 android.content.pm.PackageUserState
@@ -4838,7 +4839,6 @@ com.android.internal.telephony.PhoneConstantConversions
 com.android.internal.telephony.PhoneConstants$DataState
 com.android.internal.telephony.PhoneConstants$State
 com.android.internal.telephony.PhoneFactory
-com.android.internal.telephony.PhoneInternalInterface$DataActivityState
 com.android.internal.telephony.PhoneInternalInterface
 com.android.internal.telephony.PhoneNotifier
 com.android.internal.telephony.PhoneStateIntentReceiver

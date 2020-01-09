@@ -33,6 +33,7 @@ import android.os.UserManager;
 import android.provider.Settings.Global;
 import android.service.notification.ZenModeConfig;
 import android.telecom.TelecomManager;
+import android.telephony.TelephonyManager;
 import android.text.format.DateFormat;
 import android.util.Log;
 
@@ -40,12 +41,8 @@ import com.android.internal.telephony.IccCardConstants;
 import com.android.internal.telephony.TelephonyIntents;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
-import com.android.systemui.SysUiServiceProvider;
 import com.android.systemui.UiOffloadThread;
-import com.android.systemui.privacy.PrivacyItem;
-import com.android.systemui.privacy.PrivacyItemController;
-import com.android.systemui.privacy.PrivacyItemControllerKt;
-import com.android.systemui.privacy.PrivacyType;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.qs.tiles.DndTile;
 import com.android.systemui.qs.tiles.RotationLockTile;
 import com.android.systemui.statusbar.CommandQueue;
@@ -57,7 +54,7 @@ import com.android.systemui.statusbar.policy.DataSaverController.Listener;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController.DeviceProvisionedListener;
 import com.android.systemui.statusbar.policy.HotspotController;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.policy.LocationController;
 import com.android.systemui.statusbar.policy.NextAlarmController;
 import com.android.systemui.statusbar.policy.RotationLockController;
@@ -66,9 +63,6 @@ import com.android.systemui.statusbar.policy.SensorPrivacyController;
 import com.android.systemui.statusbar.policy.UserInfoController;
 import com.android.systemui.statusbar.policy.ZenModeController;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -82,13 +76,13 @@ public class PhoneStatusBarPolicy
                 Listener,
                 ZenModeController.Callback,
                 DeviceProvisionedListener,
-                KeyguardMonitor.Callback,
-                PrivacyItemController.Callback,
+                KeyguardStateController.Callback,
                 LocationController.LocationChangeCallback {
     private static final String TAG = "PhoneStatusBarPolicy";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
-    public static final int LOCATION_STATUS_ICON_ID = PrivacyType.TYPE_LOCATION.getIconId();
+    public static final int LOCATION_STATUS_ICON_ID =
+            com.android.internal.R.drawable.perm_group_location;
 
     private final String mSlotCast;
     private final String mSlotHotspot;
@@ -119,15 +113,14 @@ public class PhoneStatusBarPolicy
     private final DataSaverController mDataSaver;
     private final ZenModeController mZenController;
     private final DeviceProvisionedController mProvisionedController;
-    private final KeyguardMonitor mKeyguardMonitor;
+    private final KeyguardStateController mKeyguardStateController;
     private final LocationController mLocationController;
-    private final PrivacyItemController mPrivacyItemController;
     private final UiOffloadThread mUiOffloadThread = Dependency.get(UiOffloadThread.class);
     private final SensorPrivacyController mSensorPrivacyController;
 
     // Assume it's all good unless we hear otherwise.  We don't always seem
     // to get broadcasts that it *is* there.
-    IccCardConstants.State mSimState = IccCardConstants.State.READY;
+    int mSimState = TelephonyManager.SIM_STATE_READY;
 
     private boolean mZenVisible;
     private boolean mVolumeVisible;
@@ -138,7 +131,8 @@ public class PhoneStatusBarPolicy
     private BluetoothController mBluetooth;
     private AlarmManager.AlarmClockInfo mNextAlarm;
 
-    public PhoneStatusBarPolicy(Context context, StatusBarIconController iconController) {
+    public PhoneStatusBarPolicy(Context context, StatusBarIconController iconController,
+            CommandQueue commandQueue, BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mIconController = iconController;
         mCast = Dependency.get(CastController.class);
@@ -152,9 +146,8 @@ public class PhoneStatusBarPolicy
         mDataSaver = Dependency.get(DataSaverController.class);
         mZenController = Dependency.get(ZenModeController.class);
         mProvisionedController = Dependency.get(DeviceProvisionedController.class);
-        mKeyguardMonitor = Dependency.get(KeyguardMonitor.class);
+        mKeyguardStateController = Dependency.get(KeyguardStateController.class);
         mLocationController = Dependency.get(LocationController.class);
-        mPrivacyItemController = Dependency.get(PrivacyItemController.class);
         mSensorPrivacyController = Dependency.get(SensorPrivacyController.class);
 
         mSlotCast = context.getString(com.android.internal.R.string.status_bar_cast);
@@ -184,7 +177,7 @@ public class PhoneStatusBarPolicy
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE);
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE);
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED);
-        mContext.registerReceiver(mIntentReceiver, filter, null, mHandler);
+        broadcastDispatcher.registerReceiver(mIntentReceiver, filter, mHandler);
 
         // listen for user / profile change.
         try {
@@ -231,13 +224,6 @@ public class PhoneStatusBarPolicy
                 context.getString(R.string.accessibility_data_saver_on));
         mIconController.setIconVisibility(mSlotDataSaver, false);
 
-        // privacy items
-        mIconController.setIcon(mSlotMicrophone, PrivacyType.TYPE_MICROPHONE.getIconId(),
-                PrivacyType.TYPE_MICROPHONE.getName(mContext));
-        mIconController.setIconVisibility(mSlotMicrophone, false);
-        mIconController.setIcon(mSlotCamera, PrivacyType.TYPE_CAMERA.getIconId(),
-                PrivacyType.TYPE_CAMERA.getName(mContext));
-        mIconController.setIconVisibility(mSlotCamera, false);
         mIconController.setIcon(mSlotLocation, LOCATION_STATUS_ICON_ID,
                 mContext.getString(R.string.accessibility_location_active));
         mIconController.setIconVisibility(mSlotLocation, false);
@@ -256,12 +242,11 @@ public class PhoneStatusBarPolicy
         mHotspot.addCallback(mHotspotCallback);
         mNextAlarmController.addCallback(mNextAlarmCallback);
         mDataSaver.addCallback(this);
-        mKeyguardMonitor.addCallback(this);
-        mPrivacyItemController.addCallback(this);
+        mKeyguardStateController.addCallback(this);
         mSensorPrivacyController.addCallback(mSensorPrivacyListener);
         mLocationController.addCallback(this);
 
-        SysUiServiceProvider.getComponent(mContext, CommandQueue.class).addCallback(this);
+        commandQueue.addCallback(this);
     }
 
     @Override
@@ -306,25 +291,25 @@ public class PhoneStatusBarPolicy
     private final void updateSimState(Intent intent) {
         String stateExtra = intent.getStringExtra(IccCardConstants.INTENT_KEY_ICC_STATE);
         if (IccCardConstants.INTENT_VALUE_ICC_ABSENT.equals(stateExtra)) {
-            mSimState = IccCardConstants.State.ABSENT;
+            mSimState = TelephonyManager.SIM_STATE_READY;
         } else if (IccCardConstants.INTENT_VALUE_ICC_CARD_IO_ERROR.equals(stateExtra)) {
-            mSimState = IccCardConstants.State.CARD_IO_ERROR;
+            mSimState = TelephonyManager.SIM_STATE_CARD_IO_ERROR;
         } else if (IccCardConstants.INTENT_VALUE_ICC_CARD_RESTRICTED.equals(stateExtra)) {
-            mSimState = IccCardConstants.State.CARD_RESTRICTED;
+            mSimState = TelephonyManager.SIM_STATE_CARD_RESTRICTED;
         } else if (IccCardConstants.INTENT_VALUE_ICC_READY.equals(stateExtra)) {
-            mSimState = IccCardConstants.State.READY;
+            mSimState = TelephonyManager.SIM_STATE_READY;
         } else if (IccCardConstants.INTENT_VALUE_ICC_LOCKED.equals(stateExtra)) {
             final String lockedReason =
                     intent.getStringExtra(IccCardConstants.INTENT_KEY_LOCKED_REASON);
             if (IccCardConstants.INTENT_VALUE_LOCKED_ON_PIN.equals(lockedReason)) {
-                mSimState = IccCardConstants.State.PIN_REQUIRED;
+                mSimState = TelephonyManager.SIM_STATE_PIN_REQUIRED;
             } else if (IccCardConstants.INTENT_VALUE_LOCKED_ON_PUK.equals(lockedReason)) {
-                mSimState = IccCardConstants.State.PUK_REQUIRED;
+                mSimState = TelephonyManager.SIM_STATE_PUK_REQUIRED;
             } else {
-                mSimState = IccCardConstants.State.NETWORK_LOCKED;
+                mSimState = TelephonyManager.SIM_STATE_NETWORK_LOCKED;
             }
         } else {
-            mSimState = IccCardConstants.State.UNKNOWN;
+            mSimState = TelephonyManager.SIM_STATE_UNKNOWN;
         }
     }
 
@@ -472,8 +457,8 @@ public class PhoneStatusBarPolicy
                 boolean isManagedProfile = mUserManager.isManagedProfile(userId);
                 mHandler.post(() -> {
                     final boolean showIcon;
-                    if (isManagedProfile &&
-                            (!mKeyguardMonitor.isShowing() || mKeyguardMonitor.isOccluded())) {
+                    if (isManagedProfile && (!mKeyguardStateController.isShowing()
+                            || mKeyguardStateController.isOccluded())) {
                         showIcon = true;
                         mIconController.setIcon(mSlotManagedProfile,
                                 R.drawable.stat_sys_managed_profile_status,
@@ -601,46 +586,9 @@ public class PhoneStatusBarPolicy
         mIconController.setIconVisibility(mSlotDataSaver, isDataSaving);
     }
 
-    @Override  // PrivacyItemController.Callback
-    public void privacyChanged(List<PrivacyItem> privacyItems) {
-        updatePrivacyItems(privacyItems);
-    }
-
-    private void updatePrivacyItems(List<PrivacyItem> items) {
-        boolean showCamera = false;
-        boolean showMicrophone = false;
-        boolean showLocation = false;
-        for (PrivacyItem item : items) {
-            if (item == null /* b/124234367 */) {
-                if (DEBUG) {
-                    Log.e(TAG, "updatePrivacyItems - null item found");
-                    StringWriter out = new StringWriter();
-                    mPrivacyItemController.dump(null, new PrintWriter(out), null);
-                    Log.e(TAG, out.toString());
-                }
-                continue;
-            }
-            switch (item.getPrivacyType()) {
-                case TYPE_CAMERA:
-                    showCamera = true;
-                    break;
-                case TYPE_LOCATION:
-                    showLocation = true;
-                    break;
-                case TYPE_MICROPHONE:
-                    showMicrophone = true;
-                    break;
-            }
-        }
-
-        mIconController.setIconVisibility(mSlotCamera, showCamera);
-        mIconController.setIconVisibility(mSlotMicrophone, showMicrophone);
-        mIconController.setIconVisibility(mSlotLocation, showLocation);
-    }
-
     @Override
     public void onLocationActiveChanged(boolean active) {
-        if (!PrivacyItemControllerKt.isPermissionsHubEnabled()) updateLocation();
+        updateLocation();
     }
 
     // Updates the status view based on the current state of location requests.

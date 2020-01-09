@@ -56,6 +56,7 @@ struct LinkOptions {
   bool generate_conditional_proguard_rules = false;
   bool generate_minimal_proguard_rules = false;
   bool generate_non_final_ids = false;
+  bool no_proguard_location_reference = false;
   std::vector<std::string> javadoc_annotations;
   Maybe<std::string> private_symbols;
 
@@ -215,6 +216,9 @@ class LinkCommand : public Command {
         "Generates R.java without the final modifier. This is implied when\n"
             "--static-lib is specified.",
         &options_.generate_non_final_ids);
+    AddOptionalSwitch("--no-proguard-location-reference",
+        "Keep proguard rules files from having a reference to the source file",
+        &options_.no_proguard_location_reference);
     AddOptionalFlag("--stable-ids", "File containing a list of name to ID mapping.",
         &stable_id_file_path_);
     AddOptionalFlag("--emit-ids",
@@ -264,8 +268,8 @@ class LinkCommand : public Command {
         &options_.keep_raw_values);
     AddOptionalFlag("--no-compress-regex",
         "Do not compress extensions matching the regular expression. Remember to\n"
-            " use the '$' symbol for end of line. Uses a non case-sensitive\n"
-            " ECMAScript regular expression grammar.",
+            "use the '$' symbol for end of line. Uses a case-sensitive ECMAScript"
+            "regular expression grammar.",
         &no_compress_regex);
     AddOptionalSwitch("--warn-manifest-validation",
         "Treat manifest validation errors as warnings.",

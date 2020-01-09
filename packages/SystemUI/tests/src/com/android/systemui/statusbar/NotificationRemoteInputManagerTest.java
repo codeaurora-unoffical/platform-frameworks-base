@@ -30,7 +30,8 @@ import com.android.systemui.statusbar.NotificationRemoteInputManager.SmartReplyH
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
-import com.android.systemui.statusbar.phone.ShadeController;
+import com.android.systemui.statusbar.phone.StatusBar;
+import com.android.systemui.statusbar.policy.RemoteInputUriController;
 
 import com.google.android.collect.Sets;
 
@@ -57,6 +58,7 @@ public class NotificationRemoteInputManagerTest extends SysuiTestCase {
     @Mock private NotificationListenerService.RankingMap mRanking;
     @Mock private ExpandableNotificationRow mRow;
     @Mock private StatusBarStateController mStateController;
+    @Mock private RemoteInputUriController mRemoteInputUriController;
 
     // Dependency mocks:
     @Mock private NotificationEntryManager mEntryManager;
@@ -74,9 +76,10 @@ public class NotificationRemoteInputManagerTest extends SysuiTestCase {
 
         mRemoteInputManager = new TestableNotificationRemoteInputManager(mContext,
                 mLockscreenUserManager, mSmartReplyController, mEntryManager,
-                () -> mock(ShadeController.class),
+                () -> mock(StatusBar.class),
                 mStateController,
-                Handler.createAsync(Looper.myLooper()));
+                Handler.createAsync(Looper.myLooper()),
+                mRemoteInputUriController);
         mEntry = new NotificationEntryBuilder()
                 .setPkg(TEST_PACKAGE_NAME)
                 .setOpPkg(TEST_PACKAGE_NAME)
@@ -97,7 +100,7 @@ public class NotificationRemoteInputManagerTest extends SysuiTestCase {
     @Test
     public void testPerformOnRemoveNotification() {
         when(mController.isRemoteInputActive(mEntry)).thenReturn(true);
-        mRemoteInputManager.onPerformRemoveNotification(mEntry, mEntry.key());
+        mRemoteInputManager.onPerformRemoveNotification(mEntry, mEntry.getKey());
 
         verify(mController).removeRemoteInput(mEntry, null);
     }
@@ -112,7 +115,7 @@ public class NotificationRemoteInputManagerTest extends SysuiTestCase {
     @Test
     public void testShouldExtendLifetime_isSpinning() {
         NotificationRemoteInputManager.FORCE_REMOTE_INPUT_HISTORY = true;
-        when(mController.isSpinning(mEntry.key)).thenReturn(true);
+        when(mController.isSpinning(mEntry.getKey())).thenReturn(true);
 
         assertTrue(mRemoteInputHistoryExtender.shouldExtendLifetime(mEntry));
     }
@@ -128,7 +131,7 @@ public class NotificationRemoteInputManagerTest extends SysuiTestCase {
     @Test
     public void testShouldExtendLifetime_smartReplySending() {
         NotificationRemoteInputManager.FORCE_REMOTE_INPUT_HISTORY = true;
-        when(mSmartReplyController.isSendingSmartReply(mEntry.key)).thenReturn(true);
+        when(mSmartReplyController.isSendingSmartReply(mEntry.getKey())).thenReturn(true);
 
         assertTrue(mSmartReplyHistoryExtender.shouldExtendLifetime(mEntry));
     }
@@ -209,11 +212,13 @@ public class NotificationRemoteInputManagerTest extends SysuiTestCase {
                 NotificationLockscreenUserManager lockscreenUserManager,
                 SmartReplyController smartReplyController,
                 NotificationEntryManager notificationEntryManager,
-                Lazy<ShadeController> shadeController,
+                Lazy<StatusBar> statusBarLazy,
                 StatusBarStateController statusBarStateController,
-                Handler mainHandler) {
+                Handler mainHandler,
+                RemoteInputUriController remoteInputUriController) {
             super(context, lockscreenUserManager, smartReplyController, notificationEntryManager,
-                    shadeController, statusBarStateController, mainHandler);
+                    statusBarLazy, statusBarStateController, mainHandler,
+                    remoteInputUriController);
         }
 
         public void setUpWithPresenterForTest(Callback callback,

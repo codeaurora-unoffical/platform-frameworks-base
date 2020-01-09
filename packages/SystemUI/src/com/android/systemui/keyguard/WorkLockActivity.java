@@ -36,6 +36,9 @@ import android.view.View;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.systemui.R;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+
+import javax.inject.Inject;
 
 /**
  * Bouncer between work activities and the activity used to confirm credentials before unlocking
@@ -47,6 +50,12 @@ import com.android.systemui.R;
  */
 public class WorkLockActivity extends Activity {
     private static final String TAG = "WorkLockActivity";
+
+    /**
+     * Add additional extra {@link com.android.settings.password.ConfirmDeviceCredentialActivity} to
+     * enable device policy management enforcement from systemui.
+     */
+    public static final String EXTRA_FROM_WORK_LOCK_ACTIVITY = "from_work_lock_activity";
 
     /**
      * Contains a {@link TaskDescription} for the activity being covered.
@@ -61,14 +70,21 @@ public class WorkLockActivity extends Activity {
      * @see KeyguardManager
      */
     private KeyguardManager mKgm;
+    private final BroadcastDispatcher mBroadcastDispatcher;
+
+    @Inject
+    public WorkLockActivity(BroadcastDispatcher broadcastDispatcher) {
+        super();
+        mBroadcastDispatcher = broadcastDispatcher;
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        registerReceiverAsUser(mLockEventReceiver, UserHandle.ALL,
-                new IntentFilter(Intent.ACTION_DEVICE_LOCKED_CHANGED), /* permission */ null,
-                /* scheduler */ null);
+        mBroadcastDispatcher.registerReceiver(mLockEventReceiver,
+                new IntentFilter(Intent.ACTION_DEVICE_LOCKED_CHANGED), null /* handler */,
+                UserHandle.ALL);
 
         // Once the receiver is registered, check whether anything happened between now and the time
         // when this activity was launched. If it did and the user is unlocked now, just quit.
@@ -101,9 +117,14 @@ public class WorkLockActivity extends Activity {
         }
     }
 
+    @VisibleForTesting
+    protected void unregisterBroadcastReceiver() {
+        mBroadcastDispatcher.unregisterReceiver(mLockEventReceiver);
+    }
+
     @Override
     public void onDestroy() {
-        unregisterReceiver(mLockEventReceiver);
+        unregisterBroadcastReceiver();
         super.onDestroy();
     }
 
@@ -151,9 +172,15 @@ public class WorkLockActivity extends Activity {
 
         if (target != null) {
             credential.putExtra(Intent.EXTRA_INTENT, target.getIntentSender());
+            credential.putExtra(EXTRA_FROM_WORK_LOCK_ACTIVITY, true);
         }
 
-        startActivityForResult(credential, REQUEST_CODE_CONFIRM_CREDENTIALS);
+        final ActivityOptions launchOptions = ActivityOptions.makeBasic();
+        launchOptions.setLaunchTaskId(getTaskId());
+        launchOptions.setTaskOverlay(true /* taskOverlay */, true /* canResume */);
+
+        startActivityForResult(credential, REQUEST_CODE_CONFIRM_CREDENTIALS,
+                launchOptions.toBundle());
     }
 
     @Override

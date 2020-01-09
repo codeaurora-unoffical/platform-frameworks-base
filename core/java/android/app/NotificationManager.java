@@ -997,8 +997,13 @@ public class NotificationManager {
     }
 
     /**
-     * @hide
+     * <p>
+     *  Gets the currently applied notification policy. If {@link #getCurrentInterruptionFilter}
+     * is equal to {@link #INTERRUPTION_FILTER_ALL}, then the consolidated notification policy
+     * will match the default notification policy returned by {@link #getNotificationPolicy}.
+     * </p>
      */
+    @Nullable
     public NotificationManager.Policy getConsolidatedNotificationPolicy() {
         INotificationManager service = getService();
         try {
@@ -1024,7 +1029,7 @@ public class NotificationManager {
      * Returns AutomaticZenRules owned by the caller.
      *
      * <p>
-     * Throws a SecurityException if policy access is granted to this package.
+     * Throws a SecurityException if policy access is not granted to this package.
      * See {@link #isNotificationPolicyAccessGranted}.
      */
     public Map<String, AutomaticZenRule> getAutomaticZenRules() {
@@ -1048,7 +1053,7 @@ public class NotificationManager {
      * Returns the AutomaticZenRule with the given id, if it exists and the caller has access.
      *
      * <p>
-     * Throws a SecurityException if policy access is granted to this package.
+     * Throws a SecurityException if policy access is not granted to this package.
      * See {@link #isNotificationPolicyAccessGranted}.
      *
      * <p>
@@ -1068,7 +1073,7 @@ public class NotificationManager {
      * Creates the given zen rule.
      *
      * <p>
-     * Throws a SecurityException if policy access is granted to this package.
+     * Throws a SecurityException if policy access is not granted to this package.
      * See {@link #isNotificationPolicyAccessGranted}.
      *
      * @param automaticZenRule the rule to create.
@@ -1087,7 +1092,7 @@ public class NotificationManager {
      * Updates the given zen rule.
      *
      * <p>
-     * Throws a SecurityException if policy access is granted to this package.
+     * Throws a SecurityException if policy access is not granted to this package.
      * See {@link #isNotificationPolicyAccessGranted}.
      *
      * <p>
@@ -1129,7 +1134,7 @@ public class NotificationManager {
      * Deletes the automatic zen rule with the given id.
      *
      * <p>
-     * Throws a SecurityException if policy access is granted to this package.
+     * Throws a SecurityException if policy access is not granted to this package.
      * See {@link #isNotificationPolicyAccessGranted}.
      *
      * <p>
@@ -1767,7 +1772,7 @@ public class NotificationManager {
         @Override
         public int hashCode() {
             return Objects.hash(priorityCategories, priorityCallSenders, priorityMessageSenders,
-                    suppressedVisualEffects);
+                    suppressedVisualEffects, state);
         }
 
         @Override
@@ -1779,9 +1784,9 @@ public class NotificationManager {
                     && other.priorityCallSenders == priorityCallSenders
                     && other.priorityMessageSenders == priorityMessageSenders
                     && suppressedVisualEffectsEqual(suppressedVisualEffects,
-                    other.suppressedVisualEffects);
+                    other.suppressedVisualEffects)
+                    && other.state == this.state;
         }
-
 
         private boolean suppressedVisualEffectsEqual(int suppressedEffects,
                 int otherSuppressedVisualEffects) {
@@ -1850,7 +1855,7 @@ public class NotificationManager {
         }
 
         /** @hide */
-        public void writeToProto(ProtoOutputStream proto, long fieldId) {
+        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
             final long pToken = proto.start(fieldId);
 
             bitwiseToProtoEnum(proto, PolicyProto.PRIORITY_CATEGORIES, priorityCategories);

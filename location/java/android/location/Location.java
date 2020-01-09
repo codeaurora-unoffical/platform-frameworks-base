@@ -16,6 +16,7 @@
 
 package android.location;
 
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.annotation.UnsupportedAppUsage;
@@ -79,6 +80,8 @@ public class Location implements Parcelable {
      *
      * @hide
      */
+    @TestApi
+    @SystemApi
     public static final String EXTRA_NO_GPS_LOCATION = "noGPSLocation";
 
     /**
@@ -158,7 +161,10 @@ public class Location implements Parcelable {
      * <p>By default time, latitude and longitude are 0, and the location
      * has no bearing, altitude, speed, accuracy or extras.
      *
-     * @param provider the name of the provider that generated this location
+     * @param provider the source that provides the location. It can be of type
+     * {@link LocationManager#GPS_PROVIDER}, {@link LocationManager#NETWORK_PROVIDER},
+     * or {@link LocationManager#PASSIVE_PROVIDER}. You can also define your own
+     * provider string, in which case an empty string is a valid provider.
      */
     public Location(String provider) {
         mProvider = provider;
@@ -1208,14 +1214,16 @@ public class Location implements Parcelable {
     }
 
     /**
-     * Attaches an extra {@link Location} to this Location.
+     * Attaches an extra {@link Location} to this Location. This is useful for location providers
+     * to set the {@link #EXTRA_NO_GPS_LOCATION} extra to provide coarse locations for clients.
      *
      * @param key the key associated with the Location extra
      * @param value the Location to attach
      * @hide
      */
-    @UnsupportedAppUsage
-    public void setExtraLocation(String key, Location value) {
+    @TestApi
+    @SystemApi
+    public void setExtraLocation(@Nullable String key, @Nullable Location value) {
         if (mExtras == null) {
             mExtras = new Bundle();
         }

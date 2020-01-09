@@ -21,6 +21,7 @@ import android.os.UserHandle;
 /** @hide */
 interface IDeviceIdleController {
     void addPowerSaveWhitelistApp(String name);
+    int addPowerSaveWhitelistApps(in List<String> packageNames);
     void removePowerSaveWhitelistApp(String name);
     /* Removes an app from the system whitelist. Calling restoreSystemPowerWhitelistApp will add
     the app back into the system whitelist */
@@ -30,11 +31,13 @@ interface IDeviceIdleController {
     String[] getSystemPowerWhitelistExceptIdle();
     String[] getSystemPowerWhitelist();
     String[] getUserPowerWhitelist();
+    @UnsupportedAppUsage
     String[] getFullPowerWhitelistExceptIdle();
     String[] getFullPowerWhitelist();
     int[] getAppIdWhitelistExceptIdle();
     int[] getAppIdWhitelist();
     int[] getAppIdUserWhitelist();
+    @UnsupportedAppUsage
     int[] getAppIdTempWhitelist();
     boolean isPowerSaveWhitelistExceptIdleApp(String name);
     boolean isPowerSaveWhitelistApp(String name);
@@ -42,6 +45,7 @@ interface IDeviceIdleController {
     void addPowerSaveTempWhitelistApp(String name, long duration, int userId, String reason);
     long addPowerSaveTempWhitelistAppForMms(String name, int userId, String reason);
     long addPowerSaveTempWhitelistAppForSms(String name, int userId, String reason);
+    long whitelistAppTemporarily(String name, int userId, String reason);
     void exitIdle(String reason);
     int setPreIdleTimeoutMode(int Mode);
     void resetPreIdleTimeoutMode();

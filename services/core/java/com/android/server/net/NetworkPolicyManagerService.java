@@ -20,6 +20,9 @@ import static android.Manifest.permission.ACCESS_NETWORK_STATE;
 import static android.Manifest.permission.CONNECTIVITY_INTERNAL;
 import static android.Manifest.permission.MANAGE_NETWORK_POLICY;
 import static android.Manifest.permission.MANAGE_SUBSCRIPTION_PLANS;
+import static android.Manifest.permission.NETWORK_SETTINGS;
+import static android.Manifest.permission.NETWORK_STACK;
+import static android.Manifest.permission.OBSERVE_NETWORK_POLICY;
 import static android.Manifest.permission.READ_NETWORK_USAGE_HISTORY;
 import static android.Manifest.permission.READ_PHONE_STATE;
 import static android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE;
@@ -33,6 +36,7 @@ import static android.content.pm.PackageManager.MATCH_DIRECT_BOOT_AWARE;
 import static android.content.pm.PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
 import static android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS;
 import static android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES;
+import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 import static android.net.ConnectivityManager.CONNECTIVITY_ACTION;
 import static android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED;
 import static android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED;
@@ -153,6 +157,7 @@ import android.net.NetworkPolicyManager;
 import android.net.NetworkQuotaInfo;
 import android.net.NetworkRequest;
 import android.net.NetworkSpecifier;
+import android.net.NetworkStack;
 import android.net.NetworkState;
 import android.net.NetworkStats;
 import android.net.NetworkTemplate;
@@ -217,8 +222,6 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.messages.nano.SystemMessageProto.SystemMessage;
 import com.android.internal.notification.SystemNotificationChannels;
-import com.android.internal.os.SomeArgs;
-import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.ConcurrentUtils;
 import com.android.internal.util.DumpUtils;
@@ -230,6 +233,8 @@ import com.android.server.EventLogTags;
 import com.android.server.LocalServices;
 import com.android.server.ServiceThread;
 import com.android.server.SystemConfig;
+import com.android.server.usage.AppStandbyInternal;
+import com.android.server.usage.AppStandbyInternal.AppIdleStateChangeListener;
 
 import libcore.io.IoUtils;
 
@@ -364,7 +369,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
             "com.android.server.net.action.SNOOZE_RAPID";
 
     /**
-     * Indicates the maximum wait time for admin data to be available;
+     * Indicates the maximum wait time for admin data to be available.
      */
     private static final long WAIT_FOR_ADMIN_DATA_TIMEOUT_MS = 10_000;
 
@@ -385,6 +390,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     private static final int MSG_SUBSCRIPTION_OVERRIDE = 16;
     private static final int MSG_METERED_RESTRICTED_PACKAGES_CHANGED = 17;
     private static final int MSG_SET_NETWORK_TEMPLATE_ENABLED = 18;
+    private static final int MSG_SUBSCRIPTION_PLANS_CHANGED = 19;
 
     private static final int UID_MSG_STATE_CHANGED = 100;
     private static final int UID_MSG_GONE = 101;
@@ -396,6 +402,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     private NetworkStatsManagerInternal mNetworkStats;
     private final INetworkManagementService mNetworkManager;
     private UsageStatsManagerInternal mUsageStats;
+    private AppStandbyInternal mAppStandby;
     private final Clock mClock;
     private final UserManager mUserManager;
     private final CarrierConfigManager mCarrierConfigManager;
@@ -734,6 +741,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
             }
 
             mUsageStats = LocalServices.getService(UsageStatsManagerInternal.class);
+            mAppStandby = LocalServices.getService(AppStandbyInternal.class);
             mNetworkStats = LocalServices.getService(NetworkStatsManagerInternal.class);
 
             synchronized (mUidRulesFirstLock) {
@@ -797,6 +805,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                         writePolicyAL();
                     }
 
+                    enableFirewallChainUL(FIREWALL_CHAIN_STANDBY, true);
                     setRestrictBackgroundUL(mLoadedRestrictBackground);
                     updateRulesForGlobalChangeAL(false);
                     updateNotificationsNL();
@@ -820,7 +829,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
 
             // watch for network interfaces to be claimed
             final IntentFilter connFilter = new IntentFilter(CONNECTIVITY_ACTION);
-            mContext.registerReceiver(mConnReceiver, connFilter, CONNECTIVITY_INTERNAL, mHandler);
+            mContext.registerReceiver(mConnReceiver, connFilter, NETWORK_STACK, mHandler);
 
             // listen for package changes to update policy
             final IntentFilter packageFilter = new IntentFilter();
@@ -867,7 +876,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
             mContext.getSystemService(ConnectivityManager.class).registerNetworkCallback(
                     new NetworkRequest.Builder().build(), mNetworkCallback);
 
-            mUsageStats.addAppIdleStateChangeListener(new AppIdleStateChangeListener());
+            mAppStandby.addListener(new NetPolicyAppIdleStateChangeListener());
 
             // Listen for subscriber changes
             mContext.getSystemService(SubscriptionManager.class).addOnSubscriptionsChangedListener(
@@ -907,7 +916,8 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     }
 
     final private IUidObserver mUidObserver = new IUidObserver.Stub() {
-        @Override public void onUidStateChanged(int uid, int procState, long procStateSeq) {
+        @Override public void onUidStateChanged(int uid, int procState, long procStateSeq,
+                int capability) {
             mUidEventHandler.obtainMessage(UID_MSG_STATE_CHANGED,
                     uid, procState, procStateSeq).sendToTarget();
         }
@@ -1122,7 +1132,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         @Override
         public void limitReached(String limitName, String iface) {
             // only someone like NMS should be calling us
-            mContext.enforceCallingOrSelfPermission(CONNECTIVITY_INTERNAL, TAG);
+            NetworkStack.checkNetworkStackPermission(mContext);
 
             if (!LIMIT_GLOBAL_ALERT.equals(limitName)) {
                 mHandler.obtainMessage(MSG_LIMIT_REACHED, iface).sendToTarget();
@@ -1477,7 +1487,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     private BroadcastReceiver mConnReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            // on background handler thread, and verified CONNECTIVITY_INTERNAL
+            // on background handler thread, and verified NETWORK_STACK
             // permission above.
             updateNetworksInternal();
         }
@@ -1507,6 +1517,11 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
             latch.countDown();
         });
         latch.await(5, TimeUnit.SECONDS);
+    }
+
+    @VisibleForTesting
+    Handler getHandlerForTesting() {
+        return mHandler;
     }
 
     /**
@@ -1640,10 +1655,10 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
             // No need to do a permission check, because the ACTION_CARRIER_CONFIG_CHANGED
             // broadcast is protected and can't be spoofed. Runs on a background handler thread.
 
-            if (!intent.hasExtra(PhoneConstants.SUBSCRIPTION_KEY)) {
+            if (!intent.hasExtra(CarrierConfigManager.EXTRA_SUBSCRIPTION_INDEX)) {
                 return;
             }
-            final int subId = intent.getIntExtra(PhoneConstants.SUBSCRIPTION_KEY, -1);
+            final int subId = intent.getIntExtra(CarrierConfigManager.EXTRA_SUBSCRIPTION_INDEX, -1);
 
             // Get all of our cross-process communication with telephony out of
             // the way before we acquire internal locks.
@@ -2710,17 +2725,35 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         return changed;
     }
 
+    private boolean checkAnyPermissionOf(String... permissions) {
+        for (String permission : permissions) {
+            if (mContext.checkCallingOrSelfPermission(permission) == PERMISSION_GRANTED) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void enforceAnyPermissionOf(String... permissions) {
+        if (!checkAnyPermissionOf(permissions)) {
+            throw new SecurityException("Requires one of the following permissions: "
+                    + String.join(", ", permissions) + ".");
+        }
+    }
+
     @Override
     public void registerListener(INetworkPolicyListener listener) {
-        // TODO: create permission for observing network policy
-        mContext.enforceCallingOrSelfPermission(CONNECTIVITY_INTERNAL, TAG);
+        // TODO: Remove CONNECTIVITY_INTERNAL and the *AnyPermissionOf methods above after all apps
+        //  have declared OBSERVE_NETWORK_POLICY.
+        enforceAnyPermissionOf(CONNECTIVITY_INTERNAL, OBSERVE_NETWORK_POLICY);
         mListeners.register(listener);
     }
 
     @Override
     public void unregisterListener(INetworkPolicyListener listener) {
-        // TODO: create permission for observing network policy
-        mContext.enforceCallingOrSelfPermission(CONNECTIVITY_INTERNAL, TAG);
+        // TODO: Remove CONNECTIVITY_INTERNAL and the *AnyPermissionOf methods above after all apps
+        //  have declared OBSERVE_NETWORK_POLICY.
+        enforceAnyPermissionOf(CONNECTIVITY_INTERNAL, OBSERVE_NETWORK_POLICY);
         mListeners.unregister(listener);
     }
 
@@ -3064,6 +3097,34 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         mContext.enforceCallingOrSelfPermission(MANAGE_SUBSCRIPTION_PLANS, TAG);
     }
 
+    private void enforceSubscriptionPlanValidity(SubscriptionPlan[] plans) {
+        // nothing to check if no plans
+        if (plans.length == 0) {
+            return;
+        }
+
+        long applicableNetworkTypes = 0;
+        boolean allNetworks = false;
+        for (SubscriptionPlan plan : plans) {
+            if (plan.getNetworkTypes() == null) {
+                allNetworks = true;
+            } else {
+                if ((applicableNetworkTypes & plan.getNetworkTypesBitMask()) != 0) {
+                    throw new IllegalArgumentException(
+                            "Multiple subscription plans defined for a single network type.");
+                } else {
+                    applicableNetworkTypes |= plan.getNetworkTypesBitMask();
+                }
+            }
+        }
+
+        // ensure at least one plan applies for every network type
+        if (!allNetworks) {
+            throw new IllegalArgumentException(
+                    "No generic subscription plan that applies to all network types.");
+        }
+    }
+
     @Override
     public SubscriptionPlan[] getSubscriptionPlans(int subId, String callingPackage) {
         enforceSubscriptionPlanAccess(subId, Binder.getCallingUid(), callingPackage);
@@ -3228,6 +3289,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     @Override
     public void setSubscriptionPlans(int subId, SubscriptionPlan[] plans, String callingPackage) {
         enforceSubscriptionPlanAccess(subId, Binder.getCallingUid(), callingPackage);
+        enforceSubscriptionPlanValidity(plans);
 
         for (SubscriptionPlan plan : plans) {
             Preconditions.checkNotNull(plan);
@@ -3256,6 +3318,8 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
             intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
             intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, subId);
             mContext.sendBroadcast(intent, android.Manifest.permission.MANAGE_SUBSCRIPTION_PLANS);
+            mHandler.sendMessage(
+                    mHandler.obtainMessage(MSG_SUBSCRIPTION_PLANS_CHANGED, subId, 0, plans));
         } finally {
             Binder.restoreCallingIdentity(token);
         }
@@ -3282,7 +3346,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
 
     @Override
     public void setSubscriptionOverride(int subId, int overrideMask, int overrideValue,
-            long networkTypeMask, long timeoutMillis, String callingPackage) {
+            long timeoutMillis, String callingPackage) {
         enforceSubscriptionPlanAccess(subId, Binder.getCallingUid(), callingPackage);
 
         // We can only override when carrier told us about plans
@@ -3300,16 +3364,11 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         final boolean overrideEnabled = Settings.Global.getInt(mContext.getContentResolver(),
                 NETPOLICY_OVERRIDE_ENABLED, 1) != 0;
         if (overrideEnabled || overrideValue == 0) {
-            SomeArgs args = SomeArgs.obtain();
-            args.arg1 = subId;
-            args.arg2 = overrideMask;
-            args.arg3 = overrideValue;
-            args.arg4 = networkTypeMask;
-            mHandler.sendMessage(mHandler.obtainMessage(MSG_SUBSCRIPTION_OVERRIDE, args));
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_SUBSCRIPTION_OVERRIDE,
+                    overrideMask, overrideValue, subId));
             if (timeoutMillis > 0) {
-                args.arg3 = 0;
-                mHandler.sendMessageDelayed(mHandler.obtainMessage(MSG_SUBSCRIPTION_OVERRIDE, args),
-                        timeoutMillis);
+                mHandler.sendMessageDelayed(mHandler.obtainMessage(MSG_SUBSCRIPTION_OVERRIDE,
+                        overrideMask, 0, subId), timeoutMillis);
             }
         }
     }
@@ -3799,39 +3858,6 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     }
 
     /**
-     * Toggle the firewall standby chain and inform listeners if the uid rules have effectively
-     * changed.
-     */
-    @GuardedBy("mUidRulesFirstLock")
-    void updateRulesForAppIdleParoleUL() {
-        boolean paroled = mUsageStats.isAppIdleParoleOn();
-        boolean enableChain = !paroled;
-        enableFirewallChainUL(FIREWALL_CHAIN_STANDBY, enableChain);
-
-        int ruleCount = mUidFirewallStandbyRules.size();
-        for (int i = 0; i < ruleCount; i++) {
-            int uid = mUidFirewallStandbyRules.keyAt(i);
-            int oldRules = mUidRules.get(uid);
-            if (enableChain) {
-                // Chain wasn't enabled before and the other power-related
-                // chains are whitelists, so we can clear the
-                // MASK_ALL_NETWORKS part of the rules and re-inform listeners if
-                // the effective rules result in blocking network access.
-                oldRules &= MASK_METERED_NETWORKS;
-            } else {
-                // Skip if it had no restrictions to begin with
-                if ((oldRules & MASK_ALL_NETWORKS) == 0) continue;
-            }
-            final int newUidRules = updateRulesForPowerRestrictionsUL(uid, oldRules, paroled);
-            if (newUidRules == RULE_NONE) {
-                mUidRules.delete(uid);
-            } else {
-                mUidRules.put(uid, newUidRules);
-            }
-        }
-    }
-
-    /**
      * Update rules that might be changed by {@link #mRestrictBackground},
      * {@link #mRestrictPower}, or {@link #mDeviceIdleMode} value.
      */
@@ -4286,7 +4312,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     private void updateRulesForPowerRestrictionsUL(int uid) {
         final int oldUidRules = mUidRules.get(uid, RULE_NONE);
 
-        final int newUidRules = updateRulesForPowerRestrictionsUL(uid, oldUidRules, false);
+        final int newUidRules = updateRulesForPowerRestrictionsUL(uid, oldUidRules);
 
         if (newUidRules == RULE_NONE) {
             mUidRules.delete(uid);
@@ -4300,30 +4326,28 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
      *
      * @param uid the uid of the app to update rules for
      * @param oldUidRules the current rules for the uid, in order to determine if there's a change
-     * @param paroled whether to ignore idle state of apps and only look at other restrictions.
      *
      * @return the new computed rules for the uid
      */
-    private int updateRulesForPowerRestrictionsUL(int uid, int oldUidRules, boolean paroled) {
+    private int updateRulesForPowerRestrictionsUL(int uid, int oldUidRules) {
         if (Trace.isTagEnabled(Trace.TRACE_TAG_NETWORK)) {
             Trace.traceBegin(Trace.TRACE_TAG_NETWORK,
-                    "updateRulesForPowerRestrictionsUL: " + uid + "/" + oldUidRules + "/"
-                    + (paroled ? "P" : "-"));
+                    "updateRulesForPowerRestrictionsUL: " + uid + "/" + oldUidRules);
         }
         try {
-            return updateRulesForPowerRestrictionsULInner(uid, oldUidRules, paroled);
+            return updateRulesForPowerRestrictionsULInner(uid, oldUidRules);
         } finally {
             Trace.traceEnd(Trace.TRACE_TAG_NETWORK);
         }
     }
 
-    private int updateRulesForPowerRestrictionsULInner(int uid, int oldUidRules, boolean paroled) {
+    private int updateRulesForPowerRestrictionsULInner(int uid, int oldUidRules) {
         if (!isUidValidForBlacklistRules(uid)) {
             if (LOGD) Slog.d(TAG, "no need to update restrict power rules for uid " + uid);
             return RULE_NONE;
         }
 
-        final boolean isIdle = !paroled && isUidIdle(uid);
+        final boolean isIdle = isUidIdle(uid);
         final boolean restrictMode = isIdle || mRestrictPower || mDeviceIdleMode;
         final boolean isForeground = isUidForegroundOnRestrictPowerUL(uid);
 
@@ -4378,9 +4402,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         return newUidRules;
     }
 
-    private class AppIdleStateChangeListener
-            extends UsageStatsManagerInternal.AppIdleStateChangeListener {
-
+    private class NetPolicyAppIdleStateChangeListener extends AppIdleStateChangeListener {
         @Override
         public void onAppIdleStateChanged(String packageName, int userId, boolean idle, int bucket,
                 int reason) {
@@ -4393,14 +4415,6 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                     updateRulesForPowerRestrictionsUL(uid);
                 }
             } catch (NameNotFoundException nnfe) {
-            }
-        }
-
-        @Override
-        public void onParoleStateChanged(boolean isParoleOn) {
-            synchronized (mUidRulesFirstLock) {
-                mLogger.paroleStateChanged(isParoleOn);
-                updateRulesForAppIdleParoleUL();
             }
         }
     }
@@ -4445,11 +4459,20 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     }
 
     private void dispatchSubscriptionOverride(INetworkPolicyListener listener, int subId,
-            int overrideMask, int overrideValue, long networkTypeMask) {
+            int overrideMask, int overrideValue) {
         if (listener != null) {
             try {
-                listener.onSubscriptionOverride(subId, overrideMask, overrideValue,
-                        networkTypeMask);
+                listener.onSubscriptionOverride(subId, overrideMask, overrideValue);
+            } catch (RemoteException ignored) {
+            }
+        }
+    }
+
+    private void dispatchSubscriptionPlansChanged(INetworkPolicyListener listener, int subId,
+            SubscriptionPlan[] plans) {
+        if (listener != null) {
+            try {
+                listener.onSubscriptionPlansChanged(subId, plans);
             } catch (RemoteException ignored) {
             }
         }
@@ -4550,16 +4573,13 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                     return true;
                 }
                 case MSG_SUBSCRIPTION_OVERRIDE: {
-                    final SomeArgs args = (SomeArgs) msg.obj;
-                    final int subId = (int) args.arg1;
-                    final int overrideMask = (int) args.arg2;
-                    final int overrideValue = (int) args.arg3;
-                    final long networkTypeMask = (long) args.arg4;
+                    final int overrideMask = msg.arg1;
+                    final int overrideValue = msg.arg2;
+                    final int subId = (int) msg.obj;
                     final int length = mListeners.beginBroadcast();
                     for (int i = 0; i < length; i++) {
                         final INetworkPolicyListener listener = mListeners.getBroadcastItem(i);
-                        dispatchSubscriptionOverride(listener, subId, overrideMask, overrideValue,
-                                networkTypeMask);
+                        dispatchSubscriptionOverride(listener, subId, overrideMask, overrideValue);
                     }
                     mListeners.finishBroadcast();
                     return true;
@@ -4574,6 +4594,17 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                     final NetworkTemplate template = (NetworkTemplate) msg.obj;
                     final boolean enabled = msg.arg1 != 0;
                     setNetworkTemplateEnabledInner(template, enabled);
+                    return true;
+                }
+                case MSG_SUBSCRIPTION_PLANS_CHANGED: {
+                    final SubscriptionPlan[] plans = (SubscriptionPlan[]) msg.obj;
+                    final int subId = msg.arg1;
+                    final int length = mListeners.beginBroadcast();
+                    for (int i = 0; i < length; i++) {
+                        final INetworkPolicyListener listener = mListeners.getBroadcastItem(i);
+                        dispatchSubscriptionPlansChanged(listener, subId, plans);
+                    }
+                    mListeners.finishBroadcast();
                     return true;
                 }
                 default: {
@@ -4727,7 +4758,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     }
 
     /**
-     * Calls {@link #setUidFirewallRules(int, SparseIntArray)} and
+     * Calls {@link #setUidFirewallRulesUL(int, SparseIntArray)} and
      * {@link #enableFirewallChainUL(int, boolean)} synchronously.
      *
      * @param chain firewall chain.
@@ -4956,7 +4987,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
 
     @Override
     public void factoryReset(String subscriber) {
-        mContext.enforceCallingOrSelfPermission(CONNECTIVITY_INTERNAL, TAG);
+        mContext.enforceCallingOrSelfPermission(NETWORK_SETTINGS, TAG);
 
         if (mUserManager.hasUserRestriction(UserManager.DISALLOW_NETWORK_RESET)) {
             return;
@@ -4989,7 +5020,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     public boolean isUidNetworkingBlocked(int uid, boolean isNetworkMetered) {
         final long startTime = mStatLogger.getTime();
 
-        mContext.enforceCallingOrSelfPermission(MANAGE_NETWORK_POLICY, TAG);
+        mContext.enforceCallingOrSelfPermission(OBSERVE_NETWORK_POLICY, TAG);
         final int uidRules;
         final boolean isBackgroundRestricted;
         synchronized (mUidRulesFirstLock) {

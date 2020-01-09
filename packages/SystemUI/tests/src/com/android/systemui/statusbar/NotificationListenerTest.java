@@ -34,10 +34,9 @@ import android.testing.TestableLooper;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.systemui.Dependency;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
-import com.android.systemui.statusbar.notification.collection.NotificationData;
+import com.android.systemui.statusbar.phone.NotificationGroupManager;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -52,14 +51,12 @@ public class NotificationListenerTest extends SysuiTestCase {
     private static final String TEST_PACKAGE_NAME = "test";
     private static final int TEST_UID = 0;
 
-    @Mock private NotificationPresenter mPresenter;
     @Mock private NotificationListenerService.RankingMap mRanking;
-    @Mock private NotificationData mNotificationData;
 
     // Dependency mocks:
     @Mock private NotificationEntryManager mEntryManager;
-    @Mock private NotificationRemoteInputManager mRemoteInputManager;
     @Mock private NotificationManager mNotificationManager;
+    @Mock private NotificationGroupManager mNotificationGroupManager;
 
     private NotificationListener mListener;
     private StatusBarNotification mSbn;
@@ -67,16 +64,11 @@ public class NotificationListenerTest extends SysuiTestCase {
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
-        mDependency.injectTestDependency(NotificationEntryManager.class, mEntryManager);
-        mDependency.injectTestDependency(NotificationRemoteInputManager.class,
-                mRemoteInputManager);
-        mDependency.injectTestDependency(Dependency.MAIN_HANDLER,
-                new Handler(TestableLooper.get(this).getLooper()));
         mContext.addMockSystemService(NotificationManager.class, mNotificationManager);
 
-        when(mEntryManager.getNotificationData()).thenReturn(mNotificationData);
-
-        mListener = new NotificationListener(mContext);
+        mListener = new NotificationListener(mContext,
+                new Handler(TestableLooper.get(this).getLooper()), mEntryManager,
+                mNotificationGroupManager);
         mSbn = new StatusBarNotification(TEST_PACKAGE_NAME, TEST_PACKAGE_NAME, 0, null, TEST_UID, 0,
                 new Notification(), UserHandle.CURRENT, null, 0);
     }
@@ -90,7 +82,7 @@ public class NotificationListenerTest extends SysuiTestCase {
 
     @Test
     public void testNotificationUpdateCallsUpdateNotification() {
-        when(mNotificationData.get(mSbn.getKey()))
+        when(mEntryManager.getActiveNotificationUnfiltered(mSbn.getKey()))
                 .thenReturn(
                         new NotificationEntryBuilder()
                                 .setSbn(mSbn)

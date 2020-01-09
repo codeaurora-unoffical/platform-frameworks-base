@@ -27,6 +27,7 @@ import static com.android.server.utils.TimingsTraceAndSlog.SYSTEM_SERVER_TIMING_
 import android.annotation.NonNull;
 import android.annotation.StringRes;
 import android.app.ActivityThread;
+import android.app.AppCompatCallbacks;
 import android.app.INotificationManager;
 import android.app.usage.UsageStatsManagerInternal;
 import android.content.ComponentName;
@@ -42,10 +43,11 @@ import android.database.sqlite.SQLiteGlobal;
 import android.hardware.display.DisplayManagerInternal;
 import android.net.ConnectivityModuleConnector;
 import android.net.NetworkStackClient;
-import android.net.wifi.WifiStackClient;
+import android.net.TetheringManager;
 import android.os.BaseBundle;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Debug;
 import android.os.Environment;
 import android.os.FactoryTest;
 import android.os.FileUtils;
@@ -82,6 +84,7 @@ import com.android.server.am.ActivityManagerService;
 import com.android.server.appbinding.AppBindingService;
 import com.android.server.attention.AttentionManagerService;
 import com.android.server.audio.AudioService;
+import com.android.server.biometrics.AuthService;
 import com.android.server.biometrics.BiometricService;
 import com.android.server.biometrics.face.FaceService;
 import com.android.server.biometrics.fingerprint.FingerprintService;
@@ -90,6 +93,7 @@ import com.android.server.broadcastradio.BroadcastRadioService;
 import com.android.server.camera.CameraServiceProxy;
 import com.android.server.clipboard.ClipboardService;
 import com.android.server.compat.PlatformCompat;
+import com.android.server.compat.PlatformCompatNative;
 import com.android.server.connectivity.IpConnectivityMetrics;
 import com.android.server.contentcapture.ContentCaptureManagerInternal;
 import com.android.server.coverage.CoverageService;
@@ -105,6 +109,7 @@ import com.android.server.input.InputManagerService;
 import com.android.server.inputmethod.InputMethodManagerService;
 import com.android.server.inputmethod.InputMethodSystemProperty;
 import com.android.server.inputmethod.MultiClientInputMethodManagerService;
+import com.android.server.integrity.AppIntegrityManagerService;
 import com.android.server.lights.LightsService;
 import com.android.server.media.MediaResourceMonitorService;
 import com.android.server.media.MediaRouterService;
@@ -121,6 +126,7 @@ import com.android.server.os.DeviceIdentifiersPolicyService;
 import com.android.server.os.SchedulingPolicyService;
 import com.android.server.pm.BackgroundDexOptService;
 import com.android.server.pm.CrossProfileAppsService;
+import com.android.server.pm.DataLoaderManagerService;
 import com.android.server.pm.DynamicCodeLoggingService;
 import com.android.server.pm.Installer;
 import com.android.server.pm.LauncherAppsService;
@@ -134,6 +140,7 @@ import com.android.server.policy.role.LegacyRoleResolutionPolicy;
 import com.android.server.power.PowerManagerService;
 import com.android.server.power.ShutdownThread;
 import com.android.server.power.ThermalManagerService;
+import com.android.server.recoverysystem.RecoverySystemService;
 import com.android.server.restrictions.RestrictionsManagerService;
 import com.android.server.role.RoleManagerService;
 import com.android.server.rollback.RollbackManagerService;
@@ -141,7 +148,6 @@ import com.android.server.security.KeyAttestationApplicationIdProviderService;
 import com.android.server.security.KeyChainSystemService;
 import com.android.server.signedconfig.SignedConfigService;
 import com.android.server.soundtrigger.SoundTriggerService;
-import com.android.server.stats.StatsCompanionService;
 import com.android.server.statusbar.StatusBarManagerService;
 import com.android.server.storage.DeviceStorageMonitorService;
 import com.android.server.telecom.TelecomLoaderService;
@@ -202,6 +208,8 @@ public final class SystemServer {
             "com.android.server.print.PrintManagerService";
     private static final String COMPANION_DEVICE_MANAGER_SERVICE_CLASS =
             "com.android.server.companion.CompanionDeviceManagerService";
+    private static final String STATS_COMPANION_SERVICE_LIFECYCLE_CLASS =
+            "com.android.server.stats.StatsCompanionService$Lifecycle";
     private static final String USB_SERVICE_CLASS =
             "com.android.server.usb.UsbService$Lifecycle";
     private static final String MIDI_SERVICE_CLASS =
@@ -264,6 +272,8 @@ public final class SystemServer {
             "com.android.internal.car.CarServiceHelperService";
     private static final String TIME_DETECTOR_SERVICE_CLASS =
             "com.android.server.timedetector.TimeDetectorService$Lifecycle";
+    private static final String TIME_ZONE_DETECTOR_SERVICE_CLASS =
+            "com.android.server.timezonedetector.TimeZoneDetectorService$Lifecycle";
     private static final String ACCESSIBILITY_MANAGER_SERVICE_CLASS =
             "com.android.server.accessibility.AccessibilityManagerService$Lifecycle";
     private static final String ADB_SERVICE_CLASS =
@@ -274,7 +284,10 @@ public final class SystemServer {
             "com.android.server.contentsuggestions.ContentSuggestionsManagerService";
     private static final String DEVICE_IDLE_CONTROLLER_CLASS =
             "com.android.server.DeviceIdleController";
-
+    private static final String BLOB_STORE_MANAGER_SERVICE_CLASS =
+            "com.android.server.blob.BlobStoreManagerService";
+    private static final String APP_SEARCH_MANAGER_SERVICE_CLASS =
+            "com.android.server.appsearch.AppSearchManagerService";
     private static final String PERSISTENT_DATA_BLOCK_PROP = "ro.frp.pst";
 
     private static final String UNCRYPT_PACKAGE_FILE = "/cache/recovery/uncrypt_file";
@@ -309,6 +322,7 @@ public final class SystemServer {
     private PackageManager mPackageManager;
     private ContentResolver mContentResolver;
     private EntropyMixer mEntropyMixer;
+    private DataLoaderManagerService mDataLoaderManagerService;
 
     private boolean mOnlyCore;
     private boolean mFirstBoot;
@@ -380,15 +394,6 @@ public final class SystemServer {
             EventLog.writeEvent(EventLogTags.SYSTEM_SERVER_START,
                     mStartCount, mRuntimeStartUptime, mRuntimeStartElapsedTime);
 
-            // If a device's clock is before 1970 (before 0), a lot of
-            // APIs crash dealing with negative numbers, notably
-            // java.io.File#setLastModified, so instead we fake it and
-            // hope that time from cell towers or NTP fixes it shortly.
-            if (System.currentTimeMillis() < EARLIEST_SUPPORTED_TIME) {
-                Slog.w(TAG, "System clock is before 1970; setting to 1970.");
-                SystemClock.setCurrentTimeMillis(EARLIEST_SUPPORTED_TIME);
-            }
-
             //
             // Default the timezone property to GMT if not set.
             //
@@ -436,7 +441,7 @@ public final class SystemServer {
 
             // In case the runtime switched since last boot (such as when
             // the old runtime was removed in an OTA), set the system
-            // property so that it is in sync. We can | xq oqi't do this in
+            // property so that it is in sync. We can't do this in
             // libnativehelper's JniInvocation::Init code where we already
             // had to fallback to a different runtime because it is
             // running as root and we need to be the system user to set
@@ -445,10 +450,6 @@ public final class SystemServer {
 
             // Mmmmmm... more memory!
             VMRuntime.getRuntime().clearGrowthLimit();
-
-            // The system server has to run all of the time, so it needs to be
-            // as efficient as possible with its memory usage.
-            VMRuntime.getRuntime().setTargetHeapUtilization(0.8f);
 
             // Some devices rely on runtime fingerprint generation, so make sure
             // we've defined it before booting further.
@@ -494,13 +495,34 @@ public final class SystemServer {
             // Initialize the system context.
             createSystemContext();
 
+            // Call per-process mainline module initialization.
+            ActivityThread.initializeMainlineModules();
+
             // Create the system service manager.
             mSystemServiceManager = new SystemServiceManager(mSystemContext);
             mSystemServiceManager.setStartInfo(mRuntimeRestart,
                     mRuntimeStartElapsedTime, mRuntimeStartUptime);
             LocalServices.addService(SystemServiceManager.class, mSystemServiceManager);
             // Prepare the thread pool for init tasks that can be parallelized
-            SystemServerInitThreadPool.get();
+            SystemServerInitThreadPool.start();
+            // Attach JVMTI agent if this is a debuggable build and the system property is set.
+            if (Build.IS_DEBUGGABLE) {
+                // Property is of the form "library_path=parameters".
+                String jvmtiAgent = SystemProperties.get("persist.sys.dalvik.jvmtiagent");
+                if (!jvmtiAgent.isEmpty()) {
+                    int equalIndex = jvmtiAgent.indexOf('=');
+                    String libraryPath = jvmtiAgent.substring(0, equalIndex);
+                    String parameterList =
+                            jvmtiAgent.substring(equalIndex + 1, jvmtiAgent.length());
+                    // Attach the agent.
+                    try {
+                        Debug.attachJvmtiAgent(libraryPath, parameterList, null);
+                    } catch (Exception e) {
+                        Slog.e("System", "*************************************************");
+                        Slog.e("System", "********** Failed to load jvmti plugin: " + jvmtiAgent);
+                    }
+                }
+            }
         } finally {
             t.traceEnd();  // InitBeforeStartServices
         }
@@ -634,14 +656,17 @@ public final class SystemServer {
         Slog.i(TAG, "Reading configuration...");
         final String TAG_SYSTEM_CONFIG = "ReadingSystemConfig";
         t.traceBegin(TAG_SYSTEM_CONFIG);
-        SystemServerInitThreadPool.get().submit(SystemConfig::getInstance, TAG_SYSTEM_CONFIG);
+        SystemServerInitThreadPool.submit(SystemConfig::getInstance, TAG_SYSTEM_CONFIG);
         t.traceEnd();
 
         // Platform compat service is used by ActivityManagerService, PackageManagerService, and
         // possibly others in the future. b/135010838.
         t.traceBegin("PlatformCompat");
-        ServiceManager.addService(Context.PLATFORM_COMPAT_SERVICE,
-                new PlatformCompat(mSystemContext));
+        PlatformCompat platformCompat = new PlatformCompat(mSystemContext);
+        ServiceManager.addService(Context.PLATFORM_COMPAT_SERVICE, platformCompat);
+        ServiceManager.addService(Context.PLATFORM_COMPAT_NATIVE_SERVICE,
+                new PlatformCompatNative(platformCompat));
+        AppCompatCallbacks.install(new long[0]);
         t.traceEnd();
 
         // Wait for installd to finish starting up so that it has a chance to
@@ -674,6 +699,12 @@ public final class SystemServer {
         mWindowManagerGlobalLock = atm.getGlobalLock();
         t.traceEnd();
 
+        // Data loader manager service needs to be started before package manager
+        t.traceBegin("StartDataLoaderManagerService");
+        mDataLoaderManagerService = mSystemServiceManager.startService(
+                DataLoaderManagerService.class);
+        t.traceEnd();
+
         // Power manager needs to be started early because other services need it.
         // Native daemons may be watching for it to be registered so it must be ready
         // to handle incoming binder calls immediately (including being able to verify
@@ -694,7 +725,7 @@ public final class SystemServer {
 
         // Bring up recovery system in case a rescue party needs a reboot
         t.traceBegin("StartRecoverySystemService");
-        mSystemServiceManager.startService(RecoverySystemService.class);
+        mSystemServiceManager.startService(RecoverySystemService.Lifecycle.class);
         t.traceEnd();
 
         // Now that we have the bare essentials of the OS up and running, take
@@ -803,7 +834,7 @@ public final class SystemServer {
 
         // Manages Overlay packages
         t.traceBegin("StartOverlayManagerService");
-        mSystemServiceManager.startService(new OverlayManagerService(mSystemContext, installer));
+        mSystemServiceManager.startService(new OverlayManagerService(mSystemContext));
         t.traceEnd();
 
         t.traceBegin("StartSensorPrivacyService");
@@ -820,7 +851,7 @@ public final class SystemServer {
         // service, and permissions service, therefore we start it after them.
         // Start sensor service in a separate thread. Completion should be checked
         // before using it.
-        mSensorServiceStart = SystemServerInitThreadPool.get().submit(() -> {
+        mSensorServiceStart = SystemServerInitThreadPool.submit(() -> {
             TimingsTraceAndSlog traceLog = TimingsTraceAndSlog.newAsyncLog();
             traceLog.traceBegin(START_SENSOR_SERVICE);
             startSensorService();
@@ -920,7 +951,6 @@ public final class SystemServer {
                 false);
         boolean disableCameraService = SystemProperties.getBoolean("config.disable_cameraservice",
                 false);
-        boolean disableSlices = SystemProperties.getBoolean("config.disable_slices", false);
         boolean enableLeftyService = SystemProperties.getBoolean("config.enable_lefty", false);
 
         boolean isEmulator = SystemProperties.get("ro.kernel.qemu").equals("1");
@@ -945,7 +975,7 @@ public final class SystemServer {
             // ensure that it completes before the 32 bit relro process is forked
             // from the zygote. In the event that it takes too long, the webview
             // RELRO process will block, but it will do so without holding any locks.
-            mZygotePreload = SystemServerInitThreadPool.get().submit(() -> {
+            mZygotePreload = SystemServerInitThreadPool.submit(() -> {
                 try {
                     Slog.i(TAG, SECONDARY_ZYGOTE_PRELOAD);
                     TimingsTraceAndSlog traceLog = TimingsTraceAndSlog.newAsyncLog();
@@ -1057,7 +1087,7 @@ public final class SystemServer {
             // Start receiving calls from HIDL services. Start in in a separate thread
             // because it need to connect to SensorManager. This have to start
             // after START_SENSOR_SERVICE is done.
-            SystemServerInitThreadPool.get().submit(() -> {
+            SystemServerInitThreadPool.submit(() -> {
                 TimingsTraceAndSlog traceLog = TimingsTraceAndSlog.newAsyncLog();
                 traceLog.traceBegin(START_HIDL_SERVICES);
                 startHidlServices();
@@ -1111,9 +1141,14 @@ public final class SystemServer {
             SignedConfigService.registerUpdateReceiver(mSystemContext);
             t.traceEnd();
 
-        } catch (RuntimeException e) {
+            t.traceBegin("AppIntegrityService");
+            mSystemServiceManager.startService(AppIntegrityManagerService.class);
+            t.traceEnd();
+
+        } catch (Throwable e) {
             Slog.e("System", "******************************************");
-            Slog.e("System", "************ Failure starting core service", e);
+            Slog.e("System", "************ Failure starting core service");
+            throw e;
         }
 
         // Before things start rolling, be sure we have decided whether
@@ -1130,7 +1165,6 @@ public final class SystemServer {
 
         StatusBarManagerService statusBar = null;
         INotificationManager notification = null;
-        LocationManagerService location = null;
         CountryDetectorService countryDetector = null;
         ILockSettings lockSettings = null;
         MediaRouterService mediaRouter = null;
@@ -1360,6 +1394,40 @@ public final class SystemServer {
             t.traceEnd();
 
             if (context.getPackageManager().hasSystemFeature(
+                    PackageManager.FEATURE_WIFI)) {
+                // Wifi Service must be started first for wifi-related services.
+                t.traceBegin("StartWifi");
+                mSystemServiceManager.startService(WIFI_SERVICE_CLASS);
+                t.traceEnd();
+                t.traceBegin("StartWifiScanning");
+                mSystemServiceManager.startService(
+                        "com.android.server.wifi.scanner.WifiScanningService");
+                t.traceEnd();
+            }
+
+            if (context.getPackageManager().hasSystemFeature(
+                    PackageManager.FEATURE_WIFI_RTT)) {
+                t.traceBegin("StartRttService");
+                mSystemServiceManager.startService(
+                        "com.android.server.wifi.rtt.RttService");
+                t.traceEnd();
+            }
+
+            if (context.getPackageManager().hasSystemFeature(
+                    PackageManager.FEATURE_WIFI_AWARE)) {
+                t.traceBegin("StartWifiAware");
+                mSystemServiceManager.startService(WIFI_AWARE_SERVICE_CLASS);
+                t.traceEnd();
+            }
+
+            if (context.getPackageManager().hasSystemFeature(
+                    PackageManager.FEATURE_WIFI_DIRECT)) {
+                t.traceBegin("StartWifiP2P");
+                mSystemServiceManager.startService(WIFI_P2P_SERVICE_CLASS);
+                t.traceEnd();
+            }
+
+            if (context.getPackageManager().hasSystemFeature(
                     PackageManager.FEATURE_LOWPAN)) {
                 t.traceBegin("StartLowpan");
                 mSystemServiceManager.startService(LOWPAN_SERVICE_CLASS);
@@ -1427,12 +1495,7 @@ public final class SystemServer {
             t.traceEnd();
 
             t.traceBegin("StartLocationManagerService");
-            try {
-                location = new LocationManagerService(context);
-                ServiceManager.addService(Context.LOCATION_SERVICE, location);
-            } catch (Throwable e) {
-                reportWtf("starting Location Manager", e);
-            }
+            mSystemServiceManager.startService(LocationManagerService.Lifecycle.class);
             t.traceEnd();
 
             t.traceBegin("StartCountryDetectorService");
@@ -1449,6 +1512,14 @@ public final class SystemServer {
                 mSystemServiceManager.startService(TIME_DETECTOR_SERVICE_CLASS);
             } catch (Throwable e) {
                 reportWtf("starting StartTimeDetectorService service", e);
+            }
+            t.traceEnd();
+
+            t.traceBegin("StartTimeZoneDetectorService");
+            try {
+                mSystemServiceManager.startService(TIME_ZONE_DETECTOR_SERVICE_CLASS);
+            } catch (Throwable e) {
+                reportWtf("starting StartTimeZoneDetectorService service", e);
             }
             t.traceEnd();
 
@@ -1774,7 +1845,12 @@ public final class SystemServer {
                 t.traceBegin("StartBiometricService");
                 mSystemServiceManager.startService(BiometricService.class);
                 t.traceEnd();
+
+                t.traceBegin("StartAuthService");
+                mSystemServiceManager.startService(AuthService.class);
+                t.traceEnd();
             }
+
 
             t.traceBegin("StartBackgroundDexOptService");
             try {
@@ -1855,7 +1931,7 @@ public final class SystemServer {
             t.traceEnd();
         }
 
-        if (!disableSlices) {
+        if (!mPackageManager.hasSystemFeature(PackageManager.FEATURE_SLICES_DISABLED)) {
             t.traceBegin("StartSliceManagerService");
             mSystemServiceManager.startService(SLICE_MANAGER_SERVICE_CLASS);
             t.traceEnd();
@@ -1875,7 +1951,7 @@ public final class SystemServer {
 
         // Statsd helper
         t.traceBegin("StartStatsCompanionService");
-        mSystemServiceManager.startService(StatsCompanionService.Lifecycle.class);
+        mSystemServiceManager.startService(STATS_COMPANION_SERVICE_LIFECYCLE_CLASS);
         t.traceEnd();
 
         // Incidentd and dumpstated helper
@@ -1901,6 +1977,10 @@ public final class SystemServer {
         // NOTE: ClipboardService depends on ContentCapture and Autofill
         t.traceBegin("StartClipboardService");
         mSystemServiceManager.startService(ClipboardService.class);
+        t.traceEnd();
+
+        t.traceBegin("StartBlobStoreManagerService");
+        mSystemServiceManager.startService(BLOB_STORE_MANAGER_SERVICE_CLASS);
         t.traceEnd();
 
         t.traceBegin("AppServiceManager");
@@ -2011,12 +2091,15 @@ public final class SystemServer {
         mSystemServiceManager.startBootPhase(t, SystemService.PHASE_DEVICE_SPECIFIC_SERVICES_READY);
         t.traceEnd();
 
+        t.traceBegin("AppSearchManagerService");
+        mSystemServiceManager.startService(APP_SEARCH_MANAGER_SERVICE_CLASS);
+        t.traceEnd();
+
         // These are needed to propagate to the runnable below.
         final NetworkManagementService networkManagementF = networkManagement;
         final NetworkStatsService networkStatsF = networkStats;
         final NetworkPolicyManagerService networkPolicyF = networkPolicy;
         final ConnectivityService connectivityF = connectivity;
-        final LocationManagerService locationF = location;
         final CountryDetectorService countryDetectorF = countryDetector;
         final NetworkTimeUpdateService networkTimeUpdaterF = networkTimeUpdater;
         final InputManagerService inputManagerF = inputManager;
@@ -2049,7 +2132,7 @@ public final class SystemServer {
             final String WEBVIEW_PREPARATION = "WebViewFactoryPreparation";
             Future<?> webviewPrep = null;
             if (!mOnlyCore && mWebViewUpdateService != null) {
-                webviewPrep = SystemServerInitThreadPool.get().submit(() -> {
+                webviewPrep = SystemServerInitThreadPool.submit(() -> {
                     Slog.i(TAG, WEBVIEW_PREPARATION);
                     TimingsTraceAndSlog traceLog = TimingsTraceAndSlog.newAsyncLog();
                     traceLog.traceBegin(WEBVIEW_PREPARATION);
@@ -2164,24 +2247,15 @@ public final class SystemServer {
             }
             t.traceEnd();
 
-            t.traceBegin("StartWifiStack");
+            t.traceBegin("StartTethering");
             try {
-                WifiStackClient.getInstance().start();
+                // Tethering must start after ConnectivityService and NetworkStack.
+                TetheringManager.getInstance().start();
             } catch (Throwable e) {
-                reportWtf("starting Wifi Stack", e);
+                reportWtf("starting Tethering", e);
             }
             t.traceEnd();
 
-
-            t.traceBegin("MakeLocationServiceReady");
-            try {
-                if (locationF != null) {
-                    locationF.systemRunning();
-                }
-            } catch (Throwable e) {
-                reportWtf("Notifying Location Service running", e);
-            }
-            t.traceEnd();
             t.traceBegin("MakeCountryDetectionServiceReady");
             try {
                 if (countryDetectorF != null) {

@@ -51,8 +51,8 @@ oneway interface IWindow {
      */
     void executeCommand(String command, String parameters, in ParcelFileDescriptor descriptor);
 
-    void resized(in Rect frame, in Rect overscanInsets, in Rect contentInsets,
-            in Rect visibleInsets, in Rect stableInsets, in Rect outsets, boolean reportDraw,
+    void resized(in Rect frame, in Rect contentInsets,
+            in Rect visibleInsets, in Rect stableInsets, boolean reportDraw,
             in MergedConfiguration newMergedConfiguration, in Rect backDropFrame,
             boolean forceLayout, boolean alwaysConsumeSystemBars, int displayId,
             in DisplayCutout.ParcelableWrapper displayCutout);
@@ -69,9 +69,25 @@ oneway interface IWindow {
     void insetsChanged(in InsetsState insetsState);
 
     /**
-     * Called when this window retrieved control over a specified set of inset sources.
+     * Called when this window retrieved control over a specified set of insets sources.
      */
     void insetsControlChanged(in InsetsState insetsState, in InsetsSourceControl[] activeControls);
+
+    /**
+     * Called when a set of insets source window should be shown by policy.
+     *
+     * @param types internal insets types (WindowInsets.Type.InsetsType) to show
+     * @param fromIme true if this request originated from IME (InputMethodService).
+     */
+    void showInsets(int types, boolean fromIme);
+
+    /**
+     * Called when a set of insets source window should be hidden by policy.
+     *
+     * @param types internal insets types (WindowInsets.Type.InsetsType) to hide
+     * @param fromIme true if this request originated from IME (InputMethodService).
+     */
+    void hideInsets(int types, boolean fromIme);
 
     void moved(int newX, int newY);
     void dispatchAppVisibility(boolean visible);

@@ -200,6 +200,7 @@ StatsService::StatsService(const sp<Looper>& handlerLooper, shared_ptr<LogEventQ
                 }
             });
 
+    mUidMap->setListener(mProcessor);
     mConfigManager->AddListener(mProcessor);
 
     init_system_properties();
@@ -266,10 +267,12 @@ status_t StatsService::onTransact(uint32_t code, const Parcel& data, Parcel* rep
                     IResultReceiver::asInterface(data.readStrongBinder());
 
             err = command(in, out, err, args, resultReceiver);
-            resultReceiver->send(err);
+            if (resultReceiver != nullptr) {
+                resultReceiver->send(err);
+            }
             return NO_ERROR;
         }
-        default: { return BnStatsManager::onTransact(code, data, reply, flags); }
+        default: { return BnStatsd::onTransact(code, data, reply, flags); }
     }
 }
 
@@ -411,12 +414,19 @@ status_t StatsService::command(int in, int out, int err, Vector<String8>& args,
             return cmd_trigger_active_config_broadcast(out, args);
         }
         if (!args[0].compare(String8("data-subscribe"))) {
-            if (mShellSubscriber == nullptr) {
-                mShellSubscriber = new ShellSubscriber(mUidMap, mPullerManager);
+            {
+                std::lock_guard<std::mutex> lock(mShellSubscriberMutex);
+                if (mShellSubscriber == nullptr) {
+                    mShellSubscriber = new ShellSubscriber(mUidMap, mPullerManager);
+                }
             }
             int timeoutSec = -1;
             if (argCount >= 2) {
                 timeoutSec = atoi(args[1].c_str());
+            }
+            if (resultReceiver == nullptr) {
+                ALOGI("Null resultReceiver given, no subscription will be started");
+                return UNEXPECTED_NULL;
             }
             mShellSubscriber->startNewSubscription(in, out, resultReceiver, timeoutSec);
             return NO_ERROR;
@@ -852,13 +862,13 @@ status_t StatsService::cmd_log_binary_push(int out, const Vector<String8>& args)
     int64_t trainVersion = strtoll(args[2].c_str(), nullptr, 10);
     int options = 0;
     if (args[3] == "1") {
-        options = options | IStatsManager::FLAG_REQUIRE_STAGING;
+        options = options | IStatsd::FLAG_REQUIRE_STAGING;
     }
     if (args[4] == "1") {
-        options = options | IStatsManager::FLAG_ROLLBACK_ENABLED;
+        options = options | IStatsd::FLAG_ROLLBACK_ENABLED;
     }
     if (args[5] == "1") {
-        options = options | IStatsManager::FLAG_REQUIRE_LOW_LATENCY_MONITOR;
+        options = options | IStatsd::FLAG_REQUIRE_LOW_LATENCY_MONITOR;
     }
     int32_t state = atoi(args[6].c_str());
     vector<int64_t> experimentIds;
@@ -1265,7 +1275,7 @@ Status StatsService::sendAppBreadcrumbAtom(int32_t label, int32_t state) {
     // Permission check not necessary as it's meant for applications to write to
     // statsd.
     android::util::stats_write(util::APP_BREADCRUMB_REPORTED,
-                               IPCThreadState::self()->getCallingUid(), label,
+                               (int32_t) IPCThreadState::self()->getCallingUid(), label,
                                state);
     return Status::ok();
 }
@@ -1277,6 +1287,28 @@ Status StatsService::registerPullerCallback(int32_t atomTag,
 
     VLOG("StatsService::registerPullerCallback called.");
     mPullerManager->RegisterPullerCallback(atomTag, pullerCallback);
+    return Status::ok();
+}
+
+Status StatsService::registerPullAtomCallback(int32_t uid, int32_t atomTag, int64_t coolDownNs,
+                                    int64_t timeoutNs, const std::vector<int32_t>& additiveFields,
+                                    const sp<android::os::IPullAtomCallback>& pullerCallback) {
+    ENFORCE_UID(AID_SYSTEM);
+
+    VLOG("StatsService::registerPullAtomCallback called.");
+    mPullerManager->RegisterPullAtomCallback(uid, atomTag, coolDownNs, timeoutNs, additiveFields,
+                                             pullerCallback);
+    return Status::ok();
+}
+
+Status StatsService::registerNativePullAtomCallback(int32_t atomTag, int64_t coolDownNs,
+                                    int64_t timeoutNs, const std::vector<int32_t>& additiveFields,
+                                    const sp<android::os::IPullAtomCallback>& pullerCallback) {
+
+    VLOG("StatsService::registerNativePullAtomCallback called.");
+    int32_t uid = IPCThreadState::self()->getCallingUid();
+    mPullerManager->RegisterPullAtomCallback(uid, atomTag, coolDownNs, timeoutNs, additiveFields,
+                                             pullerCallback);
     return Status::ok();
 }
 
@@ -1374,9 +1406,9 @@ Status StatsService::sendBinaryPushStateChangedAtom(const android::String16& tra
     StorageManager::writeTrainInfo(trainVersionCode, trainNameUtf8, state, experimentIds);
 
     userid_t userId = multiuser_get_user_id(uid);
-    bool requiresStaging = options & IStatsManager::FLAG_REQUIRE_STAGING;
-    bool rollbackEnabled = options & IStatsManager::FLAG_ROLLBACK_ENABLED;
-    bool requiresLowLatencyMonitor = options & IStatsManager::FLAG_REQUIRE_LOW_LATENCY_MONITOR;
+    bool requiresStaging = options & IStatsd::FLAG_REQUIRE_STAGING;
+    bool rollbackEnabled = options & IStatsd::FLAG_ROLLBACK_ENABLED;
+    bool requiresLowLatencyMonitor = options & IStatsd::FLAG_REQUIRE_LOW_LATENCY_MONITOR;
     LogEvent event(trainNameUtf8, trainVersionCode, requiresStaging, rollbackEnabled,
                    requiresLowLatencyMonitor, state, experimentIdsProtoBuffer, userId);
     mProcessor->OnLogEvent(&event);
@@ -1385,7 +1417,10 @@ Status StatsService::sendBinaryPushStateChangedAtom(const android::String16& tra
 
 Status StatsService::sendWatchdogRollbackOccurredAtom(const int32_t rollbackTypeIn,
                                                       const android::String16& packageNameIn,
-                                                      const int64_t packageVersionCodeIn) {
+                                                      const int64_t packageVersionCodeIn,
+                                                      const int32_t rollbackReasonIn,
+                                                      const android::String16&
+                                                       failingPackageNameIn) {
     // Note: We skip the usage stats op check here since we do not have a package name.
     // This is ok since we are overloading the usage_stats permission.
     // This method only sends data, it does not receive it.
@@ -1407,7 +1442,8 @@ Status StatsService::sendWatchdogRollbackOccurredAtom(const int32_t rollbackType
     }
 
     android::util::stats_write(android::util::WATCHDOG_ROLLBACK_OCCURRED,
-            rollbackTypeIn, String8(packageNameIn).string(), packageVersionCodeIn);
+            rollbackTypeIn, String8(packageNameIn).string(), packageVersionCodeIn,
+            rollbackReasonIn, String8(failingPackageNameIn).string());
 
     // Fast return to save disk read.
     if (rollbackTypeIn != android::util::WATCHDOG_ROLLBACK_OCCURRED__ROLLBACK_TYPE__ROLLBACK_SUCCESS

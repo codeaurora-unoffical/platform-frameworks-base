@@ -16,11 +16,12 @@
 package android.net.wifi;
 
 import android.annotation.IntDef;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.SystemApi;
 import android.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.security.Credentials;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -91,10 +92,26 @@ public class WifiEnterpriseConfig implements Parcelable {
      */
     public static final String ENGINE_DISABLE = "0";
 
+    /**
+     * Key prefix for CA certificates.
+     * Note: copied from {@link android.security.Credentials#CA_CERTIFICATE} since it is @hide.
+     */
+    private static final String CA_CERTIFICATE = "CACERT_";
+    /**
+     * Key prefix for user certificates.
+     * Note: copied from {@link android.security.Credentials#USER_CERTIFICATE} since it is @hide.
+     */
+    private static final String USER_CERTIFICATE = "USRCERT_";
+    /**
+     * Key prefix for user private and secret keys.
+     * Note: copied from {@link android.security.Credentials#USER_PRIVATE_KEY} since it is @hide.
+     */
+    private static final String USER_PRIVATE_KEY = "USRPKEY_";
+
     /** @hide */
-    public static final String CA_CERT_PREFIX = KEYSTORE_URI + Credentials.CA_CERTIFICATE;
+    public static final String CA_CERT_PREFIX = KEYSTORE_URI + CA_CERTIFICATE;
     /** @hide */
-    public static final String CLIENT_CERT_PREFIX = KEYSTORE_URI + Credentials.USER_CERTIFICATE;
+    public static final String CLIENT_CERT_PREFIX = KEYSTORE_URI + USER_CERTIFICATE;
     /** @hide */
     public static final String CLIENT_CERT_KEY     = "client_cert";
     /** @hide */
@@ -118,18 +135,21 @@ public class WifiEnterpriseConfig implements Parcelable {
      * Do not use OCSP stapling (TLS certificate status extension)
      * @hide
      */
+    @SystemApi
     public static final int OCSP_NONE = 0;
 
     /**
      * Try to use OCSP stapling, but not require response
      * @hide
      */
+    @SystemApi
     public static final int OCSP_REQUEST_CERT_STATUS = 1;
 
     /**
      * Require valid OCSP stapling response
      * @hide
      */
+    @SystemApi
     public static final int OCSP_REQUIRE_CERT_STATUS = 2;
 
     /**
@@ -137,6 +157,7 @@ public class WifiEnterpriseConfig implements Parcelable {
      * certificate chain
      * @hide
      */
+    @SystemApi
     public static final int OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS = 3;
 
     /** @hide */
@@ -147,8 +168,7 @@ public class WifiEnterpriseConfig implements Parcelable {
             OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS
     })
     @Retention(RetentionPolicy.SOURCE)
-    public @interface Ocsp {
-    }
+    public @interface Ocsp {}
 
     /**
      * Whether to use/require OCSP (Online Certificate Status Protocol) to check server certificate.
@@ -636,9 +656,11 @@ public class WifiEnterpriseConfig implements Parcelable {
      * <p> See the {@link android.security.KeyChain} for details on installing or choosing
      * a certificate.
      * </p>
-     * @param aliases identifies the certificate
+     * @param aliases identifies the certificate. Can be null to indicate the absence of a
+     *                certificate.
      * @hide
      */
+    @SystemApi
     public void setCaCertificateAliases(@Nullable String[] aliases) {
         if (aliases == null) {
             setFieldValue(CA_CERT_KEY, null, CA_CERT_PREFIX);
@@ -652,7 +674,7 @@ public class WifiEnterpriseConfig implements Parcelable {
                 if (i > 0) {
                     sb.append(CA_CERT_ALIAS_DELIMITER);
                 }
-                sb.append(encodeCaCertificateAlias(Credentials.CA_CERTIFICATE + aliases[i]));
+                sb.append(encodeCaCertificateAlias(CA_CERTIFICATE + aliases[i]));
             }
             setFieldValue(CA_CERT_KEY, sb.toString(), KEYSTORES_URI);
         }
@@ -669,11 +691,13 @@ public class WifiEnterpriseConfig implements Parcelable {
     }
 
     /**
-     * Get CA certificate aliases
-     * @return alias to the CA certificate
+     * Get CA certificate aliases.
+     * @return alias to the CA certificate, or null if unset.
      * @hide
      */
-    @Nullable public String[] getCaCertificateAliases() {
+    @Nullable
+    @SystemApi
+    public String[] getCaCertificateAliases() {
         String value = getFieldValue(CA_CERT_KEY);
         if (value.startsWith(CA_CERT_PREFIX)) {
             // Backwards compatibility: parse the original alias prefix.
@@ -684,8 +708,8 @@ public class WifiEnterpriseConfig implements Parcelable {
             String[] aliases = TextUtils.split(values, CA_CERT_ALIAS_DELIMITER);
             for (int i = 0; i < aliases.length; i++) {
                 aliases[i] = decodeCaCertificateAlias(aliases[i]);
-                if (aliases[i].startsWith(Credentials.CA_CERTIFICATE)) {
-                    aliases[i] = aliases[i].substring(Credentials.CA_CERTIFICATE.length());
+                if (aliases[i].startsWith(CA_CERTIFICATE)) {
+                    aliases[i] = aliases[i].substring(CA_CERTIFICATE.length());
                 }
             }
             return aliases.length != 0 ? aliases : null;
@@ -792,34 +816,38 @@ public class WifiEnterpriseConfig implements Parcelable {
      * like /etc/ssl/certs. If configured, these certificates are added to the
      * list of trusted CAs. ca_cert may also be included in that case, but it is
      * not required.
-     * @param domain The path for CA certificate files
+     * @param path The path for CA certificate files, or null/empty string to clear.
      * @hide
      */
-    public void setCaPath(String path) {
+    @SystemApi
+    public void setCaPath(@Nullable String path) {
         setFieldValue(CA_PATH_KEY, path);
     }
 
     /**
      * Get the domain_suffix_match value. See setDomSuffixMatch.
-     * @return The path for CA certificate files.
+     * @return The path for CA certificate files, or an empty string if unset.
      * @hide
      */
+    @NonNull
+    @SystemApi
     public String getCaPath() {
         return getFieldValue(CA_PATH_KEY);
     }
 
-    /** Set Client certificate alias.
+    /**
+     * Set Client certificate alias.
      *
      * <p> See the {@link android.security.KeyChain} for details on installing or choosing
      * a certificate
      * </p>
-     * @param alias identifies the certificate
+     * @param alias identifies the certificate, or null/empty string to clear.
      * @hide
      */
-    @UnsupportedAppUsage
-    public void setClientCertificateAlias(String alias) {
+    @SystemApi
+    public void setClientCertificateAlias(@Nullable String alias) {
         setFieldValue(CLIENT_CERT_KEY, alias, CLIENT_CERT_PREFIX);
-        setFieldValue(PRIVATE_KEY_ID_KEY, alias, Credentials.USER_PRIVATE_KEY);
+        setFieldValue(PRIVATE_KEY_ID_KEY, alias, USER_PRIVATE_KEY);
         // Also, set engine parameters
         if (TextUtils.isEmpty(alias)) {
             setFieldValue(ENGINE_KEY, ENGINE_DISABLE);
@@ -831,11 +859,12 @@ public class WifiEnterpriseConfig implements Parcelable {
     }
 
     /**
-     * Get client certificate alias
-     * @return alias to the client certificate
+     * Get client certificate alias.
+     * @return alias to the client certificate, or an empty string if unset.
      * @hide
      */
-    @UnsupportedAppUsage
+    @NonNull
+    @SystemApi
     public String getClientCertificateAlias() {
         return getFieldValue(CLIENT_CERT_KEY, CLIENT_CERT_PREFIX);
     }
@@ -1241,12 +1270,14 @@ public class WifiEnterpriseConfig implements Parcelable {
     }
 
     /**
-     * Set the ocsp type.
-     * @param  ocsp is one {@link ##OCSP_NONE}, {@link #OCSP_REQUEST_CERT_STATUS},
+     * Set the OCSP type.
+     * @param ocsp is one of {@link ##OCSP_NONE}, {@link #OCSP_REQUEST_CERT_STATUS},
      *                   {@link #OCSP_REQUIRE_CERT_STATUS} or
      *                   {@link #OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS}
+     * @throws IllegalArgumentException if the OCSP type is invalid
      * @hide
      */
+    @SystemApi
     public void setOcsp(@Ocsp int ocsp) {
         if (ocsp >= OCSP_NONE && ocsp <= OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS) {
             mOcsp = ocsp;
@@ -1256,11 +1287,30 @@ public class WifiEnterpriseConfig implements Parcelable {
     }
 
     /**
-     * Get the ocsp type.
-     * @return ocsp type
+     * Get the OCSP type.
      * @hide
      */
+    @SystemApi
     public @Ocsp int getOcsp() {
         return mOcsp;
+    }
+
+    /**
+     * If the current authentication method needs SIM card.
+     * @return true if the credential information require SIM card for current authentication
+     * method, otherwise it returns false.
+     * @hide
+     */
+    public boolean requireSimCredential() {
+        if (mEapMethod == Eap.SIM || mEapMethod == Eap.AKA || mEapMethod == Eap.AKA_PRIME) {
+            return true;
+        }
+        if (mEapMethod == Eap.PEAP) {
+            if (mPhase2Method == Phase2.SIM || mPhase2Method == Phase2.AKA
+                    || mPhase2Method == Phase2.AKA_PRIME) {
+                return true;
+            }
+        }
+        return false;
     }
 }

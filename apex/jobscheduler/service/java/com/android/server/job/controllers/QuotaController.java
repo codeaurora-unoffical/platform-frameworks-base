@@ -35,8 +35,6 @@ import android.app.ActivityManagerInternal;
 import android.app.AlarmManager;
 import android.app.AppGlobals;
 import android.app.IUidObserver;
-import android.app.usage.UsageStatsManagerInternal;
-import android.app.usage.UsageStatsManagerInternal.AppIdleStateChangeListener;
 import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -52,12 +50,11 @@ import android.os.Message;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.provider.Settings;
-import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.KeyValueListParser;
 import android.util.Log;
 import android.util.Slog;
-import android.util.SparseArray;
+import android.util.SparseArrayMap;
 import android.util.SparseBooleanArray;
 import android.util.SparseSetArray;
 import android.util.proto.ProtoOutputStream;
@@ -70,6 +67,8 @@ import com.android.server.job.ConstantsProto;
 import com.android.server.job.JobSchedulerService;
 import com.android.server.job.JobServiceContext;
 import com.android.server.job.StateControllerProto;
+import com.android.server.usage.AppStandbyInternal;
+import com.android.server.usage.AppStandbyInternal.AppIdleStateChangeListener;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -114,92 +113,6 @@ public final class QuotaController extends StateController {
     private static final String ALARM_TAG_QUOTA_CHECK = "*job.quota_check*";
 
     /**
-     * A sparse array of ArrayMaps, which is suitable for holding (userId, packageName)->object
-     * associations.
-     */
-    private static class UserPackageMap<T> {
-        private final SparseArray<ArrayMap<String, T>> mData = new SparseArray<>();
-
-        public void add(int userId, @NonNull String packageName, @Nullable T obj) {
-            ArrayMap<String, T> data = mData.get(userId);
-            if (data == null) {
-                data = new ArrayMap<String, T>();
-                mData.put(userId, data);
-            }
-            data.put(packageName, obj);
-        }
-
-        public void clear() {
-            for (int i = 0; i < mData.size(); ++i) {
-                mData.valueAt(i).clear();
-            }
-        }
-
-        /** Removes all the data for the user, if there was any. */
-        public void delete(int userId) {
-            mData.delete(userId);
-        }
-
-        /** Removes the data for the user and package, if there was any. */
-        public void delete(int userId, @NonNull String packageName) {
-            ArrayMap<String, T> data = mData.get(userId);
-            if (data != null) {
-                data.remove(packageName);
-            }
-        }
-
-        @Nullable
-        public T get(int userId, @NonNull String packageName) {
-            ArrayMap<String, T> data = mData.get(userId);
-            if (data != null) {
-                return data.get(packageName);
-            }
-            return null;
-        }
-
-        /** @see SparseArray#indexOfKey */
-        public int indexOfKey(int userId) {
-            return mData.indexOfKey(userId);
-        }
-
-        /** Returns the userId at the given index. */
-        public int keyAt(int index) {
-            return mData.keyAt(index);
-        }
-
-        /** Returns the package name at the given index. */
-        @NonNull
-        public String keyAt(int userIndex, int packageIndex) {
-            return mData.valueAt(userIndex).keyAt(packageIndex);
-        }
-
-        /** Returns the size of the outer (userId) array. */
-        public int numUsers() {
-            return mData.size();
-        }
-
-        public int numPackagesForUser(int userId) {
-            ArrayMap<String, T> data = mData.get(userId);
-            return data == null ? 0 : data.size();
-        }
-
-        /** Returns the value T at the given user and index. */
-        @Nullable
-        public T valueAt(int userIndex, int packageIndex) {
-            return mData.valueAt(userIndex).valueAt(packageIndex);
-        }
-
-        public void forEach(Consumer<T> consumer) {
-            for (int i = numUsers() - 1; i >= 0; --i) {
-                ArrayMap<String, T> data = mData.valueAt(i);
-                for (int j = data.size() - 1; j >= 0; --j) {
-                    consumer.accept(data.valueAt(j));
-                }
-            }
-        }
-    }
-
-    /**
      * Standardize the output of userId-packageName combo.
      */
     private static String string(int userId, String packageName) {
@@ -220,7 +133,7 @@ public final class QuotaController extends StateController {
             return string(userId, packageName);
         }
 
-        public void writeToProto(ProtoOutputStream proto, long fieldId) {
+        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
             final long token = proto.start(fieldId);
 
             proto.write(StateControllerProto.QuotaController.Package.USER_ID, userId);
@@ -378,22 +291,22 @@ public final class QuotaController extends StateController {
     }
 
     /** List of all tracked jobs keyed by source package-userId combo. */
-    private final UserPackageMap<ArraySet<JobStatus>> mTrackedJobs = new UserPackageMap<>();
+    private final SparseArrayMap<ArraySet<JobStatus>> mTrackedJobs = new SparseArrayMap<>();
 
     /** Timer for each package-userId combo. */
-    private final UserPackageMap<Timer> mPkgTimers = new UserPackageMap<>();
+    private final SparseArrayMap<Timer> mPkgTimers = new SparseArrayMap<>();
 
     /** List of all timing sessions for a package-userId combo, in chronological order. */
-    private final UserPackageMap<List<TimingSession>> mTimingSessions = new UserPackageMap<>();
+    private final SparseArrayMap<List<TimingSession>> mTimingSessions = new SparseArrayMap<>();
 
     /**
      * List of alarm listeners for each package that listen for when each package comes back within
      * quota.
      */
-    private final UserPackageMap<QcAlarmListener> mInQuotaAlarmListeners = new UserPackageMap<>();
+    private final SparseArrayMap<QcAlarmListener> mInQuotaAlarmListeners = new SparseArrayMap<>();
 
     /** Cached calculation results for each app, with the standby buckets as the array indices. */
-    private final UserPackageMap<ExecutionStats[]> mExecutionStatsCache = new UserPackageMap<>();
+    private final SparseArrayMap<ExecutionStats[]> mExecutionStatsCache = new SparseArrayMap<>();
 
     /** List of UIDs currently in the foreground. */
     private final SparseBooleanArray mForegroundUids = new SparseBooleanArray();
@@ -413,8 +326,6 @@ public final class QuotaController extends StateController {
     private final ChargingTracker mChargeTracker;
     private final Handler mHandler;
     private final QcConstants mQcConstants;
-
-    private volatile boolean mInParole;
 
     /** How much time each app will have to run jobs within their standby bucket window. */
     private long mAllowedTimePerPeriodMs = QcConstants.DEFAULT_ALLOWED_TIME_PER_PERIOD_MS;
@@ -468,7 +379,7 @@ public final class QuotaController extends StateController {
 
     private final IUidObserver mUidObserver = new IUidObserver.Stub() {
         @Override
-        public void onUidStateChanged(int uid, int procState, long procStateSeq) {
+        public void onUidStateChanged(int uid, int procState, long procStateSeq, int capability) {
             mHandler.obtainMessage(MSG_UID_PROCESS_STATE_CHANGED, uid, procState).sendToTarget();
         }
 
@@ -576,9 +487,8 @@ public final class QuotaController extends StateController {
         mContext.registerReceiverAsUser(mPackageAddedReceiver, UserHandle.ALL, filter, null, null);
 
         // Set up the app standby bucketing tracker
-        UsageStatsManagerInternal usageStats = LocalServices.getService(
-                UsageStatsManagerInternal.class);
-        usageStats.addAppIdleStateChangeListener(new StandbyTracker());
+        AppStandbyInternal appStandby = LocalServices.getService(AppStandbyInternal.class);
+        appStandby.addListener(new StandbyTracker());
 
         try {
             ActivityManager.getService().registerUidObserver(mUidObserver,
@@ -711,7 +621,6 @@ public final class QuotaController extends StateController {
     public long getMaxJobExecutionTimeMsLocked(@NonNull final JobStatus jobStatus) {
         // If quota is currently "free", then the job can run for the full amount of time.
         if (mChargeTracker.isCharging()
-                || mInParole
                 || isTopStartedJobLocked(jobStatus)
                 || isUidInForeground(jobStatus.getSourceUid())) {
             return JobServiceContext.EXECUTING_TIMESLICE_MILLIS;
@@ -737,8 +646,8 @@ public final class QuotaController extends StateController {
             final int standbyBucket) {
         if (standbyBucket == NEVER_INDEX) return false;
 
-        // Quota constraint is not enforced while charging or when parole is on.
-        if (mChargeTracker.isCharging() || mInParole) {
+        // Quota constraint is not enforced while charging.
+        if (mChargeTracker.isCharging()) {
             return true;
         }
 
@@ -1210,9 +1119,9 @@ public final class QuotaController extends StateController {
 
     private void maybeUpdateAllConstraintsLocked() {
         boolean changed = false;
-        for (int u = 0; u < mTrackedJobs.numUsers(); ++u) {
+        for (int u = 0; u < mTrackedJobs.numMaps(); ++u) {
             final int userId = mTrackedJobs.keyAt(u);
-            for (int p = 0; p < mTrackedJobs.numPackagesForUser(userId); ++p) {
+            for (int p = 0; p < mTrackedJobs.numElementsForKey(userId); ++p) {
                 final String packageName = mTrackedJobs.keyAt(u, p);
                 changed |= maybeUpdateConstraintForPkgLocked(userId, packageName);
             }
@@ -1272,7 +1181,7 @@ public final class QuotaController extends StateController {
     }
 
     private class UidConstraintUpdater implements Consumer<JobStatus> {
-        private final UserPackageMap<Integer> mToScheduleStartAlarms = new UserPackageMap<>();
+        private final SparseArrayMap<Integer> mToScheduleStartAlarms = new SparseArrayMap<>();
         public boolean wasJobChanged;
 
         @Override
@@ -1294,9 +1203,9 @@ public final class QuotaController extends StateController {
         }
 
         void postProcess() {
-            for (int u = 0; u < mToScheduleStartAlarms.numUsers(); ++u) {
+            for (int u = 0; u < mToScheduleStartAlarms.numMaps(); ++u) {
                 final int userId = mToScheduleStartAlarms.keyAt(u);
-                for (int p = 0; p < mToScheduleStartAlarms.numPackagesForUser(userId); ++p) {
+                for (int p = 0; p < mToScheduleStartAlarms.numElementsForKey(userId); ++p) {
                     final String packageName = mToScheduleStartAlarms.keyAt(u, p);
                     final int standbyBucket = mToScheduleStartAlarms.get(userId, packageName);
                     maybeScheduleStartAlarmLocked(userId, packageName, standbyBucket);
@@ -1729,7 +1638,7 @@ public final class QuotaController extends StateController {
         public void dump(ProtoOutputStream proto, long fieldId, Predicate<JobStatus> predicate) {
             final long token = proto.start(fieldId);
 
-            mPkg.writeToProto(proto, StateControllerProto.QuotaController.Timer.PKG);
+            mPkg.dumpDebug(proto, StateControllerProto.QuotaController.Timer.PKG);
             proto.write(StateControllerProto.QuotaController.Timer.IS_ACTIVE, isActive());
             proto.write(StateControllerProto.QuotaController.Timer.START_TIME_ELAPSED,
                     mStartTimeElapsed);
@@ -1777,20 +1686,6 @@ public final class QuotaController extends StateController {
                     if (maybeUpdateConstraintForPkgLocked(userId, packageName)) {
                         mStateChangedListener.onControllerStateChanged();
                     }
-                }
-            });
-        }
-
-        @Override
-        public void onParoleStateChanged(final boolean isParoleOn) {
-            mInParole = isParoleOn;
-            if (DEBUG) {
-                Slog.i(TAG, "Global parole state now " + (isParoleOn ? "ON" : "OFF"));
-            }
-            // Update job bookkeeping out of band.
-            BackgroundThread.getHandler().post(() -> {
-                synchronized (mLock) {
-                    maybeUpdateAllConstraintsLocked();
                 }
             });
         }
@@ -2515,7 +2410,6 @@ public final class QuotaController extends StateController {
     public void dumpControllerStateLocked(final IndentingPrintWriter pw,
             final Predicate<JobStatus> predicate) {
         pw.println("Is charging: " + mChargeTracker.isCharging());
-        pw.println("In parole: " + mInParole);
         pw.println("Current elapsed time: " + sElapsedRealtimeClock.millis());
         pw.println();
 
@@ -2566,9 +2460,9 @@ public final class QuotaController extends StateController {
         });
 
         pw.println();
-        for (int u = 0; u < mPkgTimers.numUsers(); ++u) {
+        for (int u = 0; u < mPkgTimers.numMaps(); ++u) {
             final int userId = mPkgTimers.keyAt(u);
-            for (int p = 0; p < mPkgTimers.numPackagesForUser(userId); ++p) {
+            for (int p = 0; p < mPkgTimers.numElementsForKey(userId); ++p) {
                 final String pkgName = mPkgTimers.keyAt(u, p);
                 mPkgTimers.valueAt(u, p).dump(pw, predicate);
                 pw.println();
@@ -2590,9 +2484,9 @@ public final class QuotaController extends StateController {
 
         pw.println("Cached execution stats:");
         pw.increaseIndent();
-        for (int u = 0; u < mExecutionStatsCache.numUsers(); ++u) {
+        for (int u = 0; u < mExecutionStatsCache.numMaps(); ++u) {
             final int userId = mExecutionStatsCache.keyAt(u);
-            for (int p = 0; p < mExecutionStatsCache.numPackagesForUser(userId); ++p) {
+            for (int p = 0; p < mExecutionStatsCache.numElementsForKey(userId); ++p) {
                 final String pkgName = mExecutionStatsCache.keyAt(u, p);
                 ExecutionStats[] stats = mExecutionStatsCache.valueAt(u, p);
 
@@ -2614,9 +2508,9 @@ public final class QuotaController extends StateController {
         pw.println();
         pw.println("In quota alarms:");
         pw.increaseIndent();
-        for (int u = 0; u < mInQuotaAlarmListeners.numUsers(); ++u) {
+        for (int u = 0; u < mInQuotaAlarmListeners.numMaps(); ++u) {
             final int userId = mInQuotaAlarmListeners.keyAt(u);
-            for (int p = 0; p < mInQuotaAlarmListeners.numPackagesForUser(userId); ++p) {
+            for (int p = 0; p < mInQuotaAlarmListeners.numElementsForKey(userId); ++p) {
                 final String pkgName = mInQuotaAlarmListeners.keyAt(u, p);
                 QcAlarmListener alarmListener = mInQuotaAlarmListeners.valueAt(u, p);
 
@@ -2639,7 +2533,6 @@ public final class QuotaController extends StateController {
         final long mToken = proto.start(StateControllerProto.QUOTA);
 
         proto.write(StateControllerProto.QuotaController.IS_CHARGING, mChargeTracker.isCharging());
-        proto.write(StateControllerProto.QuotaController.IS_IN_PAROLE, mInParole);
         proto.write(StateControllerProto.QuotaController.ELAPSED_REALTIME,
                 sElapsedRealtimeClock.millis());
 
@@ -2687,9 +2580,9 @@ public final class QuotaController extends StateController {
             }
         });
 
-        for (int u = 0; u < mPkgTimers.numUsers(); ++u) {
+        for (int u = 0; u < mPkgTimers.numMaps(); ++u) {
             final int userId = mPkgTimers.keyAt(u);
-            for (int p = 0; p < mPkgTimers.numPackagesForUser(userId); ++p) {
+            for (int p = 0; p < mPkgTimers.numElementsForKey(userId); ++p) {
                 final String pkgName = mPkgTimers.keyAt(u, p);
                 final long psToken = proto.start(
                         StateControllerProto.QuotaController.PACKAGE_STATS);

@@ -39,7 +39,7 @@ import android.app.PackageInstallObserver;
 import android.app.admin.DevicePolicyManager;
 import android.app.usage.StorageStatsManager;
 import android.compat.annotation.ChangeId;
-import android.compat.annotation.EnabledAfter;
+import android.compat.annotation.Disabled;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -917,8 +917,9 @@ public abstract class PackageManager {
     public static final int INSTALL_DRY_RUN = 0x00800000;
 
     /** @hide */
-    @IntDef(flag = true, prefix = { "DONT_KILL_APP" }, value = {
-            DONT_KILL_APP
+    @IntDef(flag = true, value = {
+            DONT_KILL_APP,
+            SYNCHRONOUS
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface EnabledFlags {}
@@ -931,13 +932,22 @@ public abstract class PackageManager {
      */
     public static final int DONT_KILL_APP = 0x00000001;
 
+    /**
+     * Flag parameter for
+     * {@link #setComponentEnabledSetting(android.content.ComponentName, int, int)} to indicate
+     * that the given user's package restrictions state will be serialised to disk after the
+     * component state has been updated.
+     */
+    public static final int SYNCHRONOUS = 0x00000002;
+
     /** @hide */
     @IntDef(prefix = { "INSTALL_REASON_" }, value = {
             INSTALL_REASON_UNKNOWN,
             INSTALL_REASON_POLICY,
             INSTALL_REASON_DEVICE_RESTORE,
             INSTALL_REASON_DEVICE_SETUP,
-            INSTALL_REASON_USER
+            INSTALL_REASON_USER,
+            INSTALL_REASON_ROLLBACK
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface InstallReason {}
@@ -966,6 +976,13 @@ public abstract class PackageManager {
      * Code indicating that the package installation was initiated by the user.
      */
     public static final int INSTALL_REASON_USER = 4;
+
+    /**
+     * Code indicating that the package installation was a rollback initiated by RollbackManager.
+     *
+     * @hide
+     */
+    public static final int INSTALL_REASON_ROLLBACK = 5;
 
     /**
      * @hide
@@ -1426,7 +1443,7 @@ public abstract class PackageManager {
 
     /**
      * Installation failed return code: a new staged session was attempted to be committed while
-     * there is already one in-progress.
+     * there is already one in-progress or new session has package that is already staged.
      *
      * @hide
      */
@@ -2849,6 +2866,25 @@ public abstract class PackageManager {
 
     /**
      * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}:
+     * The device does not have slices implementation.
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.FEATURE)
+    public static final String FEATURE_SLICES_DISABLED = "android.software.slices_disabled";
+
+    /**
+     * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}:
+     * The device supports device-unique Keystore attestations.  Only available on devices that
+     * also support {@link #FEATURE_STRONGBOX_KEYSTORE}, and can only be used by device owner
+     * apps (see {@link android.app.admin.DevicePolicyManager#generateKeyPair}).
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.FEATURE)
+    public static final String FEATURE_DEVICE_UNIQUE_ATTESTATION =
+            "android.hardware.device_unique_attestation";
+
+    /**
+     * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}:
      * The device has a Keymaster implementation that supports Device ID attestation.
      *
      * @see DevicePolicyManager#isDeviceIdAttestationSupported
@@ -3078,8 +3114,11 @@ public abstract class PackageManager {
      * because the app was updated to support runtime permissions, the
      * the permission will be revoked in the upgrade process.
      *
+     * @deprecated Renamed to {@link #FLAG_PERMISSION_REVOKED_COMPAT}.
+     *
      * @hide
      */
+    @Deprecated
     @SystemApi
     @TestApi
     public static final int FLAG_PERMISSION_REVOKE_ON_UPGRADE =  1 << 3;
@@ -3202,6 +3241,18 @@ public abstract class PackageManager {
     public static final int FLAG_PERMISSION_GRANTED_BY_ROLE =  1 << 15;
 
     /**
+     * Permission flag: The permission should have been revoked but is kept granted for
+     * compatibility. The data protected by the permission should be protected by a no-op (empty
+     * list, default error, etc) instead of crashing the client. The permission will be revoked if
+     * the app is upgraded to supports it.
+     *
+     * @hide
+     */
+    @SystemApi
+    @TestApi
+    public static final int FLAG_PERMISSION_REVOKED_COMPAT =  FLAG_PERMISSION_REVOKE_ON_UPGRADE;
+
+    /**
      * Permission flags: Bitwise or of all permission flags allowing an
      * exemption for a restricted permission.
      * @hide
@@ -3241,7 +3292,8 @@ public abstract class PackageManager {
             | FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT
             | FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT
             | FLAG_PERMISSION_APPLY_RESTRICTION
-            | FLAG_PERMISSION_GRANTED_BY_ROLE;
+            | FLAG_PERMISSION_GRANTED_BY_ROLE
+            | FLAG_PERMISSION_REVOKED_COMPAT;
 
     /**
      * Injected activity in app that forwards user to setting activity of that app.
@@ -3288,6 +3340,7 @@ public abstract class PackageManager {
      *
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public static final String SYSTEM_SHARED_LIBRARY_SERVICES = "android.ext.services";
 
@@ -3300,6 +3353,7 @@ public abstract class PackageManager {
      *
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public static final String SYSTEM_SHARED_LIBRARY_SHARED = "android.ext.shared";
 
@@ -3379,7 +3433,7 @@ public abstract class PackageManager {
      * @hide
      */
     @ChangeId
-    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
+    @Disabled
     public static final long FILTER_APPLICATION_QUERY = 135549675L;
 
     /** {@hide} */
@@ -3933,6 +3987,7 @@ public abstract class PackageManager {
      *
      * @hide
      */
+    @UnsupportedAppUsage
     @NonNull
     @TestApi
     public abstract String getPermissionControllerPackageName();
@@ -4017,7 +4072,8 @@ public abstract class PackageManager {
             FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT,
             FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT,
             FLAG_PERMISSION_APPLY_RESTRICTION,
-            FLAG_PERMISSION_GRANTED_BY_ROLE
+            FLAG_PERMISSION_GRANTED_BY_ROLE,
+            FLAG_PERMISSION_REVOKED_COMPAT
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface PermissionFlags {}
@@ -4639,6 +4695,7 @@ public abstract class PackageManager {
      *
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public abstract @NonNull String getServicesSystemSharedLibraryPackageName();
 
@@ -4649,6 +4706,7 @@ public abstract class PackageManager {
      *
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public abstract @NonNull String getSharedSystemSharedLibraryPackageName();
 
@@ -5939,9 +5997,28 @@ public abstract class PackageManager {
      *
      * @param packageName The name of the package to query
      * @throws IllegalArgumentException if the given package name is not installed
+     *
+     * @deprecated use {@link #getInstallSourceInfo(String)} instead
      */
+    @Deprecated
     @Nullable
     public abstract String getInstallerPackageName(@NonNull String packageName);
+
+    /**
+     * Retrieves information about how a package was installed or updated.
+     * <p>
+     * If the calling application does not hold the INSTALL_PACKAGES permission then
+     * the result will always return {@code null} from
+     * {@link InstallSourceInfo#getOriginatingPackageName()}.
+     *
+     * @param packageName The name of the package to query
+     * @throws NameNotFoundException if the given package name is not installed
+     */
+    @NonNull
+    public InstallSourceInfo getInstallSourceInfo(@NonNull String packageName)
+            throws NameNotFoundException {
+        throw new UnsupportedOperationException("getInstallSourceInfo not implemented");
+    }
 
     /**
      * Attempts to clear the user data directory of an application.
@@ -7086,7 +7163,6 @@ public abstract class PackageManager {
             case FLAG_PERMISSION_POLICY_FIXED: return "POLICY_FIXED";
             case FLAG_PERMISSION_SYSTEM_FIXED: return "SYSTEM_FIXED";
             case FLAG_PERMISSION_USER_SET: return "USER_SET";
-            case FLAG_PERMISSION_REVOKE_ON_UPGRADE: return "REVOKE_ON_UPGRADE";
             case FLAG_PERMISSION_USER_FIXED: return "USER_FIXED";
             case FLAG_PERMISSION_REVIEW_REQUIRED: return "REVIEW_REQUIRED";
             case FLAG_PERMISSION_REVOKE_WHEN_REQUESTED: return "REVOKE_WHEN_REQUESTED";
@@ -7097,6 +7173,7 @@ public abstract class PackageManager {
             case FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT: return "RESTRICTION_UPGRADE_EXEMPT";
             case FLAG_PERMISSION_APPLY_RESTRICTION: return "APPLY_RESTRICTION";
             case FLAG_PERMISSION_GRANTED_BY_ROLE: return "GRANTED_BY_ROLE";
+            case FLAG_PERMISSION_REVOKED_COMPAT: return "REVOKED_COMPAT";
             default: return Integer.toString(flag);
         }
     }
@@ -7346,6 +7423,17 @@ public abstract class PackageManager {
     }
 
     /**
+     * @return the system defined text classifier package names, or null if there's none.
+     *
+     * @hide
+     */
+    @NonNull
+    public String[] getSystemTextClassifierPackages() {
+        throw new UnsupportedOperationException(
+                "getSystemTextClassifierPackages not implemented in subclass");
+    }
+
+    /**
      * @return  attention service package name, or null if there's none.
      *
      * @hide
@@ -7379,6 +7467,18 @@ public abstract class PackageManager {
     }
 
     /**
+     * @return the system defined telephony package names, or null if there's none.
+     *
+     * @hide
+     */
+    @Nullable
+    @TestApi
+    public String[] getTelephonyPackageNames() {
+        throw new UnsupportedOperationException(
+                "getTelephonyPackageNames not implemented in subclass");
+    }
+
+    /**
      * @return the system defined content capture service package name, or null if there's none.
      *
      * @hide
@@ -7387,6 +7487,29 @@ public abstract class PackageManager {
     public String getSystemCaptionsServicePackageName() {
         throw new UnsupportedOperationException(
                 "getSystemCaptionsServicePackageName not implemented in subclass");
+    }
+
+    /**
+     * @return the system defined setup wizard package name, or null if there's none.
+     *
+     * @hide
+     */
+    @Nullable
+    public String getSetupWizardPackageName() {
+        throw new UnsupportedOperationException(
+                "getSetupWizardPackageName not implemented in subclass");
+    }
+
+    /**
+     * @return the system defined content capture package name, or null if there's none.
+     *
+     * @hide
+     */
+    @TestApi
+    @Nullable
+    public String getContentCaptureServicePackageName() {
+        throw new UnsupportedOperationException(
+                "getContentCaptureServicePackageName not implemented in subclass");
     }
 
     /**

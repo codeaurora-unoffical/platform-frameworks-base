@@ -100,6 +100,8 @@ public class Toast {
     @UnsupportedAppUsage
     int mDuration;
     View mNextView;
+    // TODO(b/128611929): Remove this and check for null view when toast creation is in the system
+    boolean mIsCustomToast = false;
 
     /**
      * Construct an empty Toast object.  You must call {@link #setView} before you
@@ -140,7 +142,11 @@ public class Toast {
         final int displayId = mContext.getDisplayId();
 
         try {
-            service.enqueueToast(pkg, tn, mDuration, displayId);
+            if (mIsCustomToast) {
+                service.enqueueToast(pkg, tn, mDuration, displayId);
+            } else {
+                service.enqueueTextToast(pkg, tn, mDuration, displayId);
+            }
         } catch (RemoteException e) {
             // Empty
         }
@@ -160,6 +166,7 @@ public class Toast {
      * @see #getView
      */
     public void setView(View view) {
+        mIsCustomToast = true;
         mNextView = view;
     }
 
@@ -168,6 +175,7 @@ public class Toast {
      * @see #setView
      */
     public View getView() {
+        mIsCustomToast = true;
         return mNextView;
     }
 
@@ -393,6 +401,7 @@ public class Toast {
             params.format = PixelFormat.TRANSLUCENT;
             params.windowAnimations = com.android.internal.R.style.Animation_Toast;
             params.type = WindowManager.LayoutParams.TYPE_TOAST;
+            params.setFitIgnoreVisibility(true);
             params.setTitle("Toast");
             params.flags = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                     | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE

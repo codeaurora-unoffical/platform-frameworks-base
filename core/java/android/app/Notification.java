@@ -17,7 +17,6 @@
 package android.app;
 
 import static android.annotation.Dimension.DP;
-import static android.graphics.drawable.Icon.TYPE_BITMAP;
 
 import static com.android.internal.util.ContrastColorUtil.satisfiesTextContrast;
 
@@ -627,6 +626,13 @@ public class Notification implements Parcelable
      * this flag to see whether that request was honored by the system.
      */
     public static final int FLAG_BUBBLE = 0x00001000;
+
+    /** @hide */
+    @IntDef({FLAG_SHOW_LIGHTS, FLAG_ONGOING_EVENT, FLAG_INSISTENT, FLAG_ONLY_ALERT_ONCE,
+            FLAG_AUTO_CANCEL, FLAG_NO_CLEAR, FLAG_FOREGROUND_SERVICE, FLAG_HIGH_PRIORITY,
+            FLAG_LOCAL_ONLY, FLAG_GROUP_SUMMARY, FLAG_AUTOGROUP_SUMMARY, FLAG_BUBBLE})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface NotificationFlags{};
 
     public int flags;
 
@@ -2577,10 +2583,12 @@ public class Notification implements Parcelable
             PendingIntent.setOnMarshaledListener(
                     (PendingIntent intent, Parcel out, int outFlags) -> {
                 if (parcel == out) {
-                    if (allPendingIntents == null) {
-                        allPendingIntents = new ArraySet<>();
+                    synchronized (this) {
+                        if (allPendingIntents == null) {
+                            allPendingIntents = new ArraySet<>();
+                        }
+                        allPendingIntents.add(intent);
                     }
-                    allPendingIntents.add(intent);
                 }
             });
         }
@@ -2588,8 +2596,10 @@ public class Notification implements Parcelable
             // IMPORTANT: Add marshaling code in writeToParcelImpl as we
             // want to intercept all pending events written to the parcel.
             writeToParcelImpl(parcel, flags);
-            // Must be written last!
-            parcel.writeArraySet(allPendingIntents);
+            synchronized (this) {
+                // Must be written last!
+                parcel.writeArraySet(allPendingIntents);
+            }
         } finally {
             if (collectPendingIntents) {
                 PendingIntent.setOnMarshaledListener(null);
@@ -2967,7 +2977,7 @@ public class Notification implements Parcelable
     /**
      * @hide
      */
-    public void writeToProto(ProtoOutputStream proto, long fieldId) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
         long token = proto.start(fieldId);
         proto.write(NotificationProto.CHANNEL_ID, getChannelId());
         proto.write(NotificationProto.HAS_TICKER_TEXT, this.tickerText != null);
@@ -2983,7 +2993,7 @@ public class Notification implements Parcelable
             proto.write(NotificationProto.VISIBILITY, this.visibility);
         }
         if (publicVersion != null) {
-            publicVersion.writeToProto(proto, NotificationProto.PUBLIC_VERSION);
+            publicVersion.dumpDebug(proto, NotificationProto.PUBLIC_VERSION);
         }
         proto.end(token);
     }
@@ -3198,6 +3208,14 @@ public class Notification implements Parcelable
     @Nullable
     public BubbleMetadata getBubbleMetadata() {
         return mBubbleMetadata;
+    }
+
+    /**
+     * Sets the {@link BubbleMetadata} for this notification.
+     * @hide
+     */
+    public void setBubbleMetadata(BubbleMetadata data) {
+        mBubbleMetadata = data;
     }
 
     /**
@@ -4534,10 +4552,15 @@ public class Notification implements Parcelable
         }
 
         /**
-         * @hide
+         * Set the value for a notification flag
+         *
+         * @param mask Bit mask of the flag
+         * @param value Status (on/off) of the flag
+         *
+         * @return The same Builder.
          */
         @NonNull
-        public Builder setFlag(int mask, boolean value) {
+        public Builder setFlag(@NotificationFlags int mask, boolean value) {
             if (value) {
                 mN.flags |= mask;
             } else {
@@ -8150,7 +8173,9 @@ public class Notification implements Parcelable
                 Action action, StandardTemplateParams p) {
             final boolean tombstone = (action.actionIntent == null);
             container.setViewVisibility(buttonId, View.VISIBLE);
-            container.setImageViewIcon(buttonId, action.getIcon());
+            if (buttonId != R.id.media_seamless) {
+                container.setImageViewIcon(buttonId, action.getIcon());
+            }
 
             // If the action buttons should not be tinted, then just use the default
             // notification color. Otherwise, just use the passed-in color.
@@ -8204,6 +8229,10 @@ public class Notification implements Parcelable
                     view.setViewVisibility(MEDIA_BUTTON_IDS[i], View.GONE);
                 }
             }
+            bindMediaActionButton(view, R.id.media_seamless, new Action(
+                    R.drawable.ic_media_seamless, mBuilder.mContext.getString(
+                            com.android.internal.R.string.ext_media_seamless_action), null), p);
+            view.setViewVisibility(R.id.media_seamless, View.GONE);
             handleImage(view);
             // handle the content margin
             int endMargin = R.dimen.notification_content_margin_end;
@@ -8735,25 +8764,19 @@ public class Notification implements Parcelable
              * If your app produces multiple bubbles, the image should be unique for each of them.
              * </p>
              *
-             * <p>The shape of a bubble icon is adaptive and can match the device theme.
+             * <p>The shape of a bubble icon is adaptive and will match the device theme.
              *
-             * If your icon is bitmap-based, you should create it using
-             * {@link Icon#createWithAdaptiveBitmap(Bitmap)}, otherwise this method will throw.
-             *
-             * If your icon is not bitmap-based, you should expect that the icon will be tinted.
+             * Ideally your icon should be constructed via
+             * {@link Icon#createWithAdaptiveBitmap(Bitmap)}, otherwise, the icon will be shrunk
+             * and placed on an adaptive shape.
              * </p>
              *
-             * @throws IllegalArgumentException if icon is null or a non-adaptive bitmap
+             * @throws IllegalArgumentException if icon is null.
              */
             @NonNull
             public BubbleMetadata.Builder setIcon(@NonNull Icon icon) {
                 if (icon == null) {
                     throw new IllegalArgumentException("Bubbles require non-null icon");
-                }
-                if (icon.getType() == TYPE_BITMAP) {
-                    throw new IllegalArgumentException("When using bitmap based icons, Bubbles "
-                            + "require TYPE_ADAPTIVE_BITMAP, please use"
-                            + " Icon#createWithAdaptiveBitmap instead");
                 }
                 mIcon = icon;
                 return this;
@@ -10399,6 +10422,16 @@ public class Notification implements Parcelable
             p.recycle();
             return brv;
         }
+
+        /**
+         * Override and return true, since {@link RemoteViews#onLoadClass(Class)} is not overridden.
+         *
+         * @see RemoteViews#shouldUseStaticFilter()
+         */
+        @Override
+        protected boolean shouldUseStaticFilter() {
+            return true;
+        }
     }
 
     /**
@@ -10505,12 +10538,7 @@ public class Notification implements Parcelable
         final StandardTemplateParams fillTextsFrom(Builder b) {
             Bundle extras = b.mN.extras;
             this.title = b.processLegacyText(extras.getCharSequence(EXTRA_TITLE));
-
-            CharSequence text = extras.getCharSequence(EXTRA_BIG_TEXT);
-            if (TextUtils.isEmpty(text)) {
-                text = extras.getCharSequence(EXTRA_TEXT);
-            }
-            this.text = b.processLegacyText(text);
+            this.text = b.processLegacyText(extras.getCharSequence(EXTRA_TEXT));
             this.summaryText = extras.getCharSequence(EXTRA_SUB_TEXT);
             return this;
         }

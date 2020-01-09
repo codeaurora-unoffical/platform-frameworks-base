@@ -159,6 +159,8 @@ public abstract class ActivatableNotificationView extends ExpandableOutlineView 
     private int mHeadsUpAddStartLocation;
     private float mHeadsUpLocation;
     private boolean mIsAppearing;
+    private boolean mDismissed;
+    private boolean mRefocusOnDismiss;
 
     public ActivatableNotificationView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -178,6 +180,10 @@ public abstract class ActivatableNotificationView extends ExpandableOutlineView 
             }
         }, super::performClick, this::handleSlideBack, mFalsingManager::onNotificationDoubleTap);
         initDimens();
+    }
+
+    public FalsingManager getFalsingManager() {
+        return mFalsingManager;
     }
 
     private void updateColors() {
@@ -1042,6 +1048,27 @@ public abstract class ActivatableNotificationView extends ExpandableOutlineView 
 
     public int getHeadsUpHeightWithoutHeader() {
         return getHeight();
+    }
+
+    /** Mark that this view has been dismissed. */
+    public void dismiss(boolean refocusOnDismiss) {
+        mDismissed = true;
+        mRefocusOnDismiss = refocusOnDismiss;
+    }
+
+    /** Mark that this view is no longer dismissed. */
+    public void unDismiss() {
+        mDismissed = false;
+    }
+
+    /** Is this view marked as dismissed? */
+    public boolean isDismissed() {
+        return mDismissed;
+    }
+
+    /** Should a re-focus occur upon dismissing this view? */
+    public boolean shouldRefocusOnDismiss() {
+        return mRefocusOnDismiss || isAccessibilityFocused();
     }
 
     public interface OnActivatedListener {

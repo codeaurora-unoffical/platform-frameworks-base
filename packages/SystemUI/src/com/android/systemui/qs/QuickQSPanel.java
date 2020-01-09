@@ -35,6 +35,7 @@ import com.android.systemui.plugins.qs.QSTile.State;
 import com.android.systemui.qs.customize.QSCustomizer;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerService.Tunable;
+import com.android.systemui.util.Utils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -55,6 +56,13 @@ public class QuickQSPanel extends QSPanel {
     private boolean mDisabledByPolicy;
     private int mMaxTiles;
     protected QSPanel mFullPanel;
+    private QuickQSMediaPlayer mMediaPlayer;
+    private boolean mUsingMediaPlayer;
+    private LinearLayout mHorizontalLinearLayout;
+
+    // Only used with media
+    private QSTileLayout mMediaTileLayout;
+    private QSTileLayout mRegularTileLayout;
 
     @Inject
     public QuickQSPanel(@Named(VIEW_CONTEXT) Context context, AttributeSet attrs,
@@ -69,11 +77,47 @@ public class QuickQSPanel extends QSPanel {
             }
             removeView((View) mTileLayout);
         }
-        sDefaultMaxTiles = getResources().getInteger(R.integer.quick_qs_panel_max_columns);
-        mTileLayout = new HeaderTileLayout(context);
-        mTileLayout.setListening(mListening);
-        addView((View) mTileLayout, 0 /* Between brightness and footer */);
-        super.setPadding(0, 0, 0, 0);
+
+        mUsingMediaPlayer = Utils.useQsMediaPlayer(context);
+        if (mUsingMediaPlayer) {
+            mHorizontalLinearLayout = new LinearLayout(mContext);
+            mHorizontalLinearLayout.setOrientation(LinearLayout.HORIZONTAL);
+            mHorizontalLinearLayout.setClipChildren(false);
+            mHorizontalLinearLayout.setClipToPadding(false);
+
+            LayoutParams lp = new LayoutParams(0, LayoutParams.MATCH_PARENT, 1);
+
+            mTileLayout = new DoubleLineTileLayout(context);
+            mMediaTileLayout = mTileLayout;
+            mRegularTileLayout = new HeaderTileLayout(context);
+            lp.setMarginEnd(10);
+            lp.setMarginStart(0);
+            mHorizontalLinearLayout.addView((View) mTileLayout, lp);
+
+            mMediaPlayer = new QuickQSMediaPlayer(mContext, mHorizontalLinearLayout);
+
+            lp.setMarginEnd(0);
+            lp.setMarginStart(10);
+            mHorizontalLinearLayout.addView(mMediaPlayer.getView(), lp);
+
+            sDefaultMaxTiles = getResources().getInteger(R.integer.quick_qs_panel_max_columns);
+
+            mTileLayout.setListening(mListening);
+            addView(mHorizontalLinearLayout, 0 /* Between brightness and footer */);
+            ((View) mRegularTileLayout).setVisibility(View.GONE);
+            addView((View) mRegularTileLayout, 0);
+            super.setPadding(0, 0, 0, 0);
+        } else {
+            sDefaultMaxTiles = getResources().getInteger(R.integer.quick_qs_panel_max_columns);
+            mTileLayout = new HeaderTileLayout(context);
+            mTileLayout.setListening(mListening);
+            addView((View) mTileLayout, 0 /* Between brightness and footer */);
+            super.setPadding(0, 0, 0, 0);
+        }
+    }
+
+    public QuickQSMediaPlayer getMediaPlayer() {
+        return mMediaPlayer;
     }
 
     @Override
@@ -97,6 +141,8 @@ public class QuickQSPanel extends QSPanel {
         Dependency.get(TunerService.class).removeTunable(mNumTiles);
     }
 
+
+
     @Override
     protected String getDumpableTag() {
         return TAG;
@@ -117,6 +163,42 @@ public class QuickQSPanel extends QSPanel {
             state = copy;
         }
         super.drawTile(r, state);
+    }
+
+    boolean switchTileLayout() {
+        if (!mUsingMediaPlayer) return false;
+        if (mMediaPlayer.hasMediaSession()
+                && mHorizontalLinearLayout.getVisibility() == View.GONE) {
+            mHorizontalLinearLayout.setVisibility(View.VISIBLE);
+            ((View) mRegularTileLayout).setVisibility(View.GONE);
+            mTileLayout.setListening(false);
+            for (TileRecord record : mRecords) {
+                mTileLayout.removeTile(record);
+                record.tile.removeCallback(record.callback);
+            }
+            mTileLayout = mMediaTileLayout;
+            if (mHost != null) setTiles(mHost.getTiles());
+            mTileLayout.setListening(mListening);
+            return true;
+        } else if (!mMediaPlayer.hasMediaSession()
+                && mHorizontalLinearLayout.getVisibility() == View.VISIBLE) {
+            mHorizontalLinearLayout.setVisibility(View.GONE);
+            ((View) mRegularTileLayout).setVisibility(View.VISIBLE);
+            mTileLayout.setListening(false);
+            for (TileRecord record : mRecords) {
+                mTileLayout.removeTile(record);
+                record.tile.removeCallback(record.callback);
+            }
+            mTileLayout = mRegularTileLayout;
+            if (mHost != null) setTiles(mHost.getTiles());
+            mTileLayout.setListening(mListening);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean hasMediaPlayerSession() {
+        return mMediaPlayer.hasMediaSession();
     }
 
     @Override
@@ -286,7 +368,14 @@ public class QuickQSPanel extends QSPanel {
             } else{
                 mColumns = mCellWidth == 0 ? 1 :
                         Math.min(maxTiles, availableWidth / mCellWidth );
-                mCellMarginHorizontal = (availableWidth - mColumns * mCellWidth) / (mColumns - 1);
+                // If we can only fit one column, use mCellMarginHorizontal to center it.
+                if (mColumns == 1) {
+                    mCellMarginHorizontal = (availableWidth - mCellWidth) / 2;
+                } else {
+                    mCellMarginHorizontal =
+                            (availableWidth - mColumns * mCellWidth) / (mColumns - 1);
+                }
+
             }
             return mColumns != prevNumColumns;
         }
@@ -324,6 +413,10 @@ public class QuickQSPanel extends QSPanel {
 
         @Override
         protected int getColumnStart(int column) {
+            if (mColumns == 1) {
+                // Only one column/tile. Use the margin to center the tile.
+                return getPaddingStart() + mCellMarginHorizontal;
+            }
             return getPaddingStart() + column *  (mCellWidth + mCellMarginHorizontal);
         }
     }

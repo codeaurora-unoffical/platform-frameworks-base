@@ -54,7 +54,6 @@ class TaskSnapshotPersister {
     private static final String REDUCED_POSTFIX = "_reduced";
     private static final float REDUCED_SCALE = .5f;
     private static final float LOW_RAM_REDUCED_SCALE = .6f;
-    private static final float LOW_RAM_RECENTS_REDUCED_SCALE = .1f;
     static final boolean DISABLE_FULL_SIZED_BITMAPS = ActivityManager.isLowRamDeviceStatic();
     private static final long DELAY_MS = 100;
     private static final int QUALITY = 95;
@@ -74,6 +73,7 @@ class TaskSnapshotPersister {
     private final Object mLock = new Object();
     private final DirectoryResolver mDirectoryResolver;
     private final float mReducedScale;
+    private final boolean mUse16BitFormat;
 
     /**
      * The list of ids of the tasks that have been persisted since {@link #removeObsoleteFiles} was
@@ -84,14 +84,10 @@ class TaskSnapshotPersister {
 
     TaskSnapshotPersister(WindowManagerService service, DirectoryResolver resolver) {
         mDirectoryResolver = resolver;
-        if (service.mLowRamTaskSnapshotsAndRecents) {
-            // Use very low res snapshots if we are using Go version of recents.
-            mReducedScale = LOW_RAM_RECENTS_REDUCED_SCALE;
-        } else {
-            // TODO(122671846) Replace the low RAM value scale with the above when it is fully built
-            mReducedScale = ActivityManager.isLowRamDeviceStatic()
-                    ? LOW_RAM_REDUCED_SCALE : REDUCED_SCALE;
-        }
+        mReducedScale = ActivityManager.isLowRamDeviceStatic()
+                ? LOW_RAM_REDUCED_SCALE : REDUCED_SCALE;
+        mUse16BitFormat = service.mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_use16BitTaskSnapshotPixelFormat);
     }
 
     /**
@@ -162,6 +158,15 @@ class TaskSnapshotPersister {
      */
     float getReducedScale() {
         return mReducedScale;
+    }
+
+    /**
+     * Return if task snapshots are stored in 16 bit pixel format.
+     *
+     * @return true if task snapshots are stored in 16 bit pixel format.
+     */
+    boolean use16BitFormat() {
+        return mUse16BitFormat;
     }
 
     @TestApi

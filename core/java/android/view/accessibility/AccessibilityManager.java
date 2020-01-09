@@ -21,6 +21,7 @@ import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_ENABLE_
 import android.Manifest;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.AccessibilityServiceInfo.FeedbackType;
+import android.accessibilityservice.AccessibilityShortcutInfo;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -30,9 +31,13 @@ import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
 import android.annotation.UnsupportedAppUsage;
+import android.annotation.UserIdInt;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 import android.content.res.Resources;
 import android.os.Binder;
@@ -56,6 +61,9 @@ import android.view.accessibility.AccessibilityEvent.EventType;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.IntPair;
 
+import org.xmlpull.v1.XmlPullParserException;
+
+import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
@@ -109,7 +117,7 @@ public final class AccessibilityManager {
      * Activity action: Launch UI to manage which accessibility service or feature is assigned
      * to the navigation bar Accessibility button.
      * <p>
-     * Input: Nothing.
+     * Input: {@link #EXTRA_SHORTCUT_TYPE} is the shortcut type.
      * </p>
      * <p>
      * Output: Nothing.
@@ -120,6 +128,42 @@ public final class AccessibilityManager {
     @SdkConstant(SdkConstant.SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_CHOOSE_ACCESSIBILITY_BUTTON =
             "com.android.internal.intent.action.CHOOSE_ACCESSIBILITY_BUTTON";
+
+    /**
+     * Used as an int extra field in {@link #ACTION_CHOOSE_ACCESSIBILITY_BUTTON} intent to specify
+     * the shortcut type.
+     *
+     * @hide
+     */
+    public static final String EXTRA_SHORTCUT_TYPE =
+            "com.android.internal.intent.extra.SHORTCUT_TYPE";
+
+    /**
+     * Used as an int value for {@link #EXTRA_SHORTCUT_TYPE} to represent the accessibility button
+     * shortcut type.
+     *
+     * @hide
+     */
+    public static final int ACCESSIBILITY_BUTTON = 0;
+
+    /**
+     * Used as an int value for {@link #EXTRA_SHORTCUT_TYPE} to represent hardware key shortcut,
+     * such as volume key button.
+     *
+     * @hide
+     */
+    public static final int ACCESSIBILITY_SHORTCUT_KEY = 1;
+
+    /**
+     * Annotations for the shortcut type.
+     * @hide
+     */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(value = {
+            ACCESSIBILITY_BUTTON,
+            ACCESSIBILITY_SHORTCUT_KEY
+    })
+    public @interface ShortcutType {}
 
     /**
      * Annotations for content flag of UI.
@@ -699,10 +743,10 @@ public final class AccessibilityManager {
         try {
             services = service.getEnabledAccessibilityServiceList(feedbackTypeFlags, userId);
             if (DEBUG) {
-                Log.i(LOG_TAG, "Installed AccessibilityServices " + services);
+                Log.i(LOG_TAG, "Enabled AccessibilityServices " + services);
             }
         } catch (RemoteException re) {
-            Log.e(LOG_TAG, "Error while obtaining the installed AccessibilityServices. ", re);
+            Log.e(LOG_TAG, "Error while obtaining the enabled AccessibilityServices. ", re);
         }
         if (mAccessibilityPolicy != null) {
             services = mAccessibilityPolicy.getEnabledAccessibilityServiceList(
@@ -1234,25 +1278,84 @@ public final class AccessibilityManager {
     }
 
     /**
-     * Get the component name of the service currently assigned to the accessibility shortcut.
+     * Returns the list of shortcut target names currently assigned to the given shortcut.
      *
-     * @return The flattened component name
+     * @param shortcutType The shortcut type.
+     * @return The list of shortcut target names.
      * @hide
      */
     @TestApi
     @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
-    @Nullable
-    public String getAccessibilityShortcutService() {
+    @NonNull
+    public List<String> getAccessibilityShortcutTargets(@ShortcutType int shortcutType) {
         final IAccessibilityManager service;
         synchronized (mLock) {
             service = getServiceLocked();
         }
         if (service != null) {
             try {
-                return service.getAccessibilityShortcutService();
+                return service.getAccessibilityShortcutTargets(shortcutType);
             } catch (RemoteException re) {
                 re.rethrowFromSystemServer();
             }
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * Returns the {@link AccessibilityShortcutInfo}s of the installed accessibility shortcut
+     * targets, for specific user.
+     *
+     * @param context The context of the application.
+     * @param userId The user id.
+     * @return A list with {@link AccessibilityShortcutInfo}s.
+     * @hide
+     */
+    @NonNull
+    public List<AccessibilityShortcutInfo> getInstalledAccessibilityShortcutListAsUser(
+            @NonNull Context context, @UserIdInt int userId) {
+        final List<AccessibilityShortcutInfo> shortcutInfos = new ArrayList<>();
+        final int flags = PackageManager.GET_ACTIVITIES
+                | PackageManager.GET_META_DATA
+                | PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS
+                | PackageManager.MATCH_DIRECT_BOOT_AWARE
+                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        final Intent actionMain = new Intent(Intent.ACTION_MAIN);
+        actionMain.addCategory(Intent.CATEGORY_ACCESSIBILITY_SHORTCUT_TARGET);
+
+        final PackageManager packageManager = context.getPackageManager();
+        final List<ResolveInfo> installedShortcutList =
+                packageManager.queryIntentActivitiesAsUser(actionMain, flags, userId);
+        for (int i = 0; i < installedShortcutList.size(); i++) {
+            final AccessibilityShortcutInfo shortcutInfo =
+                    getShortcutInfo(context, installedShortcutList.get(i));
+            if (shortcutInfo != null) {
+                shortcutInfos.add(shortcutInfo);
+            }
+        }
+        return shortcutInfos;
+    }
+
+    /**
+     * Returns an {@link AccessibilityShortcutInfo} according to the given {@link ResolveInfo} of
+     * an activity.
+     *
+     * @param context The context of the application.
+     * @param resolveInfo The resolve info of an activity.
+     * @return The AccessibilityShortcutInfo.
+     */
+    @Nullable
+    private AccessibilityShortcutInfo getShortcutInfo(@NonNull Context context,
+            @NonNull ResolveInfo resolveInfo) {
+        final ActivityInfo activityInfo = resolveInfo.activityInfo;
+        if (activityInfo == null || activityInfo.metaData == null
+                || activityInfo.metaData.getInt(AccessibilityShortcutInfo.META_DATA) == 0) {
+            return null;
+        }
+        try {
+            return new AccessibilityShortcutInfo(context, activityInfo);
+        } catch (XmlPullParserException | IOException exp) {
+            Log.e(LOG_TAG, "Error while initializing AccessibilityShortcutInfo", exp);
         }
         return null;
     }

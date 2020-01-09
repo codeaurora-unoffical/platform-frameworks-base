@@ -16,7 +16,6 @@
 
 package com.android.server.wm;
 
-import android.annotation.ColorInt;
 import android.util.proto.ProtoOutputStream;
 import android.view.SurfaceControl;
 import android.view.SurfaceControl.Transaction;
@@ -39,11 +38,6 @@ interface AnimationAdapter {
      * @see Animation#getShowWallpaper()
      */
     boolean getShowWallpaper();
-
-    /**
-     * @return The background color behind the animation.
-     */
-    @ColorInt int getBackgroundColor();
 
     /**
      * Requests to start the animation.
@@ -82,11 +76,11 @@ interface AnimationAdapter {
 
     void dump(PrintWriter pw, String prefix);
 
-    default void writeToProto(ProtoOutputStream proto, long fieldId) {
+    default void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long token = proto.start(fieldId);
-        writeToProto(proto);
+        dumpDebug(proto);
         proto.end(token);
     }
 
-    void writeToProto(ProtoOutputStream proto);
+    void dumpDebug(ProtoOutputStream proto);
 }

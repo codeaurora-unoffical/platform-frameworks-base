@@ -24,9 +24,11 @@ import static android.view.DisplayAdjustments.DEFAULT_DISPLAY_ADJUSTMENTS;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.annotation.LayoutRes;
@@ -34,11 +36,14 @@ import android.annotation.Nullable;
 import android.app.Fragment;
 import android.app.FragmentController;
 import android.app.FragmentHostCallback;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.IntentFilter;
 import android.hardware.display.DisplayManagerGlobal;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.UserHandle;
 import android.testing.AndroidTestingRunner;
 import android.testing.LeakCheck.Tracker;
 import android.testing.TestableLooper;
@@ -58,6 +63,7 @@ import com.android.systemui.Dependency;
 import com.android.systemui.SysuiBaseFragmentTest;
 import com.android.systemui.SysuiTestableContext;
 import com.android.systemui.assist.AssistManager;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.recents.OverviewProxyService;
@@ -70,9 +76,13 @@ import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.Optional;
 
 @RunWith(AndroidTestingRunner.class)
-@RunWithLooper()
+@RunWithLooper(setAsMainLooper = true)
 @SmallTest
 public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
     private static final int EXTERNAL_DISPLAY_ID = 2;
@@ -85,6 +95,12 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
     private OverviewProxyService mOverviewProxyService;
     private CommandQueue mCommandQueue;
     private SysUiState mMockSysUiState;
+    @Mock
+    private BroadcastDispatcher mBroadcastDispatcher;
+    @Mock
+    private Divider mDivider;
+    @Mock
+    private Recents mRecents;
 
     private AccessibilityManagerWrapper mAccessibilityWrapper =
             new AccessibilityManagerWrapper(mContext) {
@@ -112,6 +128,9 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
 
     @Before
     public void setupFragment() throws Exception {
+        MockitoAnnotations.initMocks(this);
+
+        mCommandQueue = new CommandQueue(mContext);
         setupSysuiDependency();
         createRootView();
         mOverviewProxyService =
@@ -138,20 +157,10 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
     }
 
     private void setupSysuiDependency() {
-        mCommandQueue = new CommandQueue(mContext);
-        mSysuiContext.putComponent(CommandQueue.class, mCommandQueue);
-        mSysuiContext.putComponent(StatusBar.class, mock(StatusBar.class));
-        mSysuiContext.putComponent(Recents.class, mock(Recents.class));
-        mSysuiContext.putComponent(Divider.class, mock(Divider.class));
-
         Display display = new Display(DisplayManagerGlobal.getInstance(), EXTERNAL_DISPLAY_ID,
                 new DisplayInfo(), DEFAULT_DISPLAY_ADJUSTMENTS);
         mSysuiTestableContextExternal = (SysuiTestableContext) mSysuiContext.createDisplayContext(
                 display);
-        mSysuiTestableContextExternal.putComponent(CommandQueue.class, mCommandQueue);
-        mSysuiTestableContextExternal.putComponent(StatusBar.class, mock(StatusBar.class));
-        mSysuiTestableContextExternal.putComponent(Recents.class, mock(Recents.class));
-        mSysuiTestableContextExternal.putComponent(Divider.class, mock(Divider.class));
 
         injectLeakCheckedDependencies(ALL_SUPPORTED_CLASSES);
         WindowManager windowManager = mock(WindowManager.class);
@@ -177,6 +186,18 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
     }
 
     @Test
+    public void testRegisteredWithDispatcher() {
+        mFragments.dispatchResume();
+        processAllMessages();
+
+        verify(mBroadcastDispatcher).registerReceiver(
+                any(BroadcastReceiver.class),
+                any(IntentFilter.class),
+                any(Handler.class),
+                any(UserHandle.class));
+    }
+
+    @Test
     public void testSetImeWindowStatusWhenImeSwitchOnDisplay() {
         // Create default & external NavBar fragment.
         NavigationBarFragment defaultNavBar = (NavigationBarFragment) mFragment;
@@ -193,7 +214,7 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
         // Set IME window status for default NavBar.
         mCommandQueue.setImeWindowStatus(DEFAULT_DISPLAY, null, IME_VISIBLE,
                 BACK_DISPOSITION_DEFAULT, true, false);
-        Handler.getMain().runWithScissors(() -> { }, 500);
+        processAllMessages();
 
         // Verify IME window state will be updated in default NavBar & external NavBar state reset.
         assertEquals(NAVIGATION_HINT_BACK_ALT | NAVIGATION_HINT_IME_SHOWN,
@@ -204,7 +225,7 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
         // Set IME window status for external NavBar.
         mCommandQueue.setImeWindowStatus(EXTERNAL_DISPLAY_ID, null,
                 IME_VISIBLE, BACK_DISPOSITION_DEFAULT, true, false);
-        Handler.getMain().runWithScissors(() -> { }, 500);
+        processAllMessages();
 
         // Verify IME window state will be updated in external NavBar & default NavBar state reset.
         assertEquals(NAVIGATION_HINT_BACK_ALT | NAVIGATION_HINT_IME_SHOWN,
@@ -227,7 +248,14 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
                 mOverviewProxyService,
                 mock(NavigationModeController.class),
                 mock(StatusBarStateController.class),
-                mMockSysUiState);
+                mMockSysUiState,
+                mBroadcastDispatcher,
+                mCommandQueue,
+                mDivider,
+                Optional.of(mRecents),
+                () -> mock(StatusBar.class),
+                mock(ShadeController.class),
+                mHandler);
     }
 
     private class HostCallbacksForExternalDisplay extends

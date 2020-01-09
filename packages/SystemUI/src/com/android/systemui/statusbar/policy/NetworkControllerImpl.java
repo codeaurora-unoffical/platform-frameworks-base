@@ -24,7 +24,6 @@ import static android.net.wifi.WifiManager.TrafficStateCallback.DATA_ACTIVITY_OU
 import static android.telephony.PhoneStateListener.LISTEN_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGE;
 
 import static com.android.internal.telephony.PhoneConstants.MAX_PHONE_COUNT_DUAL_SIM;
-import static com.android.systemui.Dependency.BG_LOOPER_NAME;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -61,10 +60,11 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.TelephonyIntents;
 import com.android.settingslib.net.DataUsageController;
-import com.android.systemui.ConfigurationChangedReceiver;
 import com.android.systemui.DemoMode;
 import com.android.systemui.Dumpable;
 import com.android.systemui.R;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dagger.qualifiers.BgLooper;
 import com.android.systemui.settings.CurrentUserTracker;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController.DeviceProvisionedListener;
 import com.android.systemui.statusbar.policy.MobileSignalController.MobileIconGroup;
@@ -81,14 +81,12 @@ import java.util.Locale;
 import java.util.Map;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
 
 /** Platform implementation of the network controller. **/
 @Singleton
 public class NetworkControllerImpl extends BroadcastReceiver
-        implements NetworkController, DemoMode, DataUsageController.NetworkNameProvider,
-        ConfigurationChangedReceiver, Dumpable {
+        implements NetworkController, DemoMode, DataUsageController.NetworkNameProvider, Dumpable {
     // debug
     static final String TAG = "NetworkController";
     static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
@@ -110,6 +108,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
     private final SubscriptionDefaults mSubDefaults;
     private final DataSaverController mDataSaverController;
     private final CurrentUserTracker mUserTracker;
+    private final BroadcastDispatcher mBroadcastDispatcher;
     private final Object mLock = new Object();
     private Config mConfig;
 
@@ -166,12 +165,21 @@ public class NetworkControllerImpl extends BroadcastReceiver
     private boolean mUserSetup;
     private boolean mSimDetected;
 
+    private ConfigurationController.ConfigurationListener mConfigurationListener =
+            new ConfigurationController.ConfigurationListener() {
+                @Override
+                public void onConfigChanged(Configuration newConfig) {
+                    mConfig = Config.readConfig(mContext);
+                    mReceiverHandler.post(() -> handleConfigurationChanged());
+                }
+            };
     /**
      * Construct this controller object and register for updates.
      */
     @Inject
-    public NetworkControllerImpl(Context context, @Named(BG_LOOPER_NAME) Looper bgLooper,
-            DeviceProvisionedController deviceProvisionedController) {
+    public NetworkControllerImpl(Context context, @BgLooper Looper bgLooper,
+            DeviceProvisionedController deviceProvisionedController,
+            BroadcastDispatcher broadcastDispatcher) {
         this(context, (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE),
                 (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE),
                 (WifiManager) context.getSystemService(Context.WIFI_SERVICE),
@@ -180,7 +188,8 @@ public class NetworkControllerImpl extends BroadcastReceiver
                 new AccessPointControllerImpl(context),
                 new DataUsageController(context),
                 new SubscriptionDefaults(),
-                deviceProvisionedController);
+                deviceProvisionedController,
+                broadcastDispatcher);
         mReceiverHandler.post(mRegisterListeners);
     }
 
@@ -192,12 +201,14 @@ public class NetworkControllerImpl extends BroadcastReceiver
             AccessPointControllerImpl accessPointController,
             DataUsageController dataUsageController,
             SubscriptionDefaults defaultsHandler,
-            DeviceProvisionedController deviceProvisionedController) {
+            DeviceProvisionedController deviceProvisionedController,
+            BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mConfig = config;
         mReceiverHandler = new Handler(bgLooper);
         mCallbackHandler = callbackHandler;
         mDataSaverController = new DataSaverControllerImpl(context);
+        mBroadcastDispatcher = broadcastDispatcher;
 
         mSubscriptionManager = subManager;
         mSubDefaults = defaultsHandler;
@@ -220,6 +231,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
             @Override
             public void onMobileDataEnabled(boolean enabled) {
                 mCallbackHandler.setMobileDataEnabled(enabled);
+                notifyControllersMobileDataChanged();
             }
         });
         mWifiSignalController = new WifiSignalController(mContext, mHasMobileDataFeature,
@@ -229,7 +241,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
 
         // AIRPLANE_MODE_CHANGED is sent at boot; we've probably already missed it
         updateAirplaneMode(true /* force callback */);
-        mUserTracker = new CurrentUserTracker(mContext) {
+        mUserTracker = new CurrentUserTracker(broadcastDispatcher) {
             @Override
             public void onUserSwitched(int newUserId) {
                 NetworkControllerImpl.this.onUserSwitched(newUserId);
@@ -276,7 +288,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
         // exclusively for status bar icons.
         mConnectivityManager.registerDefaultNetworkCallback(callback, mReceiverHandler);
         // Register the listener on our bg looper
-        mPhoneStateListener = new PhoneStateListener(bgLooper) {
+        mPhoneStateListener = new PhoneStateListener(mReceiverHandler::post) {
             @Override
             public void onActiveDataSubscriptionIdChanged(int subId) {
                 mActiveMobileDataSubscription = subId;
@@ -313,9 +325,8 @@ public class NetworkControllerImpl extends BroadcastReceiver
         filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
         filter.addAction(ConnectivityManager.INET_CONDITION_ACTION);
         filter.addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED);
-        filter.addAction(Intent.ACTION_BOOT_COMPLETED);
         filter.addAction(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
-        mContext.registerReceiver(this, filter, null, mReceiverHandler);
+        mBroadcastDispatcher.registerReceiver(this, filter, mReceiverHandler);
         mListening = true;
 
         updateMobileControllers();
@@ -384,6 +395,22 @@ public class NetworkControllerImpl extends BroadcastReceiver
     @Override
     public int getNumberSubscriptions() {
         return mMobileSignalControllers.size();
+    }
+
+    boolean isDataControllerDisabled() {
+        MobileSignalController dataController = getDataController();
+        if (dataController == null) {
+            return false;
+        }
+
+        return dataController.isDataDisabled();
+    }
+
+    private void notifyControllersMobileDataChanged() {
+        for (int i = 0; i < mMobileSignalControllers.size(); i++) {
+            MobileSignalController mobileSignalController = mMobileSignalControllers.valueAt(i);
+            mobileSignalController.onMobileDataChanged();
+        }
     }
 
     public boolean isEmergencyOnly() {
@@ -515,9 +542,6 @@ public class NetworkControllerImpl extends BroadcastReceiver
                     recalculateEmergency();
                 }
                 break;
-            case Intent.ACTION_BOOT_COMPLETED:
-                mWifiSignalController.handleBootCompleted();
-                break;
             case CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED:
                 mConfig = Config.readConfig(mContext);
                 mReceiverHandler.post(this::handleConfigurationChanged);
@@ -538,16 +562,6 @@ public class NetworkControllerImpl extends BroadcastReceiver
                 }
                 break;
         }
-    }
-
-    public void onConfigurationChanged(Configuration newConfig) {
-        mConfig = Config.readConfig(mContext);
-        mReceiverHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                handleConfigurationChanged();
-            }
-        });
     }
 
     @VisibleForTesting
@@ -627,7 +641,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
     }
 
     private boolean hasAnySim() {
-        int simCount = mPhone.getSimCount();
+        int simCount = mPhone.getActiveModemCount();
         for (int i = 0; i < simCount; i++) {
             int state = mPhone.getSimState(i);
             if (state != TelephonyManager.SIM_STATE_ABSENT

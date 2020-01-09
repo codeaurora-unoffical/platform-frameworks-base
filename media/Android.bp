@@ -34,12 +34,18 @@ java_library {
         "android_system_stubs_current",
     ],
 
+    static_libs: [
+        "exoplayer2-core"
+    ],
+    jarjar_rules: "jarjar_rules.txt",
+
     plugins: ["java_api_finder"],
 }
 
 filegroup {
     name: "updatable-media-srcs",
     srcs: [
+        ":mediaparser-srcs",
         ":mediasession2-srcs",
     ],
 }
@@ -64,23 +70,11 @@ filegroup {
 }
 
 filegroup {
-    name: "mediaplayer2-srcs",
+    name: "mediaparser-srcs",
     srcs: [
-        "apex/java/android/media/CloseGuard.java",
-        "apex/java/android/media/DataSourceCallback.java",
-        "apex/java/android/media/DataSourceDesc.java",
-        "apex/java/android/media/UriDataSourceDesc.java",
-        "apex/java/android/media/FileDataSourceDesc.java",
-        "apex/java/android/media/Media2Utils.java",
-        "apex/java/android/media/MediaPlayer2Utils.java",
-        "apex/java/android/media/MediaPlayer2.java",
-        "apex/java/android/media/Media2HTTPService.java",
-        "apex/java/android/media/Media2HTTPConnection.java",
-        "apex/java/android/media/RoutingDelegate.java",
-        "apex/java/android/media/BufferingParams.java",
-        "apex/java/android/media/ProxyDataSourceCallback.java",
+        "apex/java/android/media/MediaParser.java"
     ],
-    path: "apex/java",
+    path: "apex/java"
 }
 
 metalava_updatable_media_args = " --error UnhiddenSystemApi " +
@@ -88,7 +82,7 @@ metalava_updatable_media_args = " --error UnhiddenSystemApi " +
     "--hide MissingPermission --hide BroadcastBehavior " +
     "--hide HiddenSuperclass --hide DeprecationMismatch --hide UnavailableSymbol " +
     "--hide SdkConstant --hide HiddenTypeParameter --hide Todo --hide Typo " +
-    "--hide HiddenTypedefConstant --show-annotation android.annotation.SystemApi "
+    "--hide HiddenTypedefConstant --show-annotation android.annotation.SystemApi\\(client=android.annotation.SystemApi.Client.PRIVILEGED_APPS,process=android.annotation.SystemApi.Process.ALL\\) "
 
 droidstubs {
     name: "updatable-media-stubs",

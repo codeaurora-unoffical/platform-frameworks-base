@@ -28,7 +28,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-import android.graphics.Rect;
 import android.os.IBinder;
 import android.platform.test.annotations.Presubmit;
 import android.view.Display;
@@ -42,6 +41,7 @@ import androidx.test.filters.FlakyTest;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 /**
  * Tests for change transitions
@@ -51,18 +51,17 @@ import org.junit.Test;
  */
 @SmallTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class AppChangeTransitionTests extends WindowTestsBase {
 
-    private TaskStack mStack;
+    private ActivityStack mStack;
     private Task mTask;
-    private WindowTestUtils.TestAppWindowToken mToken;
+    private ActivityRecord mActivity;
 
     public void setUpOnDisplay(DisplayContent dc) {
-        mStack = createTaskStackOnDisplay(WINDOWING_MODE_UNDEFINED, ACTIVITY_TYPE_STANDARD, dc);
-        mTask = createTaskInStack(mStack, 0 /* userId */);
-        mToken = WindowTestUtils.createTestAppWindowToken(dc);
-
-        mTask.addChild(mToken, 0);
+        mActivity = createTestActivityRecord(dc, WINDOWING_MODE_UNDEFINED, ACTIVITY_TYPE_STANDARD);
+        mTask = mActivity.getTask();
+        mStack = mTask.getTaskStack();
 
         // Set a remote animator with snapshot disabled. Snapshots don't work in wmtests.
         RemoteAnimationDefinition definition = new RemoteAnimationDefinition();
@@ -75,6 +74,7 @@ public class AppChangeTransitionTests extends WindowTestsBase {
     class TestRemoteAnimationRunner implements IRemoteAnimationRunner {
         @Override
         public void onAnimationStart(RemoteAnimationTarget[] apps,
+                RemoteAnimationTarget[] wallpapers,
                 IRemoteAnimationFinishedCallback finishedCallback) {
             for (RemoteAnimationTarget target : apps) {
                 assertNotNull(target.startBounds);
@@ -107,11 +107,11 @@ public class AppChangeTransitionTests extends WindowTestsBase {
 
         // Verify we are in a change transition, but without a snapshot.
         // Though, the test will actually have crashed by now if a snapshot is attempted.
-        assertNull(mToken.getThumbnail());
-        assertTrue(mToken.isInChangeTransition());
+        assertNull(mActivity.getThumbnail());
+        assertTrue(mActivity.isInChangeTransition());
 
         waitUntilHandlersIdle();
-        mToken.removeImmediately();
+        mActivity.removeImmediately();
     }
 
     @Test
@@ -122,16 +122,16 @@ public class AppChangeTransitionTests extends WindowTestsBase {
 
         mTask.setWindowingMode(WINDOWING_MODE_FREEFORM);
         assertEquals(1, mDisplayContent.mChangingApps.size());
-        assertTrue(mToken.isInChangeTransition());
+        assertTrue(mActivity.isInChangeTransition());
 
         // Removing the app-token from the display should clean-up the
         // the change leash.
-        mDisplayContent.removeAppToken(mToken.token);
+        mDisplayContent.removeAppToken(mActivity.token);
         assertEquals(0, mDisplayContent.mChangingApps.size());
-        assertFalse(mToken.isInChangeTransition());
+        assertFalse(mActivity.isInChangeTransition());
 
         waitUntilHandlersIdle();
-        mToken.removeImmediately();
+        mActivity.removeImmediately();
     }
 
     @Test
@@ -147,16 +147,16 @@ public class AppChangeTransitionTests extends WindowTestsBase {
         // Reparenting to a display with different windowing mode may trigger
         // a change transition internally, but it should be cleaned-up once
         // the display change is complete.
-        mStack.reparent(mDisplayContent.getDisplayId(), new Rect(), true);
+        mStack.reparent(mDisplayContent, true);
 
         assertEquals(WINDOWING_MODE_FULLSCREEN, mTask.getWindowingMode());
 
         // Make sure we're not waiting for a change animation (no leash)
-        assertFalse(mToken.isInChangeTransition());
-        assertNull(mToken.getThumbnail());
+        assertFalse(mActivity.isInChangeTransition());
+        assertNull(mActivity.getThumbnail());
 
         waitUntilHandlersIdle();
-        mToken.removeImmediately();
+        mActivity.removeImmediately();
     }
 
     @Test
@@ -166,14 +166,14 @@ public class AppChangeTransitionTests extends WindowTestsBase {
 
         mTask.setWindowingMode(WINDOWING_MODE_FREEFORM);
         assertEquals(1, mDisplayContent.mChangingApps.size());
-        assertTrue(mToken.isInChangeTransition());
+        assertTrue(mActivity.isInChangeTransition());
 
         // Changing visibility should cancel the change transition and become closing
-        mToken.setVisibility(false, false);
+        mActivity.setVisibility(false, false);
         assertEquals(0, mDisplayContent.mChangingApps.size());
-        assertFalse(mToken.isInChangeTransition());
+        assertFalse(mActivity.isInChangeTransition());
 
         waitUntilHandlersIdle();
-        mToken.removeImmediately();
+        mActivity.removeImmediately();
     }
 }

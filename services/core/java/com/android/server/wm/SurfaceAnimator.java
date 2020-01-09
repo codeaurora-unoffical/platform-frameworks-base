@@ -54,6 +54,7 @@ class SurfaceAnimator {
     final Animatable mAnimatable;
     private final OnAnimationFinishedCallback mInnerAnimationFinishedCallback;
     @VisibleForTesting
+    @Nullable
     final Runnable mAnimationFinishedCallback;
     private boolean mAnimationStartDelayed;
 
@@ -262,7 +263,7 @@ class SurfaceAnimator {
             if (!mAnimationStartDelayed && forwardCancel) {
                 animation.onAnimationCancelled(leash);
             }
-            if (!restarting) {
+            if (!restarting && mAnimationFinishedCallback != null) {
                 mAnimationFinishedCallback.run();
             }
         }
@@ -339,13 +340,13 @@ class SurfaceAnimator {
      * @param fieldId Field Id of the SurfaceAnimator as defined in the parent message.
      * @hide
      */
-    void writeToProto(ProtoOutputStream proto, long fieldId) {
+    void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long token = proto.start(fieldId);
         if (mAnimation != null) {
-            mAnimation.writeToProto(proto, ANIMATION_ADAPTER);
+            mAnimation.dumpDebug(proto, ANIMATION_ADAPTER);
         }
         if (mLeash != null) {
-            mLeash.writeToProto(proto, LEASH);
+            mLeash.dumpDebug(proto, LEASH);
         }
         proto.write(ANIMATION_START_DELAYED, mAnimationStartDelayed);
         proto.end(token);

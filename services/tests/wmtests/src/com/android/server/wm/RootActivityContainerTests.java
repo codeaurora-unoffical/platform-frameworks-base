@@ -25,6 +25,7 @@ import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.content.pm.ActivityInfo.FLAG_ALWAYS_FOCUSABLE;
 import static android.view.Display.DEFAULT_DISPLAY;
+import static android.view.Display.TYPE_VIRTUAL;
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
@@ -34,8 +35,6 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.spy;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.times;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
-import static com.android.server.wm.ActivityDisplay.POSITION_TOP;
-import static com.android.server.wm.ActivityStack.REMOVE_TASK_MODE_DESTROYING;
 import static com.android.server.wm.ActivityStackSupervisor.ON_TOP;
 import static com.android.server.wm.RootActivityContainer.MATCH_TASK_IN_STACKS_OR_RECENT_TASKS_AND_RESTORE;
 
@@ -74,6 +73,7 @@ import org.junit.runner.RunWith;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Tests for the {@link RootActivityContainer} class.
@@ -100,7 +100,7 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testRestoringInvalidTask() {
         mRootActivityContainer.getDefaultDisplay().removeAllTasks();
-        TaskRecord task = mRootActivityContainer.anyTaskForId(0 /*taskId*/,
+        Task task = mRootActivityContainer.anyTaskForId(0 /*taskId*/,
                 MATCH_TASK_IN_STACKS_OR_RECENT_TASKS_AND_RESTORE, null, false /* onTop */);
         assertNull(task);
     }
@@ -113,27 +113,26 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     public void testReplacingTaskInPinnedStack() {
         final ActivityRecord firstActivity = new ActivityBuilder(mService).setCreateTask(true)
                 .setStack(mFullscreenStack).build();
-        final TaskRecord firstTask = firstActivity.getTaskRecord();
+        final Task task = firstActivity.getTask();
 
-        final ActivityRecord secondActivity = new ActivityBuilder(mService).setCreateTask(true)
+        final ActivityRecord secondActivity = new ActivityBuilder(mService).setTask(task)
                 .setStack(mFullscreenStack).build();
-        final TaskRecord secondTask = secondActivity.getTaskRecord();
 
         mFullscreenStack.moveToFront("testReplacingTaskInPinnedStack");
 
         // Ensure full screen stack has both tasks.
-        ensureStackPlacement(mFullscreenStack, firstTask, secondTask);
+        ensureStackPlacement(mFullscreenStack, firstActivity, secondActivity);
 
         // Move first activity to pinned stack.
         final Rect sourceBounds = new Rect();
         mRootActivityContainer.moveActivityToPinnedStack(firstActivity, sourceBounds,
                 0f /*aspectRatio*/, "initialMove");
 
-        final ActivityDisplay display = mFullscreenStack.getDisplay();
+        final DisplayContent display = mFullscreenStack.getDisplay();
         ActivityStack pinnedStack = display.getPinnedStack();
         // Ensure a task has moved over.
-        ensureStackPlacement(pinnedStack, firstTask);
-        ensureStackPlacement(mFullscreenStack, secondTask);
+        ensureStackPlacement(pinnedStack, firstActivity);
+        ensureStackPlacement(mFullscreenStack, secondActivity);
 
         // Move second activity to pinned stack.
         mRootActivityContainer.moveActivityToPinnedStack(secondActivity, sourceBounds,
@@ -143,30 +142,37 @@ public class RootActivityContainerTests extends ActivityTestsBase {
         pinnedStack = display.getPinnedStack();
         mFullscreenStack = display.getStack(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD);
         // Ensure stacks have swapped tasks.
-        ensureStackPlacement(pinnedStack, secondTask);
-        ensureStackPlacement(mFullscreenStack, firstTask);
+        ensureStackPlacement(pinnedStack, secondActivity);
+        ensureStackPlacement(mFullscreenStack, firstActivity);
     }
 
-    private static void ensureStackPlacement(ActivityStack stack, TaskRecord... tasks) {
-        final ArrayList<TaskRecord> stackTasks = stack.getAllTasks();
-        assertEquals("Expecting " + Arrays.deepToString(tasks) + " got " + stackTasks,
-                stackTasks.size(), tasks != null ? tasks.length : 0);
+    private static void ensureStackPlacement(ActivityStack stack, ActivityRecord... activities) {
+        final Task task = stack.getBottomMostTask();
+        final ArrayList<ActivityRecord> stackActivities = new ArrayList<>();
 
-        if (tasks == null) {
+        task.forAllActivities((Consumer<ActivityRecord>) stackActivities::add, false);
+
+        assertEquals("Expecting " + Arrays.deepToString(activities) + " got " + stackActivities,
+                stackActivities.size(), activities != null ? activities.length : 0);
+
+        if (activities == null) {
             return;
         }
 
-        for (TaskRecord task : tasks) {
-            assertTrue(stackTasks.contains(task));
+        for (ActivityRecord activity : activities) {
+            assertTrue(stackActivities.contains(activity));
         }
     }
 
     @Test
     public void testApplySleepTokens() {
-        final ActivityDisplay display = mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mRootActivityContainer.getDefaultDisplay();
         final KeyguardController keyguard = mSupervisor.getKeyguardController();
-        final ActivityStack stack = mock(ActivityStack.class);
-        display.addChild(stack, 0 /* position */);
+        final ActivityStack stack = new StackBuilder(mRootActivityContainer)
+                .setCreateActivity(false)
+                .setDisplay(display)
+                .setOnTop(false)
+                .build();
 
         // Make sure we wake and resume in the case the display is turning on and the keyguard is
         // not showing.
@@ -196,7 +202,7 @@ public class RootActivityContainerTests extends ActivityTestsBase {
                 false /* expectResumeTopActivity */);
     }
 
-    private void verifySleepTokenBehavior(ActivityDisplay display, KeyguardController keyguard,
+    private void verifySleepTokenBehavior(DisplayContent display, KeyguardController keyguard,
             ActivityStack stack, boolean displaySleeping, boolean displayShouldSleep,
             boolean isFocusedStack, boolean keyguardShowing, boolean expectWakeFromSleep,
             boolean expectResumeTopActivity) {
@@ -219,21 +225,21 @@ public class RootActivityContainerTests extends ActivityTestsBase {
      */
     @Test
     public void testRemovingStackOnAppCrash() {
-        final ActivityDisplay defaultDisplay = mRootActivityContainer.getDefaultDisplay();
-        final int originalStackCount = defaultDisplay.getChildCount();
+        final DisplayContent defaultDisplay = mRootActivityContainer.getDefaultDisplay();
+        final int originalStackCount = defaultDisplay.getStackCount();
         final ActivityStack stack = mRootActivityContainer.getDefaultDisplay().createStack(
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, false /* onTop */);
         final ActivityRecord firstActivity = new ActivityBuilder(mService).setCreateTask(true)
                 .setStack(stack).build();
 
-        assertEquals(originalStackCount + 1, defaultDisplay.getChildCount());
+        assertEquals(originalStackCount + 1, defaultDisplay.getStackCount());
 
         // Let's pretend that the app has crashed.
         firstActivity.app.setThread(null);
         mRootActivityContainer.finishTopCrashedActivities(firstActivity.app, "test");
 
         // Verify that the stack was removed.
-        assertEquals(originalStackCount, defaultDisplay.getChildCount());
+        assertEquals(originalStackCount, defaultDisplay.getStackCount());
     }
 
     @Test
@@ -270,8 +276,7 @@ public class RootActivityContainerTests extends ActivityTestsBase {
         assertTrue(pinnedActivity.isFocusable());
 
         // Without the overridding activity, stack should not be focusable.
-        pinnedStack.removeTask(pinnedActivity.getTaskRecord(), "testFocusability",
-                REMOVE_TASK_MODE_DESTROYING);
+        pinnedStack.removeChild(pinnedActivity.getTask(), "testFocusability");
         assertFalse(pinnedStack.isFocusable());
     }
 
@@ -286,7 +291,7 @@ public class RootActivityContainerTests extends ActivityTestsBase {
         final ActivityStack primaryStack = mRootActivityContainer.getDefaultDisplay()
                 .createStack(WINDOWING_MODE_SPLIT_SCREEN_PRIMARY, ACTIVITY_TYPE_STANDARD,
                         true /* onTop */);
-        final TaskRecord task = new TaskBuilder(mSupervisor).setStack(primaryStack).build();
+        final Task task = new TaskBuilder(mSupervisor).setStack(primaryStack).build();
         final ActivityRecord r = new ActivityBuilder(mService).setTask(task).build();
 
         // Find a launch stack for the top activity in split-screen primary, while requesting
@@ -315,7 +320,7 @@ public class RootActivityContainerTests extends ActivityTestsBase {
                 .setWindowingMode(WINDOWING_MODE_SPLIT_SCREEN_PRIMARY)
                 .setOnTop(true)
                 .build();
-        final TaskRecord task = primaryStack.topTask();
+        final Task task = primaryStack.getTopMostTask();
 
         // Resize dock stack.
         mService.resizeDockedStack(stackSize, taskSize, null, null, null);
@@ -331,11 +336,11 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testFindTaskToMoveToFrontWhenRecentsOnTop() {
         // Create stack/task on default display.
-        final ActivityDisplay display = mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mRootActivityContainer.getDefaultDisplay();
         final ActivityStack targetStack = new StackBuilder(mRootActivityContainer)
                 .setOnTop(false)
                 .build();
-        final TaskRecord targetTask = targetStack.getChildAt(0);
+        final Task targetTask = targetStack.getBottomMostTask();
 
         // Create Recents on top of the display.
         final ActivityStack stack = new StackBuilder(mRootActivityContainer).setActivityType(
@@ -355,17 +360,17 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testFindTaskToMoveToFrontWhenRecentsOnOtherDisplay() {
         // Create stack/task on default display.
-        final ActivityDisplay display = mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mRootActivityContainer.getDefaultDisplay();
         final ActivityStack targetStack = display.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, false /* onTop */);
-        final TaskRecord targetTask = new TaskBuilder(mSupervisor).setStack(targetStack).build();
+        final Task targetTask = new TaskBuilder(mSupervisor).setStack(targetStack).build();
 
         // Create Recents on secondary display.
-        final TestActivityDisplay secondDisplay = addNewActivityDisplayAt(
-                ActivityDisplay.POSITION_TOP);
+        final TestDisplayContent secondDisplay = addNewDisplayContentAt(
+                DisplayContent.POSITION_TOP);
         final ActivityStack stack = secondDisplay.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_RECENTS, true /* onTop */);
-        final TaskRecord task = new TaskBuilder(mSupervisor).setStack(stack).build();
+        final Task task = new TaskBuilder(mSupervisor).setStack(stack).build();
         new ActivityBuilder(mService).setTask(task).build();
 
         final String reason = "findTaskToMoveToFront";
@@ -382,12 +387,12 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testResumeActivityWhenNonTopmostStackIsTopFocused() {
         // Create a stack at bottom.
-        final ActivityDisplay display = mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mRootActivityContainer.getDefaultDisplay();
         final ActivityStack targetStack = spy(display.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, false /* onTop */));
-        final TaskRecord task = new TaskBuilder(mSupervisor).setStack(targetStack).build();
+        final Task task = new TaskBuilder(mSupervisor).setStack(targetStack).build();
         final ActivityRecord activity = new ActivityBuilder(mService).setTask(task).build();
-        display.positionChildAtBottom(targetStack);
+        display.positionStackAtBottom(targetStack);
 
         // Assume the stack is not at the topmost position (e.g. behind always-on-top stacks) but it
         // is the current top focused stack.
@@ -409,9 +414,10 @@ public class RootActivityContainerTests extends ActivityTestsBase {
      */
     @Test
     public void testResumeFocusedStacksStartsHomeActivity_NoActivities() {
-        mFullscreenStack.remove();
-        mService.mRootActivityContainer.getActivityDisplay(DEFAULT_DISPLAY).getHomeStack().remove();
-        mService.mRootActivityContainer.getActivityDisplay(DEFAULT_DISPLAY)
+        mFullscreenStack.removeIfPossible();
+        mService.mRootActivityContainer.getDisplayContent(DEFAULT_DISPLAY).getHomeStack()
+                .removeIfPossible();
+        mService.mRootActivityContainer.getDisplayContent(DEFAULT_DISPLAY)
                 .createStack(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_HOME, ON_TOP);
 
         doReturn(true).when(mRootActivityContainer).resumeHomeActivity(any(), any(), anyInt());
@@ -431,17 +437,18 @@ public class RootActivityContainerTests extends ActivityTestsBase {
      */
     @Test
     public void testResumeFocusedStacksStartsHomeActivity_ActivityOnSecondaryScreen() {
-        mFullscreenStack.remove();
-        mService.mRootActivityContainer.getActivityDisplay(DEFAULT_DISPLAY).getHomeStack().remove();
-        mService.mRootActivityContainer.getActivityDisplay(DEFAULT_DISPLAY)
+        mFullscreenStack.removeIfPossible();
+        mService.mRootActivityContainer.getDisplayContent(DEFAULT_DISPLAY).getHomeStack()
+                .removeIfPossible();
+        mService.mRootActivityContainer.getDisplayContent(DEFAULT_DISPLAY)
                 .createStack(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_HOME, ON_TOP);
 
         // Create an activity on secondary display.
-        final TestActivityDisplay secondDisplay = addNewActivityDisplayAt(
-                ActivityDisplay.POSITION_TOP);
+        final TestDisplayContent secondDisplay = addNewDisplayContentAt(
+                DisplayContent.POSITION_TOP);
         final ActivityStack stack = secondDisplay.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, true /* onTop */);
-        final TaskRecord task = new TaskBuilder(mSupervisor).setStack(stack).build();
+        final Task task = new TaskBuilder(mSupervisor).setStack(stack).build();
         new ActivityBuilder(mService).setTask(task).build();
 
         doReturn(true).when(mRootActivityContainer).resumeHomeActivity(any(), any(), anyInt());
@@ -462,10 +469,10 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testResumeActivityLingeringTransition() {
         // Create a stack at top.
-        final ActivityDisplay display = mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mRootActivityContainer.getDefaultDisplay();
         final ActivityStack targetStack = spy(display.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, false /* onTop */));
-        final TaskRecord task = new TaskBuilder(mSupervisor).setStack(targetStack).build();
+        final Task task = new TaskBuilder(mSupervisor).setStack(targetStack).build();
         final ActivityRecord activity = new ActivityBuilder(mService).setTask(task).build();
         activity.setState(ActivityState.RESUMED, "test");
 
@@ -482,13 +489,13 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testResumeActivityLingeringTransition_notExecuted() {
         // Create a stack at bottom.
-        final ActivityDisplay display = mRootActivityContainer.getDefaultDisplay();
+        final DisplayContent display = mRootActivityContainer.getDefaultDisplay();
         final ActivityStack targetStack = spy(display.createStack(WINDOWING_MODE_FULLSCREEN,
                 ACTIVITY_TYPE_STANDARD, false /* onTop */));
-        final TaskRecord task = new TaskBuilder(mSupervisor).setStack(targetStack).build();
+        final Task task = new TaskBuilder(mSupervisor).setStack(targetStack).build();
         final ActivityRecord activity = new ActivityBuilder(mService).setTask(task).build();
         activity.setState(ActivityState.RESUMED, "test");
-        display.positionChildAtBottom(targetStack);
+        display.positionStackAtBottom(targetStack);
 
         // Assume the stack is at the topmost position
         assertFalse(targetStack.isTopStackOnDisplay());
@@ -510,9 +517,9 @@ public class RootActivityContainerTests extends ActivityTestsBase {
         mockResolveSecondaryHomeActivity();
 
         // Create secondary displays.
-        final TestActivityDisplay secondDisplay = createNewActivityDisplay();
-        mRootActivityContainer.addChild(secondDisplay, POSITION_TOP);
-        doReturn(true).when(secondDisplay).supportsSystemDecorations();
+        final TestDisplayContent secondDisplay =
+                new TestDisplayContent.Builder(mService, 1000, 1500)
+                        .setSystemDecorations(true).build();
 
         doReturn(true).when(mRootActivityContainer)
                 .ensureVisibilityAndConfig(any(), anyInt(), anyBoolean(), anyBoolean());
@@ -577,10 +584,10 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testStartSecondaryHomeOnDisplayWithUserKeyLocked() {
         // Create secondary displays.
-        final TestActivityDisplay secondDisplay = createNewActivityDisplay();
-        mRootActivityContainer.addChild(secondDisplay, POSITION_TOP);
+        final TestDisplayContent secondDisplay =
+                new TestDisplayContent.Builder(mService, 1000, 1500)
+                        .setSystemDecorations(true).build();
 
-        doReturn(true).when(secondDisplay).supportsSystemDecorations();
         // Use invalid user id to let StorageManager.isUserKeyUnlocked() return false.
         final int currentUser = mRootActivityContainer.mCurrentUser;
         mRootActivityContainer.mCurrentUser = -1;
@@ -603,9 +610,9 @@ public class RootActivityContainerTests extends ActivityTestsBase {
     @Test
     public void testStartSecondaryHomeOnDisplayWithoutSysDecorations() {
         // Create secondary displays.
-        final TestActivityDisplay secondDisplay = createNewActivityDisplay();
-        mRootActivityContainer.addChild(secondDisplay, POSITION_TOP);
-        doReturn(false).when(secondDisplay).supportsSystemDecorations();
+        final TestDisplayContent secondDisplay =
+                new TestDisplayContent.Builder(mService, 1000, 1500)
+                        .setSystemDecorations(false).build();
 
         mRootActivityContainer.startHomeOnDisplay(0 /* userId */, "testStartSecondaryHome",
                 secondDisplay.mDisplayId, true /* allowInstrumenting */, true /* fromHomeKey */);
@@ -817,6 +824,38 @@ public class RootActivityContainerTests extends ActivityTestsBase {
         assertEquals(infoFake1.activityInfo.applicationInfo.packageName,
                 resolvedInfo.first.applicationInfo.packageName);
         assertEquals(infoFake1.activityInfo.name, resolvedInfo.first.name);
+    }
+
+    /**
+     * Test that {@link RootActivityContainer#getLaunchStack} with the real caller id will get the
+     * expected stack when requesting the activity launch on the secondary display.
+     */
+    @Test
+    public void testGetLaunchStackWithRealCallerId() {
+        // Create a non-system owned virtual display.
+        final TestDisplayContent secondaryDisplay =
+                new TestDisplayContent.Builder(mService, 1000, 1500)
+                        .setType(TYPE_VIRTUAL).setOwnerUid(100).build();
+
+        // Create an activity with specify the original launch pid / uid.
+        final ActivityRecord r = new ActivityBuilder(mService).setLaunchedFromPid(200)
+                .setLaunchedFromUid(200).build();
+
+        // Simulate ActivityStarter to find a launch stack for requesting the activity to launch
+        // on the secondary display with realCallerId.
+        final ActivityOptions options = ActivityOptions.makeBasic();
+        options.setLaunchDisplayId(secondaryDisplay.mDisplayId);
+        options.setLaunchWindowingMode(WINDOWING_MODE_FULLSCREEN);
+        doReturn(true).when(mSupervisor).canPlaceEntityOnDisplay(secondaryDisplay.mDisplayId,
+                300 /* test realCallerPid */, 300 /* test realCallerUid */, r.info);
+        final ActivityStack result = mRootActivityContainer.getLaunchStack(r, options,
+                null /* task */, true /* onTop */, null, 300 /* test realCallerPid */,
+                300 /* test realCallerUid */);
+
+        // Assert that the stack is returned as expected.
+        assertNotNull(result);
+        assertEquals("The display ID of the stack should same as secondary display ",
+                secondaryDisplay.mDisplayId, result.mDisplayId);
     }
 
     /**

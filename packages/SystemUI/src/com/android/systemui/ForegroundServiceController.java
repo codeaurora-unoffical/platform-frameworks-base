@@ -15,12 +15,19 @@
 package com.android.systemui;
 
 import android.annotation.Nullable;
+import android.app.AppOpsManager;
+import android.os.Handler;
 import android.os.UserHandle;
 import android.service.notification.StatusBarNotification;
 import android.util.ArraySet;
 import android.util.SparseArray;
 
 import com.android.internal.messages.nano.SystemMessageProto;
+import com.android.systemui.appops.AppOpsController;
+import com.android.systemui.dagger.qualifiers.MainHandler;
+import com.android.systemui.statusbar.notification.NotificationEntryManager;
+import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.util.Assert;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -30,12 +37,27 @@ import javax.inject.Singleton;
  */
 @Singleton
 public class ForegroundServiceController {
+    public static final int[] APP_OPS = new int[] {AppOpsManager.OP_CAMERA,
+            AppOpsManager.OP_SYSTEM_ALERT_WINDOW,
+            AppOpsManager.OP_RECORD_AUDIO,
+            AppOpsManager.OP_COARSE_LOCATION,
+            AppOpsManager.OP_FINE_LOCATION};
 
     private final SparseArray<ForegroundServicesUserState> mUserServices = new SparseArray<>();
     private final Object mMutex = new Object();
+    private final NotificationEntryManager mEntryManager;
+    private final Handler mMainHandler;
 
     @Inject
-    public ForegroundServiceController() {
+    public ForegroundServiceController(NotificationEntryManager entryManager,
+            AppOpsController appOpsController, @MainHandler Handler mainHandler) {
+        mEntryManager = entryManager;
+        mMainHandler = mainHandler;
+        appOpsController.addCallback(APP_OPS, (code, uid, packageName, active) -> {
+            mMainHandler.post(() -> {
+                onAppOpChanged(code, uid, packageName, active);
+            });
+        });
     }
 
     /**
@@ -90,11 +112,20 @@ public class ForegroundServiceController {
     }
 
     /**
-     * Records active app ops. App Ops are stored in FSC in addition to NotificationData in
-     * case they change before we have a notification to tag.
+     * Records active app ops and updates the app op for the pending or visible notifications
+     * with the given parameters.
+     * App Ops are stored in FSC in addition to NotificationEntry in case they change before we
+     * have a notification to tag.
+     * @param appOpCode code for appOp to add/remove
+     * @param uid of user the notification is sent to
+     * @param packageName package that created the notification
+     * @param active whether the appOpCode is active or not
      */
-    public void onAppOpChanged(int code, int uid, String packageName, boolean active) {
+    void onAppOpChanged(int appOpCode, int uid, String packageName, boolean active) {
+        Assert.isMainThread();
+
         int userId = UserHandle.getUserId(uid);
+        // Record active app ops
         synchronized (mMutex) {
             ForegroundServicesUserState userServices = mUserServices.get(userId);
             if (userServices == null) {
@@ -102,9 +133,32 @@ public class ForegroundServiceController {
                 mUserServices.put(userId, userServices);
             }
             if (active) {
-                userServices.addOp(packageName, code);
+                userServices.addOp(packageName, appOpCode);
             } else {
-                userServices.removeOp(packageName, code);
+                userServices.removeOp(packageName, appOpCode);
+            }
+        }
+
+        // TODO: (b/145659174) remove when moving to NewNotifPipeline. Replaced by
+        //  ForegroundCoordinator
+        // Update appOp if there's an associated pending or visible notification:
+        final String foregroundKey = getStandardLayoutKey(userId, packageName);
+        if (foregroundKey != null) {
+            final NotificationEntry entry = mEntryManager.getPendingOrActiveNotif(foregroundKey);
+            if (entry != null
+                    && uid == entry.getSbn().getUid()
+                    && packageName.equals(entry.getSbn().getPackageName())) {
+                boolean changed;
+                synchronized (entry.mActiveAppOps) {
+                    if (active) {
+                        changed = entry.mActiveAppOps.add(appOpCode);
+                    } else {
+                        changed = entry.mActiveAppOps.remove(appOpCode);
+                    }
+                }
+                if (changed) {
+                    mEntryManager.updateNotifications("appOpChanged pkg=" + packageName);
+                }
             }
         }
     }

@@ -130,8 +130,6 @@ public class KeyphraseEnrollmentInfo {
                     continue;
                 }
 
-                Slog.i(TAG, ai.packageName + " added to keyphrase");
-
                 KeyphraseMetadata metadata =
                         getKeyphraseMetadataFromApplicationInfo(pm, ai, parseErrors);
                 if (metadata != null) {

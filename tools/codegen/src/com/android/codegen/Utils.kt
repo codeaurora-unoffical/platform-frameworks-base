@@ -1,9 +1,12 @@
 package com.android.codegen
 
-import com.github.javaparser.ast.Modifier
-import com.github.javaparser.ast.expr.AnnotationExpr
-import com.github.javaparser.ast.expr.Expression
-import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr
+import com.github.javaparser.JavaParser
+import com.github.javaparser.ParseProblemException
+import com.github.javaparser.ParseResult
+import com.github.javaparser.ast.Node
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration
+import com.github.javaparser.ast.body.TypeDeclaration
+import com.github.javaparser.ast.expr.*
 import com.github.javaparser.ast.nodeTypes.NodeWithModifiers
 import java.time.Instant
 import java.time.ZoneId
@@ -88,3 +91,56 @@ fun abort(msg: String): Nothing {
 }
 
 fun bitAtExpr(bitIndex: Int) = "0x${java.lang.Long.toHexString(1L shl bitIndex)}"
+
+val AnnotationExpr.args: Map<String, Expression> get() = when (this) {
+    is MarkerAnnotationExpr -> emptyMap()
+    is SingleMemberAnnotationExpr -> mapOf("value" to memberValue)
+    is NormalAnnotationExpr -> pairs.map { it.name.asString() to it.value }.toMap()
+    else -> throw IllegalArgumentException("Unknown annotation expression: $this")
+}
+
+val TypeDeclaration<*>.nestedTypes get() = childNodes.filterIsInstance<TypeDeclaration<*>>()
+val TypeDeclaration<*>.nestedDataClasses get()
+        = nestedTypes.filterIsInstance<ClassOrInterfaceDeclaration>()
+            .filter { it.annotations.any { it.nameAsString.endsWith("DataClass") } }
+val TypeDeclaration<*>.startLine get() = range.get()!!.begin.line
+
+inline fun <T> List<T>.forEachSequentialPair(action: (T, T?) -> Unit) {
+    forEachIndexed { index, t ->
+        action(t, getOrNull(index + 1))
+    }
+}
+
+fun <T: Node> parseJava(fn: JavaParser.(String) -> ParseResult<T>, source: String): T = try {
+    val parse = JAVA_PARSER.fn(source)
+    if (parse.problems.isNotEmpty()) {
+        throw parseFailed(
+                source,
+                desc = parse.problems.joinToString("\n"),
+                cause = parse.problems.mapNotNull { it.cause.orElse(null) }.firstOrNull())
+    }
+    parse.result.get()
+} catch (e: ParseProblemException) {
+    throw parseFailed(source, cause = e)
+}
+
+private fun parseFailed(source: String, cause: Throwable? = null, desc: String = ""): RuntimeException {
+    return RuntimeException("Failed to parse code:\n" +
+            source
+                    .lines()
+                    .mapIndexed { lnNum, ln -> "/*$lnNum*/$ln" }
+                    .joinToString("\n") + "\n$desc",
+            cause)
+}
+
+var <T> MutableList<T>.last
+    get() = last()
+    set(value) {
+        if (isEmpty()) {
+            add(value)
+        } else {
+            this[size - 1] = value
+        }
+    }
+
+inline fun <T> buildList(init: MutableList<T>.() -> Unit) = mutableListOf<T>().apply(init)

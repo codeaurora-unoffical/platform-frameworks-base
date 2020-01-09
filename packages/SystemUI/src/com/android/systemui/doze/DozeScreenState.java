@@ -16,6 +16,13 @@
 
 package com.android.systemui.doze;
 
+import static com.android.systemui.doze.DozeMachine.State.DOZE;
+import static com.android.systemui.doze.DozeMachine.State.DOZE_AOD;
+import static com.android.systemui.doze.DozeMachine.State.DOZE_AOD_DOCKED;
+import static com.android.systemui.doze.DozeMachine.State.DOZE_AOD_PAUSED;
+import static com.android.systemui.doze.DozeMachine.State.DOZE_AOD_PAUSING;
+import static com.android.systemui.doze.DozeMachine.State.DOZE_PULSE_DONE;
+
 import android.os.Handler;
 import android.util.Log;
 import android.view.Display;
@@ -48,21 +55,24 @@ public class DozeScreenState implements DozeMachine.Part {
     private final Handler mHandler;
     private final Runnable mApplyPendingScreenState = this::applyPendingScreenState;
     private final DozeParameters mParameters;
+    private final DozeHost mDozeHost;
 
     private int mPendingScreenState = Display.STATE_UNKNOWN;
     private SettableWakeLock mWakeLock;
 
-    public DozeScreenState(DozeMachine.Service service, Handler handler,
+    public DozeScreenState(DozeMachine.Service service, Handler handler, DozeHost host,
             DozeParameters parameters, WakeLock wakeLock) {
         mDozeService = service;
         mHandler = handler;
         mParameters = parameters;
+        mDozeHost = host;
         mWakeLock = new SettableWakeLock(wakeLock, TAG);
     }
 
     @Override
     public void transitionTo(DozeMachine.State oldState, DozeMachine.State newState) {
         int screenState = newState.screenState(mParameters);
+        mDozeHost.cancelGentleSleep();
 
         if (newState == DozeMachine.State.FINISH) {
             // Make sure not to apply the screen state after DozeService was destroyed.
@@ -79,12 +89,13 @@ public class DozeScreenState implements DozeMachine.Part {
             return;
         }
 
-        boolean messagePending = mHandler.hasCallbacks(mApplyPendingScreenState);
-        boolean pulseEnding = oldState  == DozeMachine.State.DOZE_PULSE_DONE
-                && newState == DozeMachine.State.DOZE_AOD;
-        boolean turningOn = (oldState == DozeMachine.State.DOZE_AOD_PAUSED
-                || oldState  == DozeMachine.State.DOZE) && newState == DozeMachine.State.DOZE_AOD;
-        boolean justInitialized = oldState == DozeMachine.State.INITIALIZED;
+        final boolean messagePending = mHandler.hasCallbacks(mApplyPendingScreenState);
+        final boolean pulseEnding = oldState == DOZE_PULSE_DONE && isAlwaysOnState(newState);
+        final boolean turningOn = (oldState == DOZE_AOD_PAUSED || oldState == DOZE)
+                && isAlwaysOnState(newState);
+        final boolean turningOff = (isAlwaysOnState(oldState) && newState == DOZE)
+                || (oldState == DOZE_AOD_PAUSING && newState == DOZE_AOD_PAUSED);
+        final boolean justInitialized = oldState == DozeMachine.State.INITIALIZED;
         if (messagePending || justInitialized || pulseEnding || turningOn) {
             // During initialization, we hide the navigation bar. That is however only applied after
             // a traversal; setting the screen state here is immediate however, so it can happen
@@ -93,7 +104,7 @@ public class DozeScreenState implements DozeMachine.Part {
             mPendingScreenState = screenState;
 
             // Delay screen state transitions even longer while animations are running.
-            boolean shouldDelayTransition = newState == DozeMachine.State.DOZE_AOD
+            boolean shouldDelayTransition = newState == DOZE_AOD
                     && mParameters.shouldControlScreenOff() && !turningOn;
 
             if (shouldDelayTransition) {
@@ -114,9 +125,15 @@ public class DozeScreenState implements DozeMachine.Part {
             } else if (DEBUG) {
                 Log.d(TAG, "Pending display state change to " + screenState);
             }
+        } else if (turningOff) {
+            mDozeHost.prepareForGentleSleep(() -> applyScreenState(screenState));
         } else {
             applyScreenState(screenState);
         }
+    }
+
+    private boolean isAlwaysOnState(DozeMachine.State state) {
+        return state == DOZE_AOD || state == DOZE_AOD_DOCKED;
     }
 
     private void applyPendingScreenState() {

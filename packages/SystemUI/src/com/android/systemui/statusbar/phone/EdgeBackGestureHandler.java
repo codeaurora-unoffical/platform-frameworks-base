@@ -22,7 +22,6 @@ import android.content.res.Resources;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.PointF;
-import android.graphics.Rect;
 import android.graphics.Region;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.DisplayManager.DisplayListener;
@@ -32,9 +31,7 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.util.Log;
-import android.util.MathUtils;
 import android.util.StatsLog;
-import android.view.Gravity;
 import android.view.ISystemGestureExclusionListener;
 import android.view.InputChannel;
 import android.view.InputDevice;
@@ -44,7 +41,6 @@ import android.view.InputMonitor;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
@@ -53,10 +49,11 @@ import com.android.systemui.Dependency;
 import com.android.systemui.R;
 import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.model.SysUiState;
+import com.android.systemui.plugins.NavigationEdgeBackPlugin;
+import com.android.systemui.plugins.PluginListener;
 import com.android.systemui.recents.OverviewProxyService;
-import com.android.systemui.shared.system.PinnedStackListenerForwarder.PinnedStackListener;
+import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.system.QuickStepContract;
-import com.android.systemui.shared.system.WindowManagerWrapper;
 
 import java.io.PrintWriter;
 import java.util.concurrent.Executor;
@@ -64,20 +61,12 @@ import java.util.concurrent.Executor;
 /**
  * Utility class to handle edge swipes for back gesture
  */
-public class EdgeBackGestureHandler implements DisplayListener {
+public class EdgeBackGestureHandler implements DisplayListener,
+        PluginListener<NavigationEdgeBackPlugin> {
 
     private static final String TAG = "EdgeBackGestureHandler";
     private static final int MAX_LONG_PRESS_TIMEOUT = SystemProperties.getInt(
             "gestures.back_timeout", 250);
-
-    private final PinnedStackListener mImeChangedListener = new PinnedStackListener() {
-        @Override
-        public void onImeVisibilityChanged(boolean imeVisible, int imeHeight) {
-            // No need to thread jump, assignments are atomic
-            mImeHeight = imeVisible ? imeHeight : 0;
-            // TODO: Probably cancel any existing gesture
-        }
-    };
 
     private ISystemGestureExclusionListener mGestureExclusionListener =
             new ISystemGestureExclusionListener.Stub() {
@@ -96,6 +85,7 @@ public class EdgeBackGestureHandler implements DisplayListener {
 
     private final Context mContext;
     private final OverviewProxyService mOverviewProxyService;
+    private PluginManager mPluginManager;
 
     private final Point mDisplaySize = new Point();
     private final int mDisplayId;
@@ -111,14 +101,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
     private final float mTouchSlop;
     // Duration after which we consider the event as longpress.
     private final int mLongPressTimeout;
-    // The threshold where the touch needs to be at most, such that the arrow is displayed above the
-    // finger, otherwise it will be below
-    private final int mMinArrowPosition;
-    // The amount by which the arrow is shifted to avoid the finger
-    private final int mFingerOffset;
-
-
-    private final int mNavBarHeight;
 
     private final PointF mDownPoint = new PointF();
     private boolean mThresholdCrossed = false;
@@ -126,33 +108,57 @@ public class EdgeBackGestureHandler implements DisplayListener {
     private boolean mInRejectedExclusion = false;
     private boolean mIsOnLeftEdge;
 
-    private int mImeHeight = 0;
-
     private boolean mIsAttached;
     private boolean mIsGesturalModeEnabled;
     private boolean mIsEnabled;
+    private boolean mIsNavBarShownTransiently;
 
     private InputMonitor mInputMonitor;
     private InputEventReceiver mInputEventReceiver;
 
-    private final WindowManager mWm;
-
-    private NavigationBarEdgePanel mEdgePanel;
-    private WindowManager.LayoutParams mEdgePanelLp;
-    private final Rect mSamplingRect = new Rect();
-    private RegionSamplingHelper mRegionSamplingHelper;
+    private NavigationEdgeBackPlugin mEdgeBackPlugin;
     private int mLeftInset;
     private int mRightInset;
     private int mSysUiFlags;
 
+    private final NavigationEdgeBackPlugin.BackCallback mBackCallback =
+            new NavigationEdgeBackPlugin.BackCallback() {
+                @Override
+                public void triggerBack() {
+                    sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK);
+                    sendEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK);
+
+                    mOverviewProxyService.notifyBackAction(true, (int) mDownPoint.x,
+                            (int) mDownPoint.y, false /* isButton */, !mIsOnLeftEdge);
+                    int backtype = (mInRejectedExclusion
+                            ? StatsLog.BACK_GESTURE__TYPE__COMPLETED_REJECTED :
+                            StatsLog.BACK_GESTURE__TYPE__COMPLETED);
+                    StatsLog.write(StatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
+                            (int) mDownPoint.y, mIsOnLeftEdge
+                                    ? StatsLog.BACK_GESTURE__X_LOCATION__LEFT :
+                                    StatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
+                }
+
+                @Override
+                public void cancelBack() {
+                    mOverviewProxyService.notifyBackAction(false, (int) mDownPoint.x,
+                            (int) mDownPoint.y, false /* isButton */, !mIsOnLeftEdge);
+                    int backtype = StatsLog.BACK_GESTURE__TYPE__INCOMPLETE;
+                    StatsLog.write(StatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
+                            (int) mDownPoint.y, mIsOnLeftEdge
+                                    ? StatsLog.BACK_GESTURE__X_LOCATION__LEFT :
+                                    StatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
+                }
+            };
+
     public EdgeBackGestureHandler(Context context, OverviewProxyService overviewProxyService,
-            SysUiState sysUiFlagContainer) {
+            SysUiState sysUiFlagContainer, PluginManager pluginManager) {
         final Resources res = context.getResources();
         mContext = context;
         mDisplayId = context.getDisplayId();
         mMainExecutor = context.getMainExecutor();
-        mWm = context.getSystemService(WindowManager.class);
         mOverviewProxyService = overviewProxyService;
+        mPluginManager = pluginManager;
 
         // Reduce the default touch slop to ensure that we can intercept the gesture
         // before the app starts to react to it.
@@ -161,9 +167,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mLongPressTimeout = Math.min(MAX_LONG_PRESS_TIMEOUT,
                 ViewConfiguration.getLongPressTimeout());
 
-        mNavBarHeight = res.getDimensionPixelSize(R.dimen.navigation_bar_frame_height);
-        mMinArrowPosition = res.getDimensionPixelSize(R.dimen.navigation_edge_arrow_min_y);
-        mFingerOffset = res.getDimensionPixelSize(R.dimen.navigation_edge_finger_offset);
         updateCurrentUserResources(res);
         sysUiFlagContainer.addCallback(sysUiFlags -> mSysUiFlags = sysUiFlags);
     }
@@ -195,6 +198,10 @@ public class EdgeBackGestureHandler implements DisplayListener {
         updateCurrentUserResources(currentUserContext.getResources());
     }
 
+    public void onNavBarTransientStateChanged(boolean isTransient) {
+        mIsNavBarShownTransiently = isTransient;
+    }
+
     private void disposeInputChannel() {
         if (mInputEventReceiver != null) {
             mInputEventReceiver.dispose();
@@ -214,16 +221,14 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mIsEnabled = isEnabled;
         disposeInputChannel();
 
-        if (mEdgePanel != null) {
-            mWm.removeView(mEdgePanel);
-            mEdgePanel = null;
-            mRegionSamplingHelper.stop();
-            mRegionSamplingHelper = null;
+        if (mEdgeBackPlugin != null) {
+            mEdgeBackPlugin.onDestroy();
+            mEdgeBackPlugin = null;
         }
 
         if (!mIsEnabled) {
-            WindowManagerWrapper.getInstance().removePinnedStackListener(mImeChangedListener);
             mContext.getSystemService(DisplayManager.class).unregisterDisplayListener(this);
+            mPluginManager.removePluginListener(this);
 
             try {
                 WindowManagerGlobal.getWindowManagerService()
@@ -239,7 +244,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
                     mContext.getMainThreadHandler());
 
             try {
-                WindowManagerWrapper.getInstance().addPinnedStackListener(mImeChangedListener);
                 WindowManagerGlobal.getWindowManagerService()
                         .registerSystemGestureExclusionListener(
                                 mGestureExclusionListener, mDisplayId);
@@ -254,39 +258,50 @@ public class EdgeBackGestureHandler implements DisplayListener {
                     mInputMonitor.getInputChannel(), Looper.getMainLooper());
 
             // Add a nav bar panel window
-            mEdgePanel = new NavigationBarEdgePanel(mContext);
-            mEdgePanelLp = new WindowManager.LayoutParams(
-                    mContext.getResources()
-                            .getDimensionPixelSize(R.dimen.navigation_edge_panel_width),
-                    mContext.getResources()
-                            .getDimensionPixelSize(R.dimen.navigation_edge_panel_height),
-                    WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                            | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT);
-            mEdgePanelLp.privateFlags |=
-                    WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
-            mEdgePanelLp.setTitle(TAG + mDisplayId);
-            mEdgePanelLp.accessibilityTitle = mContext.getString(R.string.nav_bar_edge_panel);
-            mEdgePanelLp.windowAnimations = 0;
-            mEdgePanel.setLayoutParams(mEdgePanelLp);
-            mWm.addView(mEdgePanel, mEdgePanelLp);
-            mRegionSamplingHelper = new RegionSamplingHelper(mEdgePanel,
-                    new RegionSamplingHelper.SamplingCallback() {
-                        @Override
-                        public void onRegionDarknessChanged(boolean isRegionDark) {
-                            mEdgePanel.setIsDark(!isRegionDark, true /* animate */);
-                        }
-
-                        @Override
-                        public Rect getSampledRegion(View sampledView) {
-                            return mSamplingRect;
-                        }
-                    });
-            mRegionSamplingHelper.setWindowVisible(true);
+            setEdgeBackPlugin(new NavigationBarEdgePanel(mContext));
+            mPluginManager.addPluginListener(
+                    this, NavigationEdgeBackPlugin.class, /*allowMultiple=*/ false);
         }
+    }
+
+    @Override
+    public void onPluginConnected(NavigationEdgeBackPlugin plugin, Context context) {
+        setEdgeBackPlugin(plugin);
+    }
+
+    @Override
+    public void onPluginDisconnected(NavigationEdgeBackPlugin plugin) {
+        setEdgeBackPlugin(new NavigationBarEdgePanel(mContext));
+    }
+
+    private void setEdgeBackPlugin(NavigationEdgeBackPlugin edgeBackPlugin) {
+        if (mEdgeBackPlugin != null) {
+            mEdgeBackPlugin.onDestroy();
+        }
+        mEdgeBackPlugin = edgeBackPlugin;
+        mEdgeBackPlugin.setBackCallback(mBackCallback);
+        mEdgeBackPlugin.setLayoutParams(createLayoutParams());
+        updateDisplaySize();
+    }
+
+    private WindowManager.LayoutParams createLayoutParams() {
+        Resources resources = mContext.getResources();
+        WindowManager.LayoutParams layoutParams = new WindowManager.LayoutParams(
+                resources.getDimensionPixelSize(R.dimen.navigation_edge_panel_width),
+                resources.getDimensionPixelSize(R.dimen.navigation_edge_panel_height),
+                WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT);
+        layoutParams.privateFlags |=
+                WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
+        layoutParams.setTitle(TAG + mContext.getDisplayId());
+        layoutParams.accessibilityTitle = mContext.getString(R.string.nav_bar_edge_panel);
+        layoutParams.windowAnimations = 0;
+        layoutParams.setFitWindowInsetsTypes(0 /* types */);
+        return layoutParams;
     }
 
     private void onInputEvent(InputEvent ev) {
@@ -296,13 +311,16 @@ public class EdgeBackGestureHandler implements DisplayListener {
     }
 
     private boolean isWithinTouchRegion(int x, int y) {
-        if (y > (mDisplaySize.y - Math.max(mImeHeight, mNavBarHeight))) {
-            return false;
-        }
-
+        // Disallow if too far from the edge
         if (x > mEdgeWidth + mLeftInset && x < (mDisplaySize.x - mEdgeWidth - mRightInset)) {
             return false;
         }
+
+        // Always allow if the user is in a transient sticky immersive state
+        if (mIsNavBarShownTransiently) {
+            return true;
+        }
+
         boolean isInExcludedRegion = mExcludeRegion.contains(x, y);
         if (isInExcludedRegion) {
             mOverviewProxyService.notifyBackAction(false /* completed */, -1, -1,
@@ -323,7 +341,7 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mInRejectedExclusion = false;
         MotionEvent cancelEv = MotionEvent.obtain(ev);
         cancelEv.setAction(MotionEvent.ACTION_CANCEL);
-        mEdgePanel.handleTouch(cancelEv);
+        mEdgeBackPlugin.onMotionEvent(cancelEv);
         cancelEv.recycle();
     }
 
@@ -337,14 +355,8 @@ public class EdgeBackGestureHandler implements DisplayListener {
             mAllowGesture = !QuickStepContract.isBackGestureDisabled(mSysUiFlags)
                     && isWithinTouchRegion((int) ev.getX(), (int) ev.getY());
             if (mAllowGesture) {
-                mEdgePanelLp.gravity = mIsOnLeftEdge
-                        ? (Gravity.LEFT | Gravity.TOP)
-                        : (Gravity.RIGHT | Gravity.TOP);
-                mEdgePanel.setIsLeftPanel(mIsOnLeftEdge);
-                mEdgePanel.handleTouch(ev);
-                updateEdgePanelPosition(ev.getY());
-                mWm.updateViewLayout(mEdgePanel, mEdgePanelLp);
-                mRegionSamplingHelper.start(mSamplingRect);
+                mEdgeBackPlugin.setIsLeftPanel(mIsOnLeftEdge);
+                mEdgeBackPlugin.onMotionEvent(ev);
 
                 mDownPoint.set(ev.getX(), ev.getY());
                 mThresholdCrossed = false;
@@ -376,51 +388,8 @@ public class EdgeBackGestureHandler implements DisplayListener {
             }
 
             // forward touch
-            mEdgePanel.handleTouch(ev);
-
-            boolean isUp = action == MotionEvent.ACTION_UP;
-            if (isUp) {
-                boolean performAction = mEdgePanel.shouldTriggerBack();
-                if (performAction) {
-                    // Perform back
-                    sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK);
-                    sendEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK);
-                }
-                mOverviewProxyService.notifyBackAction(performAction, (int) mDownPoint.x,
-                        (int) mDownPoint.y, false /* isButton */, !mIsOnLeftEdge);
-                int backtype = performAction ? (mInRejectedExclusion
-                        ? StatsLog.BACK_GESTURE__TYPE__COMPLETED_REJECTED :
-                                StatsLog.BACK_GESTURE__TYPE__COMPLETED) :
-                                        StatsLog.BACK_GESTURE__TYPE__INCOMPLETE;
-                StatsLog.write(StatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
-                        (int) mDownPoint.y, mIsOnLeftEdge
-                                ? StatsLog.BACK_GESTURE__X_LOCATION__LEFT :
-                                StatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
-            }
-            if (isUp || action == MotionEvent.ACTION_CANCEL) {
-                mRegionSamplingHelper.stop();
-            } else {
-                updateSamplingRect();
-                mRegionSamplingHelper.updateSamplingRect();
-            }
+            mEdgeBackPlugin.onMotionEvent(ev);
         }
-    }
-
-    private void updateEdgePanelPosition(float touchY) {
-        float position = touchY - mFingerOffset;
-        position = Math.max(position, mMinArrowPosition);
-        position = (position - mEdgePanelLp.height / 2.0f);
-        mEdgePanelLp.y = MathUtils.constrain((int) position, 0, mDisplaySize.y);
-        updateSamplingRect();
-    }
-
-    private void updateSamplingRect() {
-        int top = mEdgePanelLp.y;
-        int left = mIsOnLeftEdge ? mLeftInset : mDisplaySize.x - mRightInset - mEdgePanelLp.width;
-        int right = left + mEdgePanelLp.width;
-        int bottom = top + mEdgePanelLp.height;
-        mSamplingRect.set(left, top, right, bottom);
-        mEdgePanel.adjustRectToBoundingBox(mSamplingRect);
     }
 
     @Override
@@ -440,6 +409,9 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mContext.getSystemService(DisplayManager.class)
                 .getDisplay(mDisplayId)
                 .getRealSize(mDisplaySize);
+        if (mEdgeBackPlugin != null) {
+            mEdgeBackPlugin.setDisplaySize(mDisplaySize);
+        }
     }
 
     private void sendEvent(int action, int code) {
@@ -461,6 +433,9 @@ public class EdgeBackGestureHandler implements DisplayListener {
     public void setInsets(int leftInset, int rightInset) {
         mLeftInset = leftInset;
         mRightInset = rightInset;
+        if (mEdgeBackPlugin != null) {
+            mEdgeBackPlugin.setInsets(leftInset, rightInset);
+        }
     }
 
     public void dump(PrintWriter pw) {
@@ -470,7 +445,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
         pw.println("  mInRejectedExclusion" + mInRejectedExclusion);
         pw.println("  mExcludeRegion=" + mExcludeRegion);
         pw.println("  mUnrestrictedExcludeRegion=" + mUnrestrictedExcludeRegion);
-        pw.println("  mImeHeight=" + mImeHeight);
         pw.println("  mIsAttached=" + mIsAttached);
         pw.println("  mEdgeWidth=" + mEdgeWidth);
     }

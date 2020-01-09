@@ -146,8 +146,7 @@ public class BarController {
 
     int applyTranslucentFlagLw(WindowState win, int vis, int oldVis) {
         if (mWin != null) {
-            if (win != null && (win.getAttrs().privateFlags
-                    & WindowManager.LayoutParams.PRIVATE_FLAG_INHERIT_TRANSLUCENT_DECOR) == 0) {
+            if (win != null) {
                 int fl = PolicyControl.getWindowFlags(win, null);
                 if ((fl & mTranslucentWmFlag) != 0) {
                     vis |= mTranslucentFlag;
@@ -340,7 +339,7 @@ public class BarController {
         throw new IllegalArgumentException("Unknown state " + state);
     }
 
-    void writeToProto(ProtoOutputStream proto, long fieldId) {
+    void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long token = proto.start(fieldId);
         proto.write(STATE, mState);
         proto.write(TRANSIENT_STATE, mTransientBarState);
