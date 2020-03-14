@@ -16,9 +16,9 @@
 
 package com.android.server.wm;
 
-import static android.view.InsetsState.TYPE_IME;
-import static android.view.InsetsState.TYPE_NAVIGATION_BAR;
-import static android.view.InsetsState.TYPE_TOP_BAR;
+import static android.view.InsetsState.ITYPE_IME;
+import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
+import static android.view.InsetsState.ITYPE_STATUS_BAR;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_FULL;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_IME;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_NONE;
@@ -47,9 +47,11 @@ import java.io.PrintWriter;
  */
 class InsetsSourceProvider {
 
+    protected final DisplayContent mDisplayContent;
+    protected final @NonNull InsetsSource mSource;
+    protected WindowState mWin;
+
     private final Rect mTmpRect = new Rect();
-    private final @NonNull InsetsSource mSource;
-    private final DisplayContent mDisplayContent;
     private final InsetsStateController mStateController;
     private final InsetsSourceControl mFakeControl;
     private @Nullable InsetsSourceControl mControl;
@@ -57,7 +59,6 @@ class InsetsSourceProvider {
     private @Nullable InsetsControlTarget mFakeControlTarget;
 
     private @Nullable ControlAdapter mAdapter;
-    private WindowState mWin;
     private TriConsumer<DisplayFrames, WindowState, Rect> mFrameProvider;
 
     /** The visibility override from the current controlling window. */
@@ -80,9 +81,9 @@ class InsetsSourceProvider {
                 new Point());
 
         final int type = source.getType();
-        if (type == TYPE_TOP_BAR || type == TYPE_NAVIGATION_BAR) {
+        if (type == ITYPE_STATUS_BAR || type == ITYPE_NAVIGATION_BAR) {
             mControllable = sNewInsetsMode == NEW_INSETS_MODE_FULL;
-        } else if (type == TYPE_IME) {
+        } else if (type == ITYPE_IME) {
             mControllable = sNewInsetsMode >= NEW_INSETS_MODE_IME;
         } else {
             mControllable = false;
@@ -110,7 +111,9 @@ class InsetsSourceProvider {
     void setWindow(@Nullable WindowState win,
             @Nullable TriConsumer<DisplayFrames, WindowState, Rect> frameProvider) {
         if (mWin != null) {
-            mWin.setInsetProvider(null);
+            if (mControllable) {
+                mWin.setControllableInsetProvider(null);
+            }
             // The window may be animating such that we can hand out the leash to the control
             // target. Revoke the leash by cancelling the animation to correct the state.
             // TODO: Ideally, we should wait for the animation to finish so previous window can
@@ -122,8 +125,8 @@ class InsetsSourceProvider {
         if (win == null) {
             setServerVisible(false);
             mSource.setFrame(new Rect());
-        } else {
-            mWin.setInsetProvider(this);
+        } else if (mControllable) {
+            mWin.setControllableInsetProvider(this);
             if (mControlTarget != null) {
                 updateControlForTarget(mControlTarget, true /* force */);
             }
@@ -131,9 +134,17 @@ class InsetsSourceProvider {
     }
 
     /**
-     * Called when a layout pass has occurred.
+     * @return Whether there is a window which backs this source.
      */
-    void onPostLayout() {
+    boolean hasWindow() {
+        return mWin != null;
+    }
+
+    /**
+     * The source frame can affect the layout of other windows, so this should be called once the
+     * window gets laid out.
+     */
+    void updateSourceFrame() {
         if (mWin == null) {
             return;
         }
@@ -145,6 +156,17 @@ class InsetsSourceProvider {
             mTmpRect.inset(mWin.mGivenContentInsets);
         }
         mSource.setFrame(mTmpRect);
+    }
+
+    /**
+     * Called when a layout pass has occurred.
+     */
+    void onPostLayout() {
+        if (mWin == null) {
+            return;
+        }
+
+        updateSourceFrame();
         if (mControl != null) {
             final Rect frame = mWin.getWindowFrames().mFrame;
             if (mControl.setSurfacePosition(frame.left, frame.top)) {
@@ -224,6 +246,10 @@ class InsetsSourceProvider {
         return null;
     }
 
+    InsetsControlTarget getControlTarget() {
+        return mControlTarget;
+    }
+
     boolean isClientVisible() {
         return sNewInsetsMode == NEW_INSETS_MODE_NONE || mClientVisible;
     }
@@ -238,13 +264,16 @@ class InsetsSourceProvider {
         }
 
         @Override
-        public int getBackgroundColor() {
-            return 0;
-        }
-
-        @Override
         public void startAnimation(SurfaceControl animationLeash, Transaction t,
                 OnAnimationFinishedCallback finishCallback) {
+            // TODO(b/118118435): We can remove the type check when implementing the transient bar
+            //                    animation.
+            if (mSource.getType() == ITYPE_IME) {
+                // TODO: use 0 alpha and remove t.hide() once b/138459974 is fixed.
+                t.setAlpha(animationLeash, 1 /* alpha */);
+                t.hide(animationLeash);
+            }
+
             mCapturedLeash = animationLeash;
             final Rect frame = mWin.getWindowFrames().mFrame;
             t.setPosition(mCapturedLeash, frame.left, frame.top);
@@ -276,7 +305,7 @@ class InsetsSourceProvider {
         }
 
         @Override
-        public void writeToProto(ProtoOutputStream proto) {
+        public void dumpDebug(ProtoOutputStream proto) {
         }
     }
 }

@@ -52,6 +52,7 @@ import com.android.systemui.SysuiTestCase;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.ActivityStarter.OnDismissAction;
 import com.android.systemui.statusbar.NotificationEntryBuilder;
+import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.SmartReplyController;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.phone.KeyguardDismissUtil;
@@ -115,6 +116,7 @@ public class SmartReplyViewTest extends SysuiTestCase {
         });
         mDependency.injectMockDependency(KeyguardUpdateMonitor.class);
         mDependency.injectMockDependency(ShadeController.class);
+        mDependency.injectMockDependency(NotificationRemoteInputManager.class);
         mDependency.injectTestDependency(ActivityStarter.class, mActivityStarter);
         mDependency.injectTestDependency(SmartReplyConstants.class, mConstants);
 
@@ -500,6 +502,7 @@ public class SmartReplyViewTest extends SysuiTestCase {
     private void setSmartActions(String[] actionTitles, boolean useDelayedOnClickListener) {
         mView.resetSmartSuggestions(mContainer);
         List<Button> actions = mView.inflateSmartActions(
+                getContext(),
                 new SmartReplyView.SmartActions(createActions(actionTitles), false),
                 mLogger,
                 mEntry,
@@ -520,6 +523,7 @@ public class SmartReplyViewTest extends SysuiTestCase {
         List<Button> smartSuggestions = inflateSmartReplies(choices, fromAssistant,
                 useDelayedOnClickListener);
         smartSuggestions.addAll(mView.inflateSmartActions(
+                getContext(),
                 new SmartReplyView.SmartActions(createActions(actionTitles), fromAssistant),
                 mLogger,
                 mEntry,
@@ -866,7 +870,7 @@ public class SmartReplyViewTest extends SysuiTestCase {
     }
 
     private Button inflateActionButton(Notification.Action action) {
-        return SmartReplyView.inflateActionButton(mView, getContext(), 0,
+        return SmartReplyView.inflateActionButton(mView, getContext(), getContext(), 0,
                 new SmartReplyView.SmartActions(Collections.singletonList(action), false),
                 mLogger, mEntry, mHeadsUpManager, true /* useDelayedOnClickListener */);
     }

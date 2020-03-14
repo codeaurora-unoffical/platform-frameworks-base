@@ -230,7 +230,7 @@ public class NotificationContentInflater {
         }
         // Only inflate the ones that are set.
         reInflateFlags &= mInflationFlags;
-        StatusBarNotification sbn = mRow.getEntry().notification;
+        StatusBarNotification sbn = mRow.getEntry().getSbn();
 
         // To check if the notification has inline image and preload inline image if necessary.
         mRow.getImageResolver().preloadImages(sbn.getNotification());
@@ -264,7 +264,7 @@ public class NotificationContentInflater {
                 mIsChildInGroup, mUsesIncreasedHeight, mUsesIncreasedHeadsUpHeight,
                 packageContext);
         result = inflateSmartReplyViews(result, reInflateFlags, mRow.getEntry(),
-                mRow.getContext(), mRow.getHeadsUpManager(),
+                mRow.getContext(), packageContext, mRow.getHeadsUpManager(),
                 mRow.getExistingSmartRepliesAndActions());
         apply(
                 inflateSynchronously,
@@ -311,20 +311,21 @@ public class NotificationContentInflater {
 
     private static InflationProgress inflateSmartReplyViews(InflationProgress result,
             @InflationFlag int reInflateFlags, NotificationEntry entry, Context context,
-            HeadsUpManager headsUpManager, SmartRepliesAndActions previousSmartRepliesAndActions) {
+            Context packageContext, HeadsUpManager headsUpManager,
+            SmartRepliesAndActions previousSmartRepliesAndActions) {
         SmartReplyConstants smartReplyConstants = Dependency.get(SmartReplyConstants.class);
         SmartReplyController smartReplyController = Dependency.get(SmartReplyController.class);
         if ((reInflateFlags & FLAG_CONTENT_VIEW_EXPANDED) != 0 && result.newExpandedView != null) {
             result.expandedInflatedSmartReplies =
                     InflatedSmartReplies.inflate(
-                            context, entry, smartReplyConstants, smartReplyController,
-                            headsUpManager, previousSmartRepliesAndActions);
+                            context, packageContext, entry, smartReplyConstants,
+                            smartReplyController, headsUpManager, previousSmartRepliesAndActions);
         }
         if ((reInflateFlags & FLAG_CONTENT_VIEW_HEADS_UP) != 0 && result.newHeadsUpView != null) {
             result.headsUpInflatedSmartReplies =
                     InflatedSmartReplies.inflate(
-                            context, entry, smartReplyConstants, smartReplyController,
-                            headsUpManager, previousSmartRepliesAndActions);
+                            context, packageContext, entry, smartReplyConstants,
+                            smartReplyController, headsUpManager, previousSmartRepliesAndActions);
         }
         return result;
     }
@@ -511,7 +512,7 @@ public class NotificationContentInflater {
                     existingWrapper.onReinflated();
                 }
             } catch (Exception e) {
-                handleInflationError(runningInflations, e, row.getStatusBarNotification(), callback);
+                handleInflationError(runningInflations, e, row.getEntry().getSbn(), callback);
                 // Add a running inflation to make sure we don't trigger callbacks.
                 // Safe to do because only happens in tests.
                 runningInflations.put(inflationId, new CancellationSignal());
@@ -562,7 +563,7 @@ public class NotificationContentInflater {
                     onViewApplied(newView);
                 } catch (Exception anotherException) {
                     runningInflations.remove(inflationId);
-                    handleInflationError(runningInflations, e, row.getStatusBarNotification(),
+                    handleInflationError(runningInflations, e, row.getEntry().getSbn(),
                             callback);
                 }
             }
@@ -817,7 +818,7 @@ public class NotificationContentInflater {
                         recoveredBuilder, mIsLowPriority, mIsChildInGroup, mUsesIncreasedHeight,
                         mUsesIncreasedHeadsUpHeight, packageContext);
                 return inflateSmartReplyViews(inflationProgress, mReInflateFlags, mRow.getEntry(),
-                        mRow.getContext(), mRow.getHeadsUpManager(),
+                        mRow.getContext(), packageContext, mRow.getHeadsUpManager(),
                         mRow.getExistingSmartRepliesAndActions());
             } catch (Exception e) {
                 mError = e;
@@ -837,7 +838,7 @@ public class NotificationContentInflater {
 
         private void handleError(Exception e) {
             mRow.getEntry().onInflationTaskFinished();
-            StatusBarNotification sbn = mRow.getStatusBarNotification();
+            StatusBarNotification sbn = mRow.getEntry().getSbn();
             final String ident = sbn.getPackageName() + "/0x"
                     + Integer.toHexString(sbn.getId());
             Log.e(StatusBar.TAG, "couldn't inflate view for notification " + ident, e);

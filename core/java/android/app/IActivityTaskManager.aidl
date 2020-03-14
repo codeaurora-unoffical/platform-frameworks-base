@@ -70,6 +70,7 @@ import android.service.voice.IVoiceInteractionSession;
 import android.view.IRecentsAnimationRunner;
 import android.view.RemoteAnimationDefinition;
 import android.view.RemoteAnimationAdapter;
+import android.view.WindowContainerTransaction;
 import com.android.internal.app.IVoiceInteractor;
 import com.android.internal.os.IResultReceiver;
 import com.android.internal.policy.IKeyguardDismissCallback;
@@ -163,7 +164,7 @@ interface IActivityTaskManager {
     boolean convertToTranslucent(in IBinder token, in Bundle options);
     void notifyActivityDrawn(in IBinder token);
     void reportActivityFullyDrawn(in IBinder token, boolean restoredFromBundle);
-    int getActivityDisplayId(in IBinder activityToken);
+    int getDisplayId(in IBinder activityToken);
     boolean isImmersive(in IBinder token);
     void setImmersive(in IBinder token, boolean immersive);
     boolean isTopActivityImmersive();
@@ -215,12 +216,12 @@ interface IActivityTaskManager {
 
     void releaseSomeActivities(in IApplicationThread app);
     Bitmap getTaskDescriptionIcon(in String filename, int userId);
-    void startInPlaceAnimationOnFrontMostApplication(in Bundle opts);
     void registerTaskStackListener(in ITaskStackListener listener);
     void unregisterTaskStackListener(in ITaskStackListener listener);
     void setTaskResizeable(int taskId, int resizeableMode);
     void toggleFreeformWindowingMode(in IBinder token);
     void resizeTask(int taskId, in Rect bounds, int resizeMode);
+    void applyContainerTransaction(in WindowContainerTransaction t);
     void moveStackToDisplay(int stackId, int displayId);
     void removeStack(int stackId);
 
@@ -269,6 +270,9 @@ interface IActivityTaskManager {
 
     List<ActivityManager.StackInfo> getAllStackInfos();
     ActivityManager.StackInfo getStackInfo(int windowingMode, int activityType);
+    List<ActivityManager.StackInfo> getAllStackInfosOnDisplay(int displayId);
+    ActivityManager.StackInfo getStackInfoOnDisplay(int windowingMode, int activityType,
+            int displayId);
 
     /**
      * Informs ActivityTaskManagerService that the keyguard is showing.
@@ -399,6 +403,14 @@ interface IActivityTaskManager {
      * See {@link android.app.Activity#setDisablePreviewScreenshots}
      */
     void setDisablePreviewScreenshots(IBinder token, boolean disable);
+
+    /**
+     * It should only be called from home activity to remove its outdated snapshot. The home
+     * snapshot is used to speed up entering home from screen off. If the content of home activity
+     * is significantly different from before taking the snapshot, then the home activity can use
+     * this method to avoid inconsistent transition.
+     */
+    void invalidateHomeTaskSnapshot(IBinder homeToken);
 
     /**
      * Return the user id of last resumed activity.

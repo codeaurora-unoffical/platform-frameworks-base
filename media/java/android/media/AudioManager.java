@@ -1,4 +1,5 @@
 /*
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -77,6 +78,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -908,6 +910,7 @@ public class AudioManager {
 
     /** @hide */
     @UnsupportedAppUsage
+    @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
     public void setMasterMute(boolean mute, int flags) {
         final IAudioService service = getService();
         try {
@@ -1534,6 +1537,76 @@ public class AudioManager {
     }
 
     //====================================================================
+    // Audio Product Strategy routing
+
+    /**
+     * @hide
+     * Set the preferred device for a given strategy, i.e. the audio routing to be used by
+     * this audio strategy. Note that the device may not be available at the time the preferred
+     * device is set, but it will be used once made available.
+     * <p>Use {@link #removePreferredDeviceForStrategy(AudioProductStrategy)} to cancel setting
+     * this preference for this strategy.</p>
+     * @param strategy the audio strategy whose routing will be affected
+     * @param device the audio device to route to when available
+     * @return true if the operation was successful, false otherwise
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
+    public boolean setPreferredDeviceForStrategy(@NonNull AudioProductStrategy strategy,
+            @NonNull AudioDeviceAddress device) {
+        Objects.requireNonNull(strategy);
+        Objects.requireNonNull(device);
+        try {
+            final int status =
+                    getService().setPreferredDeviceForStrategy(strategy.getId(), device);
+            return status == AudioSystem.SUCCESS;
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * @hide
+     * Removes the preferred audio device previously set with
+     * {@link #setPreferredDeviceForStrategy(AudioProductStrategy, AudioDeviceAddress)}.
+     * @param strategy the audio strategy whose routing will be affected
+     * @return true if the operation was successful, false otherwise (invalid strategy, or no
+     *     device set for example)
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
+    public boolean removePreferredDeviceForStrategy(@NonNull AudioProductStrategy strategy) {
+        Objects.requireNonNull(strategy);
+        try {
+            final int status =
+                    getService().removePreferredDeviceForStrategy(strategy.getId());
+            return status == AudioSystem.SUCCESS;
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * @hide
+     * Return the preferred device for an audio strategy, previously set with
+     * {@link #setPreferredDeviceForStrategy(AudioProductStrategy, AudioDeviceAddress)}
+     * @param strategy the strategy to query
+     * @return the preferred device for that strategy, or null if none was ever set or if the
+     *    strategy is invalid
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
+    public @Nullable AudioDeviceAddress getPreferredDeviceForStrategy(
+            @NonNull AudioProductStrategy strategy) {
+        Objects.requireNonNull(strategy);
+        try {
+            return getService().getPreferredDeviceForStrategy(strategy.getId());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    //====================================================================
     // Offload query
     /**
      * Returns whether offloaded playback of an audio format is supported on the device.
@@ -1857,12 +1930,37 @@ public class AudioManager {
     }
 
     /**
+     * @hide
+     * Sets the microphone from switch mute on or off.
+     * <p>
+     * This method should only be used by InputManager to notify
+     * Audio Subsystem about Microphone Mute switch state.
+     *
+     * @param on set <var>true</var> to mute the microphone;
+     *           <var>false</var> to turn mute off
+     */
+    @UnsupportedAppUsage
+    public void setMicrophoneMuteFromSwitch(boolean on) {
+        final IAudioService service = getService();
+        try {
+            service.setMicrophoneMuteFromSwitch(on);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Checks whether the microphone mute is on or off.
      *
      * @return true if microphone is muted, false if it's not
      */
     public boolean isMicrophoneMute() {
-        return AudioSystem.isMicrophoneMuted();
+        final IAudioService service = getService();
+        try {
+            return service.isMicrophoneMuted();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     /**
@@ -1905,12 +2003,11 @@ public class AudioManager {
      * application when it places a phone call, as it will cause signals from the radio layer
      * to feed the platform mixer.
      *
-     * @param mode  the requested audio mode ({@link #MODE_NORMAL}, {@link #MODE_RINGTONE},
-     *              {@link #MODE_IN_CALL} or {@link #MODE_IN_COMMUNICATION}).
+     * @param mode  the requested audio mode.
      *              Informs the HAL about the current audio state so that
      *              it can route the audio appropriately.
      */
-    public void setMode(int mode) {
+    public void setMode(@AudioMode int mode) {
         final IAudioService service = getService();
         try {
             service.setMode(mode, mICallBack, mApplicationContext.getOpPackageName());
@@ -1922,14 +2019,47 @@ public class AudioManager {
     /**
      * Returns the current audio mode.
      *
-     * @return      the current audio mode ({@link #MODE_NORMAL}, {@link #MODE_RINGTONE},
-     *              {@link #MODE_IN_CALL} or {@link #MODE_IN_COMMUNICATION}).
-     *              Returns the current current audio state from the HAL.
+     * @return      the current audio mode.
      */
+    @AudioMode
     public int getMode() {
         final IAudioService service = getService();
         try {
-            return service.getMode();
+            int mode = service.getMode();
+            int sdk;
+            try {
+                sdk = getContext().getApplicationInfo().targetSdkVersion;
+            } catch (NullPointerException e) {
+                // some tests don't have a Context
+                sdk = Build.VERSION.SDK_INT;
+            }
+            if (mode == MODE_CALL_SCREENING && sdk <= Build.VERSION_CODES.Q) {
+                mode = MODE_IN_CALL;
+            }
+            return mode;
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+    * Indicates if the platform supports a special call screening and call monitoring mode.
+    * <p>
+    * When this mode is supported, it is possible to perform call screening and monitoring
+    * functions while other use cases like music or movie playback are active.
+    * <p>
+    * Use {@link #setMode(int)} with mode {@link #MODE_CALL_SCREENING} to place the platform in
+    * call screening mode.
+    * <p>
+    * If call screening mode is not supported, setting mode to
+    * MODE_CALL_SCREENING will be ignored and will not change current mode reported by
+    *  {@link #getMode()}.
+    * @return true if call screening mode is supported, false otherwise.
+    */
+    public boolean isCallScreeningModeSupported() {
+        final IAudioService service = getService();
+        try {
+            return service.isCallScreeningModeSupported();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1963,6 +2093,22 @@ public class AudioManager {
      * In communication audio mode. An audio/video chat or VoIP call is established.
      */
     public static final int MODE_IN_COMMUNICATION   = AudioSystem.MODE_IN_COMMUNICATION;
+    /**
+     * Call screening in progress. Call is connected and audio is accessible to call
+     * screening applications but other audio use cases are still possible.
+     */
+    public static final int MODE_CALL_SCREENING     = AudioSystem.MODE_CALL_SCREENING;
+
+    /** @hide */
+    @IntDef(flag = false, prefix = "MODE_", value = {
+            MODE_NORMAL,
+            MODE_RINGTONE,
+            MODE_IN_CALL,
+            MODE_IN_COMMUNICATION,
+            MODE_CALL_SCREENING }
+    )
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface AudioMode {}
 
     /* Routing bits for setRouting/getRouting API */
     /**
@@ -4887,6 +5033,14 @@ public class AudioManager {
      */
     public static final int GET_DEVICES_OUTPUTS   = 0x0002;
 
+    /** @hide */
+    @IntDef(flag = true, prefix = "GET_DEVICES", value = {
+            GET_DEVICES_INPUTS,
+            GET_DEVICES_OUTPUTS }
+    )
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface AudioDeviceRole {}
+
     /**
      * Specifies to the {@link AudioManager#getDevices(int)} method to include both
      * source and sink devices.
@@ -4919,7 +5073,7 @@ public class AudioManager {
      * @see #GET_DEVICES_ALL
      * @return A (possibly zero-length) array of AudioDeviceInfo objects.
      */
-    public AudioDeviceInfo[] getDevices(int flags) {
+    public AudioDeviceInfo[] getDevices(@AudioDeviceRole int flags) {
         return getDevicesStatic(flags);
     }
 

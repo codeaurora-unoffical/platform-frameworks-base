@@ -138,6 +138,14 @@ static struct {
     jmethodID builder;
 } gScreenshotGraphicBufferClassInfo;
 
+static struct {
+    jclass clazz;
+    jmethodID ctor;
+    jfieldID defaultModeId;
+    jfieldID minRefreshRate;
+    jfieldID maxRefreshRate;
+} gDesiredDisplayConfigSpecsClassInfo;
+
 class JNamedColorSpace {
 public:
     // ColorSpace.Named.SRGB.ordinal() = 0;
@@ -274,7 +282,7 @@ static jobject nativeScreenshot(JNIEnv* env, jclass clazz,
 
 static jobject nativeCaptureLayers(JNIEnv* env, jclass clazz, jobject displayTokenObj,
         jlong layerObject, jobject sourceCropObj, jfloat frameScale,
-        jlongArray excludeObjectArray) {
+        jlongArray excludeObjectArray, jint format) {
 
     auto layer = reinterpret_cast<SurfaceControl *>(layerObject);
     if (layer == NULL) {
@@ -311,8 +319,9 @@ static jobject nativeCaptureLayers(JNIEnv* env, jclass clazz, jobject displayTok
         dataspace = pickDataspaceFromColorMode(colorMode);
     }
     status_t res = ScreenshotClient::captureChildLayers(layer->getHandle(), dataspace,
-                                                        ui::PixelFormat::RGBA_8888, sourceCrop,
-                                                        excludeHandles, frameScale, &buffer);
+                                                        static_cast<ui::PixelFormat>(format),
+                                                        sourceCrop, excludeHandles, frameScale,
+                                                        &buffer);
     if (res != NO_ERROR) {
         return NULL;
     }
@@ -458,15 +467,6 @@ static void nativeSetInputWindowInfo(JNIEnv* env, jclass clazz, jlong transactio
     transaction->setInputWindowInfo(ctrl, *handle->getInfo());
 }
 
-static void nativeTransferTouchFocus(JNIEnv* env, jclass clazz, jlong transactionObj,
-        jobject fromTokenObj, jobject toTokenObj) {
-    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
-
-    sp<IBinder> fromToken(ibinderForJavaObject(env, fromTokenObj));
-    sp<IBinder> toToken(ibinderForJavaObject(env, toTokenObj));
-    transaction->transferTouchFocus(fromToken, toToken);
-}
-
 static void nativeSyncInputWindows(JNIEnv* env, jclass clazz, jlong transactionObj) {
     auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
     transaction->syncInputWindows();
@@ -499,6 +499,7 @@ static void nativeSetColor(JNIEnv* env, jclass clazz, jlong transactionObj,
     float* floatColors = env->GetFloatArrayElements(fColor, 0);
     half3 color(floatColors[0], floatColors[1], floatColors[2]);
     transaction->setColor(ctrl, color);
+    env->ReleaseFloatArrayElements(fColor, floatColors, 0);
 }
 
 static void nativeSetMatrix(JNIEnv* env, jclass clazz, jlong transactionObj,
@@ -516,8 +517,12 @@ static void nativeSetColorTransform(JNIEnv* env, jclass clazz, jlong transaction
     SurfaceControl* const surfaceControl = reinterpret_cast<SurfaceControl*>(nativeObject);
     float* floatMatrix = env->GetFloatArrayElements(fMatrix, 0);
     mat3 matrix(static_cast<float const*>(floatMatrix));
+    env->ReleaseFloatArrayElements(fMatrix, floatMatrix, 0);
+
     float* floatTranslation = env->GetFloatArrayElements(fTranslation, 0);
     vec3 translation(floatTranslation[0], floatTranslation[1], floatTranslation[2]);
+    env->ReleaseFloatArrayElements(fTranslation, floatTranslation, 0);
+
     transaction->setColorTransform(surfaceControl, matrix, translation);
 }
 
@@ -552,6 +557,14 @@ static void nativeSetLayerStack(JNIEnv* env, jclass clazz, jlong transactionObj,
 
     SurfaceControl* const ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
     transaction->setLayerStack(ctrl, layerStack);
+}
+
+static void nativeSetShadowRadius(JNIEnv* env, jclass clazz, jlong transactionObj,
+         jlong nativeObject, jfloat shadowRadius) {
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+
+    const auto ctrl = reinterpret_cast<SurfaceControl *>(nativeObject);
+    transaction->setShadowRadius(ctrl, shadowRadius);
 }
 
 static jlongArray nativeGetPhysicalDisplayIds(JNIEnv* env, jclass clazz) {
@@ -803,6 +816,23 @@ static jintArray nativeGetAllowedDisplayConfigs(JNIEnv* env, jclass clazz, jobje
     }
     env->ReleaseIntArrayElements(allowedConfigsArray, allowedConfigsArrayValues, 0);
     return allowedConfigsArray;
+}
+
+static jboolean nativeSetDesiredDisplayConfigSpecs(JNIEnv* env, jclass clazz, jobject tokenObj,
+                                                   jobject desiredDisplayConfigSpecs) {
+    sp<IBinder> token(ibinderForJavaObject(env, tokenObj));
+    if (token == nullptr) return JNI_FALSE;
+
+    jint defaultModeId = env->GetIntField(desiredDisplayConfigSpecs,
+                                          gDesiredDisplayConfigSpecsClassInfo.defaultModeId);
+    jfloat minRefreshRate = env->GetFloatField(desiredDisplayConfigSpecs,
+                                               gDesiredDisplayConfigSpecsClassInfo.minRefreshRate);
+    jfloat maxRefreshRate = env->GetFloatField(desiredDisplayConfigSpecs,
+                                               gDesiredDisplayConfigSpecsClassInfo.maxRefreshRate);
+
+    size_t result = SurfaceComposerClient::setDesiredDisplayConfigSpecs(
+            token, defaultModeId, minRefreshRate, maxRefreshRate);
+    return result == NO_ERROR ? JNI_TRUE : JNI_FALSE;
 }
 
 static jint nativeGetActiveConfig(JNIEnv* env, jclass clazz, jobject tokenObj) {
@@ -1253,6 +1283,31 @@ static jlong nativeReadTransactionFromParcel(JNIEnv* env, jclass clazz, jobject 
     return reinterpret_cast<jlong>(transaction.release());
 }
 
+static jlong nativeMirrorSurface(JNIEnv* env, jclass clazz, jlong mirrorOfObj) {
+    sp<SurfaceComposerClient> client = SurfaceComposerClient::getDefault();
+    SurfaceControl *mirrorOf = reinterpret_cast<SurfaceControl*>(mirrorOfObj);
+    sp<SurfaceControl> surface = client->mirrorSurface(mirrorOf);
+
+    surface->incStrong((void *)nativeCreate);
+    return reinterpret_cast<jlong>(surface.get());
+}
+
+static void nativeSetGlobalShadowSettings(JNIEnv* env, jclass clazz, jfloatArray jAmbientColor,
+        jfloatArray jSpotColor, jfloat lightPosY, jfloat lightPosZ, jfloat lightRadius) {
+    sp<SurfaceComposerClient> client = SurfaceComposerClient::getDefault();
+
+    float* floatAmbientColor = env->GetFloatArrayElements(jAmbientColor, 0);
+    half4 ambientColor = half4(floatAmbientColor[0], floatAmbientColor[1], floatAmbientColor[2],
+            floatAmbientColor[3]);
+    env->ReleaseFloatArrayElements(jAmbientColor, floatAmbientColor, 0);
+
+    float* floatSpotColor = env->GetFloatArrayElements(jSpotColor, 0);
+    half4 spotColor = half4(floatSpotColor[0], floatSpotColor[1], floatSpotColor[2],
+            floatSpotColor[3]);
+    env->ReleaseFloatArrayElements(jSpotColor, floatSpotColor, 0);
+
+    client->setGlobalShadowSettings(ambientColor, spotColor, lightPosY, lightPosZ, lightRadius);
+}
 // ----------------------------------------------------------------------------
 
 static const JNINativeMethod sSurfaceControlMethods[] = {
@@ -1308,6 +1363,8 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeSetCornerRadius },
     {"nativeSetLayerStack", "(JJI)V",
             (void*)nativeSetLayerStack },
+    {"nativeSetShadowRadius", "(JJF)V",
+            (void*)nativeSetShadowRadius },
     {"nativeGetPhysicalDisplayIds", "()[J",
             (void*)nativeGetPhysicalDisplayIds },
     {"nativeGetPhysicalDisplayToken", "(J)Landroid/os/IBinder;",
@@ -1334,6 +1391,9 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeSetAllowedDisplayConfigs },
     {"nativeGetAllowedDisplayConfigs", "(Landroid/os/IBinder;)[I",
             (void*)nativeGetAllowedDisplayConfigs },
+    {"nativeSetDesiredDisplayConfigSpecs",
+            "(Landroid/os/IBinder;Landroid/view/SurfaceControl$DesiredDisplayConfigSpecs;)Z",
+            (void*)nativeSetDesiredDisplayConfigSpecs },
     {"nativeGetDisplayColorModes", "(Landroid/os/IBinder;)[I",
             (void*)nativeGetDisplayColorModes},
     {"nativeGetDisplayNativePrimaries", "(Landroid/os/IBinder;)Landroid/view/SurfaceControl$DisplayPrimaries;",
@@ -1376,13 +1436,11 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeScreenshot },
     {"nativeCaptureLayers",
             "(Landroid/os/IBinder;JLandroid/graphics/Rect;"
-            "F[J)"
+            "F[JI)"
             "Landroid/view/SurfaceControl$ScreenshotGraphicBuffer;",
             (void*)nativeCaptureLayers },
     {"nativeSetInputWindowInfo", "(JJLandroid/view/InputWindowHandle;)V",
             (void*)nativeSetInputWindowInfo },
-    {"nativeTransferTouchFocus", "(JLandroid/os/IBinder;Landroid/os/IBinder;)V",
-            (void*)nativeTransferTouchFocus },
     {"nativeSetMetadata", "(JJILandroid/os/Parcel;)V",
             (void*)nativeSetMetadata },
     {"nativeGetDisplayedContentSamplingAttributes",
@@ -1405,6 +1463,10 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeReadTransactionFromParcel },
     {"nativeWriteTransactionToParcel", "(JLandroid/os/Parcel;)V",
             (void*)nativeWriteTransactionToParcel },
+    {"nativeMirrorSurface", "(J)J",
+            (void*)nativeMirrorSurface },
+    {"nativeSetGlobalShadowSettings", "([F[FFFF)V",
+            (void*)nativeSetGlobalShadowSettings },
 };
 
 int register_android_view_SurfaceControl(JNIEnv* env)
@@ -1500,6 +1562,19 @@ int register_android_view_SurfaceControl(JNIEnv* env)
             "Landroid/view/SurfaceControl$CieXyz;");
     gDisplayPrimariesClassInfo.white = GetFieldIDOrDie(env, displayPrimariesClazz, "white",
             "Landroid/view/SurfaceControl$CieXyz;");
+
+    jclass desiredDisplayConfigSpecsClazz =
+            FindClassOrDie(env, "android/view/SurfaceControl$DesiredDisplayConfigSpecs");
+    gDesiredDisplayConfigSpecsClassInfo.clazz =
+            MakeGlobalRefOrDie(env, desiredDisplayConfigSpecsClazz);
+    gDesiredDisplayConfigSpecsClassInfo.ctor =
+            GetMethodIDOrDie(env, gDesiredDisplayConfigSpecsClassInfo.clazz, "<init>", "(IFF)V");
+    gDesiredDisplayConfigSpecsClassInfo.defaultModeId =
+            GetFieldIDOrDie(env, desiredDisplayConfigSpecsClazz, "mDefaultModeId", "I");
+    gDesiredDisplayConfigSpecsClassInfo.minRefreshRate =
+            GetFieldIDOrDie(env, desiredDisplayConfigSpecsClazz, "mMinRefreshRate", "F");
+    gDesiredDisplayConfigSpecsClassInfo.maxRefreshRate =
+            GetFieldIDOrDie(env, desiredDisplayConfigSpecsClazz, "mMaxRefreshRate", "F");
 
     return err;
 }

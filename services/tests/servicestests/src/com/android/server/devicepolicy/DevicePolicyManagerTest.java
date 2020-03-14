@@ -25,10 +25,9 @@ import static android.app.admin.DevicePolicyManager.PASSWORD_COMPLEXITY_HIGH;
 import static android.app.admin.DevicePolicyManager.PASSWORD_COMPLEXITY_MEDIUM;
 import static android.app.admin.DevicePolicyManager.PASSWORD_COMPLEXITY_NONE;
 import static android.app.admin.DevicePolicyManager.WIPE_EUICC;
-import static android.os.UserManagerInternal.CAMERA_DISABLED_GLOBALLY;
-import static android.os.UserManagerInternal.CAMERA_DISABLED_LOCALLY;
-import static android.os.UserManagerInternal.CAMERA_NOT_DISABLED;
+import static android.app.admin.PasswordMetrics.computeForPassword;
 
+import static com.android.internal.widget.LockPatternUtils.CREDENTIAL_TYPE_NONE;
 import static com.android.internal.widget.LockPatternUtils.EscrowTokenStateChangeCallback;
 import static com.android.server.testutils.TestUtils.assertExpectException;
 
@@ -64,6 +63,9 @@ import android.app.admin.DeviceAdminReceiver;
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.DevicePolicyManagerInternal;
 import android.app.admin.PasswordMetrics;
+import android.app.timedetector.ManualTimeSuggestion;
+import android.app.timezonedetector.ManualTimeZoneSuggestion;
+import android.app.timezonedetector.TimeZoneDetector;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -80,6 +82,7 @@ import android.os.Bundle;
 import android.os.Process;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.UserManagerInternal;
 import android.platform.test.annotations.Presubmit;
 import android.provider.Settings;
 import android.security.KeyChain;
@@ -93,7 +96,7 @@ import android.util.Pair;
 import androidx.test.filters.SmallTest;
 
 import com.android.internal.R;
-import com.android.internal.widget.LockPatternUtils;
+import com.android.internal.widget.LockscreenCredential;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
 import com.android.server.devicepolicy.DevicePolicyManagerService.RestrictionsListener;
@@ -137,6 +140,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
             permission.MANAGE_USERS, permission.INTERACT_ACROSS_USERS_FULL);
     public static final String NOT_DEVICE_OWNER_MSG = "does not own the device";
     public static final String NOT_PROFILE_OWNER_MSG = "does not own the profile";
+    public static final String NOT_ORG_OWNED_PROFILE_OWNER_MSG =
+            "not the profile owner on organization-owned device";
     public static final String ONGOING_CALL_MSG = "ongoing call on the device";
 
     // TODO replace all instances of this with explicit {@link #mServiceContext}.
@@ -146,6 +151,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     private DpmMockContext mServiceContext;
     private DpmMockContext mAdmin1Context;
     public DevicePolicyManager dpm;
+    public DevicePolicyManager parentDpm;
     public DevicePolicyManagerServiceTestable dpms;
 
     /*
@@ -235,6 +241,9 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         dpm = new DevicePolicyManagerTestable(mContext, dpms);
 
+        parentDpm = new DevicePolicyManagerTestable(mServiceContext, dpms,
+                /* parentInstance= */true);
+
         mContext.binder.restoreCallingIdentity(ident);
     }
 
@@ -264,7 +273,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 anyString(), any(UserHandle.class));
 
         // Add the first secondary user.
-        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, 0);
+        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, 0,
+                UserManager.USER_TYPE_FULL_SECONDARY);
     }
 
     private void setAsProfileOwner(ComponentName admin) {
@@ -325,7 +335,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
     public void testLoadAdminData_noAdmins() throws Exception {
         final int ANOTHER_USER_ID = 15;
-        getServices().addUser(ANOTHER_USER_ID, 0);
+        getServices().addUser(ANOTHER_USER_ID, 0, "");
 
         initializeDpms();
 
@@ -472,7 +482,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         final int ANOTHER_USER_ID = 100;
         final int ANOTHER_ADMIN_UID = UserHandle.getUid(ANOTHER_USER_ID, 20456);
 
-        getServices().addUser(ANOTHER_USER_ID, 0); // Add one more user.
+        getServices().addUser(ANOTHER_USER_ID, 0, ""); // Add one more user.
 
         // Set up pacakge manager for the other user.
         setUpPackageManagerForAdmin(admin2, ANOTHER_ADMIN_UID);
@@ -765,7 +775,38 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     }
 
     /**
-     * Test for: @{link DevicePolicyManager#reportPasswordChanged}
+     * Test for: {@link DevicePolicyManager#setPasswordHistoryLength(ComponentName, int)}
+     *
+     * Validates that when the password history length is set, it is persisted after rebooting
+     */
+    public void testSaveAndLoadPasswordHistoryLength_persistedAfterReboot() throws Exception {
+        int passwordHistoryLength = 2;
+
+        mContext.callerPermissions.add(android.Manifest.permission.MANAGE_DEVICE_ADMINS);
+        mContext.callerPermissions.add(permission.MANAGE_PROFILE_AND_DEVICE_OWNERS);
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+
+        // Install admin1 on system user.
+        setUpPackageManagerForAdmin(admin1, DpmMockContext.CALLER_SYSTEM_USER_UID);
+
+        // Set admin1 to active admin and device owner
+        dpm.setActiveAdmin(admin1, false);
+        dpm.setDeviceOwner(admin1, null, UserHandle.USER_SYSTEM);
+
+        // Save password history length
+        dpm.setPasswordHistoryLength(admin1, passwordHistoryLength);
+
+        assertEquals(dpm.getPasswordHistoryLength(admin1), passwordHistoryLength);
+
+        initializeDpms();
+        reset(mContext.spiedContext);
+
+        // Password history length should persist after rebooted
+        assertEquals(dpm.getPasswordHistoryLength(admin1), passwordHistoryLength);
+    }
+
+    /**
+     * Test for: {@link DevicePolicyManager#reportPasswordChanged}
      *
      * Validates that when the password for a user changes, the notification broadcast intent
      * {@link DeviceAdminReceiver#ACTION_PASSWORD_CHANGED} is sent to managed profile owners, in
@@ -909,10 +950,6 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         // Verify internal calls.
         verify(getServices().iactivityManager, times(1)).updateDeviceOwner(
                 eq(admin1.getPackageName()));
-
-        // TODO We should check if the caller has called clearCallerIdentity().
-        verify(getServices().ibackupManager, times(1)).setBackupServiceActive(
-                eq(UserHandle.USER_SYSTEM), eq(false));
 
         verify(mContext.spiedContext, times(1)).sendBroadcastAsUser(
                 MockUtils.checkIntentAction(DevicePolicyManager.ACTION_DEVICE_OWNER_CHANGED),
@@ -1125,9 +1162,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 MockUtils.checkUserHandle(UserHandle.USER_SYSTEM));
 
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
-                eq(UserHandle.USER_SYSTEM),
-                eq(null),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserHandle.USER_SYSTEM), eq(null),
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
 
         verify(getServices().usageStatsManagerInternal).setActiveAdminApps(
                 null, UserHandle.USER_SYSTEM);
@@ -1140,6 +1176,37 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 MockUtils.checkIntentAction(DevicePolicyManager.ACTION_DEVICE_OWNER_CHANGED),
                 MockUtils.checkUserHandle(UserHandle.USER_SYSTEM));
         // TODO Check other calls.
+    }
+
+    public void testDeviceOwnerBackupActivateDeactivate() throws Exception {
+        mContext.callerPermissions.add(permission.MANAGE_DEVICE_ADMINS);
+        mContext.callerPermissions.add(permission.MANAGE_PROFILE_AND_DEVICE_OWNERS);
+
+        // Set admin1 as a DA to the secondary user.
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+        setUpPackageManagerForAdmin(admin1, DpmMockContext.CALLER_SYSTEM_USER_UID);
+        dpm.setActiveAdmin(admin1, /* replace =*/ false);
+        assertTrue(dpm.setDeviceOwner(admin1, "owner-name"));
+
+        verify(getServices().ibackupManager, times(1)).setBackupServiceActive(
+                eq(UserHandle.USER_SYSTEM), eq(false));
+
+        dpm.clearDeviceOwnerApp(admin1.getPackageName());
+
+        verify(getServices().ibackupManager, times(1)).setBackupServiceActive(
+                eq(UserHandle.USER_SYSTEM), eq(true));
+    }
+
+    public void testProfileOwnerBackupActivateDeactivate() throws Exception {
+        setAsProfileOwner(admin1);
+
+        verify(getServices().ibackupManager, times(1)).setBackupServiceActive(
+                eq(DpmMockContext.CALLER_USER_HANDLE), eq(false));
+
+        dpm.clearProfileOwner(admin1);
+
+        verify(getServices().ibackupManager, times(1)).setBackupServiceActive(
+                eq(DpmMockContext.CALLER_USER_HANDLE), eq(true));
     }
 
     public void testClearDeviceOwner_fromDifferentUser() throws Exception {
@@ -1179,6 +1246,45 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         // DO shouldn't be removed.
         assertTrue(dpm.isDeviceManaged());
+    }
+
+    /**
+     * Test for: {@link DevicePolicyManager#clearDeviceOwnerApp(String)}
+     *
+     * Validates that when the device owner is removed, the reset password token is cleared
+     */
+    public void testClearDeviceOwner_clearResetPasswordToken() throws Exception {
+        mContext.callerPermissions.add(android.Manifest.permission.MANAGE_DEVICE_ADMINS);
+        mContext.callerPermissions.add(permission.MANAGE_PROFILE_AND_DEVICE_OWNERS);
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+
+        // Install admin1 on system user
+        setUpPackageManagerForAdmin(admin1, DpmMockContext.CALLER_SYSTEM_USER_UID);
+
+        // Set admin1 to active admin and device owner
+        dpm.setActiveAdmin(admin1, /* replace =*/ false);
+        dpm.setDeviceOwner(admin1, null, UserHandle.USER_SYSTEM);
+
+        // Add reset password token
+        final long handle = 12000;
+        final byte[] token = new byte[32];
+        when(getServices().lockPatternUtils.addEscrowToken(eq(token), eq(UserHandle.USER_SYSTEM),
+                nullable(EscrowTokenStateChangeCallback.class)))
+                .thenReturn(handle);
+        assertTrue(dpm.setResetPasswordToken(admin1, token));
+
+        // Assert reset password token is active
+        when(getServices().lockPatternUtils.isEscrowTokenActive(eq(handle),
+                eq(UserHandle.USER_SYSTEM)))
+                .thenReturn(true);
+        assertTrue(dpm.isResetPasswordTokenActive(admin1));
+
+        // Remove the device owner
+        dpm.clearDeviceOwnerApp(admin1.getPackageName());
+
+        // Verify password reset password token was removed
+        verify(getServices().lockPatternUtils).removeEscrowToken(eq(handle),
+                eq(UserHandle.USER_SYSTEM));
     }
 
     public void testSetProfileOwner() throws Exception {
@@ -1242,7 +1348,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         final int ANOTHER_USER_ID = 100;
         final int ANOTHER_ADMIN_UID = UserHandle.getUid(ANOTHER_USER_ID, 456);
 
-        getServices().addUser(ANOTHER_USER_ID, 0); // Add one more user.
+        getServices().addUser(ANOTHER_USER_ID, 0, ""); // Add one more user.
 
         mContext.callerPermissions.add(permission.MANAGE_DEVICE_ADMINS);
         mContext.callerPermissions.add(permission.MANAGE_USERS);
@@ -1626,8 +1732,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(defaultRestrictions),
-                eq(true) /* isDeviceOwner */,
-                eq(CAMERA_NOT_DISABLED)
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER)
         );
         reset(getServices().userManagerInternal);
 
@@ -1642,7 +1747,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_ADD_USER),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         dpm.addUserRestriction(admin1, UserManager.DISALLOW_OUTGOING_CALLS);
@@ -1650,7 +1755,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_OUTGOING_CALLS,
                         UserManager.DISALLOW_ADD_USER),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         DpmTestUtils.assertRestrictions(
@@ -1668,7 +1773,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_OUTGOING_CALLS),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         DpmTestUtils.assertRestrictions(
@@ -1684,7 +1789,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         assertNoDeviceOwnerRestrictions();
@@ -1698,7 +1803,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_ADJUST_VOLUME,
                         UserManager.DISALLOW_UNMUTE_MICROPHONE),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         dpm.clearUserRestriction(admin1, UserManager.DISALLOW_ADJUST_VOLUME);
@@ -1710,7 +1815,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_ADD_USER),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         dpm.addUserRestriction(admin1, UserManager.DISALLOW_FUN);
@@ -1718,16 +1823,16 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_FUN,
                         UserManager.DISALLOW_ADD_USER),
-                eq(true), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
 
         dpm.setCameraDisabled(admin1, true);
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
-                // DISALLOW_CAMERA will be applied to both local and global.
+                // DISALLOW_CAMERA will be applied globally.
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_FUN,
-                        UserManager.DISALLOW_ADD_USER),
-                eq(true), eq(CAMERA_DISABLED_GLOBALLY));
+                        UserManager.DISALLOW_ADD_USER, UserManager.DISALLOW_CAMERA),
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER));
         reset(getServices().userManagerInternal);
     }
 
@@ -1773,7 +1878,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(DpmMockContext.CALLER_USER_HANDLE),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES),
-                eq(false), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER));
         reset(getServices().userManagerInternal);
 
         dpm.addUserRestriction(admin1, UserManager.DISALLOW_OUTGOING_CALLS);
@@ -1781,7 +1886,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 eq(DpmMockContext.CALLER_USER_HANDLE),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
                         UserManager.DISALLOW_OUTGOING_CALLS),
-                eq(false), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER));
         reset(getServices().userManagerInternal);
 
         DpmTestUtils.assertRestrictions(
@@ -1804,7 +1909,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(DpmMockContext.CALLER_USER_HANDLE),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_OUTGOING_CALLS),
-                eq(false), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER));
         reset(getServices().userManagerInternal);
 
         DpmTestUtils.assertRestrictions(
@@ -1825,7 +1930,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(DpmMockContext.CALLER_USER_HANDLE),
                 MockUtils.checkUserRestrictions(),
-                eq(false), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER));
         reset(getServices().userManagerInternal);
 
         DpmTestUtils.assertRestrictions(
@@ -1847,20 +1952,47 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 eq(DpmMockContext.CALLER_USER_HANDLE),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_ADJUST_VOLUME,
                         UserManager.DISALLOW_UNMUTE_MICROPHONE),
-                eq(false), eq(CAMERA_NOT_DISABLED));
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER));
         reset(getServices().userManagerInternal);
 
         dpm.setCameraDisabled(admin1, true);
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(DpmMockContext.CALLER_USER_HANDLE),
                 MockUtils.checkUserRestrictions(UserManager.DISALLOW_ADJUST_VOLUME,
-                        UserManager.DISALLOW_UNMUTE_MICROPHONE),
-                eq(false), eq(CAMERA_DISABLED_LOCALLY));
+                        UserManager.DISALLOW_UNMUTE_MICROPHONE, UserManager.DISALLOW_CAMERA),
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER));
         reset(getServices().userManagerInternal);
 
         // TODO Make sure restrictions are written to the file.
     }
 
+    // TODO: (b/138709470) test addUserRestriction as PO of an organization-owned device
+    public void testSetUserRestriction_asPoOfOrgOwnedDevice() throws Exception {
+        final int MANAGED_PROFILE_USER_ID = DpmMockContext.CALLER_USER_HANDLE;
+        final int MANAGED_PROFILE_ADMIN_UID =
+                UserHandle.getUid(MANAGED_PROFILE_USER_ID, DpmMockContext.SYSTEM_UID);
+        mContext.binder.callingUid = MANAGED_PROFILE_ADMIN_UID;
+
+        addManagedProfile(admin1, MANAGED_PROFILE_ADMIN_UID, admin1);
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
+
+        when(getServices().userManager.getProfileParent(MANAGED_PROFILE_USER_ID))
+                .thenReturn(new UserInfo(UserHandle.USER_SYSTEM, "user system", 0));
+
+        parentDpm.setCameraDisabled(admin1, true);
+        verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
+                eq(UserHandle.USER_SYSTEM),
+                MockUtils.checkUserRestrictions(UserManager.DISALLOW_CAMERA),
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER_OF_ORGANIZATION_OWNED_DEVICE));
+        reset(getServices().userManagerInternal);
+
+        parentDpm.setCameraDisabled(admin1, false);
+        verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
+                eq(UserHandle.USER_SYSTEM),
+                MockUtils.checkUserRestrictions(),
+                eq(UserManagerInternal.OWNER_TYPE_PROFILE_OWNER_OF_ORGANIZATION_OWNED_DEVICE));
+        reset(getServices().userManagerInternal);
+    }
 
     public void testDefaultEnabledUserRestrictions() throws Exception {
         mContext.callerPermissions.add(permission.MANAGE_DEVICE_ADMINS);
@@ -1895,8 +2027,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(UserHandle.USER_SYSTEM),
                 MockUtils.checkUserRestrictions(defaultRestrictions),
-                eq(true) /* isDeviceOwner */,
-                eq(CAMERA_NOT_DISABLED)
+                eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER)
         );
         reset(getServices().userManagerInternal);
 
@@ -1936,10 +2067,9 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 dpm.getUserRestrictions(admin1)
             );
             verify(getServices().userManagerInternal, atLeast(1)).setDevicePolicyUserRestrictions(
-                eq(UserHandle.USER_SYSTEM),
-                MockUtils.checkUserRestrictions(newDefaultEnabledRestriction),
-                eq(true) /* isDeviceOwner */,
-                eq(CAMERA_NOT_DISABLED)
+                    eq(UserHandle.USER_SYSTEM),
+                    MockUtils.checkUserRestrictions(newDefaultEnabledRestriction),
+                    eq(UserManagerInternal.OWNER_TYPE_DEVICE_OWNER)
             );
             reset(getServices().userManagerInternal);
 
@@ -1988,12 +2118,14 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         assertTrue(dpm.isAdminActive(admin1));
 
         // Test 2. Caller has DA, but not DO.
-        assertExpectException(SecurityException.class, /* messageRegex= */ NOT_DEVICE_OWNER_MSG,
+        assertExpectException(SecurityException.class,
+                /* messageRegex= */ NOT_ORG_OWNED_PROFILE_OWNER_MSG,
                 () -> dpm.getWifiMacAddress(admin1));
 
         // Test 3. Caller has PO, but not DO.
         assertTrue(dpm.setProfileOwner(admin1, null, UserHandle.USER_SYSTEM));
-        assertExpectException(SecurityException.class, /* messageRegex= */ NOT_DEVICE_OWNER_MSG,
+        assertExpectException(SecurityException.class,
+                /* messageRegex= */ NOT_ORG_OWNED_PROFILE_OWNER_MSG,
                 () -> dpm.getWifiMacAddress(admin1));
 
         // Remove PO.
@@ -2010,6 +2142,15 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         assertNull(dpm.getWifiMacAddress(admin1));
 
         // 4-3. With a real MAC address.
+        final String[] macAddresses = new String[]{"11:22:33:44:55:66"};
+        when(getServices().wifiManager.getFactoryMacAddresses()).thenReturn(macAddresses);
+        assertEquals("11:22:33:44:55:66", dpm.getWifiMacAddress(admin1));
+    }
+
+    public void testGetMacAddressByOrgOwnedPO() throws Exception {
+        setupProfileOwner();
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
+
         final String[] macAddresses = new String[]{"11:22:33:44:55:66"};
         when(getServices().wifiManager.getFactoryMacAddresses()).thenReturn(macAddresses);
         assertEquals("11:22:33:44:55:66", dpm.getWifiMacAddress(admin1));
@@ -2509,6 +2650,16 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         mContext.callerPermissions.removeAll(OWNER_SETUP_PERMISSIONS);
     }
 
+    private void setupProfileOwnerOnUser0() throws Exception {
+        mContext.callerPermissions.addAll(OWNER_SETUP_PERMISSIONS);
+
+        setUpPackageManagerForAdmin(admin1, DpmMockContext.CALLER_SYSTEM_USER_UID);
+        dpm.setActiveAdmin(admin1, false);
+        assertTrue(dpm.setProfileOwner(admin1, null, UserHandle.USER_SYSTEM));
+
+        mContext.callerPermissions.removeAll(OWNER_SETUP_PERMISSIONS);
+    }
+
     private void setupDeviceOwner() throws Exception {
         mContext.callerPermissions.addAll(OWNER_SETUP_PERMISSIONS);
 
@@ -2578,6 +2729,21 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         dpm.setMaximumTimeToLock(admin2, 0);
         verifyScreenTimeoutCall(Long.MAX_VALUE, UserHandle.USER_SYSTEM);
         verifyStayOnWhilePluggedCleared(false);
+    }
+
+    public void testIsActiveSupervisionApp() throws Exception {
+        when(mServiceContext.resources
+                .getString(R.string.config_defaultSupervisionProfileOwnerComponent))
+                .thenReturn(admin1.flattenToString());
+
+        final int PROFILE_USER = 15;
+        final int PROFILE_ADMIN = UserHandle.getUid(PROFILE_USER, 19436);
+        addManagedProfile(admin1, PROFILE_ADMIN, admin1);
+        mContext.binder.callingUid = PROFILE_ADMIN;
+
+        final DevicePolicyManagerInternal dpmi =
+                LocalServices.getService(DevicePolicyManagerInternal.class);
+        assertTrue(dpmi.isActiveSupervisionApp(PROFILE_ADMIN));
     }
 
     // Test if lock timeout on managed profile is handled correctly depending on whether profile
@@ -3470,11 +3636,99 @@ public class DevicePolicyManagerTest extends DpmTestBase {
             Settings.System.SCREEN_BRIGHTNESS, "0", DpmMockContext.CALLER_USER_HANDLE);
     }
 
+    public void testSetAutoTimeModifiesSetting() throws Exception {
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+        setupDeviceOwner();
+        dpm.setAutoTime(admin1, true);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 1);
+
+        dpm.setAutoTime(admin1, false);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 0);
+    }
+
+    public void testSetAutoTimeWithPOOnUser0() throws Exception {
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+        setupProfileOwnerOnUser0();
+        dpm.setAutoTime(admin1, true);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 1);
+
+        dpm.setAutoTime(admin1, false);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 0);
+    }
+
+    public void testSetAutoTimeFailWithPONotOnUser0() throws Exception {
+        setupProfileOwner();
+        assertExpectException(SecurityException.class, null, () -> dpm.setAutoTime(admin1, false));
+        verify(getServices().settings, never()).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 0);
+    }
+
+    public void testSetAutoTimeWithPOOfOrganizationOwnedDevice() throws Exception {
+        setupProfileOwner();
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
+
+        dpm.setAutoTime(admin1, true);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 1);
+
+        dpm.setAutoTime(admin1, false);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME, 0);
+    }
+
+    public void testSetAutoTimeZoneModifiesSetting() throws Exception {
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+        setupDeviceOwner();
+        dpm.setAutoTimeZone(admin1, true);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE, 1);
+
+        dpm.setAutoTimeZone(admin1, false);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE, 0);
+    }
+
+    public void testSetAutoTimeZoneWithPOOnUser0() throws Exception {
+        mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
+        setupProfileOwnerOnUser0();
+        dpm.setAutoTimeZone(admin1, true);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE, 1);
+
+        dpm.setAutoTimeZone(admin1, false);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE, 0);
+    }
+
+    public void testSetAutoTimeZoneFailWithPONotOnUser0() throws Exception {
+        setupProfileOwner();
+        assertExpectException(SecurityException.class, null,
+                () -> dpm.setAutoTimeZone(admin1, false));
+        verify(getServices().settings, never()).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE,
+                0);
+    }
+
+    public void testSetAutoTimeZoneWithPOOfOrganizationOwnedDevice() throws Exception {
+        setupProfileOwner();
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
+
+        dpm.setAutoTimeZone(admin1, true);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE, 1);
+
+        dpm.setAutoTimeZone(admin1, false);
+        verify(getServices().settings).settingsGlobalPutInt(Settings.Global.AUTO_TIME_ZONE, 0);
+    }
+
     public void testSetTime() throws Exception {
         mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
         setupDeviceOwner();
         dpm.setTime(admin1, 0);
-        verify(getServices().alarmManager).setTime(0);
+
+        BaseMatcher<ManualTimeSuggestion> hasZeroTime = new BaseMatcher<ManualTimeSuggestion>() {
+            @Override
+            public boolean matches(Object item) {
+                final ManualTimeSuggestion suggestion = (ManualTimeSuggestion) item;
+                return suggestion.getUtcTime().getValue() == 0;
+            }
+            @Override
+            public void describeTo(Description description) {
+                description.appendText("ManualTimeSuggestion{utcTime.value=0}");
+            }
+        };
+        verify(getServices().timeDetector).suggestManualTime(argThat(hasZeroTime));
     }
 
     public void testSetTimeFailWithPO() throws Exception {
@@ -3494,7 +3748,9 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         mContext.binder.callingUid = DpmMockContext.CALLER_SYSTEM_USER_UID;
         setupDeviceOwner();
         dpm.setTimeZone(admin1, "Asia/Shanghai");
-        verify(getServices().alarmManager).setTimeZone("Asia/Shanghai");
+        ManualTimeZoneSuggestion suggestion =
+                TimeZoneDetector.createManualTimeZoneSuggestion("Asia/Shanghai", "Test debug info");
+        verify(getServices().timeZoneDetector).suggestManualTimeZone(suggestion);
     }
 
     public void testSetTimeZoneFailWithPO() throws Exception {
@@ -3644,7 +3900,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         // Add a secondary user, it should never talk with.
         final int ANOTHER_USER_ID = 36;
-        getServices().addUser(ANOTHER_USER_ID, 0);
+        getServices().addUser(ANOTHER_USER_ID, 0, UserManager.USER_TYPE_FULL_SECONDARY);
 
         // Since the managed profile is not affiliated, they should not be allowed to talk to each
         // other.
@@ -4181,9 +4437,9 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         assertTrue(dpm.isResetPasswordTokenActive(admin1));
 
         // test reset password with token
-        when(getServices().lockPatternUtils.setLockCredentialWithToken(eq(password.getBytes()),
-                eq(LockPatternUtils.CREDENTIAL_TYPE_PASSWORD),
-                eq(DevicePolicyManager.PASSWORD_QUALITY_ALPHABETIC), eq(handle), eq(token),
+        when(getServices().lockPatternUtils.setLockCredentialWithToken(
+                eq(LockscreenCredential.createPassword(password)),
+                eq(handle), eq(token),
                 eq(UserHandle.USER_SYSTEM)))
                 .thenReturn(true);
         assertTrue(dpm.resetPasswordWithToken(admin1, password, token, 0));
@@ -4210,11 +4466,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         reset(mContext.spiedContext);
 
-        PasswordMetrics passwordMetricsNoSymbols = new PasswordMetrics(
-                DevicePolicyManager.PASSWORD_QUALITY_COMPLEX, 9,
-                8, 2,
-                6, 1,
-                0, 1);
+        PasswordMetrics passwordMetricsNoSymbols = computeForPassword("abcdXYZ5".getBytes());
 
         setActivePasswordState(passwordMetricsNoSymbols);
         assertTrue(dpm.isActivePasswordSufficient());
@@ -4241,11 +4493,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         reset(mContext.spiedContext);
         assertFalse(dpm.isActivePasswordSufficient());
 
-        PasswordMetrics passwordMetricsWithSymbols = new PasswordMetrics(
-                DevicePolicyManager.PASSWORD_QUALITY_COMPLEX, 9,
-                7, 2,
-                5, 1,
-                1, 2);
+        PasswordMetrics passwordMetricsWithSymbols = computeForPassword("abcd.XY5".getBytes());
 
         setActivePasswordState(passwordMetricsWithSymbols);
         assertTrue(dpm.isActivePasswordSufficient());
@@ -4262,7 +4510,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         final int userHandle = UserHandle.getUserId(mContext.binder.callingUid);
         // When there is no lockscreen, user password metrics is always empty.
         when(getServices().lockSettingsInternal.getUserPasswordMetrics(userHandle))
-                .thenReturn(new PasswordMetrics());
+                .thenReturn(new PasswordMetrics(CREDENTIAL_TYPE_NONE));
 
         // If no password requirements are set, isActivePasswordSufficient should succeed.
         assertTrue(dpm.isActivePasswordSufficient());
@@ -4997,8 +5245,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     }
 
     public void testRevertProfileOwnership_adminAndProfileMigrated() throws Exception {
-        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, UserInfo.FLAG_MANAGED_PROFILE,
-                UserHandle.USER_SYSTEM);
+        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, 0,
+                UserManager.USER_TYPE_PROFILE_MANAGED, UserHandle.USER_SYSTEM);
         DpmTestUtils.writeInputStreamToFile(
                 getRawStream(com.android.frameworks.servicestests.R.raw.active_admin_migrated),
                 getProfileOwnerPoliciesFile());
@@ -5009,8 +5257,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     }
 
     public void testRevertProfileOwnership_profileNotMigrated() throws Exception {
-        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, UserInfo.FLAG_MANAGED_PROFILE,
-                UserHandle.USER_SYSTEM);
+        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, 0,
+                UserManager.USER_TYPE_PROFILE_MANAGED, UserHandle.USER_SYSTEM);
         DpmTestUtils.writeInputStreamToFile(
                 getRawStream(com.android.frameworks.servicestests.R.raw.active_admin_migrated),
                 getProfileOwnerPoliciesFile());
@@ -5021,8 +5269,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     }
 
     public void testRevertProfileOwnership_adminAndProfileNotMigrated() throws Exception {
-        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, UserInfo.FLAG_MANAGED_PROFILE,
-                UserHandle.USER_SYSTEM);
+        getServices().addUser(DpmMockContext.CALLER_USER_HANDLE, 0,
+                UserManager.USER_TYPE_PROFILE_MANAGED, UserHandle.USER_SYSTEM);
         DpmTestUtils.writeInputStreamToFile(
                 getRawStream(com.android.frameworks.servicestests.R.raw.active_admin_not_migrated),
                 getProfileOwnerPoliciesFile());
@@ -5037,7 +5285,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         configureContextForAccess(mContext, false);
 
         assertExpectException(SecurityException.class, /* messageRegex= */ null,
-                () -> dpm.setProfileOwnerCanAccessDeviceIds(admin2));
+                () -> dpm.markProfileOwnerOnOrganizationOwnedDevice(admin2));
     }
 
     public void testGrantDeviceIdsAccess_notByAuthorizedCaller() throws Exception {
@@ -5045,22 +5293,25 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         configureContextForAccess(mContext, false);
 
         assertExpectException(SecurityException.class, /* messageRegex= */ null,
-                () -> dpm.setProfileOwnerCanAccessDeviceIds(admin1));
+                () -> dpm.markProfileOwnerOnOrganizationOwnedDevice(admin1));
     }
 
     public void testGrantDeviceIdsAccess_byAuthorizedSystemCaller() throws Exception {
         setupProfileOwner();
 
         // This method will throw if the system context could not call
-        // setProfileOwnerCanAccessDeviceIds successfully.
-        configureProfileOwnerForDeviceIdAccess(admin1, DpmMockContext.CALLER_USER_HANDLE);
+        // markProfileOwnerOfOrganizationOwnedDevice successfully.
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
     }
 
-    private static void configureContextForAccess(DpmMockContext context, boolean granted) {
+    private void configureContextForAccess(DpmMockContext context, boolean granted) {
         when(context.spiedContext.checkCallingPermission(
-                android.Manifest.permission.GRANT_PROFILE_OWNER_DEVICE_IDS_ACCESS))
+                permission.MARK_DEVICE_ORGANIZATION_OWNED))
                 .thenReturn(granted ? PackageManager.PERMISSION_GRANTED
                         : PackageManager.PERMISSION_DENIED);
+
+        when(getServices().userManager.getProfileParent(any()))
+                .thenReturn(UserHandle.SYSTEM);
     }
 
     public void testGrantDeviceIdsAccess_byAuthorizedManagedProvisioning() throws Exception {
@@ -5074,7 +5325,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                         DpmMockContext.CALLER_MANAGED_PROVISIONING_UID);
         try {
             runAsCaller(mServiceContext, dpms, dpm -> {
-                dpm.setProfileOwnerCanAccessDeviceIds(admin1);
+                dpm.markProfileOwnerOnOrganizationOwnedDevice(admin1);
             });
         } finally {
             mServiceContext.binder.restoreCallingIdentity(ident);
@@ -5112,7 +5363,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                         admin1.getPackageName(), DpmMockContext.CALLER_SYSTEM_USER_UID));
 
         setupProfileOwner();
-        configureProfileOwnerForDeviceIdAccess(admin1, DpmMockContext.CALLER_USER_HANDLE);
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
 
         // The profile owner is allowed to request Device ID attestation.
         mServiceContext.binder.callingUid = DpmMockContext.CALLER_UID;
@@ -5149,7 +5400,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 dpm -> dpm.setDelegatedScopes(admin1, DpmMockContext.DELEGATE_PACKAGE_NAME,
                         Arrays.asList(DELEGATION_CERT_INSTALL)));
 
-        configureProfileOwnerForDeviceIdAccess(admin1, DpmMockContext.CALLER_USER_HANDLE);
+        configureProfileOwnerOfOrgOwnedDevice(admin1, DpmMockContext.CALLER_USER_HANDLE);
 
         // Make sure that the profile owner can still request Device ID attestation.
         mServiceContext.binder.callingUid = DpmMockContext.CALLER_UID;
@@ -5189,13 +5440,13 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         });
     }
 
-    public void testGetPasswordComplexity_securityExceptionIfParentInstance() {
-        assertThrows(SecurityException.class,
-                () -> new DevicePolicyManagerTestable(
-                        mServiceContext,
-                        dpms,
-                        /* parentInstance= */ true)
-                        .getPasswordComplexity());
+    public void testGetPasswordComplexity_securityExceptionNotThrownForParentInstance() {
+        mServiceContext.permissions.add(permission.REQUEST_PASSWORD_COMPLEXITY);
+        setAsProfileOwner(admin1);
+
+        parentDpm.getPasswordComplexity();
+
+        assertEquals(PASSWORD_COMPLEXITY_NONE, dpm.getPasswordComplexity());
     }
 
     public void testGetPasswordComplexity_illegalStateExceptionIfLocked() {
@@ -5229,7 +5480,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 .thenReturn(DpmMockContext.CALLER_USER_HANDLE);
         when(getServices().lockSettingsInternal
                 .getUserPasswordMetrics(DpmMockContext.CALLER_USER_HANDLE))
-                .thenReturn(PasswordMetrics.computeForPassword("asdf".getBytes()));
+                .thenReturn(computeForPassword("asdf".getBytes()));
 
         assertEquals(PASSWORD_COMPLEXITY_MEDIUM, dpm.getPasswordComplexity());
     }
@@ -5246,10 +5497,10 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         when(getServices().lockSettingsInternal
                 .getUserPasswordMetrics(DpmMockContext.CALLER_USER_HANDLE))
-                .thenReturn(PasswordMetrics.computeForPassword("asdf".getBytes()));
+                .thenReturn(computeForPassword("asdf".getBytes()));
         when(getServices().lockSettingsInternal
                 .getUserPasswordMetrics(parentUser.id))
-                .thenReturn(PasswordMetrics.computeForPassword("parentUser".getBytes()));
+                .thenReturn(computeForPassword("parentUser".getBytes()));
 
         assertEquals(PASSWORD_COMPLEXITY_HIGH, dpm.getPasswordComplexity());
     }
@@ -5322,14 +5573,50 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         assertTrue(dpm.isPackageAllowedToAccessCalendar(testPackage));
     }
 
-    private void configureProfileOwnerForDeviceIdAccess(ComponentName who, int userId) {
+    private void configureProfileOwnerOfOrgOwnedDevice(ComponentName who, int userId) {
+        when(getServices().userManager.getProfileParent(eq(UserHandle.of(userId))))
+                .thenReturn(UserHandle.SYSTEM);
         final long ident = mServiceContext.binder.clearCallingIdentity();
         mServiceContext.binder.callingUid =
                 UserHandle.getUid(DpmMockContext.CALLER_USER_HANDLE, DpmMockContext.SYSTEM_UID);
+
+        configureContextForAccess(mServiceContext, true);
         runAsCaller(mServiceContext, dpms, dpm -> {
-            dpm.setProfileOwnerCanAccessDeviceIds(who);
+            dpm.markProfileOwnerOnOrganizationOwnedDevice(who);
         });
         mServiceContext.binder.restoreCallingIdentity(ident);
+    }
+
+    public void testGetCrossProfilePackages_notSet_returnsEmpty() {
+        setAsProfileOwner(admin1);
+        assertTrue(dpm.getCrossProfilePackages(admin1).isEmpty());
+    }
+
+    public void testGetCrossProfilePackages_notSet_dpmsReinitialized_returnsEmpty() {
+        setAsProfileOwner(admin1);
+
+        initializeDpms();
+
+        assertTrue(dpm.getCrossProfilePackages(admin1).isEmpty());
+    }
+
+    public void testGetCrossProfilePackages_whenSet_returnsEqual() {
+        setAsProfileOwner(admin1);
+        Set<String> packages = Collections.singleton("TEST_PACKAGE");
+
+        dpm.setCrossProfilePackages(admin1, packages);
+
+        assertEquals(packages, dpm.getCrossProfilePackages(admin1));
+    }
+
+    public void testGetCrossProfilePackages_whenSet_dpmsReinitialized_returnsEqual() {
+        setAsProfileOwner(admin1);
+        Set<String> packages = Collections.singleton("TEST_PACKAGE");
+
+        dpm.setCrossProfilePackages(admin1, packages);
+        initializeDpms();
+
+        assertEquals(packages, dpm.getCrossProfilePackages(admin1));
     }
 
     // admin1 is the outgoing DPC, adminAnotherPakcage is the incoming one.
@@ -5465,7 +5752,8 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     private void addManagedProfile(
             ComponentName admin, int adminUid, ComponentName copyFromAdmin) throws Exception {
         final int userId = UserHandle.getUserId(adminUid);
-        getServices().addUser(userId, UserInfo.FLAG_MANAGED_PROFILE, UserHandle.USER_SYSTEM);
+        getServices().addUser(userId, 0, UserManager.USER_TYPE_PROFILE_MANAGED,
+                UserHandle.USER_SYSTEM);
         mContext.callerPermissions.addAll(OWNER_SETUP_PERMISSIONS);
         setUpPackageManagerForFakeAdmin(admin, adminUid, copyFromAdmin);
         dpm.setActiveAdmin(admin, false, userId);

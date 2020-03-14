@@ -150,6 +150,12 @@ public final class DefaultPermissionGrantPolicy {
         ALWAYS_LOCATION_PERMISSIONS.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION);
     }
 
+    private static final Set<String> COARSE_BACKGROUND_LOCATION_PERMISSIONS = new ArraySet<>();
+    static {
+        COARSE_BACKGROUND_LOCATION_PERMISSIONS.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        COARSE_BACKGROUND_LOCATION_PERMISSIONS.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION);
+    }
+
     private static final Set<String> ACTIVITY_RECOGNITION_PERMISSIONS = new ArraySet<>();
     static {
         ACTIVITY_RECOGNITION_PERMISSIONS.add(Manifest.permission.ACTIVITY_RECOGNITION);
@@ -190,6 +196,7 @@ public final class DefaultPermissionGrantPolicy {
     static {
         STORAGE_PERMISSIONS.add(Manifest.permission.READ_EXTERNAL_STORAGE);
         STORAGE_PERMISSIONS.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        STORAGE_PERMISSIONS.add(Manifest.permission.ACCESS_MEDIA_LOCATION);
     }
 
     private static final int MSG_READ_DEFAULT_PERMISSION_EXCEPTIONS = 1;
@@ -436,17 +443,20 @@ public final class DefaultPermissionGrantPolicy {
 
         // Installer
         grantSystemFixedPermissionsToSystemPackage(
-                getKnownPackage(PackageManagerInternal.PACKAGE_INSTALLER, userId),
+                ArrayUtils.firstOrNull(getKnownPackages(
+                        PackageManagerInternal.PACKAGE_INSTALLER, userId)),
                 userId, STORAGE_PERMISSIONS);
 
         // Verifier
-        final String verifier = getKnownPackage(PackageManagerInternal.PACKAGE_VERIFIER, userId);
+        final String verifier = ArrayUtils.firstOrNull(getKnownPackages(
+                PackageManagerInternal.PACKAGE_VERIFIER, userId));
         grantSystemFixedPermissionsToSystemPackage(verifier, userId, STORAGE_PERMISSIONS);
         grantPermissionsToSystemPackage(verifier, userId, PHONE_PERMISSIONS, SMS_PERMISSIONS);
 
         // SetupWizard
         grantPermissionsToSystemPackage(
-                getKnownPackage(PackageManagerInternal.PACKAGE_SETUP_WIZARD, userId), userId,
+                ArrayUtils.firstOrNull(getKnownPackages(
+                        PackageManagerInternal.PACKAGE_SETUP_WIZARD, userId)), userId,
                 PHONE_PERMISSIONS, CONTACTS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
                 CAMERA_PERMISSIONS);
 
@@ -595,7 +605,8 @@ public final class DefaultPermissionGrantPolicy {
                 userId, CONTACTS_PERMISSIONS, CALENDAR_PERMISSIONS);
 
         // Browser
-        String browserPackage = getKnownPackage(PackageManagerInternal.PACKAGE_BROWSER, userId);
+        String browserPackage = ArrayUtils.firstOrNull(getKnownPackages(
+                PackageManagerInternal.PACKAGE_BROWSER, userId));
         if (browserPackage == null) {
             browserPackage = getDefaultSystemHandlerActivityPackageForCategory(
                     Intent.CATEGORY_APP_BROWSER, userId);
@@ -719,8 +730,16 @@ public final class DefaultPermissionGrantPolicy {
                 mContext.getPackageManager().getSystemTextClassifierPackageName();
         if (!TextUtils.isEmpty(textClassifierPackageName)) {
             grantPermissionsToSystemPackage(textClassifierPackageName, userId,
-                    PHONE_PERMISSIONS, SMS_PERMISSIONS, CALENDAR_PERMISSIONS,
-                    ALWAYS_LOCATION_PERMISSIONS, CONTACTS_PERMISSIONS);
+                    COARSE_BACKGROUND_LOCATION_PERMISSIONS, CONTACTS_PERMISSIONS);
+        }
+
+        // Content capture
+        String contentCapturePackageName =
+                mContext.getPackageManager().getContentCaptureServicePackageName();
+        if (!TextUtils.isEmpty(contentCapturePackageName)) {
+            grantPermissionsToSystemPackage(contentCapturePackageName, userId,
+                    PHONE_PERMISSIONS, SMS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
+                    CONTACTS_PERMISSIONS);
         }
 
         // Atthention Service
@@ -760,8 +779,8 @@ public final class DefaultPermissionGrantPolicy {
         }
     }
 
-    private String getKnownPackage(int knownPkgId, int userId) {
-        return mServiceInternal.getKnownPackageName(knownPkgId, userId);
+    private @NonNull String[] getKnownPackages(int knownPkgId, int userId) {
+        return mServiceInternal.getKnownPackageNames(knownPkgId, userId);
     }
 
     private void grantDefaultPermissionsToDefaultSystemDialerApp(

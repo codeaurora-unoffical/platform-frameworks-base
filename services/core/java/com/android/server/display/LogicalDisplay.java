@@ -150,10 +150,6 @@ final class LogicalDisplay {
                 mInfo.largestNominalAppHeight = mOverrideDisplayInfo.largestNominalAppHeight;
                 mInfo.logicalWidth = mOverrideDisplayInfo.logicalWidth;
                 mInfo.logicalHeight = mOverrideDisplayInfo.logicalHeight;
-                mInfo.overscanLeft = mOverrideDisplayInfo.overscanLeft;
-                mInfo.overscanTop = mOverrideDisplayInfo.overscanTop;
-                mInfo.overscanRight = mOverrideDisplayInfo.overscanRight;
-                mInfo.overscanBottom = mOverrideDisplayInfo.overscanBottom;
                 mInfo.rotation = mOverrideDisplayInfo.rotation;
                 mInfo.displayCutout = mOverrideDisplayInfo.displayCutout;
                 mInfo.logicalDensityDpi = mOverrideDisplayInfo.logicalDensityDpi;
@@ -356,11 +352,12 @@ final class LogicalDisplay {
 
         // Set the color mode and allowed display mode.
         if (device == mPrimaryDisplayDevice) {
-            device.setAllowedDisplayModesLocked(mAllowedDisplayModes);
+            // See ag/9588196 for correct values.
+            device.setDesiredDisplayConfigSpecs(0, 60, 60, mAllowedDisplayModes);
             device.setRequestedColorModeLocked(mRequestedColorMode);
         } else {
             // Reset to default for non primary displays
-            device.setAllowedDisplayModesLocked(new int[] {0});
+            device.setDesiredDisplayConfigSpecs(0, 60, 60, new int[] {0});
             device.setRequestedColorModeLocked(0);
         }
 

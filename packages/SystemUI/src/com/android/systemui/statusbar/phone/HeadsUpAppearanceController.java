@@ -16,8 +16,6 @@
 
 package com.android.systemui.statusbar.phone;
 
-import static com.android.systemui.SysUiServiceProvider.getComponent;
-
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.view.DisplayCutout;
@@ -39,7 +37,7 @@ import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.policy.OnHeadsUpChangedListener;
 
 import java.util.function.BiConsumer;
@@ -89,18 +87,19 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
             };
     private boolean mAnimationsEnabled = true;
     Point mPoint;
-    private KeyguardMonitor mKeyguardMonitor;
+    private KeyguardStateController mKeyguardStateController;
 
 
     public HeadsUpAppearanceController(
             NotificationIconAreaController notificationIconAreaController,
-            HeadsUpManagerPhone headsUpManager,
-            View statusbarView,
+            HeadsUpManagerPhone headsUpManager, View statusbarView,
             SysuiStatusBarStateController statusBarStateController,
             KeyguardBypassController keyguardBypassController,
-            NotificationWakeUpCoordinator wakeUpCoordinator) {
+            KeyguardStateController keyguardStateController,
+            NotificationWakeUpCoordinator wakeUpCoordinator, CommandQueue commandQueue) {
         this(notificationIconAreaController, headsUpManager, statusBarStateController,
-                keyguardBypassController, wakeUpCoordinator,
+                keyguardBypassController, wakeUpCoordinator, keyguardStateController,
+                commandQueue,
                 statusbarView.findViewById(R.id.heads_up_status_bar_view),
                 statusbarView.findViewById(R.id.notification_stack_scroller),
                 statusbarView.findViewById(R.id.notification_panel),
@@ -116,6 +115,8 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
             StatusBarStateController stateController,
             KeyguardBypassController bypassController,
             NotificationWakeUpCoordinator wakeUpCoordinator,
+            KeyguardStateController keyguardStateController,
+            CommandQueue commandQueue,
             HeadsUpStatusBarView headsUpStatusBarView,
             NotificationStackScrollLayout stackScroller,
             NotificationPanelView panelView,
@@ -159,8 +160,8 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
         mStatusBarStateController = stateController;
         mWakeUpCoordinator = wakeUpCoordinator;
         wakeUpCoordinator.addListener(this);
-        mCommandQueue = getComponent(headsUpStatusBarView.getContext(), CommandQueue.class);
-        mKeyguardMonitor = Dependency.get(KeyguardMonitor.class);
+        mCommandQueue = commandQueue;
+        mKeyguardStateController = keyguardStateController;
     }
 
 
@@ -378,7 +379,7 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
         boolean canShow = !mIsExpanded && notificationsShown;
         if (mBypassController.getBypassEnabled() &&
                 (mStatusBarStateController.getState() == StatusBarState.KEYGUARD
-                        || mKeyguardMonitor.isKeyguardGoingAway())
+                        || mKeyguardStateController.isKeyguardGoingAway())
                 && notificationsShown) {
             canShow = true;
         }

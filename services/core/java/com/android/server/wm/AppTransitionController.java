@@ -31,7 +31,6 @@ import static android.view.WindowManager.TRANSIT_KEYGUARD_GOING_AWAY_ON_WALLPAPE
 import static android.view.WindowManager.TRANSIT_NONE;
 import static android.view.WindowManager.TRANSIT_SHOW_SINGLE_TASK_DISPLAY;
 import static android.view.WindowManager.TRANSIT_TASK_CLOSE;
-import static android.view.WindowManager.TRANSIT_TASK_IN_PLACE;
 import static android.view.WindowManager.TRANSIT_TASK_OPEN;
 import static android.view.WindowManager.TRANSIT_TASK_TO_BACK;
 import static android.view.WindowManager.TRANSIT_TASK_TO_FRONT;
@@ -48,24 +47,27 @@ import static com.android.server.wm.ActivityTaskManagerInternal.APP_TRANSITION_S
 import static com.android.server.wm.ActivityTaskManagerInternal.APP_TRANSITION_SPLASH_SCREEN;
 import static com.android.server.wm.ActivityTaskManagerInternal.APP_TRANSITION_WINDOWS_DRAWN;
 import static com.android.server.wm.AppTransition.isKeyguardGoingAwayTransit;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_APP_TRANSITIONS;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_APP_TRANSITIONS;
+import static com.android.server.wm.WindowContainer.AnimationFlags.CHILDREN;
+import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowManagerDebugConfig.SHOW_LIGHT_TRANSACTIONS;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
 
-import android.os.SystemClock;
 import android.os.Trace;
+import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Slog;
-import android.util.SparseIntArray;
 import android.view.Display;
 import android.view.RemoteAnimationAdapter;
 import android.view.RemoteAnimationDefinition;
 import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
+import android.view.WindowManager.TransitionType;
 import android.view.animation.Animation;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.server.protolog.common.ProtoLog;
 
 import java.util.function.Predicate;
 
@@ -81,7 +83,7 @@ public class AppTransitionController {
     private final WallpaperController mWallpaperControllerLocked;
     private RemoteAnimationDefinition mRemoteAnimationDefinition = null;
 
-    private final SparseIntArray mTempTransitionReasons = new SparseIntArray();
+    private final ArrayMap<ActivityRecord, Integer> mTempTransitionReasons = new ArrayMap<>();
 
     AppTransitionController(WindowManagerService service, DisplayContent displayContent) {
         mService = service;
@@ -104,7 +106,7 @@ public class AppTransitionController {
         }
         Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "AppTransitionReady");
 
-        if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "**** GOOD TO GO");
+        ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "**** GOOD TO GO");
         final AppTransition appTransition = mDisplayContent.mAppTransition;
         int transit = appTransition.getAppTransition();
         if (mDisplayContent.mSkipAppTransitionAnimation && !isKeyguardGoingAwayTransit(transit)) {
@@ -156,20 +158,20 @@ public class AppTransitionController {
         final ArraySet<Integer> activityTypes = collectActivityTypes(mDisplayContent.mOpeningApps,
                 mDisplayContent.mClosingApps, mDisplayContent.mChangingApps);
         final boolean allowAnimations = mDisplayContent.getDisplayPolicy().allowAppAnimationsLw();
-        final AppWindowToken animLpToken = allowAnimations
+        final ActivityRecord animLpActivity = allowAnimations
                 ? findAnimLayoutParamsToken(transit, activityTypes)
                 : null;
-        final AppWindowToken topOpeningApp = allowAnimations
+        final ActivityRecord topOpeningApp = allowAnimations
                 ? getTopApp(mDisplayContent.mOpeningApps, false /* ignoreHidden */)
                 : null;
-        final AppWindowToken topClosingApp = allowAnimations
+        final ActivityRecord topClosingApp = allowAnimations
                 ? getTopApp(mDisplayContent.mClosingApps, false /* ignoreHidden */)
                 : null;
-        final AppWindowToken topChangingApp = allowAnimations
+        final ActivityRecord topChangingApp = allowAnimations
                 ? getTopApp(mDisplayContent.mChangingApps, false /* ignoreHidden */)
                 : null;
-        final WindowManager.LayoutParams animLp = getAnimLp(animLpToken);
-        overrideWithRemoteAnimationIfSet(animLpToken, transit, activityTypes);
+        final WindowManager.LayoutParams animLp = getAnimLp(animLpActivity);
+        overrideWithRemoteAnimationIfSet(animLpActivity, transit, activityTypes);
 
         final boolean voiceInteraction = containsVoiceInteraction(mDisplayContent.mOpeningApps)
                 || containsVoiceInteraction(mDisplayContent.mOpeningApps)
@@ -178,11 +180,15 @@ public class AppTransitionController {
         final int layoutRedo;
         mService.mSurfaceAnimationRunner.deferStartingAnimations();
         try {
-            processApplicationsAnimatingInPlace(transit);
-
-            handleClosingApps(transit, animLp, voiceInteraction);
-            handleOpeningApps(transit, animLp, voiceInteraction);
-            handleChangingApps(transit, animLp, voiceInteraction);
+            // TODO: Apply an app transition animation on TaskStack instead of ActivityRecord when
+            //  appropriate.
+            applyAnimations(mDisplayContent.mClosingApps, transit, false /* visible */,
+                    animLp, voiceInteraction);
+            applyAnimations(mDisplayContent.mOpeningApps, transit, true /* visible */,
+                    animLp, voiceInteraction);
+            handleClosingApps();
+            handleOpeningApps();
+            handleChangingApps(transit);
 
             appTransition.setLastAppTransition(transit, topOpeningApp,
                     topClosingApp, topChangingApp);
@@ -210,8 +216,8 @@ public class AppTransitionController {
 
         mDisplayContent.computeImeTarget(true /* updateImeTarget */);
 
-        mService.mAtmInternal.notifyAppTransitionStarting(mTempTransitionReasons.clone(),
-                SystemClock.uptimeMillis());
+        mService.mAtmService.mStackSupervisor.getActivityMetricsLogger().notifyTransitionStarting(
+                mTempTransitionReasons);
 
         if (transit == TRANSIT_SHOW_SINGLE_TASK_DISPLAY) {
             mService.mAnimator.addAfterPrepareSurfacesRunnable(() -> {
@@ -225,14 +231,14 @@ public class AppTransitionController {
                 layoutRedo | FINISH_LAYOUT_REDO_LAYOUT | FINISH_LAYOUT_REDO_CONFIG;
     }
 
-    private static WindowManager.LayoutParams getAnimLp(AppWindowToken wtoken) {
-        final WindowState mainWindow = wtoken != null ? wtoken.findMainWindow() : null;
+    private static WindowManager.LayoutParams getAnimLp(ActivityRecord activity) {
+        final WindowState mainWindow = activity != null ? activity.findMainWindow() : null;
         return mainWindow != null ? mainWindow.mAttrs : null;
     }
 
-    RemoteAnimationAdapter getRemoteAnimationOverride(AppWindowToken animLpToken, int transit,
-            ArraySet<Integer> activityTypes) {
-        final RemoteAnimationDefinition definition = animLpToken.getRemoteAnimationDefinition();
+    RemoteAnimationAdapter getRemoteAnimationOverride(ActivityRecord animLpActivity,
+            @TransitionType int transit, ArraySet<Integer> activityTypes) {
+        final RemoteAnimationDefinition definition = animLpActivity.getRemoteAnimationDefinition();
         if (definition != null) {
             final RemoteAnimationAdapter adapter = definition.getAdapter(transit, activityTypes);
             if (adapter != null) {
@@ -249,19 +255,19 @@ public class AppTransitionController {
      * Overrides the pending transition with the remote animation defined for the transition in the
      * set of defined remote animations in the app window token.
      */
-    private void overrideWithRemoteAnimationIfSet(AppWindowToken animLpToken, int transit,
-            ArraySet<Integer> activityTypes) {
+    private void overrideWithRemoteAnimationIfSet(ActivityRecord animLpActivity,
+            @TransitionType int transit, ArraySet<Integer> activityTypes) {
         if (transit == TRANSIT_CRASHING_ACTIVITY_CLOSE) {
             // The crash transition has higher priority than any involved remote animations.
             return;
         }
-        if (animLpToken == null) {
+        if (animLpActivity == null) {
             return;
         }
         final RemoteAnimationAdapter adapter =
-                getRemoteAnimationOverride(animLpToken, transit, activityTypes);
+                getRemoteAnimationOverride(animLpActivity, transit, activityTypes);
         if (adapter != null) {
-            animLpToken.getDisplayContent().mAppTransition.overridePendingAppTransitionRemote(
+            animLpActivity.getDisplayContent().mAppTransition.overridePendingAppTransitionRemote(
                     adapter);
         }
     }
@@ -269,12 +275,12 @@ public class AppTransitionController {
     /**
      * @return The window token that determines the animation theme.
      */
-    private AppWindowToken findAnimLayoutParamsToken(@WindowManager.TransitionType int transit,
+    private ActivityRecord findAnimLayoutParamsToken(@TransitionType int transit,
             ArraySet<Integer> activityTypes) {
-        AppWindowToken result;
-        final ArraySet<AppWindowToken> closingApps = mDisplayContent.mClosingApps;
-        final ArraySet<AppWindowToken> openingApps = mDisplayContent.mOpeningApps;
-        final ArraySet<AppWindowToken> changingApps = mDisplayContent.mChangingApps;
+        ActivityRecord result;
+        final ArraySet<ActivityRecord> closingApps = mDisplayContent.mClosingApps;
+        final ArraySet<ActivityRecord> openingApps = mDisplayContent.mOpeningApps;
+        final ArraySet<ActivityRecord> changingApps = mDisplayContent.mChangingApps;
 
         // Remote animations always win, but fullscreen tokens override non-fullscreen tokens.
         result = lookForHighestTokenWithFilter(closingApps, openingApps, changingApps,
@@ -296,8 +302,8 @@ public class AppTransitionController {
      * @return The set of {@link android.app.WindowConfiguration.ActivityType}s contained in the set
      *         of apps in {@code array1}, {@code array2}, and {@code array3}.
      */
-    private static ArraySet<Integer> collectActivityTypes(ArraySet<AppWindowToken> array1,
-            ArraySet<AppWindowToken> array2, ArraySet<AppWindowToken> array3) {
+    private static ArraySet<Integer> collectActivityTypes(ArraySet<ActivityRecord> array1,
+            ArraySet<ActivityRecord> array2, ArraySet<ActivityRecord> array3) {
         final ArraySet<Integer> result = new ArraySet<>();
         for (int i = array1.size() - 1; i >= 0; i--) {
             result.add(array1.valueAt(i).getActivityType());
@@ -311,16 +317,16 @@ public class AppTransitionController {
         return result;
     }
 
-    private static AppWindowToken lookForHighestTokenWithFilter(ArraySet<AppWindowToken> array1,
-            ArraySet<AppWindowToken> array2, ArraySet<AppWindowToken> array3,
-            Predicate<AppWindowToken> filter) {
+    private static ActivityRecord lookForHighestTokenWithFilter(ArraySet<ActivityRecord> array1,
+            ArraySet<ActivityRecord> array2, ArraySet<ActivityRecord> array3,
+            Predicate<ActivityRecord> filter) {
         final int array2base = array1.size();
         final int array3base = array2.size() + array2base;
         final int count = array3base + array3.size();
         int bestPrefixOrderIndex = Integer.MIN_VALUE;
-        AppWindowToken bestToken = null;
+        ActivityRecord bestToken = null;
         for (int i = 0; i < count; i++) {
-            final AppWindowToken wtoken = i < array2base
+            final ActivityRecord wtoken = i < array2base
                     ? array1.valueAt(i)
                     : (i < array3base
                             ? array2.valueAt(i - array2base)
@@ -334,7 +340,7 @@ public class AppTransitionController {
         return bestToken;
     }
 
-    private boolean containsVoiceInteraction(ArraySet<AppWindowToken> apps) {
+    private boolean containsVoiceInteraction(ArraySet<ActivityRecord> apps) {
         for (int i = apps.size() - 1; i >= 0; i--) {
             if (apps.valueAt(i).mVoiceInteraction) {
                 return true;
@@ -343,26 +349,60 @@ public class AppTransitionController {
         return false;
     }
 
-    private void handleOpeningApps(int transit, LayoutParams animLp, boolean voiceInteraction) {
-        final ArraySet<AppWindowToken> openingApps = mDisplayContent.mOpeningApps;
-        final int appsCount = openingApps.size();
+    /**
+     * Apply an app transition animation on a set of {@link ActivityRecord}
+     *
+     * @param apps The list of apps to which an app transition animation applies.
+     * @param transit The current transition type.
+     * @param visible {@code true} if the apps becomes visible, {@code false} if the apps becomes
+     *                invisible.
+     * @param animLp Layout parameters in which an app transition animation runs.
+     * @param voiceInteraction {@code true} if one of the apps in this transition belongs to a voice
+     *                         interaction session driving task.
+     */
+    private void applyAnimations(ArraySet<ActivityRecord> apps, @TransitionType int transit,
+            boolean visible, LayoutParams animLp, boolean voiceInteraction) {
+        final int appsCount = apps.size();
         for (int i = 0; i < appsCount; i++) {
-            AppWindowToken wtoken = openingApps.valueAt(i);
-            if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "Now opening app" + wtoken);
+            final ActivityRecord app = apps.valueAt(i);
+            if (transit != WindowManager.TRANSIT_UNSET && app.shouldApplyAnimation(visible)) {
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "Changing app %s visible=%b performLayout=%b",
+                        app, app.isVisible(), false);
+                if (!app.mUseTransferredAnimation) {
+                    app.applyAnimation(animLp, transit, visible, voiceInteraction);
+                }
+                final WindowState window = app.findMainWindow();
+                final AccessibilityController accessibilityController =
+                        app.mWmService.mAccessibilityController;
+                if (window != null && accessibilityController != null) {
+                    accessibilityController.onAppWindowTransitionLocked(window, transit);
+                }
+            }
+        }
+    }
 
-            if (!wtoken.commitVisibility(animLp, true, transit, false, voiceInteraction)) {
+    private void handleOpeningApps() {
+        final ArraySet<ActivityRecord> openingApps = mDisplayContent.mOpeningApps;
+        final int appsCount = openingApps.size();
+
+        for (int i = 0; i < appsCount; i++) {
+            final ActivityRecord app = openingApps.valueAt(i);
+            ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "Now opening app %s", app);
+
+            app.commitVisibility(true /* visible */, false /* performLayout */);
+            if (!app.isAnimating(PARENTS | CHILDREN)) {
                 // This token isn't going to be animating. Add it to the list of tokens to
                 // be notified of app transition complete since the notification will not be
                 // sent be the app window animator.
-                mDisplayContent.mNoAnimationNotifyOnTransitionFinished.add(wtoken.token);
+                mDisplayContent.mNoAnimationNotifyOnTransitionFinished.add(app.token);
             }
-            wtoken.updateReportedVisibilityLocked();
-            wtoken.waitingToShow = false;
+            app.updateReportedVisibilityLocked();
+            app.waitingToShow = false;
             if (SHOW_LIGHT_TRANSACTIONS) Slog.i(TAG,
                     ">>> OPEN TRANSACTION handleAppTransitionReady()");
             mService.openSurfaceTransaction();
             try {
-                wtoken.showAllWindowsLocked();
+                app.showAllWindowsLocked();
             } finally {
                 mService.closeSurfaceTransaction("handleAppTransitionReady");
                 if (SHOW_LIGHT_TRANSACTIONS) Slog.i(TAG,
@@ -370,60 +410,58 @@ public class AppTransitionController {
             }
 
             if (mDisplayContent.mAppTransition.isNextAppTransitionThumbnailUp()) {
-                wtoken.attachThumbnailAnimation();
+                app.attachThumbnailAnimation();
             } else if (mDisplayContent.mAppTransition.isNextAppTransitionOpenCrossProfileApps()) {
-                wtoken.attachCrossProfileAppsThumbnailAnimation();
+                app.attachCrossProfileAppsThumbnailAnimation();
             }
         }
     }
 
-    private void handleClosingApps(int transit, LayoutParams animLp, boolean voiceInteraction) {
-        final ArraySet<AppWindowToken> closingApps = mDisplayContent.mClosingApps;
+    private void handleClosingApps() {
+        final ArraySet<ActivityRecord> closingApps = mDisplayContent.mClosingApps;
         final int appsCount = closingApps.size();
-        for (int i = 0; i < appsCount; i++) {
-            AppWindowToken wtoken = closingApps.valueAt(i);
 
-            if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "Now closing app " + wtoken);
-            // TODO: Do we need to add to mNoAnimationNotifyOnTransitionFinished like above if not
-            //       animating?
-            wtoken.commitVisibility(animLp, false, transit, false, voiceInteraction);
-            wtoken.updateReportedVisibilityLocked();
+        for (int i = 0; i < appsCount; i++) {
+            final ActivityRecord app = closingApps.valueAt(i);
+            ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "Now closing app %s", app);
+
+            app.commitVisibility(false /* visible */, false /* performLayout */);
+            app.updateReportedVisibilityLocked();
             // Force the allDrawn flag, because we want to start
             // this guy's animations regardless of whether it's
             // gotten drawn.
-            wtoken.allDrawn = true;
-            wtoken.deferClearAllDrawn = false;
+            app.allDrawn = true;
             // Ensure that apps that are mid-starting are also scheduled to have their
             // starting windows removed after the animation is complete
-            if (wtoken.startingWindow != null && !wtoken.startingWindow.mAnimatingExit) {
-                wtoken.removeStartingWindow();
+            if (app.startingWindow != null && !app.startingWindow.mAnimatingExit) {
+                app.removeStartingWindow();
             }
 
             if (mDisplayContent.mAppTransition.isNextAppTransitionThumbnailDown()) {
-                wtoken.attachThumbnailAnimation();
+                app.attachThumbnailAnimation();
             }
         }
     }
 
-    private void handleChangingApps(int transit, LayoutParams animLp, boolean voiceInteraction) {
-        final ArraySet<AppWindowToken> apps = mDisplayContent.mChangingApps;
+    private void handleChangingApps(@TransitionType int transit) {
+        final ArraySet<ActivityRecord> apps = mDisplayContent.mChangingApps;
         final int appsCount = apps.size();
         for (int i = 0; i < appsCount; i++) {
-            AppWindowToken wtoken = apps.valueAt(i);
-            if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "Now changing app" + wtoken);
-            wtoken.cancelAnimationOnly();
-            wtoken.applyAnimationLocked(null, transit, true, false);
-            wtoken.updateReportedVisibilityLocked();
+            ActivityRecord activity = apps.valueAt(i);
+            ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "Now changing app %s", activity);
+            activity.cancelAnimationOnly();
+            activity.applyAnimation(null, transit, true, false);
+            activity.updateReportedVisibilityLocked();
             mService.openSurfaceTransaction();
             try {
-                wtoken.showAllWindowsLocked();
+                activity.showAllWindowsLocked();
             } finally {
                 mService.closeSurfaceTransaction("handleChangingApps");
             }
         }
     }
 
-    private void handleNonAppWindowsInTransition(int transit, int flags) {
+    private void handleNonAppWindowsInTransition(@TransitionType int transit, int flags) {
         if (transit == TRANSIT_KEYGUARD_GOING_AWAY) {
             if ((flags & TRANSIT_FLAG_KEYGUARD_GOING_AWAY_WITH_WALLPAPER) != 0
                     && (flags & TRANSIT_FLAG_KEYGUARD_GOING_AWAY_NO_ANIMATION) == 0
@@ -444,14 +482,14 @@ public class AppTransitionController {
         }
     }
 
-    private boolean transitionGoodToGo(ArraySet<AppWindowToken> apps, SparseIntArray outReasons) {
-        if (DEBUG_APP_TRANSITIONS) Slog.v(TAG,
-                "Checking " + apps.size() + " opening apps (frozen="
-                        + mService.mDisplayFrozen + " timeout="
-                        + mDisplayContent.mAppTransition.isTimeout() + ")...");
-        final ScreenRotationAnimation screenRotationAnimation =
-                mService.mAnimator.getScreenRotationAnimationLocked(
-                        Display.DEFAULT_DISPLAY);
+    private boolean transitionGoodToGo(ArraySet<ActivityRecord> apps,
+            ArrayMap<ActivityRecord, Integer> outReasons) {
+        ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                "Checking %d opening apps (frozen=%b timeout=%b)...", apps.size(),
+                mService.mDisplayFrozen, mDisplayContent.mAppTransition.isTimeout());
+
+        final ScreenRotationAnimation screenRotationAnimation = mService.mRoot.getDisplayContent(
+                Display.DEFAULT_DISPLAY).getRotationAnimation();
 
         if (!mDisplayContent.mAppTransition.isTimeout()) {
             // Imagine the case where we are changing orientation due to an app transition, but a
@@ -463,32 +501,29 @@ public class AppTransitionController {
             // app transition.
             if (screenRotationAnimation != null && screenRotationAnimation.isAnimating() &&
                     mDisplayContent.getDisplayRotation().needsUpdate()) {
-                if (DEBUG_APP_TRANSITIONS) {
-                    Slog.v(TAG, "Delaying app transition for screen rotation animation to finish");
-                }
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                        "Delaying app transition for screen rotation animation to finish");
                 return false;
             }
             for (int i = 0; i < apps.size(); i++) {
-                AppWindowToken wtoken = apps.valueAt(i);
-                if (DEBUG_APP_TRANSITIONS) Slog.v(TAG,
-                        "Check opening app=" + wtoken + ": allDrawn="
-                                + wtoken.allDrawn + " startingDisplayed="
-                                + wtoken.startingDisplayed + " startingMoved="
-                                + wtoken.startingMoved + " isRelaunching()="
-                                + wtoken.isRelaunching() + " startingWindow="
-                                + wtoken.startingWindow);
+                ActivityRecord activity = apps.valueAt(i);
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                                "Check opening app=%s: allDrawn=%b startingDisplayed=%b "
+                                        + "startingMoved=%b isRelaunching()=%b startingWindow=%s",
+                                activity, activity.allDrawn, activity.startingDisplayed,
+                                activity.startingMoved, activity.isRelaunching(),
+                                activity.startingWindow);
 
 
-                final boolean allDrawn = wtoken.allDrawn && !wtoken.isRelaunching();
-                if (!allDrawn && !wtoken.startingDisplayed && !wtoken.startingMoved) {
+                final boolean allDrawn = activity.allDrawn && !activity.isRelaunching();
+                if (!allDrawn && !activity.startingDisplayed && !activity.startingMoved) {
                     return false;
                 }
-                final int windowingMode = wtoken.getWindowingMode();
                 if (allDrawn) {
-                    outReasons.put(windowingMode,  APP_TRANSITION_WINDOWS_DRAWN);
+                    outReasons.put(activity, APP_TRANSITION_WINDOWS_DRAWN);
                 } else {
-                    outReasons.put(windowingMode,
-                            wtoken.mStartingData instanceof SplashScreenStartingData
+                    outReasons.put(activity,
+                            activity.mStartingData instanceof SplashScreenStartingData
                                     ? APP_TRANSITION_SPLASH_SCREEN
                                     : APP_TRANSITION_SNAPSHOT);
                 }
@@ -496,15 +531,13 @@ public class AppTransitionController {
 
             // We also need to wait for the specs to be fetched, if needed.
             if (mDisplayContent.mAppTransition.isFetchingAppTransitionsSpecs()) {
-                if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "isFetchingAppTransitionSpecs=true");
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "isFetchingAppTransitionSpecs=true");
                 return false;
             }
 
             if (!mDisplayContent.mUnknownAppVisibilityController.allResolved()) {
-                if (DEBUG_APP_TRANSITIONS) {
-                    Slog.v(TAG, "unknownApps is not empty: "
-                            + mDisplayContent.mUnknownAppVisibilityController.getDebugMessage());
-                }
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "unknownApps is not empty: %s",
+                            mDisplayContent.mUnknownAppVisibilityController.getDebugMessage());
                 return false;
             }
 
@@ -519,8 +552,8 @@ public class AppTransitionController {
         return true;
     }
 
-    private int maybeUpdateTransitToWallpaper(int transit, boolean openingAppHasWallpaper,
-            boolean closingAppHasWallpaper) {
+    private int maybeUpdateTransitToWallpaper(@TransitionType int transit,
+            boolean openingAppHasWallpaper, boolean closingAppHasWallpaper) {
         // Given no app transition pass it through instead of a wallpaper transition.
         // Never convert the crashing transition.
         // Never update the transition for the wallpaper if we are just docking from recents
@@ -541,30 +574,28 @@ public class AppTransitionController {
                 (mWallpaperControllerLocked.isWallpaperTargetAnimating() || !showWallpaper)
                         ? null
                         : wallpaperTarget;
-        final ArraySet<AppWindowToken> openingApps = mDisplayContent.mOpeningApps;
-        final ArraySet<AppWindowToken> closingApps = mDisplayContent.mClosingApps;
-        final AppWindowToken topOpeningApp = getTopApp(mDisplayContent.mOpeningApps,
+        final ArraySet<ActivityRecord> openingApps = mDisplayContent.mOpeningApps;
+        final ArraySet<ActivityRecord> closingApps = mDisplayContent.mClosingApps;
+        final ActivityRecord topOpeningApp = getTopApp(mDisplayContent.mOpeningApps,
                 false /* ignoreHidden */);
-        final AppWindowToken topClosingApp = getTopApp(mDisplayContent.mClosingApps,
+        final ActivityRecord topClosingApp = getTopApp(mDisplayContent.mClosingApps,
                 true /* ignoreHidden */);
 
         boolean openingCanBeWallpaperTarget = canBeWallpaperTarget(openingApps);
-        if (DEBUG_APP_TRANSITIONS) Slog.v(TAG,
-                "New wallpaper target=" + wallpaperTarget
-                        + ", oldWallpaper=" + oldWallpaper
-                        + ", openingApps=" + openingApps
-                        + ", closingApps=" + closingApps);
+        ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                        "New wallpaper target=%s, oldWallpaper=%s, openingApps=%s, closingApps=%s",
+                        wallpaperTarget, oldWallpaper, openingApps, closingApps);
 
         if (openingCanBeWallpaperTarget && transit == TRANSIT_KEYGUARD_GOING_AWAY) {
             transit = TRANSIT_KEYGUARD_GOING_AWAY_ON_WALLPAPER;
-            if (DEBUG_APP_TRANSITIONS) Slog.v(TAG,
-                    "New transit: " + AppTransition.appTransitionToString(transit));
+            ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                    "New transit: %s", AppTransition.appTransitionToString(transit));
         }
         // We never want to change from a Keyguard transit to a non-Keyguard transit, as our logic
         // relies on the fact that we always execute a Keyguard transition after preparing one.
         else if (!isKeyguardGoingAwayTransit(transit)) {
             if (closingAppHasWallpaper && openingAppHasWallpaper) {
-                if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "Wallpaper animation!");
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "Wallpaper animation!");
                 switch (transit) {
                     case TRANSIT_ACTIVITY_OPEN:
                     case TRANSIT_TASK_OPEN:
@@ -577,25 +608,26 @@ public class AppTransitionController {
                         transit = TRANSIT_WALLPAPER_INTRA_CLOSE;
                         break;
                 }
-                if (DEBUG_APP_TRANSITIONS) Slog.v(TAG,
-                        "New transit: " + AppTransition.appTransitionToString(transit));
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                        "New transit: %s", AppTransition.appTransitionToString(transit));
             } else if (oldWallpaper != null && !mDisplayContent.mOpeningApps.isEmpty()
-                    && !openingApps.contains(oldWallpaper.mAppToken)
-                    && closingApps.contains(oldWallpaper.mAppToken)
-                    && topClosingApp == oldWallpaper.mAppToken) {
+                    && !openingApps.contains(oldWallpaper.mActivityRecord)
+                    && closingApps.contains(oldWallpaper.mActivityRecord)
+                    && topClosingApp == oldWallpaper.mActivityRecord) {
                 // We are transitioning from an activity with a wallpaper to one without.
                 transit = TRANSIT_WALLPAPER_CLOSE;
-                if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "New transit away from wallpaper: "
-                        + AppTransition.appTransitionToString(transit));
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
+                        "New transit away from wallpaper: %s",
+                                AppTransition.appTransitionToString(transit));
             } else if (wallpaperTarget != null && wallpaperTarget.isVisibleLw()
-                    && openingApps.contains(wallpaperTarget.mAppToken)
-                    && topOpeningApp == wallpaperTarget.mAppToken
+                    && openingApps.contains(wallpaperTarget.mActivityRecord)
+                    && topOpeningApp == wallpaperTarget.mActivityRecord
                     && transit != TRANSIT_TRANSLUCENT_ACTIVITY_CLOSE) {
                 // We are transitioning from an activity without
                 // a wallpaper to now showing the wallpaper
                 transit = TRANSIT_WALLPAPER_OPEN;
-                if (DEBUG_APP_TRANSITIONS) Slog.v(TAG, "New transit into wallpaper: "
-                        + AppTransition.appTransitionToString(transit));
+                ProtoLog.v(WM_DEBUG_APP_TRANSITIONS, "New transit into wallpaper: %s",
+                        AppTransition.appTransitionToString(transit));
             }
         }
         return transit;
@@ -614,7 +646,7 @@ public class AppTransitionController {
      *         situation.
      */
     @VisibleForTesting
-    int maybeUpdateTransitToTranslucentAnim(int transit) {
+    int maybeUpdateTransitToTranslucentAnim(@TransitionType int transit) {
         if (AppTransition.isChangeTransit(transit)) {
             // There's no special animation to handle change animations with translucent apps
             return transit;
@@ -624,10 +656,10 @@ public class AppTransitionController {
         boolean allOpeningVisible = true;
         boolean allTranslucentOpeningApps = !mDisplayContent.mOpeningApps.isEmpty();
         for (int i = mDisplayContent.mOpeningApps.size() - 1; i >= 0; i--) {
-            final AppWindowToken token = mDisplayContent.mOpeningApps.valueAt(i);
-            if (!token.isVisible()) {
+            final ActivityRecord activity = mDisplayContent.mOpeningApps.valueAt(i);
+            if (!activity.isVisible()) {
                 allOpeningVisible = false;
-                if (token.fillsParent()) {
+                if (activity.fillsParent()) {
                     allTranslucentOpeningApps = false;
                 }
             }
@@ -654,7 +686,7 @@ public class AppTransitionController {
      * to determine whether animations should be clipped to the task bounds instead of stack bounds.
      */
     @VisibleForTesting
-    boolean isTransitWithinTask(int transit, Task task) {
+    boolean isTransitWithinTask(@TransitionType int transit, Task task) {
         if (task == null
                 || !mDisplayContent.mChangingApps.isEmpty()) {
             // if there is no task, then we can't constrain to the task.
@@ -668,13 +700,13 @@ public class AppTransitionController {
             return false;
         }
         // check that all components are in the task.
-        for (AppWindowToken activity : mDisplayContent.mOpeningApps) {
+        for (ActivityRecord activity : mDisplayContent.mOpeningApps) {
             Task activityTask = activity.getTask();
             if (activityTask != task) {
                 return false;
             }
         }
-        for (AppWindowToken activity : mDisplayContent.mClosingApps) {
+        for (ActivityRecord activity : mDisplayContent.mClosingApps) {
             if (activity.getTask() != task) {
                 return false;
             }
@@ -682,7 +714,7 @@ public class AppTransitionController {
         return true;
     }
 
-    private boolean canBeWallpaperTarget(ArraySet<AppWindowToken> apps) {
+    private boolean canBeWallpaperTarget(ArraySet<ActivityRecord> apps) {
         for (int i = apps.size() - 1; i >= 0; i--) {
             if (apps.valueAt(i).windowsCanBeWallpaperTarget()) {
                 return true;
@@ -692,19 +724,20 @@ public class AppTransitionController {
     }
 
     /**
-     * Finds the top app in a list of apps, using its {@link AppWindowToken#getPrefixOrderIndex} to
+     * Finds the top app in a list of apps, using its {@link ActivityRecord#getPrefixOrderIndex} to
      * compare z-order.
      *
      * @param apps The list of apps to search.
-     * @param ignoreHidden If set to true, ignores apps that are {@link AppWindowToken#isHidden}.
-     * @return The top {@link AppWindowToken}.
+     * @param ignoreInvisible If set to true, ignores apps that are not
+     *                        {@link ActivityRecord#isVisible}.
+     * @return The top {@link ActivityRecord}.
      */
-    private AppWindowToken getTopApp(ArraySet<AppWindowToken> apps, boolean ignoreHidden) {
+    private ActivityRecord getTopApp(ArraySet<ActivityRecord> apps, boolean ignoreInvisible) {
         int topPrefixOrderIndex = Integer.MIN_VALUE;
-        AppWindowToken topApp = null;
+        ActivityRecord topApp = null;
         for (int i = apps.size() - 1; i >= 0; i--) {
-            final AppWindowToken app = apps.valueAt(i);
-            if (ignoreHidden && app.isHidden()) {
+            final ActivityRecord app = apps.valueAt(i);
+            if (ignoreInvisible && !app.isVisible()) {
                 continue;
             }
             final int prefixOrderIndex = app.getPrefixOrderIndex();
@@ -714,21 +747,5 @@ public class AppTransitionController {
             }
         }
         return topApp;
-    }
-
-    private void processApplicationsAnimatingInPlace(int transit) {
-        if (transit == TRANSIT_TASK_IN_PLACE) {
-            // Find the focused window
-            final WindowState win = mDisplayContent.findFocusedWindow();
-            if (win != null) {
-                final AppWindowToken wtoken = win.mAppToken;
-                if (DEBUG_APP_TRANSITIONS)
-                    Slog.v(TAG, "Now animating app in place " + wtoken);
-                wtoken.cancelAnimation();
-                wtoken.applyAnimationLocked(null, transit, false, false);
-                wtoken.updateReportedVisibilityLocked();
-                wtoken.showAllWindowsLocked();
-            }
-        }
     }
 }

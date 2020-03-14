@@ -18,8 +18,6 @@ package com.android.internal.telephony;
 
 import android.app.PendingIntent;
 import android.net.Uri;
-import android.os.Bundle;
-import android.telephony.IFinancialSmsCallback;
 
 import java.util.List;
 
@@ -198,14 +196,19 @@ public class ISmsImplBase extends ISms.Stub {
     }
 
     @Override
-    public void getSmsMessagesForFinancialApp(
-            int subId, String callingPkg, Bundle params, IFinancialSmsCallback callback) {
+    public int checkSmsShortCodeDestination(int subid, String callingPackage,
+            String callingFeatureId, String destAddress, String countryIso) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public int checkSmsShortCodeDestination(
-            int subid, String callingApk, String destAddress, String countryIso) {
+    public String getSmscAddressFromIccEfForSubscriber(int subId, String callingPackage) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean setSmscAddressOnIccEfForSubscriber(
+            String smsc, int subId, String callingPackage) {
         throw new UnsupportedOperationException();
     }
 }

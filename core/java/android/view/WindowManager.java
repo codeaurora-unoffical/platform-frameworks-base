@@ -17,11 +17,26 @@
 package android.view;
 
 import static android.content.pm.ActivityInfo.COLOR_MODE_DEFAULT;
+import static android.view.WindowInsets.Side.BOTTOM;
+import static android.view.WindowInsets.Side.LEFT;
+import static android.view.WindowInsets.Side.RIGHT;
+import static android.view.WindowInsets.Side.TOP;
+import static android.view.WindowInsets.Type.CAPTION_BAR;
+import static android.view.WindowInsets.Type.IME;
+import static android.view.WindowInsets.Type.MANDATORY_SYSTEM_GESTURES;
+import static android.view.WindowInsets.Type.NAVIGATION_BARS;
+import static android.view.WindowInsets.Type.STATUS_BARS;
+import static android.view.WindowInsets.Type.SYSTEM_GESTURES;
+import static android.view.WindowInsets.Type.TAPPABLE_ELEMENT;
+import static android.view.WindowInsets.Type.WINDOW_DECOR;
 import static android.view.WindowLayoutParamsProto.ALPHA;
 import static android.view.WindowLayoutParamsProto.APPEARANCE;
 import static android.view.WindowLayoutParamsProto.BEHAVIOR;
 import static android.view.WindowLayoutParamsProto.BUTTON_BRIGHTNESS;
 import static android.view.WindowLayoutParamsProto.COLOR_MODE;
+import static android.view.WindowLayoutParamsProto.FIT_IGNORE_VISIBILITY;
+import static android.view.WindowLayoutParamsProto.FIT_INSETS_SIDES;
+import static android.view.WindowLayoutParamsProto.FIT_INSETS_TYPES;
 import static android.view.WindowLayoutParamsProto.FLAGS;
 import static android.view.WindowLayoutParamsProto.FORMAT;
 import static android.view.WindowLayoutParamsProto.GRAVITY;
@@ -29,7 +44,6 @@ import static android.view.WindowLayoutParamsProto.HAS_SYSTEM_UI_LISTENERS;
 import static android.view.WindowLayoutParamsProto.HEIGHT;
 import static android.view.WindowLayoutParamsProto.HORIZONTAL_MARGIN;
 import static android.view.WindowLayoutParamsProto.INPUT_FEATURE_FLAGS;
-import static android.view.WindowLayoutParamsProto.NEEDS_MENU_KEY;
 import static android.view.WindowLayoutParamsProto.PREFERRED_REFRESH_RATE;
 import static android.view.WindowLayoutParamsProto.PRIVATE_FLAGS;
 import static android.view.WindowLayoutParamsProto.ROTATION_ANIMATION;
@@ -66,6 +80,10 @@ import android.os.Parcelable;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.proto.ProtoOutputStream;
+import android.view.WindowInsets.Side;
+import android.view.WindowInsets.Side.InsetsSide;
+import android.view.WindowInsets.Type;
+import android.view.WindowInsets.Type.InsetsType;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.lang.annotation.Retention;
@@ -197,12 +215,6 @@ public interface WindowManager extends ViewManager {
     int TRANSIT_TASK_OPEN_BEHIND = 16;
 
     /**
-     * A window in a task is being animated in-place.
-     * @hide
-     */
-    int TRANSIT_TASK_IN_PLACE = 17;
-
-    /**
      * An activity is being relaunched (e.g. due to configuration change).
      * @hide
      */
@@ -286,7 +298,6 @@ public interface WindowManager extends ViewManager {
             TRANSIT_WALLPAPER_INTRA_OPEN,
             TRANSIT_WALLPAPER_INTRA_CLOSE,
             TRANSIT_TASK_OPEN_BEHIND,
-            TRANSIT_TASK_IN_PLACE,
             TRANSIT_ACTIVITY_RELAUNCH,
             TRANSIT_DOCK_TASK_FROM_RECENTS,
             TRANSIT_KEYGUARD_GOING_AWAY,
@@ -1113,6 +1124,13 @@ public interface WindowManager extends ViewManager {
         public static final int TYPE_APPLICATION_OVERLAY = FIRST_SYSTEM_WINDOW + 38;
 
         /**
+         * Window type: Window for adding accessibility window magnification above other windows.
+         * This will place the window in the overlay windows.
+         * @hide
+         */
+        public static final int TYPE_ACCESSIBILITY_MAGNIFICATION_OVERLAY = FIRST_SYSTEM_WINDOW + 39;
+
+        /**
          * End of types of system windows.
          */
         public static final int LAST_SYSTEM_WINDOW      = 2999;
@@ -1295,14 +1313,11 @@ public interface WindowManager extends ViewManager {
          * set for you by Window as described in {@link Window#setFlags}.*/
         public static final int FLAG_LAYOUT_INSET_DECOR = 0x00010000;
 
-        /** Window flag: invert the state of {@link #FLAG_NOT_FOCUSABLE} with
-         * respect to how this window interacts with the current method.  That
-         * is, if FLAG_NOT_FOCUSABLE is set and this flag is set, then the
-         * window will behave as if it needs to interact with the input method
-         * and thus be placed behind/away from it; if FLAG_NOT_FOCUSABLE is
-         * not set and this flag is set, then the window will behave as if it
-         * doesn't need to interact with the input method and can be placed
-         * to use more space and cover the input method.
+        /** Window flag: When set, input method can't interact with the focusable window
+         * and can be placed to use more space and cover the input method.
+         * Note: When combined with {@link #FLAG_NOT_FOCUSABLE}, this flag has no
+         * effect since input method cannot interact with windows having {@link #FLAG_NOT_FOCUSABLE}
+         * flag set.
          */
         public static final int FLAG_ALT_FOCUSABLE_IM = 0x00020000;
 
@@ -1456,7 +1471,10 @@ public interface WindowManager extends ViewManager {
          * position its UI elements with this overscan flag is set:</p>
          *
          * {@sample development/samples/ApiDemos/res/layout/overscan_activity.xml complete}
+         *
+         * @deprecated Overscan areas aren't set by any Android product anymore.
          */
+        @Deprecated
         public static final int FLAG_LAYOUT_IN_OVERSCAN = 0x02000000;
 
         /**
@@ -1687,14 +1705,16 @@ public interface WindowManager extends ViewManager {
          * to determine its default behavior.
          *
          * {@hide} */
-        @UnsupportedAppUsage
-        public static final int PRIVATE_FLAG_SHOW_FOR_ALL_USERS = 0x00000010;
+        @SystemApi
+        @RequiresPermission(permission.INTERNAL_SYSTEM_WINDOW)
+        public static final int SYSTEM_FLAG_SHOW_FOR_ALL_USERS = 0x00000010;
 
         /**
          * Never animate position changes of the window.
          *
          * {@hide}
          */
+        @UnsupportedAppUsage
         @TestApi
         public static final int PRIVATE_FLAG_NO_MOVE_ANIMATION = 0x00000040;
 
@@ -1710,11 +1730,6 @@ public interface WindowManager extends ViewManager {
          * it is created.
          * {@hide} */
         public static final int PRIVATE_FLAG_SYSTEM_ERROR = 0x00000100;
-
-        /** Window flag: maintain the previous translucent decor state when this window
-         * becomes top-most.
-         * {@hide} */
-        public static final int PRIVATE_FLAG_INHERIT_TRANSLUCENT_DECOR = 0x00000200;
 
         /**
          * Flag whether the current window is a keyguard window, meaning that it will hide all other
@@ -1834,6 +1849,27 @@ public interface WindowManager extends ViewManager {
         public static final int PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC = 0x01000000;
 
         /**
+         * Flag to request creation of a BLAST (Buffer as LayerState) Layer.
+         * If not specified the client will receive a BufferQueue layer.
+         * @hide
+         */
+        public static final int PRIVATE_FLAG_USE_BLAST = 0x02000000;
+
+        /**
+         * Flag to indicate that the window is controlling how it fits window insets on its own.
+         * So we don't need to adjust its attributes for fitting window insets.
+         * @hide
+         */
+        public static final int PRIVATE_FLAG_FIT_INSETS_CONTROLLED = 0x04000000;
+
+        /**
+         * Flag to indicate that the window only draws the bottom bar background so that we don't
+         * extend it to system bar areas at other sides.
+         * @hide
+         */
+        public static final int PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND = 0x08000000;
+
+        /**
          * An internal annotation for flags that can be specified to {@link #softInputMode}.
          *
          * @hide
@@ -1842,6 +1878,7 @@ public interface WindowManager extends ViewManager {
         @Retention(RetentionPolicy.SOURCE)
         @IntDef(flag = true, prefix = { "SYSTEM_FLAG_" }, value = {
                 SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS,
+                SYSTEM_FLAG_SHOW_FOR_ALL_USERS,
         })
         public @interface SystemFlags {}
 
@@ -1849,6 +1886,7 @@ public interface WindowManager extends ViewManager {
          * Control flags that are private to the platform.
          * @hide
          */
+        @UnsupportedAppUsage
         @ViewDebug.ExportedProperty(flagMapping = {
                 @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_FAKE_HARDWARE_ACCELERATED,
@@ -1863,8 +1901,8 @@ public interface WindowManager extends ViewManager {
                         equals = PRIVATE_FLAG_WANTS_OFFSET_NOTIFICATIONS,
                         name = "WANTS_OFFSET_NOTIFICATIONS"),
                 @ViewDebug.FlagToString(
-                        mask = PRIVATE_FLAG_SHOW_FOR_ALL_USERS,
-                        equals = PRIVATE_FLAG_SHOW_FOR_ALL_USERS,
+                        mask = SYSTEM_FLAG_SHOW_FOR_ALL_USERS,
+                        equals = SYSTEM_FLAG_SHOW_FOR_ALL_USERS,
                         name = "SHOW_FOR_ALL_USERS"),
                 @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_NO_MOVE_ANIMATION,
@@ -1878,10 +1916,6 @@ public interface WindowManager extends ViewManager {
                         mask = PRIVATE_FLAG_SYSTEM_ERROR,
                         equals = PRIVATE_FLAG_SYSTEM_ERROR,
                         name = "SYSTEM_ERROR"),
-                @ViewDebug.FlagToString(
-                        mask = PRIVATE_FLAG_INHERIT_TRANSLUCENT_DECOR,
-                        equals = PRIVATE_FLAG_INHERIT_TRANSLUCENT_DECOR,
-                        name = "INHERIT_TRANSLUCENT_DECOR"),
                 @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_KEYGUARD,
                         equals = PRIVATE_FLAG_KEYGUARD,
@@ -1937,52 +1971,18 @@ public interface WindowManager extends ViewManager {
                 @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC,
                         equals = PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC,
-                        name = "COLOR_SPACE_AGNOSTIC")
+                        name = "COLOR_SPACE_AGNOSTIC"),
+                @ViewDebug.FlagToString(
+                        mask = PRIVATE_FLAG_FIT_INSETS_CONTROLLED,
+                        equals = PRIVATE_FLAG_FIT_INSETS_CONTROLLED,
+                        name = "FIT_INSETS_CONTROLLED"),
+                @ViewDebug.FlagToString(
+                        mask = PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND,
+                        equals = PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND,
+                        name = "ONLY_DRAW_BOTTOM_BAR_BACKGROUND")
         })
         @TestApi
         public int privateFlags;
-
-        /**
-         * Value for {@link #needsMenuKey} for a window that has not explicitly specified if it
-         * needs {@link #NEEDS_MENU_SET_TRUE} or doesn't need {@link #NEEDS_MENU_SET_FALSE} a menu
-         * key. For this case, we should look at windows behind it to determine the appropriate
-         * value.
-         *
-         * @hide
-         */
-        public static final int NEEDS_MENU_UNSET = 0;
-
-        /**
-         * Value for {@link #needsMenuKey} for a window that has explicitly specified it needs a
-         * menu key.
-         *
-         * @hide
-         */
-        @UnsupportedAppUsage
-        public static final int NEEDS_MENU_SET_TRUE = 1;
-
-        /**
-         * Value for {@link #needsMenuKey} for a window that has explicitly specified it doesn't
-         * needs a menu key.
-         *
-         * @hide
-         */
-        @UnsupportedAppUsage
-        public static final int NEEDS_MENU_SET_FALSE = 2;
-
-        /**
-         * State variable for a window belonging to an activity that responds to
-         * {@link KeyEvent#KEYCODE_MENU} and therefore needs a Menu key. For devices where Menu is a
-         * physical button this variable is ignored, but on devices where the Menu key is drawn in
-         * software it may be hidden unless this variable is set to {@link #NEEDS_MENU_SET_TRUE}.
-         *
-         *  (Note that Action Bars, when available, are the preferred way to offer additional
-         * functions otherwise accessed via an options menu.)
-         *
-         * {@hide}
-         */
-        @UnsupportedAppUsage
-        public int needsMenuKey = NEEDS_MENU_UNSET;
 
         /**
          * Given a particular set of window manager flags, determine whether
@@ -1995,16 +1995,12 @@ public interface WindowManager extends ViewManager {
          *
          * @param flags The current window manager flags.
          *
-         * @return Returns true if such a window should be behind/interact
-         * with an input method, false if not.
+         * @return Returns {@code true} if such a window should be behind/interact
+         * with an input method, {@code false} if not.
          */
         public static boolean mayUseInputMethod(int flags) {
-            switch (flags&(FLAG_NOT_FOCUSABLE|FLAG_ALT_FOCUSABLE_IM)) {
-                case 0:
-                case FLAG_NOT_FOCUSABLE|FLAG_ALT_FOCUSABLE_IM:
-                    return true;
-            }
-            return false;
+            return (flags & FLAG_NOT_FOCUSABLE) != FLAG_NOT_FOCUSABLE
+                    && (flags & FLAG_ALT_FOCUSABLE_IM) != FLAG_ALT_FOCUSABLE_IM;
         }
 
         /**
@@ -2629,6 +2625,124 @@ public interface WindowManager extends ViewManager {
          */
         public final InsetsFlags insetsFlags = new InsetsFlags();
 
+        @ViewDebug.ExportedProperty(flagMapping = {
+                @ViewDebug.FlagToString(
+                        mask = STATUS_BARS,
+                        equals = STATUS_BARS,
+                        name = "STATUS_BARS"),
+                @ViewDebug.FlagToString(
+                        mask = NAVIGATION_BARS,
+                        equals = NAVIGATION_BARS,
+                        name = "NAVIGATION_BARS"),
+                @ViewDebug.FlagToString(
+                        mask = CAPTION_BAR,
+                        equals = CAPTION_BAR,
+                        name = "CAPTION_BAR"),
+                @ViewDebug.FlagToString(
+                        mask = IME,
+                        equals = IME,
+                        name = "IME"),
+                @ViewDebug.FlagToString(
+                        mask = SYSTEM_GESTURES,
+                        equals = SYSTEM_GESTURES,
+                        name = "SYSTEM_GESTURES"),
+                @ViewDebug.FlagToString(
+                        mask = MANDATORY_SYSTEM_GESTURES,
+                        equals = MANDATORY_SYSTEM_GESTURES,
+                        name = "MANDATORY_SYSTEM_GESTURES"),
+                @ViewDebug.FlagToString(
+                        mask = TAPPABLE_ELEMENT,
+                        equals = TAPPABLE_ELEMENT,
+                        name = "TAPPABLE_ELEMENT"),
+                @ViewDebug.FlagToString(
+                        mask = WINDOW_DECOR,
+                        equals = WINDOW_DECOR,
+                        name = "WINDOW_DECOR")
+        })
+        private @InsetsType int mFitWindowInsetsTypes = Type.systemBars();
+
+        @ViewDebug.ExportedProperty(flagMapping = {
+                @ViewDebug.FlagToString(
+                        mask = LEFT,
+                        equals = LEFT,
+                        name = "LEFT"),
+                @ViewDebug.FlagToString(
+                        mask = TOP,
+                        equals = TOP,
+                        name = "TOP"),
+                @ViewDebug.FlagToString(
+                        mask = RIGHT,
+                        equals = RIGHT,
+                        name = "RIGHT"),
+                @ViewDebug.FlagToString(
+                        mask = BOTTOM,
+                        equals = BOTTOM,
+                        name = "BOTTOM")
+        })
+        private @InsetsSide int mFitWindowInsetsSides = Side.all();
+
+        private boolean mFitIgnoreVisibility = false;
+
+        /**
+         * Specifies types of insets that this window should avoid overlapping during layout.
+         *
+         * @param types which types of insets that this window should avoid. The initial value of
+         *              this object includes all system bars.
+         * @hide pending unhide
+         */
+        public void setFitWindowInsetsTypes(@InsetsType int types) {
+            mFitWindowInsetsTypes = types;
+            privateFlags |= PRIVATE_FLAG_FIT_INSETS_CONTROLLED;
+        }
+
+        /**
+         * Specifies sides of insets that this window should avoid overlapping during layout.
+         *
+         * @param sides which sides that this window should avoid overlapping with the types
+         *              specified. The initial value of this object includes all sides.
+         * @hide pending unhide
+         */
+        public void setFitWindowInsetsSides(@InsetsSide int sides) {
+            mFitWindowInsetsSides = sides;
+            privateFlags |= PRIVATE_FLAG_FIT_INSETS_CONTROLLED;
+        }
+
+        /**
+         * Specifies if this window should fit the window insets no matter they are visible or not.
+         *
+         * @param ignore if true, this window will fit the given types even if they are not visible.
+         * @hide pending unhide
+         */
+        public void setFitIgnoreVisibility(boolean ignore) {
+            mFitIgnoreVisibility = ignore;
+            privateFlags |= PRIVATE_FLAG_FIT_INSETS_CONTROLLED;
+        }
+
+        /**
+         * @return the insets types that this window is avoiding overlapping.
+         * @hide pending unhide
+         */
+        public @InsetsType int getFitWindowInsetsTypes() {
+            return mFitWindowInsetsTypes;
+        }
+
+        /**
+         * @return the sides that this window is avoiding overlapping.
+         * @hide pending unhide
+         */
+        public @InsetsSide int getFitWindowInsetsSides() {
+            return mFitWindowInsetsSides;
+        }
+
+        /**
+         * @return {@code true} if this window fits the window insets no matter they are visible or
+         *         not.
+         * @hide pending unhide
+         */
+        public boolean getFitIgnoreVisibility() {
+            return mFitIgnoreVisibility;
+        }
+
         public LayoutParams() {
             super(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
             type = TYPE_APPLICATION;
@@ -2786,13 +2900,15 @@ public interface WindowManager extends ViewManager {
             out.writeInt(surfaceInsets.bottom);
             out.writeInt(hasManualSurfaceInsets ? 1 : 0);
             out.writeInt(preservePreviousSurfaceInsets ? 1 : 0);
-            out.writeInt(needsMenuKey);
             out.writeLong(accessibilityIdOfAnchor);
             TextUtils.writeToParcel(accessibilityTitle, out, parcelableFlags);
             out.writeInt(mColorMode);
             out.writeLong(hideTimeoutMilliseconds);
             out.writeInt(insetsFlags.appearance);
             out.writeInt(insetsFlags.behavior);
+            out.writeInt(mFitWindowInsetsTypes);
+            out.writeInt(mFitWindowInsetsSides);
+            out.writeBoolean(mFitIgnoreVisibility);
         }
 
         public static final @android.annotation.NonNull Parcelable.Creator<LayoutParams> CREATOR
@@ -2844,13 +2960,15 @@ public interface WindowManager extends ViewManager {
             surfaceInsets.bottom = in.readInt();
             hasManualSurfaceInsets = in.readInt() != 0;
             preservePreviousSurfaceInsets = in.readInt() != 0;
-            needsMenuKey = in.readInt();
             accessibilityIdOfAnchor = in.readLong();
             accessibilityTitle = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(in);
             mColorMode = in.readInt();
             hideTimeoutMilliseconds = in.readLong();
             insetsFlags.appearance = in.readInt();
             insetsFlags.behavior = in.readInt();
+            mFitWindowInsetsTypes = in.readInt();
+            mFitWindowInsetsSides = in.readInt();
+            mFitIgnoreVisibility = in.readBoolean();
         }
 
         @SuppressWarnings({"PointlessBitwiseExpression"})
@@ -2885,8 +3003,6 @@ public interface WindowManager extends ViewManager {
         public static final int SURFACE_INSETS_CHANGED = 1<<20;
         /** {@hide} */
         public static final int PREFERRED_REFRESH_RATE_CHANGED = 1 << 21;
-        /** {@hide} */
-        public static final int NEEDS_MENU_KEY_CHANGED = 1 << 22;
         /** {@hide} */
         public static final int PREFERRED_DISPLAY_MODE_ID = 1 << 23;
         /** {@hide} */
@@ -3061,11 +3177,6 @@ public interface WindowManager extends ViewManager {
                 changes |= SURFACE_INSETS_CHANGED;
             }
 
-            if (needsMenuKey != o.needsMenuKey) {
-                needsMenuKey = o.needsMenuKey;
-                changes |= NEEDS_MENU_KEY_CHANGED;
-            }
-
             if (accessibilityIdOfAnchor != o.accessibilityIdOfAnchor) {
                 accessibilityIdOfAnchor = o.accessibilityIdOfAnchor;
                 changes |= ACCESSIBILITY_ANCHOR_CHANGED;
@@ -3094,6 +3205,21 @@ public interface WindowManager extends ViewManager {
             if (insetsFlags.behavior != o.insetsFlags.behavior) {
                 insetsFlags.behavior = o.insetsFlags.behavior;
                 changes |= INSET_FLAGS_CHANGED;
+            }
+
+            if (mFitWindowInsetsTypes != o.mFitWindowInsetsTypes) {
+                mFitWindowInsetsTypes = o.mFitWindowInsetsTypes;
+                changes |= LAYOUT_CHANGED;
+            }
+
+            if (mFitWindowInsetsSides != o.mFitWindowInsetsSides) {
+                mFitWindowInsetsSides = o.mFitWindowInsetsSides;
+                changes |= LAYOUT_CHANGED;
+            }
+
+            if (mFitIgnoreVisibility != o.mFitIgnoreVisibility) {
+                mFitIgnoreVisibility = o.mFitIgnoreVisibility;
+                changes |= LAYOUT_CHANGED;
             }
 
             return changes;
@@ -3219,9 +3345,6 @@ public interface WindowManager extends ViewManager {
                     sb.append(" (!preservePreviousSurfaceInsets)");
                 }
             }
-            if (needsMenuKey == NEEDS_MENU_SET_TRUE) {
-                sb.append(" needsMenuKey");
-            }
             if (mColorMode != COLOR_MODE_DEFAULT) {
                 sb.append(" colorMode=").append(ActivityInfo.colorModeToString(mColorMode));
             }
@@ -3253,6 +3376,20 @@ public interface WindowManager extends ViewManager {
                 sb.append(prefix).append("  bhv=").append(ViewDebug.flagsToString(
                         InsetsFlags.class, "behavior", insetsFlags.behavior));
             }
+            if (mFitWindowInsetsTypes != 0) {
+                sb.append(System.lineSeparator());
+                sb.append(prefix).append("  fitTypes=").append(ViewDebug.flagsToString(
+                        LayoutParams.class, "mFitWindowInsetsTypes", mFitWindowInsetsTypes));
+            }
+            if (mFitWindowInsetsSides != Side.all()) {
+                sb.append(System.lineSeparator());
+                sb.append(prefix).append("  fitSides=").append(ViewDebug.flagsToString(
+                        LayoutParams.class, "mFitWindowInsetsSides", mFitWindowInsetsSides));
+            }
+            if (mFitIgnoreVisibility) {
+                sb.append(System.lineSeparator());
+                sb.append(prefix).append("  fitIgnoreVis");
+            }
 
             sb.append('}');
             return sb.toString();
@@ -3261,7 +3398,7 @@ public interface WindowManager extends ViewManager {
         /**
          * @hide
          */
-        public void writeToProto(ProtoOutputStream proto, long fieldId) {
+        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
             final long token = proto.start(fieldId);
             proto.write(TYPE, type);
             proto.write(X, x);
@@ -3283,7 +3420,6 @@ public interface WindowManager extends ViewManager {
             proto.write(HAS_SYSTEM_UI_LISTENERS, hasSystemUiListeners);
             proto.write(INPUT_FEATURE_FLAGS, inputFeatures);
             proto.write(USER_ACTIVITY_TIMEOUT, userActivityTimeout);
-            proto.write(NEEDS_MENU_KEY, needsMenuKey);
             proto.write(COLOR_MODE, mColorMode);
             proto.write(FLAGS, flags);
             proto.write(PRIVATE_FLAGS, privateFlags);
@@ -3291,6 +3427,9 @@ public interface WindowManager extends ViewManager {
             proto.write(SUBTREE_SYSTEM_UI_VISIBILITY_FLAGS, subtreeSystemUiVisibility);
             proto.write(APPEARANCE, insetsFlags.appearance);
             proto.write(BEHAVIOR, insetsFlags.behavior);
+            proto.write(FIT_INSETS_TYPES, mFitWindowInsetsTypes);
+            proto.write(FIT_INSETS_SIDES, mFitWindowInsetsSides);
+            proto.write(FIT_IGNORE_VISIBILITY, mFitIgnoreVisibility);
             proto.end(token);
         }
 

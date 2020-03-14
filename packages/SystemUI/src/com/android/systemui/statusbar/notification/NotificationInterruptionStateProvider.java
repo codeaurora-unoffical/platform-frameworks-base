@@ -18,7 +18,6 @@ package com.android.systemui.statusbar.notification;
 
 import static com.android.systemui.statusbar.StatusBarState.SHADE;
 
-import android.app.Notification;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.database.ContentObserver;
@@ -39,6 +38,7 @@ import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.NotificationPresenter;
 import com.android.systemui.statusbar.StatusBarState;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.policy.BatteryController;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
 
 import javax.inject.Inject;
@@ -63,6 +63,7 @@ public class NotificationInterruptionStateProvider {
     private final Context mContext;
     private final PowerManager mPowerManager;
     private final IDreamManager mDreamManager;
+    private final BatteryController mBatteryController;
 
     private NotificationPresenter mPresenter;
     private HeadsUpManager mHeadsUpManager;
@@ -75,13 +76,14 @@ public class NotificationInterruptionStateProvider {
 
     @Inject
     public NotificationInterruptionStateProvider(Context context, NotificationFilter filter,
-            StatusBarStateController stateController) {
+            StatusBarStateController stateController, BatteryController batteryController) {
         this(context,
                 (PowerManager) context.getSystemService(Context.POWER_SERVICE),
                 IDreamManager.Stub.asInterface(
                         ServiceManager.checkService(DreamService.DREAM_SERVICE)),
                 new AmbientDisplayConfiguration(context),
                 filter,
+                batteryController,
                 stateController);
     }
 
@@ -92,10 +94,12 @@ public class NotificationInterruptionStateProvider {
             IDreamManager dreamManager,
             AmbientDisplayConfiguration ambientDisplayConfiguration,
             NotificationFilter notificationFilter,
+            BatteryController batteryController,
             StatusBarStateController statusBarStateController) {
         mContext = context;
         mPowerManager = powerManager;
         mDreamManager = dreamManager;
+        mBatteryController = batteryController;
         mAmbientDisplayConfiguration = ambientDisplayConfiguration;
         mNotificationFilter = notificationFilter;
         mStatusBarStateController = statusBarStateController;
@@ -159,7 +163,7 @@ public class NotificationInterruptionStateProvider {
      * @return true if the entry should bubble up, false otherwise
      */
     public boolean shouldBubbleUp(NotificationEntry entry) {
-        final StatusBarNotification sbn = entry.notification;
+        final StatusBarNotification sbn = entry.getSbn();
 
         if (!canAlertCommon(entry)) {
             return false;
@@ -184,8 +188,7 @@ public class NotificationInterruptionStateProvider {
             return false;
         }
 
-        final Notification n = sbn.getNotification();
-        if (n.getBubbleMetadata() == null || n.getBubbleMetadata().getIntent() == null) {
+        if (entry.getBubbleMetadata() == null || entry.getBubbleMetadata().getIntent() == null) {
             if (DEBUG) {
                 Log.d(TAG, "No bubble up: notification: " + sbn.getKey()
                         + " doesn't have valid metadata");
@@ -211,7 +214,7 @@ public class NotificationInterruptionStateProvider {
     }
 
     private boolean shouldHeadsUpWhenAwake(NotificationEntry entry) {
-        StatusBarNotification sbn = entry.notification;
+        StatusBarNotification sbn = entry.getSbn();
 
         if (!mUseHeadsUp) {
             if (DEBUG_HEADS_UP) {
@@ -284,11 +287,18 @@ public class NotificationInterruptionStateProvider {
      * @return true if the entry should ambient pulse, false otherwise
      */
     private boolean shouldHeadsUpWhenDozing(NotificationEntry entry) {
-        StatusBarNotification sbn = entry.notification;
+        StatusBarNotification sbn = entry.getSbn();
 
         if (!mAmbientDisplayConfiguration.pulseOnNotificationEnabled(UserHandle.USER_CURRENT)) {
             if (DEBUG_HEADS_UP) {
                 Log.d(TAG, "No pulsing: disabled by setting: " + sbn.getKey());
+            }
+            return false;
+        }
+
+        if (mBatteryController.isAodPowerSave()) {
+            if (DEBUG_HEADS_UP) {
+                Log.d(TAG, "No pulsing: disabled by battery saver: " + sbn.getKey());
             }
             return false;
         }
@@ -324,7 +334,7 @@ public class NotificationInterruptionStateProvider {
      */
     @VisibleForTesting
     public boolean canAlertCommon(NotificationEntry entry) {
-        StatusBarNotification sbn = entry.notification;
+        StatusBarNotification sbn = entry.getSbn();
 
         if (mNotificationFilter.shouldFilterOut(entry)) {
             if (DEBUG || DEBUG_HEADS_UP) {
@@ -351,7 +361,7 @@ public class NotificationInterruptionStateProvider {
      */
     @VisibleForTesting
     public boolean canAlertAwakeCommon(NotificationEntry entry) {
-        StatusBarNotification sbn = entry.notification;
+        StatusBarNotification sbn = entry.getSbn();
 
         if (mPresenter.isDeviceInVrMode()) {
             if (DEBUG_HEADS_UP) {
@@ -411,7 +421,7 @@ public class NotificationInterruptionStateProvider {
      * @return {@code true} if we should launch the full screen intent
      */
     public boolean shouldLaunchFullScreenIntentWhenAdded(NotificationEntry entry) {
-        return entry.notification.getNotification().fullScreenIntent != null
+        return entry.getSbn().getNotification().fullScreenIntent != null
             && (!shouldHeadsUp(entry)
                 || mStatusBarStateController.getState() == StatusBarState.KEYGUARD);
     }

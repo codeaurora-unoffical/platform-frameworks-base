@@ -24,6 +24,9 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.BluetoothUuid;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
 import android.os.ParcelUuid;
 import android.os.SystemClock;
 import android.text.TextUtils;
@@ -32,6 +35,7 @@ import android.util.Log;
 
 import androidx.annotation.VisibleForTesting;
 
+import com.android.internal.util.ArrayUtils;
 import com.android.settingslib.R;
 import com.android.settingslib.Utils;
 
@@ -55,6 +59,7 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
     // Some Hearing Aids (especially the 2nd device) needs more time to do service discovery
     private static final long MAX_HEARING_AIDS_DELAY_FOR_AUTO_CONNECT = 15000;
     private static final long MAX_HOGP_DELAY_FOR_AUTO_CONNECT = 30000;
+    private static final long MAX_MEDIA_PROFILE_CONNECT_DELAY = 60000;
 
     private final Context mContext;
     private final BluetoothAdapter mLocalAdapter;
@@ -90,8 +95,34 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
     private boolean mIsActiveDeviceA2dp = false;
     private boolean mIsActiveDeviceHeadset = false;
     private boolean mIsActiveDeviceHearingAid = false;
+    // Media profile connect state
+    private boolean mIsA2dpProfileConnectedFail = false;
+    private boolean mIsHeadsetProfileConnectedFail = false;
+    private boolean mIsHearingAidProfileConnectedFail = false;
     // Group second device for Hearing Aid
     private CachedBluetoothDevice mSubDevice;
+
+    private final Handler mHandler = new Handler(Looper.getMainLooper()) {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case BluetoothProfile.A2DP:
+                    mIsA2dpProfileConnectedFail = true;
+                    break;
+                case BluetoothProfile.HEADSET:
+                    mIsHeadsetProfileConnectedFail = true;
+                    break;
+                case BluetoothProfile.HEARING_AID:
+                    mIsHearingAidProfileConnectedFail = true;
+                    break;
+                default:
+                    Log.w(TAG, "handleMessage(): unknown message : " + msg.what);
+                    break;
+            }
+            Log.w(TAG, "Connect to profile : " + msg.what + " timeout, show error message !");
+            refresh();
+        }
+    };
 
     CachedBluetoothDevice(Context context, LocalBluetoothProfileManager profileManager,
             BluetoothDevice device) {
@@ -133,6 +164,35 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
         }
 
         synchronized (mProfileLock) {
+            if (profile instanceof A2dpProfile || profile instanceof HeadsetProfile
+                    || profile instanceof HearingAidProfile) {
+                setProfileConnectedStatus(profile.getProfileId(), false);
+                switch (newProfileState) {
+                    case BluetoothProfile.STATE_CONNECTED:
+                        mHandler.removeMessages(profile.getProfileId());
+                        break;
+                    case BluetoothProfile.STATE_CONNECTING:
+                        mHandler.sendEmptyMessageDelayed(profile.getProfileId(),
+                                MAX_MEDIA_PROFILE_CONNECT_DELAY);
+                        break;
+                    case BluetoothProfile.STATE_DISCONNECTING:
+                        if (mHandler.hasMessages(profile.getProfileId())) {
+                            mHandler.removeMessages(profile.getProfileId());
+                        }
+                        break;
+                    case BluetoothProfile.STATE_DISCONNECTED:
+                        if (mHandler.hasMessages(profile.getProfileId())) {
+                            mHandler.removeMessages(profile.getProfileId());
+                            setProfileConnectedStatus(profile.getProfileId(), true);
+                        }
+                        break;
+                    default:
+                        Log.w(TAG, "onProfileStateChanged(): unknown profile state : "
+                                + newProfileState);
+                        break;
+                }
+            }
+
             if (newProfileState == BluetoothProfile.STATE_CONNECTED) {
                 if (profile instanceof MapProfile) {
                     profile.setPreferred(mDevice, true);
@@ -162,11 +222,27 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
         fetchActiveDevices();
     }
 
+    @VisibleForTesting
+    void setProfileConnectedStatus(int profileId, boolean isFailed) {
+        switch (profileId) {
+            case BluetoothProfile.A2DP:
+                mIsA2dpProfileConnectedFail = isFailed;
+                break;
+            case BluetoothProfile.HEADSET:
+                mIsHeadsetProfileConnectedFail = isFailed;
+                break;
+            case BluetoothProfile.HEARING_AID:
+                mIsHearingAidProfileConnectedFail = isFailed;
+                break;
+            default:
+                Log.w(TAG, "setProfileConnectedStatus(): unknown profile id : " + profileId);
+                break;
+        }
+    }
+
     public void disconnect() {
         synchronized (mProfileLock) {
-            for (LocalBluetoothProfile profile : mProfiles) {
-                disconnect(profile);
-            }
+            mLocalAdapter.disconnectAllEnabledProfiles(mDevice);
         }
         // Disconnect  PBAP server in case its connected
         // This is to ensure all the profiles are disconnected as some CK/Hs do not
@@ -365,12 +441,12 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
 
     /**
      * Get name from remote device
-     * @return {@link BluetoothDevice#getAliasName()} if
-     * {@link BluetoothDevice#getAliasName()} is not null otherwise return
+     * @return {@link BluetoothDevice#getAlias()} if
+     * {@link BluetoothDevice#getAlias()} is not null otherwise return
      * {@link BluetoothDevice#getAddress()}
      */
     public String getName() {
-        final String aliasName = mDevice.getAliasName();
+        final String aliasName = mDevice.getAlias();
         return TextUtils.isEmpty(aliasName) ? getAddress() : aliasName;
     }
 
@@ -428,7 +504,7 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
      * @return true if device's alias name is not null nor empty, false otherwise
      */
     public boolean hasHumanReadableName() {
-        return !TextUtils.isEmpty(mDevice.getAliasName());
+        return !TextUtils.isEmpty(mDevice.getAlias());
     }
 
     /**
@@ -575,7 +651,7 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
         }
 
         if (BluetoothUtils.D) {
-            Log.e(TAG, "updating profiles for " + mDevice.getAliasName() + ", " + mDevice);
+            Log.e(TAG, "updating profiles for " + mDevice.getAlias() + ", " + mDevice);
             BluetoothClass bluetoothClass = mDevice.getBluetoothClass();
 
             if (bluetoothClass != null) Log.v(TAG, "Class: " + bluetoothClass.toString());
@@ -610,9 +686,9 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
         ParcelUuid[] uuids = mDevice.getUuids();
 
         long timeout = MAX_UUID_DELAY_FOR_AUTO_CONNECT;
-        if (BluetoothUuid.isUuidPresent(uuids, BluetoothUuid.Hogp)) {
+        if (ArrayUtils.contains(uuids, BluetoothUuid.HOGP)) {
             timeout = MAX_HOGP_DELAY_FOR_AUTO_CONNECT;
-        } else if (BluetoothUuid.isUuidPresent(uuids, BluetoothUuid.HearingAid)) {
+        } else if (ArrayUtils.contains(uuids, BluetoothUuid.HEARING_AID)) {
             timeout = MAX_HEARING_AIDS_DELAY_FOR_AUTO_CONNECT;
         }
 
@@ -645,12 +721,8 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
 
         refresh();
 
-        if (bondState == BluetoothDevice.BOND_BONDED) {
-            if (mDevice.isBluetoothDock()) {
-                onBondingDockConnect();
-            } else if (mDevice.isBondingInitiatedLocally()) {
-                connect(false);
-            }
+        if (bondState == BluetoothDevice.BOND_BONDED && mDevice.isBondingInitiatedLocally()) {
+            connect(false);
         }
     }
 
@@ -844,6 +916,10 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
         int leftBattery = -1;
         int rightBattery = -1;
 
+        if (isProfileConnectedFail() && isConnected()) {
+            return mContext.getString(R.string.profile_connect_timeout_subtext);
+        }
+
         synchronized (mProfileLock) {
             for (LocalBluetoothProfile profile : getProfiles()) {
                 int connectionStatus = getProfileConnectionState(profile);
@@ -941,6 +1017,11 @@ public class CachedBluetoothDevice implements Comparable<CachedBluetoothDevice> 
 
     private boolean isTwsBatteryAvailable(int leftBattery, int rightBattery) {
         return leftBattery >= 0 && rightBattery >= 0;
+    }
+
+    private boolean isProfileConnectedFail() {
+        return mIsA2dpProfileConnectedFail || mIsHearingAidProfileConnectedFail
+                || mIsHeadsetProfileConnectedFail;
     }
 
     /**

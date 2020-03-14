@@ -18,6 +18,7 @@ package com.android.server;
 
 import static com.android.internal.util.ArrayUtils.appendInt;
 
+import android.annotation.NonNull;
 import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.pm.FeatureInfo;
@@ -26,6 +27,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Process;
 import android.os.SystemProperties;
+import android.os.Trace;
 import android.os.storage.StorageManager;
 import android.permission.PermissionManager.SplitPermissionInfo;
 import android.text.TextUtils;
@@ -33,8 +35,10 @@ import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Slog;
 import android.util.SparseArray;
+import android.util.TimingsTraceLog;
 import android.util.Xml;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.XmlUtils;
 
 import libcore.io.IoUtils;
@@ -50,6 +54,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Loads global system configuration info.
@@ -166,6 +171,10 @@ public class SystemConfig {
     // These are the permitted backup transport service components
     final ArraySet<ComponentName> mBackupTransportWhitelist = new ArraySet<>();
 
+    // These are packages mapped to maps of component class name to default enabled state.
+    final ArrayMap<String, ArrayMap<String, Boolean>> mPackageComponentEnabledState =
+            new ArrayMap<>();
+
     // Package names that are exempted from private API blacklisting
     final ArraySet<String> mHiddenApiPackageWhitelist = new ArraySet<>();
 
@@ -208,6 +217,18 @@ public class SystemConfig {
     final ArrayMap<String, ArraySet<String>> mAllowedAssociations = new ArrayMap<>();
 
     private final ArraySet<String> mBugreportWhitelistedPackages = new ArraySet<>();
+
+    // Map of packagesNames to userTypes. Stored temporarily until cleared by UserManagerService().
+    private ArrayMap<String, Set<String>> mPackageToUserTypeWhitelist = new ArrayMap<>();
+    private ArrayMap<String, Set<String>> mPackageToUserTypeBlacklist = new ArrayMap<>();
+
+    private final ArraySet<String> mRollbackWhitelistedPackages = new ArraySet<>();
+
+    /**
+     * Map of system pre-defined, uniquely named actors; keys are namespace,
+     * value maps actor name to package name.
+     */
+    private ArrayMap<String, ArrayMap<String, String>> mNamedActors = null;
 
     public static SystemConfig getInstance() {
         if (!isSystemProcess()) {
@@ -295,6 +316,10 @@ public class SystemConfig {
         return mBackupTransportWhitelist;
     }
 
+    public ArrayMap<String, Boolean> getComponentsEnabledStates(String packageName) {
+        return mPackageComponentEnabledState.get(packageName);
+    }
+
     public ArraySet<String> getDisabledUntilUsedPreinstalledCarrierApps() {
         return mDisabledUntilUsedPreinstalledCarrierApps;
     }
@@ -359,7 +384,63 @@ public class SystemConfig {
         return mBugreportWhitelistedPackages;
     }
 
+    public Set<String> getRollbackWhitelistedPackages() {
+        return mRollbackWhitelistedPackages;
+    }
+
+    /**
+     * Gets map of packagesNames to userTypes, dictating on which user types each package should be
+     * initially installed, and then removes this map from SystemConfig.
+     * Called by UserManagerService when it is constructed.
+     */
+    public ArrayMap<String, Set<String>> getAndClearPackageToUserTypeWhitelist() {
+        ArrayMap<String, Set<String>> r = mPackageToUserTypeWhitelist;
+        mPackageToUserTypeWhitelist = new ArrayMap<>(0);
+        return r;
+    }
+
+    /**
+     * Gets map of packagesNames to userTypes, dictating on which user types each package should NOT
+     * be initially installed, even if they are whitelisted, and then removes this map from
+     * SystemConfig.
+     * Called by UserManagerService when it is constructed.
+     */
+    public ArrayMap<String, Set<String>> getAndClearPackageToUserTypeBlacklist() {
+        ArrayMap<String, Set<String>> r = mPackageToUserTypeBlacklist;
+        mPackageToUserTypeBlacklist = new ArrayMap<>(0);
+        return r;
+    }
+
+    @NonNull
+    public Map<String, ? extends Map<String, String>> getNamedActors() {
+        return mNamedActors != null ? mNamedActors : Collections.emptyMap();
+    }
+
+    /**
+     * Only use for testing. Do NOT use in production code.
+     * @param readPermissions false to create an empty SystemConfig; true to read the permissions.
+     */
+    @VisibleForTesting
+    public SystemConfig(boolean readPermissions) {
+        if (readPermissions) {
+            Slog.w(TAG, "Constructing a test SystemConfig");
+            readAllPermissions();
+        } else {
+            Slog.w(TAG, "Constructing an empty test SystemConfig");
+        }
+    }
+
     SystemConfig() {
+        TimingsTraceLog log = new TimingsTraceLog(TAG, Trace.TRACE_TAG_SYSTEM_SERVER);
+        log.traceBegin("readAllPermissions");
+        try {
+            readAllPermissions();
+        } finally {
+            log.traceEnd();
+        }
+    }
+
+    private void readAllPermissions() {
         // Read configuration from system
         readPermissions(Environment.buildPath(
                 Environment.getRootDirectory(), "etc", "sysconfig"), ALLOW_ALL);
@@ -419,7 +500,8 @@ public class SystemConfig {
                 Environment.getSystemExtDirectory(), "etc", "permissions"), ALLOW_ALL);
     }
 
-    void readPermissions(File libraryDir, int permissionFlag) {
+    @VisibleForTesting
+    public void readPermissions(File libraryDir, int permissionFlag) {
         // Read permissions from given directory.
         if (!libraryDir.exists() || !libraryDir.isDirectory()) {
             if (permissionFlag == ALLOW_ALL) {
@@ -476,6 +558,7 @@ public class SystemConfig {
             Slog.w(TAG, "Couldn't find or open permissions file " + permFile);
             return;
         }
+        Slog.i(TAG, "Reading permissions from " + permFile);
 
         final boolean lowRam = ActivityManager.isLowRamDeviceStatic();
 
@@ -798,6 +881,10 @@ public class SystemConfig {
                         }
                         XmlUtils.skipCurrentTag(parser);
                     } break;
+                    case "component-override": {
+                        readComponentOverrides(parser, permFile);
+                        XmlUtils.skipCurrentTag(parser);
+                    } break;
                     case "backup-transport-whitelisted-service": {
                         if (allowFeatures) {
                             String serviceName = parser.getAttributeValue(null, "service");
@@ -954,6 +1041,59 @@ public class SystemConfig {
                         }
                         XmlUtils.skipCurrentTag(parser);
                     } break;
+                    case "install-in-user-type": {
+                        // NB: We allow any directory permission to declare install-in-user-type.
+                        readInstallInUserType(parser,
+                                mPackageToUserTypeWhitelist, mPackageToUserTypeBlacklist);
+                    } break;
+                    case "named-actor": {
+                        String namespace = TextUtils.safeIntern(
+                                parser.getAttributeValue(null, "namespace"));
+                        String actorName = parser.getAttributeValue(null, "name");
+                        String pkgName = TextUtils.safeIntern(
+                                parser.getAttributeValue(null, "package"));
+                        if (TextUtils.isEmpty(namespace)) {
+                            Slog.wtf(TAG, "<" + name + "> without namespace in " + permFile
+                                    + " at " + parser.getPositionDescription());
+                        } else if (TextUtils.isEmpty(actorName)) {
+                            Slog.wtf(TAG, "<" + name + "> without actor name in " + permFile
+                                    + " at " + parser.getPositionDescription());
+                        } else if (TextUtils.isEmpty(pkgName)) {
+                            Slog.wtf(TAG, "<" + name + "> without package name in " + permFile
+                                    + " at " + parser.getPositionDescription());
+                        } else if ("android".equalsIgnoreCase(namespace)) {
+                            throw new IllegalStateException("Defining " + actorName + " as "
+                                    + pkgName + " for the android namespace is not allowed");
+                        } else {
+                            if (mNamedActors == null) {
+                                mNamedActors = new ArrayMap<>();
+                            }
+
+                            ArrayMap<String, String> nameToPkgMap = mNamedActors.get(namespace);
+                            if (nameToPkgMap == null) {
+                                nameToPkgMap = new ArrayMap<>();
+                                mNamedActors.put(namespace, nameToPkgMap);
+                            } else if (nameToPkgMap.containsKey(actorName)) {
+                                String existing = nameToPkgMap.get(actorName);
+                                throw new IllegalStateException("Duplicate actor definition for "
+                                        + namespace + "/" + actorName
+                                        + "; defined as both " + existing + " and " + pkgName);
+                            }
+
+                            nameToPkgMap.put(actorName, pkgName);
+                        }
+                        XmlUtils.skipCurrentTag(parser);
+                    } break;
+                    case "rollback-whitelisted-app": {
+                        String pkgname = parser.getAttributeValue(null, "package");
+                        if (pkgname == null) {
+                            Slog.w(TAG, "<" + name + "> without package in " + permFile
+                                    + " at " + parser.getPositionDescription());
+                        } else {
+                            mRollbackWhitelistedPackages.add(pkgname);
+                        }
+                        XmlUtils.skipCurrentTag(parser);
+                    } break;
                     default: {
                         Slog.w(TAG, "Tag " + name + " is unknown in "
                                 + permFile + " at " + parser.getPositionDescription());
@@ -1091,6 +1231,53 @@ public class SystemConfig {
         }
     }
 
+    private void readInstallInUserType(XmlPullParser parser,
+            Map<String, Set<String>> doInstallMap,
+            Map<String, Set<String>> nonInstallMap)
+            throws IOException, XmlPullParserException {
+        final String packageName = parser.getAttributeValue(null, "package");
+        if (TextUtils.isEmpty(packageName)) {
+            Slog.w(TAG, "package is required for <install-in-user-type> in "
+                    + parser.getPositionDescription());
+            return;
+        }
+
+        Set<String> userTypesYes = doInstallMap.get(packageName);
+        Set<String> userTypesNo = nonInstallMap.get(packageName);
+        final int depth = parser.getDepth();
+        while (XmlUtils.nextElementWithin(parser, depth)) {
+            final String name = parser.getName();
+            if ("install-in".equals(name)) {
+                final String userType = parser.getAttributeValue(null, "user-type");
+                if (TextUtils.isEmpty(userType)) {
+                    Slog.w(TAG, "user-type is required for <install-in-user-type> in "
+                            + parser.getPositionDescription());
+                    continue;
+                }
+                if (userTypesYes == null) {
+                    userTypesYes = new ArraySet<>();
+                    doInstallMap.put(packageName, userTypesYes);
+                }
+                userTypesYes.add(userType);
+            } else if ("do-not-install-in".equals(name)) {
+                final String userType = parser.getAttributeValue(null, "user-type");
+                if (TextUtils.isEmpty(userType)) {
+                    Slog.w(TAG, "user-type is required for <install-in-user-type> in "
+                            + parser.getPositionDescription());
+                    continue;
+                }
+                if (userTypesNo == null) {
+                    userTypesNo = new ArraySet<>();
+                    nonInstallMap.put(packageName, userTypesNo);
+                }
+                userTypesNo.add(userType);
+            } else {
+                Slog.w(TAG, "unrecognized tag in <install-in-user-type> in "
+                        + parser.getPositionDescription());
+            }
+        }
+    }
+
     void readOemPermissions(XmlPullParser parser) throws IOException, XmlPullParserException {
         final String packageName = parser.getAttributeValue(null, "package");
         if (TextUtils.isEmpty(packageName)) {
@@ -1166,6 +1353,54 @@ public class SystemConfig {
         }
         if (!newPermissions.isEmpty()) {
             mSplitPermissions.add(new SplitPermissionInfo(splitPerm, newPermissions, targetSdk));
+        }
+    }
+
+    private void readComponentOverrides(XmlPullParser parser, File permFile)
+            throws IOException, XmlPullParserException {
+        String pkgname = parser.getAttributeValue(null, "package");
+        if (pkgname == null) {
+            Slog.w(TAG, "<component-override> without package in "
+                    + permFile + " at " + parser.getPositionDescription());
+            return;
+        }
+
+        pkgname = pkgname.intern();
+
+        final int depth = parser.getDepth();
+        while (XmlUtils.nextElementWithin(parser, depth)) {
+            String name = parser.getName();
+            if ("component".equals(name)) {
+                String clsname = parser.getAttributeValue(null, "class");
+                String enabled = parser.getAttributeValue(null, "enabled");
+                if (clsname == null) {
+                    Slog.w(TAG, "<component> without class in "
+                            + permFile + " at " + parser.getPositionDescription());
+                    return;
+                } else if (enabled == null) {
+                    Slog.w(TAG, "<component> without enabled in "
+                            + permFile + " at " + parser.getPositionDescription());
+                    return;
+                }
+
+                if (clsname.startsWith(".")) {
+                    clsname = pkgname + clsname;
+                }
+
+                clsname = clsname.intern();
+
+                ArrayMap<String, Boolean> componentEnabledStates =
+                        mPackageComponentEnabledState.get(pkgname);
+                if (componentEnabledStates == null) {
+                    componentEnabledStates = new ArrayMap<>();
+                    mPackageComponentEnabledState.put(pkgname,
+                            componentEnabledStates);
+                }
+
+                componentEnabledStates.put(clsname, !"false".equals(enabled));
+            } else {
+                XmlUtils.skipCurrentTag(parser);
+            }
         }
     }
 

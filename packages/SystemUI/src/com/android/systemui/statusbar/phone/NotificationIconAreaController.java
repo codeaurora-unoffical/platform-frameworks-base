@@ -15,7 +15,6 @@ import androidx.collection.ArrayMap;
 import com.android.internal.statusbar.StatusBarIcon;
 import com.android.internal.util.ContrastColorUtil;
 import com.android.settingslib.Utils;
-import com.android.systemui.Dependency;
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
 import com.android.systemui.plugins.DarkIconDispatcher;
@@ -26,7 +25,6 @@ import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.NotificationShelf;
 import com.android.systemui.statusbar.StatusBarIconView;
 import com.android.systemui.statusbar.StatusBarState;
-import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.NotificationUtils;
 import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
@@ -48,7 +46,6 @@ public class NotificationIconAreaController implements DarkReceiver,
     private static final long AOD_ICONS_APPEAR_DURATION = 200;
 
     private final ContrastColorUtil mContrastColorUtil;
-    private final NotificationEntryManager mEntryManager;
     private final Runnable mUpdateStatusBarIcons = this::updateStatusBarIcons;
     private final StatusBarStateController mStatusBarStateController;
     private final NotificationMediaManager mMediaManager;
@@ -80,19 +77,21 @@ public class NotificationIconAreaController implements DarkReceiver,
     private boolean mAodIconsVisible;
     private boolean mIsPulsing;
 
-    public NotificationIconAreaController(Context context, StatusBar statusBar,
+    public NotificationIconAreaController(
+            Context context,
+            StatusBar statusBar,
             StatusBarStateController statusBarStateController,
             NotificationWakeUpCoordinator wakeUpCoordinator,
             KeyguardBypassController keyguardBypassController,
-            NotificationMediaManager notificationMediaManager) {
+            NotificationMediaManager notificationMediaManager,
+            DozeParameters dozeParameters) {
         mStatusBar = statusBar;
         mContrastColorUtil = ContrastColorUtil.getInstance(context);
         mContext = context;
-        mEntryManager = Dependency.get(NotificationEntryManager.class);
         mStatusBarStateController = statusBarStateController;
         mStatusBarStateController.addCallback(this);
         mMediaManager = notificationMediaManager;
-        mDozeParameters = DozeParameters.getInstance(mContext);
+        mDozeParameters = dozeParameters;
         mWakeUpCoordinator = wakeUpCoordinator;
         wakeUpCoordinator.addListener(this);
         mBypassController = keyguardBypassController;
@@ -244,10 +243,10 @@ public class NotificationIconAreaController implements DarkReceiver,
         if (hideCenteredIcon && isCenteredNotificationIcon && !entry.isRowHeadsUp()) {
             return false;
         }
-        if (mEntryManager.getNotificationData().isAmbient(entry.key) && !showAmbient) {
+        if (entry.getRanking().isAmbient() && !showAmbient) {
             return false;
         }
-        if (hideCurrentMedia && entry.key.equals(mMediaManager.getMediaNotificationKey())) {
+        if (hideCurrentMedia && entry.getKey().equals(mMediaManager.getMediaNotificationKey())) {
             return false;
         }
         if (!entry.isTopLevelChild()) {
@@ -533,21 +532,24 @@ public class NotificationIconAreaController implements DarkReceiver,
     }
 
     public void appearAodIcons() {
-        DozeParameters dozeParameters = DozeParameters.getInstance(mContext);
-        if (dozeParameters.shouldControlScreenOff()) {
+        if (mDozeParameters.shouldControlScreenOff()) {
             mAodIcons.setTranslationY(-mAodIconAppearTranslation);
             mAodIcons.setAlpha(0);
-            mAodIcons.animate()
-                    .setInterpolator(Interpolators.DECELERATE_QUINT)
-                    .translationY(0)
-                    .setDuration(AOD_ICONS_APPEAR_DURATION)
-                    .start();
+            animateInAodIconTranslation();
             mAodIcons.animate()
                     .alpha(1)
                     .setInterpolator(Interpolators.LINEAR)
                     .setDuration(AOD_ICONS_APPEAR_DURATION)
                     .start();
         }
+    }
+
+    private void animateInAodIconTranslation() {
+        mAodIcons.animate()
+                .setInterpolator(Interpolators.DECELERATE_QUINT)
+                .translationY(0)
+                .setDuration(AOD_ICONS_APPEAR_DURATION)
+                .start();
     }
 
     private void reloadAodColor() {
@@ -606,14 +608,19 @@ public class NotificationIconAreaController implements DarkReceiver,
                         mAodIcons.setAlpha(1.0f);
                         appearAodIcons();
                     } else {
+                        // Let's make sure the icon are translated to 0, since we cancelled it above
+                        animateInAodIconTranslation();
                         // We were fading out, let's fade in instead
                         CrossFadeHelper.fadeIn(mAodIcons);
                     }
                 } else {
+                    // Let's make sure the icon are translated to 0, since we cancelled it above
+                    animateInAodIconTranslation();
                     CrossFadeHelper.fadeOut(mAodIcons);
                 }
             } else {
                 mAodIcons.setAlpha(1.0f);
+                mAodIcons.setTranslationY(0);
                 mAodIcons.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
             }
         }

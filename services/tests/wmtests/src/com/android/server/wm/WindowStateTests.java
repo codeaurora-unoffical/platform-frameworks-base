@@ -20,7 +20,7 @@ import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.hardware.camera2.params.OutputConfiguration.ROTATION_90;
-import static android.view.InsetsState.TYPE_TOP_BAR;
+import static android.view.InsetsState.ITYPE_STATUS_BAR;
 import static android.view.Surface.ROTATION_0;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_FULL;
 import static android.view.WindowManager.LayoutParams.FIRST_SUB_WINDOW;
@@ -57,9 +57,11 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 
 import android.graphics.Insets;
 import android.graphics.Matrix;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.platform.test.annotations.Presubmit;
 import android.util.Size;
@@ -221,8 +223,7 @@ public class WindowStateTests extends WindowTestsBase {
         final WindowState appWindow = createWindow(null, TYPE_APPLICATION, "appWindow");
         final WindowState imeWindow = createWindow(null, TYPE_INPUT_METHOD, "imeWindow");
 
-        // Setting FLAG_NOT_FOCUSABLE without FLAG_ALT_FOCUSABLE_IM prevents the window from being
-        // an IME target.
+        // Setting FLAG_NOT_FOCUSABLE prevents the window from being an IME target.
         appWindow.mAttrs.flags |= FLAG_NOT_FOCUSABLE;
         imeWindow.mAttrs.flags |= FLAG_NOT_FOCUSABLE;
 
@@ -230,7 +231,7 @@ public class WindowStateTests extends WindowTestsBase {
         appWindow.setHasSurface(true);
         imeWindow.setHasSurface(true);
 
-        // Windows without flags (FLAG_NOT_FOCUSABLE|FLAG_ALT_FOCUSABLE_IM) can't be IME targets
+        // Windows with FLAG_NOT_FOCUSABLE can't be IME targets
         assertFalse(appWindow.canBeImeTarget());
         assertFalse(imeWindow.canBeImeTarget());
 
@@ -238,10 +239,21 @@ public class WindowStateTests extends WindowTestsBase {
         appWindow.mAttrs.flags |= (FLAG_NOT_FOCUSABLE | FLAG_ALT_FOCUSABLE_IM);
         imeWindow.mAttrs.flags |= (FLAG_NOT_FOCUSABLE | FLAG_ALT_FOCUSABLE_IM);
 
-        // Visible app window with flags can be IME target while an IME window can never be an IME
-        // target regardless of its visibility or flags.
-        assertTrue(appWindow.canBeImeTarget());
+        // Visible app window with flags FLAG_NOT_FOCUSABLE or FLAG_ALT_FOCUSABLE_IM can't be IME
+        // target while an IME window can never be an IME target regardless of its visibility
+        // or flags.
+        assertFalse(appWindow.canBeImeTarget());
         assertFalse(imeWindow.canBeImeTarget());
+
+        // b/145812508: special legacy use-case for transparent/translucent windows.
+        appWindow.mAttrs.format = PixelFormat.TRANSPARENT;
+        assertTrue(appWindow.canBeImeTarget());
+
+        appWindow.mAttrs.format = PixelFormat.OPAQUE;
+        appWindow.mAttrs.flags &= ~FLAG_ALT_FOCUSABLE_IM;
+        assertFalse(appWindow.canBeImeTarget());
+        appWindow.mAttrs.flags &= ~FLAG_NOT_FOCUSABLE;
+        assertTrue(appWindow.canBeImeTarget());
 
         // Make windows invisible
         appWindow.hideLw(false /* doAnimation */);
@@ -255,7 +267,7 @@ public class WindowStateTests extends WindowTestsBase {
         // minimized and home stack is resizable, so that we should ignore input for the stack.
         final DockedStackDividerController controller =
                 mDisplayContent.getDockedDividerController();
-        final TaskStack stack = createTaskStackOnDisplay(WINDOWING_MODE_SPLIT_SCREEN_PRIMARY,
+        final ActivityStack stack = createTaskStackOnDisplay(WINDOWING_MODE_SPLIT_SCREEN_PRIMARY,
                 ACTIVITY_TYPE_STANDARD, mDisplayContent);
         spyOn(appWindow);
         spyOn(controller);
@@ -302,11 +314,11 @@ public class WindowStateTests extends WindowTestsBase {
     @Test
     public void testPrepareWindowToDisplayDuringRelayout() {
         // Call prepareWindowToDisplayDuringRelayout for a window without FLAG_TURN_SCREEN_ON before
-        // calling setCurrentLaunchCanTurnScreenOn for windows with flag in the same appWindowToken.
-        final AppWindowToken appWindowToken = createAppWindowToken(mDisplayContent,
+        // calling setCurrentLaunchCanTurnScreenOn for windows with flag in the same activity.
+        final ActivityRecord activity = createActivityRecord(mDisplayContent,
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD);
-        final WindowState first = createWindow(null, TYPE_APPLICATION, appWindowToken, "first");
-        final WindowState second = createWindow(null, TYPE_APPLICATION, appWindowToken, "second");
+        final WindowState first = createWindow(null, TYPE_APPLICATION, activity, "first");
+        final WindowState second = createWindow(null, TYPE_APPLICATION, activity, "second");
         second.mAttrs.flags |= WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
 
         testPrepareWindowToDisplayDuringRelayout(first, false /* expectedWakeupCalled */,
@@ -315,8 +327,8 @@ public class WindowStateTests extends WindowTestsBase {
                 false /* expectedCurrentLaunchCanTurnScreenOn */);
 
         // Call prepareWindowToDisplayDuringRelayout for two window that have FLAG_TURN_SCREEN_ON
-        // from the same appWindowToken. Only one should trigger the wakeup.
-        appWindowToken.setCurrentLaunchCanTurnScreenOn(true);
+        // from the same activity. Only one should trigger the wakeup.
+        activity.setCurrentLaunchCanTurnScreenOn(true);
         first.mAttrs.flags |= WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
         second.mAttrs.flags |= WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
 
@@ -327,15 +339,15 @@ public class WindowStateTests extends WindowTestsBase {
 
         // Without window flags, the state of ActivityRecord.canTurnScreenOn should still be able to
         // turn on the screen.
-        appWindowToken.setCurrentLaunchCanTurnScreenOn(true);
+        activity.setCurrentLaunchCanTurnScreenOn(true);
         first.mAttrs.flags &= ~WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
-        doReturn(true).when(appWindowToken.mActivityRecord).canTurnScreenOn();
+        doReturn(true).when(activity).canTurnScreenOn();
 
         testPrepareWindowToDisplayDuringRelayout(first, true /* expectedWakeupCalled */,
                 false /* expectedCurrentLaunchCanTurnScreenOn */);
 
         // Call prepareWindowToDisplayDuringRelayout for a windows that are not children of an
-        // appWindowToken. Both windows have the FLAG_TURNS_SCREEN_ON so both should call wakeup
+        // activity. Both windows have the FLAG_TURNS_SCREEN_ON so both should call wakeup
         final WindowToken windowToken = WindowTestUtils.createTestWindowToken(FIRST_SUB_WINDOW,
                 mDisplayContent);
         final WindowState firstWindow = createWindow(null, TYPE_APPLICATION, windowToken,
@@ -370,18 +382,18 @@ public class WindowStateTests extends WindowTestsBase {
         }
         // If wakeup is expected to be called, the currentLaunchCanTurnScreenOn should be false
         // because the state will be consumed.
-        assertThat(appWindow.mAppToken.currentLaunchCanTurnScreenOn(),
+        assertThat(appWindow.mActivityRecord.currentLaunchCanTurnScreenOn(),
                 is(expectedCurrentLaunchCanTurnScreenOn));
     }
 
     @Test
     public void testCanAffectSystemUiFlags() {
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        app.mToken.setHidden(false);
+        app.mActivityRecord.setVisible(true);
         assertTrue(app.canAffectSystemUiFlags());
-        app.mToken.setHidden(true);
+        app.mActivityRecord.setVisible(false);
         assertFalse(app.canAffectSystemUiFlags());
-        app.mToken.setHidden(false);
+        app.mActivityRecord.setVisible(true);
         app.mAttrs.alpha = 0.0f;
         assertFalse(app.canAffectSystemUiFlags());
     }
@@ -389,25 +401,26 @@ public class WindowStateTests extends WindowTestsBase {
     @Test
     public void testCanAffectSystemUiFlags_disallow() {
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        app.mToken.setHidden(false);
+        app.mActivityRecord.setVisible(true);
         assertTrue(app.canAffectSystemUiFlags());
         app.getTask().setCanAffectSystemUiFlags(false);
         assertFalse(app.canAffectSystemUiFlags());
     }
 
     @Test
-    public void testVisibleWithInsetsProvider() throws Exception {
-        final WindowState topBar = createWindow(null, TYPE_STATUS_BAR, "topBar");
+    public void testVisibleWithInsetsProvider() {
+        final WindowState statusBar = createWindow(null, TYPE_STATUS_BAR, "statusBar");
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        topBar.mHasSurface = true;
-        assertTrue(topBar.isVisible());
-        mDisplayContent.getInsetsStateController().getSourceProvider(TYPE_TOP_BAR)
-                .setWindow(topBar, null);
-        mDisplayContent.getInsetsStateController().onBarControlTargetChanged(app, app);
-        mDisplayContent.getInsetsStateController().getSourceProvider(TYPE_TOP_BAR)
-                .onInsetsModified(app, new InsetsSource(TYPE_TOP_BAR));
+        statusBar.mHasSurface = true;
+        assertTrue(statusBar.isVisible());
+        mDisplayContent.getInsetsStateController().getSourceProvider(ITYPE_STATUS_BAR)
+                .setWindow(statusBar, null /* frameProvider */);
+        mDisplayContent.getInsetsStateController().onBarControlTargetChanged(
+                app, null /* fakeTopControlling */, app, null /* fakeNavControlling */);
+        mDisplayContent.getInsetsStateController().getSourceProvider(ITYPE_STATUS_BAR)
+                .onInsetsModified(app, new InsetsSource(ITYPE_STATUS_BAR));
         waitUntilHandlersIdle();
-        assertFalse(topBar.isVisible());
+        assertFalse(statusBar.isVisible());
     }
 
     @Test
@@ -451,7 +464,7 @@ public class WindowStateTests extends WindowTestsBase {
     @Test
     public void testSeamlesslyRotateWindow() {
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        final SurfaceControl.Transaction t = mock(SurfaceControl.Transaction.class);
+        final SurfaceControl.Transaction t = spy(StubTransaction.class);
 
         app.mHasSurface = true;
         app.mSurfaceControl = mock(SurfaceControl.class);
@@ -508,12 +521,12 @@ public class WindowStateTests extends WindowTestsBase {
         window.setShowToOwnerOnlyLocked(true);
 
         mWm.mCurrentUserId = 1;
-        window.switchUser();
+        window.switchUser(mWm.mCurrentUserId);
         assertFalse(window.isVisible());
         assertFalse(window.isVisibleByPolicy());
 
         mWm.mCurrentUserId = 0;
-        window.switchUser();
+        window.switchUser(mWm.mCurrentUserId);
         assertTrue(window.isVisible());
         assertTrue(window.isVisibleByPolicy());
     }
@@ -535,7 +548,7 @@ public class WindowStateTests extends WindowTestsBase {
 
         final float[] values = new float[9];
         final Matrix matrix = new Matrix();
-        final SurfaceControl.Transaction t = mock(SurfaceControl.Transaction.class);
+        final SurfaceControl.Transaction t = spy(StubTransaction.class);
         final WindowState win1 = createWindow(null, TYPE_APPLICATION, dc, "win1");
         win1.mHasSurface = true;
         win1.mSurfaceControl = mock(SurfaceControl.class);
@@ -546,5 +559,30 @@ public class WindowStateTests extends WindowTestsBase {
         matrix.getValues(values);
         assertEquals(OFFSET_SUM, values[Matrix.MTRANS_X], 0f);
         assertEquals(0f, values[Matrix.MTRANS_Y], 0f);
+    }
+
+    @Test
+    public void testCantReceiveTouchDuringRecentsAnimation() {
+        final WindowState win0 = createWindow(null, TYPE_APPLICATION, "win0");
+
+        // Mock active recents animation
+        RecentsAnimationController recentsController = mock(RecentsAnimationController.class);
+        when(recentsController.isAnimatingTask(win0.mActivityRecord.getTask())).thenReturn(true);
+        mWm.setRecentsAnimationController(recentsController);
+        assertTrue(win0.cantReceiveTouchInput());
+    }
+
+    @Test
+    public void testCantReceiveTouchWhenAppTokenHiddenRequested() {
+        final WindowState win0 = createWindow(null, TYPE_APPLICATION, "win0");
+        win0.mActivityRecord.mVisibleRequested = false;
+        assertTrue(win0.cantReceiveTouchInput());
+    }
+
+    @Test
+    public void testCantReceiveTouchWhenShouldIgnoreInput() {
+        final WindowState win0 = createWindow(null, TYPE_APPLICATION, "win0");
+        win0.mActivityRecord.getStack().setAdjustedForMinimizedDock(1 /* Any non 0 value works */);
+        assertTrue(win0.cantReceiveTouchInput());
     }
 }

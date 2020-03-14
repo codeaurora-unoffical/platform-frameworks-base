@@ -92,7 +92,10 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -358,7 +361,7 @@ public final class InputMethodManager {
     boolean mActive = false;
 
     /**
-     * {@code true} if next {@link #onPostWindowFocus(View, View, int, boolean, int)} needs to
+     * {@code true} if next {@link #onPostWindowFocus(View, View, int, int)} needs to
      * restart input.
      */
     boolean mRestartOnNextWindowFocus = true;
@@ -420,6 +423,13 @@ public final class InputMethodManager {
     int mCursorSelEnd;
     int mCursorCandStart;
     int mCursorCandEnd;
+
+    /**
+     * Initial startInput with {@link StartInputReason.WINDOW_FOCUS_GAIN} is executed
+     * in a background thread. Later, if there is an actual startInput it will wait on
+     * main thread till the background thread completes.
+     */
+    private CompletableFuture<Void> mWindowFocusGainFuture;
 
     /**
      * The instance that has previously been sent to the input method.
@@ -525,16 +535,16 @@ public final class InputMethodManager {
         final InputMethodManager fallbackImm =
                 viewRootImpl.mContext.getSystemService(InputMethodManager.class);
         if (fallbackImm == null) {
-            Log.e(TAG, "b/117267690: Failed to get non-null fallback IMM. view=" + view);
+            Log.v(TAG, "b/117267690: Failed to get non-null fallback IMM. view=" + view);
             return null;
         }
         if (fallbackImm.mDisplayId != viewRootDisplayId) {
-            Log.e(TAG, "b/117267690: Failed to get fallback IMM with expected displayId="
+            Log.v(TAG, "b/117267690: Failed to get fallback IMM with expected displayId="
                     + viewRootDisplayId + " actual IMM#displayId=" + fallbackImm.mDisplayId
                     + " view=" + view);
             return null;
         }
-        Log.w(TAG, "b/117267690: Display ID mismatch found."
+        Log.v(TAG, "b/117267690: Display ID mismatch found."
                 + " ViewRootImpl displayId=" + viewRootDisplayId
                 + " InputMethodManager displayId=" + mDisplayId
                 + ". Use the right InputMethodManager instance to avoid performance overhead.",
@@ -645,14 +655,14 @@ public final class InputMethodManager {
                             } catch (RemoteException e) {
                             }
                         }
-                        // Check focus again in case that "onWindowFocus" is called before
-                        // handling this message.
-                        if (mServedView != null && canStartInput(mServedView)) {
-                            if (checkFocusNoStartInput(mRestartOnNextWindowFocus)) {
-                                final int reason = active ? StartInputReason.ACTIVATED_BY_IMMS
-                                        : StartInputReason.DEACTIVATED_BY_IMMS;
-                                startInputInner(reason, null, 0, 0, 0);
-                            }
+                    }
+                    // Check focus again in case that "onWindowFocus" is called before
+                    // handling this message.
+                    if (mServedView != null && canStartInput(mServedView)) {
+                        if (checkFocusNoStartInput(mRestartOnNextWindowFocus)) {
+                            final int reason = active ? StartInputReason.ACTIVATED_BY_IMMS
+                                    : StartInputReason.DEACTIVATED_BY_IMMS;
+                            startInputInner(reason, null, 0, 0, 0);
                         }
                     }
                     return;
@@ -1215,6 +1225,10 @@ public final class InputMethodManager {
      */
     void clearBindingLocked() {
         if (DEBUG) Log.v(TAG, "Clearing binding!");
+        if (mWindowFocusGainFuture != null) {
+            mWindowFocusGainFuture.cancel(false /* mayInterruptIfRunning */);
+            mWindowFocusGainFuture = null;
+        }
         clearConnectionLocked();
         setInputChannelLocked(null);
         mBindSequence = -1;
@@ -1598,6 +1612,18 @@ public final class InputMethodManager {
     boolean startInputInner(@StartInputReason int startInputReason,
             @Nullable IBinder windowGainingFocus, @StartInputFlags int startInputFlags,
             @SoftInputModeFlags int softInputMode, int windowFlags) {
+        if (startInputReason != StartInputReason.WINDOW_FOCUS_GAIN
+                && mWindowFocusGainFuture != null) {
+            try {
+                mWindowFocusGainFuture.get();
+            } catch (ExecutionException | InterruptedException e) {
+                // do nothing
+            } catch (CancellationException e) {
+                // window no longer has focus.
+                return true;
+            }
+        }
+
         final View view;
         synchronized (mH) {
             view = mServedView;
@@ -1925,13 +1951,12 @@ public final class InputMethodManager {
      * @hide
      */
     public void onPostWindowFocus(View rootView, View focusedView,
-            @SoftInputModeFlags int softInputMode, boolean first, int windowFlags) {
+            @SoftInputModeFlags int softInputMode, int windowFlags) {
         boolean forceNewFocus = false;
         synchronized (mH) {
             if (DEBUG) Log.v(TAG, "onWindowFocus: " + focusedView
                     + " softInputMode=" + InputMethodDebug.softInputModeToString(softInputMode)
-                    + " first=" + first + " flags=#"
-                    + Integer.toHexString(windowFlags));
+                    + " flags=#" + Integer.toHexString(windowFlags));
             if (mRestartOnNextWindowFocus) {
                 if (DEBUG) Log.v(TAG, "Restarting due to mRestartOnNextWindowFocus");
                 mRestartOnNextWindowFocus = false;
@@ -1947,35 +1972,39 @@ public final class InputMethodManager {
                 startInputFlags |= StartInputFlags.IS_TEXT_EDITOR;
             }
         }
-        if (first) {
-            startInputFlags |= StartInputFlags.FIRST_WINDOW_FOCUS_GAIN;
-        }
 
-        if (checkFocusNoStartInput(forceNewFocus)) {
-            // We need to restart input on the current focus view.  This
-            // should be done in conjunction with telling the system service
-            // about the window gaining focus, to help make the transition
-            // smooth.
-            if (startInputInner(StartInputReason.WINDOW_FOCUS_GAIN, rootView.getWindowToken(),
-                    startInputFlags, softInputMode, windowFlags)) {
-                return;
-            }
+        final boolean forceNewFocus1 = forceNewFocus;
+        final int startInputFlags1 = startInputFlags;
+        if (mWindowFocusGainFuture != null) {
+            mWindowFocusGainFuture.cancel(false/* mayInterruptIfRunning */);
         }
+        mWindowFocusGainFuture = CompletableFuture.runAsync(() -> {
+            if (checkFocusNoStartInput(forceNewFocus1)) {
+                // We need to restart input on the current focus view.  This
+                // should be done in conjunction with telling the system service
+                // about the window gaining focus, to help make the transition
+                // smooth.
+                if (startInputInner(StartInputReason.WINDOW_FOCUS_GAIN, rootView.getWindowToken(),
+                        startInputFlags1, softInputMode, windowFlags)) {
+                    return;
+                }
+            }
 
-        // For some reason we didn't do a startInput + windowFocusGain, so
-        // we'll just do a window focus gain and call it a day.
-        synchronized (mH) {
-            try {
-                if (DEBUG) Log.v(TAG, "Reporting focus gain, without startInput");
-                mService.startInputOrWindowGainedFocus(
-                        StartInputReason.WINDOW_FOCUS_GAIN_REPORT_ONLY, mClient,
-                        rootView.getWindowToken(), startInputFlags, softInputMode, windowFlags,
-                        null, null, 0 /* missingMethodFlags */,
-                        rootView.getContext().getApplicationInfo().targetSdkVersion);
-            } catch (RemoteException e) {
-                throw e.rethrowFromSystemServer();
+            // For some reason we didn't do a startInput + windowFocusGain, so
+            // we'll just do a window focus gain and call it a day.
+            synchronized (mH) {
+                try {
+                    if (DEBUG) Log.v(TAG, "Reporting focus gain, without startInput");
+                    mService.startInputOrWindowGainedFocus(
+                            StartInputReason.WINDOW_FOCUS_GAIN_REPORT_ONLY, mClient,
+                            rootView.getWindowToken(), startInputFlags1, softInputMode, windowFlags,
+                            null, null, 0 /* missingMethodFlags */,
+                            rootView.getContext().getApplicationInfo().targetSdkVersion);
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
             }
-        }
+        });
     }
 
     /** @hide */
@@ -1990,6 +2019,10 @@ public final class InputMethodManager {
                 // If the mCurRootView is losing window focus, release the strong reference to it
                 // so as not to prevent it from being garbage-collected.
                 mCurRootView = null;
+                if (mWindowFocusGainFuture != null) {
+                    mWindowFocusGainFuture.cancel(false /* mayInterruptIfRunning */);
+                    mWindowFocusGainFuture = null;
+                }
             } else {
                 if (DEBUG) {
                     Log.v(TAG, "Ignoring onPreWindowFocus()."

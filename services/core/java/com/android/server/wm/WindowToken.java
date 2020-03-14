@@ -19,14 +19,16 @@ package com.android.server.wm;
 import static android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER;
 import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR;
 
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_ADD_REMOVE;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_FOCUS;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_WINDOW_MOVEMENT;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_ADD_REMOVE;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_FOCUS;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_WINDOW_MOVEMENT;
+import static com.android.server.wm.WindowContainer.AnimationFlags.CHILDREN;
+import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
+import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
 import static com.android.server.wm.WindowManagerService.UPDATE_FOCUS_NORMAL;
 import static com.android.server.wm.WindowTokenProto.HASH_CODE;
-import static com.android.server.wm.WindowTokenProto.HIDDEN;
 import static com.android.server.wm.WindowTokenProto.PAUSED;
 import static com.android.server.wm.WindowTokenProto.WAITING_TO_SHOW;
 import static com.android.server.wm.WindowTokenProto.WINDOWS;
@@ -35,8 +37,9 @@ import static com.android.server.wm.WindowTokenProto.WINDOW_CONTAINER;
 import android.annotation.CallSuper;
 import android.os.Debug;
 import android.os.IBinder;
-import android.util.Slog;
 import android.util.proto.ProtoOutputStream;
+
+import com.android.server.protolog.common.ProtoLog;
 
 import java.io.PrintWriter;
 import java.util.Comparator;
@@ -68,19 +71,12 @@ class WindowToken extends WindowContainer<WindowState> {
     // Is key dispatching paused for this token?
     boolean paused = false;
 
-    // Should this token's windows be hidden?
-    private boolean mHidden;
-
     // Temporary for finding which tokens no longer have visible windows.
     boolean hasVisible;
 
     // Set to true when this token is in a pending transaction where it
     // will be shown.
     boolean waitingToShow;
-
-    // Set to true when this token is in a pending transaction where its
-    // windows will be put to the bottom of the list.
-    boolean sendingToBottom;
 
     /** The owner has {@link android.Manifest.permission#MANAGE_APP_TOKENS} */
     final boolean mOwnerCanManageAppTokens;
@@ -119,24 +115,16 @@ class WindowToken extends WindowContainer<WindowState> {
         mPersistOnEmpty = persistOnEmpty;
         mOwnerCanManageAppTokens = ownerCanManageAppTokens;
         mRoundedCornerOverlay = roundedCornerOverlay;
-        onDisplayChanged(dc);
-    }
-
-    void setHidden(boolean hidden) {
-        if (hidden != mHidden) {
-            mHidden = hidden;
+        if (dc != null) {
+            onDisplayChanged(dc);
         }
-    }
-
-    boolean isHidden() {
-        return mHidden;
     }
 
     void removeAllWindowsIfPossible() {
         for (int i = mChildren.size() - 1; i >= 0; --i) {
             final WindowState win = mChildren.get(i);
-            if (DEBUG_WINDOW_MOVEMENT) Slog.w(TAG_WM,
-                    "removeAllWindowsIfPossible: removing win=" + win);
+            ProtoLog.w(WM_DEBUG_WINDOW_MOVEMENT,
+                    "removeAllWindowsIfPossible: removing win=%s", win);
             win.removeIfPossible();
         }
     }
@@ -150,23 +138,23 @@ class WindowToken extends WindowContainer<WindowState> {
         // This token is exiting, so allow it to be removed when it no longer contains any windows.
         mPersistOnEmpty = false;
 
-        if (mHidden) {
+        if (!isVisible()) {
             return;
         }
 
         final int count = mChildren.size();
         boolean changed = false;
-        boolean delayed = false;
+        final boolean delayed = isAnimating(TRANSITION | PARENTS | CHILDREN);
 
         for (int i = 0; i < count; i++) {
             final WindowState win = mChildren.get(i);
-            if (win.isAnimating()) {
-                delayed = true;
-            }
             changed |= win.onSetAppExiting();
         }
 
-        setHidden(true);
+        final ActivityRecord app = asActivityRecord();
+        if (app != null) {
+            app.setVisible(false);
+        }
 
         if (changed) {
             mWmService.mWindowPlacerLocked.performSurfacePlacement();
@@ -197,15 +185,15 @@ class WindowToken extends WindowContainer<WindowState> {
     }
 
     void addWindow(final WindowState win) {
-        if (DEBUG_FOCUS) Slog.d(TAG_WM,
-                "addWindow: win=" + win + " Callers=" + Debug.getCallers(5));
+        ProtoLog.d(WM_DEBUG_FOCUS,
+                "addWindow: win=%s Callers=%s", win, Debug.getCallers(5));
 
         if (win.isChildWindow()) {
             // Child windows are added to their parent windows.
             return;
         }
         if (!mChildren.contains(win)) {
-            if (DEBUG_ADD_REMOVE) Slog.v(TAG_WM, "Adding " + win + " to " + this);
+            ProtoLog.v(WM_DEBUG_ADD_REMOVE, "Adding %s to %s", win, this);
             addChild(win, mWindowComparator);
             mWmService.mWindowsChanged = true;
             // TODO: Should we also be setting layout needed here and other places?
@@ -240,7 +228,7 @@ class WindowToken extends WindowContainer<WindowState> {
         return false;
     }
 
-    AppWindowToken asAppWindowToken() {
+    ActivityRecord asActivityRecord() {
         // TODO: Not sure if this is the best way to handle this vs. using instanceof and casting.
         // I am not an app window token!
         return null;
@@ -270,20 +258,19 @@ class WindowToken extends WindowContainer<WindowState> {
 
     @CallSuper
     @Override
-    public void writeToProto(ProtoOutputStream proto, long fieldId,
+    public void dumpDebug(ProtoOutputStream proto, long fieldId,
             @WindowTraceLogLevel int logLevel) {
         if (logLevel == WindowTraceLogLevel.CRITICAL && !isVisible()) {
             return;
         }
 
         final long token = proto.start(fieldId);
-        super.writeToProto(proto, WINDOW_CONTAINER, logLevel);
+        super.dumpDebug(proto, WINDOW_CONTAINER, logLevel);
         proto.write(HASH_CODE, System.identityHashCode(this));
         for (int i = 0; i < mChildren.size(); i++) {
             final WindowState w = mChildren.get(i);
-            w.writeToProto(proto, WINDOWS, logLevel);
+            w.dumpDebug(proto, WINDOWS, logLevel);
         }
-        proto.write(HIDDEN, mHidden);
         proto.write(WAITING_TO_SHOW, waitingToShow);
         proto.write(PAUSED, paused);
         proto.end(token);
@@ -293,12 +280,11 @@ class WindowToken extends WindowContainer<WindowState> {
         super.dump(pw, prefix, dumpAll);
         pw.print(prefix); pw.print("windows="); pw.println(mChildren);
         pw.print(prefix); pw.print("windowType="); pw.print(windowType);
-                pw.print(" hidden="); pw.print(mHidden);
-                pw.print(" hasVisible="); pw.println(hasVisible);
-        if (waitingToShow || sendingToBottom) {
-            pw.print(prefix); pw.print("waitingToShow="); pw.print(waitingToShow);
-                    pw.print(" sendingToBottom="); pw.print(sendingToBottom);
+                pw.print(" hasVisible="); pw.print(hasVisible);
+        if (waitingToShow) {
+            pw.print(" waitingToShow=true");
         }
+        pw.println();
     }
 
     @Override
@@ -316,14 +302,6 @@ class WindowToken extends WindowContainer<WindowState> {
     @Override
     String getName() {
         return toString();
-    }
-
-    boolean okToDisplay() {
-        return mDisplayContent != null && mDisplayContent.okToDisplay();
-    }
-
-    boolean okToAnimate() {
-        return mDisplayContent != null && mDisplayContent.okToAnimate();
     }
 
     /**

@@ -60,9 +60,7 @@ import java.util.Set;
  * multiple possible matching values (via {@link #addAction},
  * {@link #addDataType}, {@link #addDataScheme}, {@link #addDataSchemeSpecificPart},
  * {@link #addDataAuthority}, {@link #addDataPath}, and {@link #addCategory}, respectively).
- * For actions, the field
- * will not be tested if no values have been given (treating it as a wildcard);
- * if no data characteristics are specified, however, then the filter will
+ * For actions, if no data characteristics are specified, then the filter will
  * only match intents that contain no data.
  *
  * <p>The data characteristic is
@@ -926,7 +924,7 @@ public class IntentFilter implements Parcelable {
             dest.writeInt(mPort);
         }
 
-        void writeToProto(ProtoOutputStream proto, long fieldId) {
+        void dumpDebug(ProtoOutputStream proto, long fieldId) {
             long token = proto.start(fieldId);
             // The original host information is already contained in host and wild, no output now.
             proto.write(AuthorityEntryProto.HOST, mHost);
@@ -1760,7 +1758,7 @@ public class IntentFilter implements Parcelable {
     }
 
     /** @hide */
-    public void writeToProto(ProtoOutputStream proto, long fieldId) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
         long token = proto.start(fieldId);
         if (mActions.size() > 0) {
             Iterator<String> it = mActions.iterator();
@@ -1783,19 +1781,19 @@ public class IntentFilter implements Parcelable {
         if (mDataSchemeSpecificParts != null) {
             Iterator<PatternMatcher> it = mDataSchemeSpecificParts.iterator();
             while (it.hasNext()) {
-                it.next().writeToProto(proto, IntentFilterProto.DATA_SCHEME_SPECS);
+                it.next().dumpDebug(proto, IntentFilterProto.DATA_SCHEME_SPECS);
             }
         }
         if (mDataAuthorities != null) {
             Iterator<AuthorityEntry> it = mDataAuthorities.iterator();
             while (it.hasNext()) {
-                it.next().writeToProto(proto, IntentFilterProto.DATA_AUTHORITIES);
+                it.next().dumpDebug(proto, IntentFilterProto.DATA_AUTHORITIES);
             }
         }
         if (mDataPaths != null) {
             Iterator<PatternMatcher> it = mDataPaths.iterator();
             while (it.hasNext()) {
-                it.next().writeToProto(proto, IntentFilterProto.DATA_PATHS);
+                it.next().dumpDebug(proto, IntentFilterProto.DATA_PATHS);
             }
         }
         if (mDataTypes != null) {

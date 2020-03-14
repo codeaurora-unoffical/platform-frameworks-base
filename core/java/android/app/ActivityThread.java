@@ -112,6 +112,7 @@ import android.os.ServiceManager;
 import android.os.StrictMode;
 import android.os.SystemClock;
 import android.os.SystemProperties;
+import android.os.TelephonyServiceManager;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.permission.IPermissionManager;
@@ -128,6 +129,7 @@ import android.security.net.config.NetworkSecurityConfigProvider;
 import android.system.ErrnoException;
 import android.system.OsConstants;
 import android.system.StructStat;
+import android.telephony.TelephonyFrameworkInitializer;
 import android.util.AndroidRuntimeException;
 import android.util.ArrayMap;
 import android.util.DisplayMetrics;
@@ -719,6 +721,9 @@ public final class ActivityThread extends ClientTransactionHandler {
 
     static final class CreateServiceData {
         @UnsupportedAppUsage
+        CreateServiceData() {
+        }
+        @UnsupportedAppUsage
         IBinder token;
         @UnsupportedAppUsage
         ServiceInfo info;
@@ -759,6 +764,9 @@ public final class ActivityThread extends ClientTransactionHandler {
     }
 
     static final class AppBindData {
+        @UnsupportedAppUsage
+        AppBindData() {
+        }
         @UnsupportedAppUsage
         LoadedApk info;
         @UnsupportedAppUsage
@@ -1161,6 +1169,10 @@ public final class ActivityThread extends ClientTransactionHandler {
 
         public void attachAgent(String agent) {
             sendMessage(H.ATTACH_AGENT, agent);
+        }
+
+        public void attachStartupAgents(String dataDir) {
+            sendMessage(H.ATTACH_STARTUP_AGENTS, dataDir);
         }
 
         public void setSchedulingGroup(int group) {
@@ -1812,6 +1824,7 @@ public final class ActivityThread extends ClientTransactionHandler {
         public static final int EXECUTE_TRANSACTION = 159;
         public static final int RELAUNCH_ACTIVITY = 160;
         public static final int PURGE_RESOURCES = 161;
+        public static final int ATTACH_STARTUP_AGENTS = 162;
 
         String codeToString(int code) {
             if (DEBUG_MESSAGES) {
@@ -1855,6 +1868,7 @@ public final class ActivityThread extends ClientTransactionHandler {
                     case EXECUTE_TRANSACTION: return "EXECUTE_TRANSACTION";
                     case RELAUNCH_ACTIVITY: return "RELAUNCH_ACTIVITY";
                     case PURGE_RESOURCES: return "PURGE_RESOURCES";
+                    case ATTACH_STARTUP_AGENTS: return "ATTACH_STARTUP_AGENTS";
                 }
             }
             return Integer.toString(code);
@@ -2042,6 +2056,9 @@ public final class ActivityThread extends ClientTransactionHandler {
                     break;
                 case PURGE_RESOURCES:
                     schedulePurgeIdler();
+                    break;
+                case ATTACH_STARTUP_AGENTS:
+                    handleAttachStartupAgents((String) msg.obj);
                     break;
             }
             Object obj = msg.obj;
@@ -3400,7 +3417,7 @@ public final class ActivityThread extends ClientTransactionHandler {
     private ContextImpl createBaseContextForActivity(ActivityClientRecord r) {
         final int displayId;
         try {
-            displayId = ActivityTaskManager.getService().getActivityDisplayId(r.token);
+            displayId = ActivityTaskManager.getService().getDisplayId(r.token);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -3779,6 +3796,27 @@ public final class ActivityThread extends ClientTransactionHandler {
         }
     }
 
+    static void handleAttachStartupAgents(String dataDir) {
+        try {
+            Path code_cache = ContextImpl.getCodeCacheDirBeforeBind(new File(dataDir)).toPath();
+            if (!Files.exists(code_cache)) {
+                return;
+            }
+            Path startup_path = code_cache.resolve("startup_agents");
+            if (Files.exists(startup_path)) {
+                for (Path p : Files.newDirectoryStream(startup_path)) {
+                    handleAttachAgent(
+                            p.toAbsolutePath().toString()
+                            + "="
+                            + dataDir,
+                            null);
+                }
+            }
+        } catch (Exception e) {
+            // Ignored.
+        }
+    }
+
     private static final ThreadLocal<Intent> sCurrentBroadcastIntent = new ThreadLocal<Intent>();
 
     /**
@@ -3983,24 +4021,14 @@ public final class ActivityThread extends ClientTransactionHandler {
                 data.info.applicationInfo, data.compatInfo);
         Service service = null;
         try {
-            java.lang.ClassLoader cl = packageInfo.getClassLoader();
-            service = packageInfo.getAppFactory()
-                    .instantiateService(cl, data.info.name, data.intent);
-        } catch (Exception e) {
-            if (!mInstrumentation.onException(service, e)) {
-                throw new RuntimeException(
-                    "Unable to instantiate service " + data.info.name
-                    + ": " + e.toString(), e);
-            }
-        }
-
-        try {
             if (localLOGV) Slog.v(TAG, "Creating service " + data.info.name);
 
             ContextImpl context = ContextImpl.createAppContext(this, packageInfo);
-            context.setOuterContext(service);
-
             Application app = packageInfo.makeApplication(false, mInstrumentation);
+            java.lang.ClassLoader cl = packageInfo.getClassLoader();
+            service = packageInfo.getAppFactory()
+                    .instantiateService(cl, data.info.name, data.intent);
+            context.setOuterContext(service);
             service.attach(context, this, data.info.name, data.token, app,
                     ActivityManager.getService());
             service.onCreate();
@@ -4379,7 +4407,9 @@ public final class ActivityThread extends ClientTransactionHandler {
                 r.newConfig = null;
             }
             if (localLOGV) Slog.v(TAG, "Resuming " + r + " with isForward=" + isForward);
-            WindowManager.LayoutParams l = r.window.getAttributes();
+            ViewRootImpl impl = r.window.getDecorView().getViewRootImpl();
+            WindowManager.LayoutParams l = impl != null
+                    ? impl.mWindowAttributes : r.window.getAttributes();
             if ((l.softInputMode
                     & WindowManager.LayoutParams.SOFT_INPUT_IS_FORWARD_NAVIGATION)
                     != forwardBit) {
@@ -4845,7 +4875,7 @@ public final class ActivityThread extends ClientTransactionHandler {
         View.sDebugViewAttributesApplicationPackage = mCoreSettings.getString(
                 Settings.Global.DEBUG_VIEW_ATTRIBUTES_APPLICATION_PACKAGE, "");
         String currentPackage = (mBoundApplication != null && mBoundApplication.appInfo != null)
-                ? mBoundApplication.appInfo.packageName : "";
+                ? mBoundApplication.appInfo.packageName : "<unknown-app>";
         View.sDebugViewAttributes =
                 mCoreSettings.getInt(Settings.Global.DEBUG_VIEW_ATTRIBUTES, 0) != 0
                         || View.sDebugViewAttributesApplicationPackage.equals(currentPackage);
@@ -6228,6 +6258,7 @@ public final class ActivityThread extends ClientTransactionHandler {
         // send up app name; do this *before* waiting for debugger
         Process.setArgV0(data.processName);
         android.ddm.DdmHandleAppName.setAppName(data.processName,
+                                                data.appInfo.packageName,
                                                 UserHandle.myUserId());
         VMRuntime.setProcessPackageName(data.appInfo.packageName);
 
@@ -6436,26 +6467,6 @@ public final class ActivityThread extends ClientTransactionHandler {
         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "NetworkSecurityConfigProvider.install");
         NetworkSecurityConfigProvider.install(appContext);
         Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
-
-
-        if (isAppDebuggable) {
-            try {
-                // Load all the agents in the code_cache/startup_agents directory.
-                // We pass the absolute path to the data_dir as an argument.
-                Path startup_path = appContext.getCodeCacheDir().toPath().resolve("startup_agents");
-                if (Files.exists(startup_path)) {
-                    for (Path p : Files.newDirectoryStream(startup_path)) {
-                        handleAttachAgent(
-                                p.toAbsolutePath().toString()
-                                + "="
-                                + appContext.getDataDir().toPath().toAbsolutePath().toString(),
-                                data.info);
-                    }
-                }
-            } catch (Exception e) {
-                // Ignored.
-            }
-        }
 
         // Continue loading instrumentation.
         if (ii != null) {
@@ -7388,6 +7399,24 @@ public final class ActivityThread extends ClientTransactionHandler {
                 super.remove(path);
             }
         }
+
+        @Override
+        public void rename(String oldPath, String newPath) throws ErrnoException {
+            try {
+                super.rename(oldPath, newPath);
+            } catch (ErrnoException e) {
+                if (e.errno == OsConstants.EXDEV && oldPath.startsWith("/storage/")) {
+                    Log.v(TAG, "Recovering failed rename " + oldPath + " to " + newPath);
+                    try {
+                        Files.move(new File(oldPath).toPath(), new File(newPath).toPath());
+                    } catch (IOException e2) {
+                        throw e;
+                    }
+                } else {
+                    throw e;
+                }
+            }
+        }
     }
 
     public static void main(String[] args) {
@@ -7406,6 +7435,9 @@ public final class ActivityThread extends ClientTransactionHandler {
         // Make sure TrustedCertificateStore looks in the right place for CA certificates
         final File configDir = Environment.getUserConfigDirectory(UserHandle.myUserId());
         TrustedCertificateStore.setDefaultUserDirectory(configDir);
+
+        // Call per-process mainline module initialization.
+        initializeMainlineModules();
 
         Process.setArgV0("<pre-initialized>");
 
@@ -7439,6 +7471,14 @@ public final class ActivityThread extends ClientTransactionHandler {
         Looper.loop();
 
         throw new RuntimeException("Main thread loop unexpectedly exited");
+    }
+
+    /**
+     * Call various initializer APIs in mainline modules that need to be called when each process
+     * starts.
+     */
+    public static void initializeMainlineModules() {
+        TelephonyFrameworkInitializer.setTelephonyServiceManager(new TelephonyServiceManager());
     }
 
     private void purgePendingResources() {

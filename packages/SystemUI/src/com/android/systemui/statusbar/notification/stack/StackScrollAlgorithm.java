@@ -16,6 +16,8 @@
 
 package com.android.systemui.statusbar.notification.stack;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.content.Context;
 import android.content.res.Resources;
 import android.util.Log;
@@ -191,20 +193,6 @@ public class StackScrollAlgorithm {
                 clipStart = Math.max(clipStart, isHeadsUp ? newYTranslation : newNotificationEnd);
             }
         }
-    }
-
-    public static boolean canChildBeDismissed(View v) {
-        if (!(v instanceof ExpandableNotificationRow)) {
-            return false;
-        }
-        ExpandableNotificationRow row = (ExpandableNotificationRow) v;
-        if (row.isBlockingHelperShowingAndTranslationFinished()) {
-            return true;
-        }
-        if (row.areGutsExposed() || !row.getEntry().hasFinishedInitialization()) {
-            return false;
-        }
-        return row.canViewBeDismissed();
     }
 
     /**
@@ -411,8 +399,10 @@ public class StackScrollAlgorithm {
             float currentYPosition,
             boolean reverse) {
         ExpandableView child = algorithmState.visibleChildren.get(i);
+        ExpandableView previousChild = i > 0 ? algorithmState.visibleChildren.get(i - 1) : null;
         final boolean applyGapHeight =
-                childNeedsGapHeight(ambientState.getSectionProvider(), algorithmState, i, child);
+                childNeedsGapHeight(
+                        ambientState.getSectionProvider(), algorithmState, i, child, previousChild);
         ExpandableViewState childViewState = child.getViewState();
         childViewState.location = ExpandableViewState.LOCATION_UNKNOWN;
 
@@ -477,8 +467,11 @@ public class StackScrollAlgorithm {
             SectionProvider sectionProvider,
             StackScrollAlgorithmState algorithmState,
             int visibleIndex,
-            View child) {
-        boolean needsGapHeight = sectionProvider.beginsSection(child) && visibleIndex > 0;
+            View child,
+            View previousChild) {
+
+        boolean needsGapHeight = sectionProvider.beginsSection(child, previousChild)
+                && visibleIndex > 0;
         if (ANCHOR_SCROLLING) {
             needsGapHeight &= visibleIndex != algorithmState.anchorViewIndex;
         }
@@ -749,6 +742,6 @@ public class StackScrollAlgorithm {
          * True if this view starts a new "section" of notifications, such as the gentle
          * notifications section. False if sections are not enabled.
          */
-        boolean beginsSection(View view);
+        boolean beginsSection(@NonNull View view, @Nullable View previous);
     }
 }

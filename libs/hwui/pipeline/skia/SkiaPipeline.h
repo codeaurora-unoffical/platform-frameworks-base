@@ -41,11 +41,12 @@ public:
     bool pinImages(std::vector<SkImage*>& mutableImages) override;
     bool pinImages(LsaVector<sk_sp<Bitmap>>& images) override { return false; }
     void unpinImages() override;
-    void onPrepareTree() override;
 
     void renderLayers(const LightGeometry& lightGeometry, LayerUpdateQueue* layerUpdateQueue,
                       bool opaque, const LightInfo& lightInfo) override;
 
+    // If the given node didn't have a layer surface, or had one of the wrong size, this method
+    // creates a new one and returns true. Otherwise does nothing and returns false.
     bool createOrUpdateLayer(RenderNode* node, const DamageAccumulator& damageAccumulator,
                              ErrorHandler* errorHandler) override;
 
@@ -56,8 +57,6 @@ public:
                      const std::vector<sp<RenderNode>>& nodes, bool opaque,
                      const Rect& contentDrawBounds, sk_sp<SkSurface> surface,
                      const SkMatrix& preTransform);
-
-    std::vector<VectorDrawableRoot*>* getVectorDrawables() { return &mVectorDrawables; }
 
     static void prepareToDraw(const renderthread::RenderThread& thread, Bitmap* bitmap);
 
@@ -80,7 +79,7 @@ protected:
     sk_sp<SkColorSpace> mSurfaceColorSpace;
 
 private:
-    void renderFrameImpl(const LayerUpdateQueue& layers, const SkRect& clip,
+    void renderFrameImpl(const SkRect& clip,
                          const std::vector<sp<RenderNode>>& nodes, bool opaque,
                          const Rect& contentDrawBounds, SkCanvas* canvas,
                          const SkMatrix& preTransform);
@@ -89,18 +88,13 @@ private:
      *  Debugging feature.  Draws a semi-transparent overlay on each pixel, indicating
      *  how many times it has been drawn.
      */
-    void renderOverdraw(const LayerUpdateQueue& layers, const SkRect& clip,
+    void renderOverdraw(const SkRect& clip,
                         const std::vector<sp<RenderNode>>& nodes, const Rect& contentDrawBounds,
                         sk_sp<SkSurface> surface, const SkMatrix& preTransform);
 
-    /**
-     *  Render mVectorDrawables into offscreen buffers.
-     */
-    void renderVectorDrawableCache();
-
     // Called every frame. Normally returns early with screen canvas.
     // But when capture is enabled, returns an nwaycanvas where commands are also recorded.
-    SkCanvas* tryCapture(SkSurface* surface);
+    SkCanvas* tryCapture(SkSurface* surface, RenderNode* root, const LayerUpdateQueue& dirtyLayers);
     // Called at the end of every frame, closes the recording if necessary.
     void endCapture(SkSurface* surface);
     // Determine if a new file-based capture should be started.
@@ -112,11 +106,6 @@ private:
     bool setupMultiFrameCapture();
 
     std::vector<sk_sp<SkImage>> mPinnedImages;
-
-    /**
-     *  populated by prepareTree with dirty VDs
-     */
-    std::vector<VectorDrawableRoot*> mVectorDrawables;
 
     // Block of properties used only for debugging to record a SkPicture and save it in a file.
     // There are three possible ways of recording drawing commands.

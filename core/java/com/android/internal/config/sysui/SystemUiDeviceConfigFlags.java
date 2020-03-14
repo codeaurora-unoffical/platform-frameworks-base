@@ -47,6 +47,20 @@ public final class SystemUiDeviceConfigFlags {
      */
     public static final String NAS_MAX_SUGGESTIONS = "nas_max_suggestions";
 
+    // Flags related to screenshot intelligence
+
+    /**
+     * (bool) Whether to enable smart actions in screenshot notifications.
+     */
+    public static final String ENABLE_SCREENSHOT_NOTIFICATION_SMART_ACTIONS =
+            "enable_screenshot_notification_smart_actions";
+
+    /**
+     * (int) Timeout value in ms to get smart actions for screenshot notification.
+     */
+    public static final String SCREENSHOT_NOTIFICATION_SMART_ACTIONS_TIMEOUT_MS =
+            "screenshot_notification_smart_actions_timeout_ms";
+
     // Flags related to controls
 
     /**
@@ -121,13 +135,6 @@ public final class SystemUiDeviceConfigFlags {
      * (int) Maximum number of days to retain the salt for hashing direct share targets in logging
      */
     public static final String HASH_SALT_MAX_DAYS = "hash_salt_max_days";
-
-    // Flag related to Privacy Indicators
-
-    /**
-     * Whether the Permissions Hub is showing.
-     */
-    public static final String PROPERTY_PERMISSIONS_HUB_ENABLED = "permissions_hub_enabled";
 
     // Flags related to Assistant
 
@@ -239,6 +246,13 @@ public final class SystemUiDeviceConfigFlags {
     public static final String ASSIST_TRANSCRIPTION_MIN_DURATION =
             "assist_transcription_min_duration";
 
+    /**
+     * (boolean) Whether or not to enable an extra section in the notification shade which
+     * filters for "people" related messages.
+     */
+    public static final String NOTIFICATIONS_USE_PEOPLE_FILTERING =
+            "notifications_use_people_filtering";
+
     // Flags related to brightline falsing
 
     /**
@@ -329,6 +343,14 @@ public final class SystemUiDeviceConfigFlags {
     public static final String BRIGHTLINE_FALSING_ZIGZAG_Y_SECONDARY_DEVIANCE =
             "brightline_falsing_zigzag_y_secondary_deviance";
 
+
+    // Flags related to screenshots
+
+    /**
+     * (boolean) Whether screenshot flow going to the corner (instead of shown in a notification)
+     * is enabled.
+     */
+    public static final String SCREENSHOT_CORNER_FLOW = "screenshot_corner_flow";
 
     private SystemUiDeviceConfigFlags() {
     }

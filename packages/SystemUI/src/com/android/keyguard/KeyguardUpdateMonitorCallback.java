@@ -23,7 +23,6 @@ import android.os.SystemClock;
 import android.telephony.TelephonyManager;
 import android.view.WindowManagerPolicyConstants;
 
-import com.android.internal.telephony.IccCardConstants;
 import com.android.systemui.statusbar.KeyguardIndicationController;
 
 import java.util.TimeZone;
@@ -136,7 +135,7 @@ public class KeyguardUpdateMonitorCallback {
      * @param slotId
      * @param simState
      */
-    public void onSimStateChanged(int subId, int slotId, IccCardConstants.State simState) { }
+    public void onSimStateChanged(int subId, int slotId, int simState) { }
 
     /**
      * Called when the user's info changed.
@@ -147,14 +146,6 @@ public class KeyguardUpdateMonitorCallback {
      * Called when a user got unlocked.
      */
     public void onUserUnlocked() { }
-
-    /**
-     * Called when boot completed.
-     *
-     * Note, this callback will only be received if boot complete occurs after registering with
-     * KeyguardUpdateMonitor.
-     */
-    public void onBootCompleted() { }
 
     /**
      * Called when the emergency call button is pressed.

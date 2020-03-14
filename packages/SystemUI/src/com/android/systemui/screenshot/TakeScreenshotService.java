@@ -18,6 +18,7 @@ package com.android.systemui.screenshot;
 
 import android.app.Service;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
@@ -27,19 +28,24 @@ import android.os.UserManager;
 import android.util.Log;
 import android.view.WindowManager;
 
+import java.util.function.Consumer;
+
+import javax.inject.Inject;
+
 public class TakeScreenshotService extends Service {
     private static final String TAG = "TakeScreenshotService";
 
-    private static GlobalScreenshot mScreenshot;
+    private final GlobalScreenshot mScreenshot;
+    private final UserManager mUserManager;
 
     private Handler mHandler = new Handler() {
         @Override
         public void handleMessage(Message msg) {
             final Messenger callback = msg.replyTo;
-            Runnable finisher = new Runnable() {
+            Consumer<Uri> finisher = new Consumer<Uri>() {
                 @Override
-                public void run() {
-                    Message reply = Message.obtain(null, 1);
+                public void accept(Uri uri) {
+                    Message reply = Message.obtain(null, 1, uri);
                     try {
                         callback.send(reply);
                     } catch (RemoteException e) {
@@ -50,14 +56,10 @@ public class TakeScreenshotService extends Service {
             // If the storage for this user is locked, we have no place to store
             // the screenshot, so skip taking it instead of showing a misleading
             // animation and error notification.
-            if (!getSystemService(UserManager.class).isUserUnlocked()) {
+            if (!mUserManager.isUserUnlocked()) {
                 Log.w(TAG, "Skipping screenshot because storage is locked!");
-                post(finisher);
+                post(() -> finisher.accept(null));
                 return;
-            }
-
-            if (mScreenshot == null) {
-                mScreenshot = new GlobalScreenshot(TakeScreenshotService.this);
             }
 
             switch (msg.what) {
@@ -72,6 +74,12 @@ public class TakeScreenshotService extends Service {
             }
         }
     };
+
+    @Inject
+    public TakeScreenshotService(GlobalScreenshot globalScreenshot, UserManager userManager) {
+        mScreenshot = globalScreenshot;
+        mUserManager = userManager;
+    }
 
     @Override
     public IBinder onBind(Intent intent) {

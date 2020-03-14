@@ -60,6 +60,9 @@
     <uses-permission android:name="android.permission.GET_APP_OPS_STATS" />
     <uses-permission android:name="android.permission.USE_RESERVED_DISK" />
 
+    <!-- to invoke ContentSuggestionsService -->
+    <uses-permission android:name="android.permission.MANAGE_CONTENT_SUGGESTIONS"/>
+
     <!-- Networking and telephony -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
@@ -203,6 +206,9 @@
     <!-- shortcut manager -->
     <uses-permission android:name="android.permission.RESET_SHORTCUT_MANAGER_THROTTLING" />
 
+    <!-- launcher apps -->
+    <uses-permission android:name="android.permission.ACCESS_SHORTCUTS" />
+
     <uses-permission android:name="android.permission.MODIFY_THEME_OVERLAY" />
 
     <!-- accessibility -->
@@ -229,9 +235,6 @@
     <!-- to read and change hvac values in a car -->
     <uses-permission android:name="android.car.permission.CONTROL_CAR_CLIMATE" />
 
-    <!-- to be able to detect the driving state in a car-->
-    <uses-permission android:name="android.car.permission.CAR_DRIVING_STATE" />
-
     <!-- Permission necessary to change car audio volume through CarAudioManager -->
     <uses-permission android:name="android.car.permission.CAR_CONTROL_AUDIO_VOLUME" />
 
@@ -242,6 +245,9 @@
 
     <!-- Permission to change the display color -->
     <uses-permission android:name="android.permission.CONTROL_DISPLAY_COLOR_TRANSFORMS" />
+
+    <!-- Query all packages on device on R+ -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <protected-broadcast android:name="com.android.settingslib.action.REGISTER_SLICE_RECEIVER" />
     <protected-broadcast android:name="com.android.settingslib.action.UNREGISTER_SLICE_RECEIVER" />
@@ -282,6 +288,11 @@
             android:exported="false"
             android:permission="com.android.systemui.permission.SELF" />
 
+        <service android:name=".assist.AssistHandleService"
+            android:exported="true"
+            android:enabled="false"
+        />
+
         <!-- started from PhoneWindowManager
              TODO: Should have an android:permission attribute -->
         <service android:name=".screenshot.TakeScreenshotService"
@@ -313,6 +324,14 @@
         <service android:name=".ImageWallpaper"
                 android:permission="android.permission.BIND_WALLPAPER"
                 android:exported="true" />
+
+        <activity
+            android:name=".bubbles.BubbleOverflowActivity"
+            android:theme="@style/BubbleOverflow"
+            android:excludeFromRecents="true"
+            android:documentLaunchMode="always"
+            android:resizeableActivity="true">
+        </activity>
 
         <activity android:name=".tuner.TunerActivity"
                   android:enabled="false"
@@ -365,6 +384,10 @@
         <!-- Callback for deleting screenshot notification -->
         <receiver android:name=".screenshot.GlobalScreenshot$DeleteScreenshotReceiver"
             android:exported="false" />
+
+        <!-- Callback for invoking a smart action from the screenshot notification. -->
+        <receiver android:name=".screenshot.GlobalScreenshot$SmartActionsReceiver"
+                  android:exported="false"/>
 
         <!-- started from UsbDeviceSettingsManager -->
         <activity android:name=".usb.UsbConfirmActivity"

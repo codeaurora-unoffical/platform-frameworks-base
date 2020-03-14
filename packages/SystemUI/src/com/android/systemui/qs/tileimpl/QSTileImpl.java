@@ -139,6 +139,11 @@ public abstract class QSTileImpl<TState extends State> implements QSTile, Lifecy
         mQSSettingsPanelOption = QSSettingsControllerKt.getQSSettingsPanelOption();
     }
 
+    protected final void resetStates() {
+        mState = newTileState();
+        mTmpState = newTileState();
+    }
+
     @NonNull
     @Override
     public Lifecycle getLifecycle() {
@@ -408,6 +413,7 @@ public abstract class QSTileImpl<TState extends State> implements QSTile, Lifecy
             handleSetListening(false);
         }
         mCallbacks.clear();
+        mHandler.removeCallbacksAndMessages(null);
     }
 
     protected void checkIfRestrictionEnforcedByAdminOnly(State state, String userRestriction) {
@@ -629,6 +635,11 @@ public abstract class QSTileImpl<TState extends State> implements QSTile, Lifecy
         }
     }
 
+    /**
+     * Dumps the state of this tile along with its name.
+     *
+     * This may be used for CTS testing of tiles.
+     */
     @Override
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println(this.getClass().getSimpleName() + ":");

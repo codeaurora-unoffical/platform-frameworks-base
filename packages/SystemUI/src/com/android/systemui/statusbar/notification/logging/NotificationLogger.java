@@ -43,9 +43,9 @@ import com.android.systemui.statusbar.notification.stack.ExpandableViewState;
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import javax.inject.Inject;
@@ -113,7 +113,7 @@ public class NotificationLogger implements StateListener {
         public void run() {
             mLastVisibilityReportUptimeMs = SystemClock.uptimeMillis();
 
-            // 1. Loop over mNotificationData entries:
+            // 1. Loop over active entries:
             //   A. Keep list of visible notifications.
             //   B. Keep list of previously hidden, now visible notifications.
             // 2. Compute no-longer visible notifications by removing currently
@@ -121,12 +121,11 @@ public class NotificationLogger implements StateListener {
             //    notifications.
             // 3. Report newly visible and no-longer visible notifications.
             // 4. Keep currently visible notifications for next report.
-            ArrayList<NotificationEntry> activeNotifications = mEntryManager
-                    .getNotificationData().getActiveNotifications();
+            List<NotificationEntry> activeNotifications = mEntryManager.getVisibleNotifications();
             int N = activeNotifications.size();
             for (int i = 0; i < N; i++) {
                 NotificationEntry entry = activeNotifications.get(i);
-                String key = entry.notification.getKey();
+                String key = entry.getSbn().getKey();
                 boolean isVisible = mListContainer.isInVisibleLocation(entry);
                 NotificationVisibility visObj = NotificationVisibility.obtain(key, i, N, isVisible,
                         getNotificationLocation(entry));
@@ -214,14 +213,14 @@ public class NotificationLogger implements StateListener {
                     NotificationVisibility visibility,
                     boolean removedByUser) {
                 if (removedByUser && visibility != null) {
-                    logNotificationClear(entry.key, entry.notification, visibility);
+                    logNotificationClear(entry.getKey(), entry.getSbn(), visibility);
                 }
-                mExpansionStateLogger.onEntryRemoved(entry.key);
+                mExpansionStateLogger.onEntryRemoved(entry.getKey());
             }
 
             @Override
-            public void onEntryReinflated(NotificationEntry entry) {
-                mExpansionStateLogger.onEntryReinflated(entry.key);
+            public void onPreEntryUpdated(NotificationEntry entry) {
+                mExpansionStateLogger.onEntryUpdated(entry.getKey());
             }
 
             @Override
@@ -403,7 +402,7 @@ public class NotificationLogger implements StateListener {
      */
     public void onExpansionChanged(String key, boolean isUserAction, boolean isExpanded) {
         NotificationVisibility.NotificationLocation location =
-                getNotificationLocation(mEntryManager.getNotificationData().get(key));
+                getNotificationLocation(mEntryManager.getActiveNotificationUnfiltered(key));
         mExpansionStateLogger.onExpansionChanged(key, isUserAction, isExpanded, location);
     }
 
@@ -480,7 +479,7 @@ public class NotificationLogger implements StateListener {
         }
 
         @VisibleForTesting
-        void onEntryReinflated(String key) {
+        void onEntryUpdated(String key) {
             // When the notification is updated, we should consider the notification as not
             // yet logged.
             mLoggedExpansionState.remove(key);

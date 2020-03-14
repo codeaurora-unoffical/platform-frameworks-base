@@ -15,8 +15,6 @@
  */
 package com.android.systemui.statusbar.policy;
 
-import static com.android.systemui.Dependency.BG_HANDLER_NAME;
-
 import android.app.ActivityManager;
 import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
@@ -50,6 +48,8 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.net.LegacyVpnInfo;
 import com.android.internal.net.VpnConfig;
 import com.android.systemui.R;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dagger.qualifiers.BgHandler;
 import com.android.systemui.settings.CurrentUserTracker;
 
 import java.io.FileDescriptor;
@@ -57,7 +57,6 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
 
 /**
@@ -102,13 +101,14 @@ public class SecurityControllerImpl extends CurrentUserTracker implements Securi
     /**
      */
     @Inject
-    public SecurityControllerImpl(Context context, @Named(BG_HANDLER_NAME) Handler bgHandler) {
-        this(context, bgHandler, null);
+    public SecurityControllerImpl(Context context, @BgHandler Handler bgHandler,
+            BroadcastDispatcher broadcastDispatcher) {
+        this(context, bgHandler, broadcastDispatcher, null);
     }
 
     public SecurityControllerImpl(Context context, Handler bgHandler,
-            SecurityControllerCallback callback) {
-        super(context);
+            BroadcastDispatcher broadcastDispatcher, SecurityControllerCallback callback) {
+        super(broadcastDispatcher);
         mContext = context;
         mBgHandler = bgHandler;
         mDevicePolicyManager = (DevicePolicyManager)
@@ -125,8 +125,8 @@ public class SecurityControllerImpl extends CurrentUserTracker implements Securi
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(KeyChain.ACTION_TRUST_STORE_CHANGED);
-        context.registerReceiverAsUser(mBroadcastReceiver, UserHandle.ALL, filter, null,
-                bgHandler);
+        filter.addAction(Intent.ACTION_USER_UNLOCKED);
+        broadcastDispatcher.registerReceiver(mBroadcastReceiver, filter, bgHandler, UserHandle.ALL);
 
         // TODO: re-register network callback on user change.
         mConnectivityManager.registerNetworkCallback(REQUEST, mNetworkCallback);
@@ -300,14 +300,11 @@ public class SecurityControllerImpl extends CurrentUserTracker implements Securi
         } else {
             mVpnUserId = mCurrentUserId;
         }
-        refreshCACerts();
         fireCallbacks();
     }
 
-    private void refreshCACerts() {
-        new CACertLoader().execute(mCurrentUserId);
-        int workProfileId = getWorkProfileUserId(mCurrentUserId);
-        if (workProfileId != UserHandle.USER_NULL) new CACertLoader().execute(workProfileId);
+    private void refreshCACerts(int userId) {
+        new CACertLoader().execute(userId);
     }
 
     private String getNameForVpnConfig(VpnConfig cfg, UserHandle user) {
@@ -403,7 +400,10 @@ public class SecurityControllerImpl extends CurrentUserTracker implements Securi
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (KeyChain.ACTION_TRUST_STORE_CHANGED.equals(intent.getAction())) {
-                refreshCACerts();
+                refreshCACerts(getSendingUserId());
+            } else if (Intent.ACTION_USER_UNLOCKED.equals(intent.getAction())) {
+                int userId = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, UserHandle.USER_NULL);
+                if (userId != UserHandle.USER_NULL) refreshCACerts(userId);
             }
         }
     };
@@ -418,9 +418,6 @@ public class SecurityControllerImpl extends CurrentUserTracker implements Securi
                 return new Pair<Integer, Boolean>(userId[0], hasCACerts);
             } catch (RemoteException | InterruptedException | AssertionError e) {
                 Log.i(TAG, "failed to get CA certs", e);
-                mBgHandler.postDelayed(
-                        () -> new CACertLoader().execute(userId[0]),
-                        CA_CERT_LOADING_RETRY_TIME_IN_MS);
                 return new Pair<Integer, Boolean>(userId[0], null);
             }
         }

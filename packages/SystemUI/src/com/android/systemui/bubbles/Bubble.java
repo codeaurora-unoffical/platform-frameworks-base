@@ -27,9 +27,13 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
+import android.content.pm.ShortcutInfo;
 import android.content.res.Resources;
+import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
+import android.os.Bundle;
 import android.os.Parcelable;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -57,14 +61,17 @@ class Bubble {
     private final String mGroupId;
     private String mAppName;
     private Drawable mUserBadgedAppIcon;
+    private ShortcutInfo mShortcutInfo;
 
     private boolean mInflated;
-    private BubbleView mIconView;
+    private BadgedImageView mIconView;
     private BubbleExpandedView mExpandedView;
+    private BubbleIconFactory mBubbleIconFactory;
 
     private long mLastUpdated;
     private long mLastAccessed;
-    private boolean mIsRemoved;
+
+    private boolean mIsUserCreated;
 
     /**
      * Whether this notification should be shown in the shade when it is also displayed as a bubble.
@@ -74,32 +81,38 @@ class Bubble {
      */
     private boolean mShowInShadeWhenBubble = true;
 
-    /**
-     * Whether the bubble should show a dot for the notification indicating updated content.
-     */
+    /** Whether the bubble should show a dot for the notification indicating updated content. */
     private boolean mShowBubbleUpdateDot = true;
 
     /** Whether flyout text should be suppressed, regardless of any other flags or state. */
     private boolean mSuppressFlyout;
 
     public static String groupId(NotificationEntry entry) {
-        UserHandle user = entry.notification.getUser();
-        return user.getIdentifier() + "|" + entry.notification.getPackageName();
+        UserHandle user = entry.getSbn().getUser();
+        return user.getIdentifier() + "|" + entry.getSbn().getPackageName();
     }
 
     /** Used in tests when no UI is required. */
     @VisibleForTesting(visibility = PRIVATE)
     Bubble(Context context, NotificationEntry e) {
         mEntry = e;
-        mKey = e.key;
-        mLastUpdated = e.notification.getPostTime();
+        mKey = e.getKey();
+        mLastUpdated = e.getSbn().getPostTime();
         mGroupId = groupId(e);
+
+        String shortcutId = e.getSbn().getNotification().getShortcutId();
+        if (BubbleExperimentConfig.useShortcutInfoToBubble(context)
+                && shortcutId != null) {
+            mShortcutInfo = BubbleExperimentConfig.getShortcutInfo(context,
+                    e.getSbn().getPackageName(),
+                    e.getSbn().getUser(), shortcutId);
+        }
 
         PackageManager pm = context.getPackageManager();
         ApplicationInfo info;
         try {
             info = pm.getApplicationInfo(
-                mEntry.notification.getPackageName(),
+                mEntry.getSbn().getPackageName(),
                 PackageManager.MATCH_UNINSTALLED_PACKAGES
                     | PackageManager.MATCH_DISABLED_COMPONENTS
                     | PackageManager.MATCH_DIRECT_BOOT_UNAWARE
@@ -107,10 +120,10 @@ class Bubble {
             if (info != null) {
                 mAppName = String.valueOf(pm.getApplicationLabel(info));
             }
-            Drawable appIcon = pm.getApplicationIcon(mEntry.notification.getPackageName());
-            mUserBadgedAppIcon = pm.getUserBadgedIcon(appIcon, mEntry.notification.getUser());
+            Drawable appIcon = pm.getApplicationIcon(mEntry.getSbn().getPackageName());
+            mUserBadgedAppIcon = pm.getUserBadgedIcon(appIcon, mEntry.getSbn().getUser());
         } catch (PackageManager.NameNotFoundException unused) {
-            mAppName = mEntry.notification.getPackageName();
+            mAppName = mEntry.getSbn().getPackageName();
         }
     }
 
@@ -127,24 +140,41 @@ class Bubble {
     }
 
     public String getPackageName() {
-        return mEntry.notification.getPackageName();
+        return mEntry.getSbn().getPackageName();
     }
 
     public String getAppName() {
         return mAppName;
     }
 
+    Drawable getUserBadgedAppIcon() {
+        return mUserBadgedAppIcon;
+    }
+
+    @Nullable
+    public ShortcutInfo getShortcutInfo() {
+        return mShortcutInfo;
+    }
+
+    /**
+     * Whether shortcut information should be used to populate the bubble.
+     * <p>
+     * To populate the activity use {@link LauncherApps#startShortcut(ShortcutInfo, Rect, Bundle)}.
+     * To populate the icon use {@link LauncherApps#getShortcutIconDrawable(ShortcutInfo, int)}.
+     */
+    public boolean usingShortcutInfo() {
+        return BubbleExperimentConfig.isShortcutIntent(getBubbleIntent());
+    }
+
+    void setBubbleIconFactory(BubbleIconFactory factory) {
+        mBubbleIconFactory = factory;
+    }
+
     boolean isInflated() {
         return mInflated;
     }
 
-    void updateDotVisibility() {
-        if (mIconView != null) {
-            mIconView.updateDotVisibility(true /* animate */);
-        }
-    }
-
-    BubbleView getIconView() {
+    BadgedImageView getIconView() {
         return mIconView;
     }
 
@@ -162,14 +192,14 @@ class Bubble {
         if (mInflated) {
             return;
         }
-        mIconView = (BubbleView) inflater.inflate(
+        mIconView = (BadgedImageView) inflater.inflate(
                 R.layout.bubble_view, stackView, false /* attachToRoot */);
+        mIconView.setBubbleIconFactory(mBubbleIconFactory);
         mIconView.setBubble(this);
-        mIconView.setAppIcon(mUserBadgedAppIcon);
 
         mExpandedView = (BubbleExpandedView) inflater.inflate(
                 R.layout.bubble_expanded_view, stackView, false /* attachToRoot */);
-        mExpandedView.setBubble(this, stackView, mAppName);
+        mExpandedView.setBubble(this, stackView);
 
         mInflated = true;
     }
@@ -190,7 +220,7 @@ class Bubble {
 
     void updateEntry(NotificationEntry entry) {
         mEntry = entry;
-        mLastUpdated = entry.notification.getPostTime();
+        mLastUpdated = entry.getSbn().getPostTime();
         if (mInflated) {
             mIconView.update(this);
             mExpandedView.update(this);
@@ -230,15 +260,15 @@ class Bubble {
      */
     void markAsAccessedAt(long lastAccessedMillis) {
         mLastAccessed = lastAccessedMillis;
-        setShowInShadeWhenBubble(false);
-        setShowBubbleDot(false);
+        setShowInShade(false);
+        setShowDot(false /* show */, true /* animate */);
     }
 
     /**
      * Whether this notification should be shown in the shade when it is also displayed as a
      * bubble.
      */
-    boolean showInShadeWhenBubble() {
+    boolean showInShade() {
         return !mEntry.isRowDismissed() && !shouldSuppressNotification()
                 && (!mEntry.isClearable() || mShowInShadeWhenBubble);
     }
@@ -247,29 +277,37 @@ class Bubble {
      * Sets whether this notification should be shown in the shade when it is also displayed as a
      * bubble.
      */
-    void setShowInShadeWhenBubble(boolean showInShade) {
+    void setShowInShade(boolean showInShade) {
         mShowInShadeWhenBubble = showInShade;
     }
 
     /**
      * Sets whether the bubble for this notification should show a dot indicating updated content.
      */
-    void setShowBubbleDot(boolean showDot) {
+    void setShowDot(boolean showDot, boolean animate) {
         mShowBubbleUpdateDot = showDot;
+        if (animate && mIconView != null) {
+            mIconView.animateDot();
+        } else if (mIconView != null) {
+            mIconView.invalidate();
+        }
     }
 
     /**
      * Whether the bubble for this notification should show a dot indicating updated content.
      */
-    boolean showBubbleDot() {
-        return mShowBubbleUpdateDot && !mEntry.shouldSuppressNotificationDot();
+    boolean showDot() {
+        return mShowBubbleUpdateDot
+                && !mEntry.shouldSuppressNotificationDot()
+                && !shouldSuppressNotification();
     }
 
     /**
      * Whether the flyout for the bubble should be shown.
      */
-    boolean showFlyoutForBubble() {
+    boolean showFlyout() {
         return !mSuppressFlyout && !mEntry.shouldSuppressPeek()
+                && !shouldSuppressNotification()
                 && !mEntry.shouldSuppressNotificationList();
     }
 
@@ -287,7 +325,7 @@ class Bubble {
      * is an ongoing bubble.
      */
     boolean isOngoing() {
-        int flags = mEntry.notification.getNotification().flags;
+        int flags = mEntry.getSbn().getNotification().flags;
         return (flags & Notification.FLAG_FOREGROUND_SERVICE) != 0;
     }
 
@@ -296,8 +334,8 @@ class Bubble {
         boolean useRes = data.getDesiredHeightResId() != 0;
         if (useRes) {
             return getDimenForPackageUser(context, data.getDesiredHeightResId(),
-                    mEntry.notification.getPackageName(),
-                    mEntry.notification.getUser().getIdentifier());
+                    mEntry.getSbn().getPackageName(),
+                    mEntry.getSbn().getUser().getIdentifier());
         } else {
             return data.getDesiredHeight()
                     * context.getResources().getDisplayMetrics().density;
@@ -315,10 +353,9 @@ class Bubble {
     }
 
     @Nullable
-    PendingIntent getBubbleIntent(Context context) {
-        Notification notif = mEntry.notification.getNotification();
-        Notification.BubbleMetadata data = notif.getBubbleMetadata();
-        if (BubbleController.canLaunchInActivityView(context, mEntry) && data != null) {
+    PendingIntent getBubbleIntent() {
+        Notification.BubbleMetadata data = mEntry.getBubbleMetadata();
+        if (data != null) {
             return data.getIntent();
         }
         return null;
@@ -327,7 +364,7 @@ class Bubble {
     Intent getSettingsIntent() {
         final Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS);
         intent.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
-        intent.putExtra(Settings.EXTRA_APP_UID, mEntry.notification.getUid());
+        intent.putExtra(Settings.EXTRA_APP_UID, mEntry.getSbn().getUid());
         intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -339,7 +376,7 @@ class Bubble {
      * notification, based on its type. Returns null if there should not be an update message.
      */
     CharSequence getUpdateMessage(Context context) {
-        final Notification underlyingNotif = mEntry.notification.getNotification();
+        final Notification underlyingNotif = mEntry.getSbn().getNotification();
         final Class<? extends Notification.Style> style = underlyingNotif.getNotificationStyle();
 
         try {
@@ -441,9 +478,9 @@ class Bubble {
     public void dump(
             @NonNull FileDescriptor fd, @NonNull PrintWriter pw, @NonNull String[] args) {
         pw.print("key: "); pw.println(mKey);
-        pw.print("  showInShade:   "); pw.println(showInShadeWhenBubble());
-        pw.print("  showDot:       "); pw.println(showBubbleDot());
-        pw.print("  showFlyout:    "); pw.println(showFlyoutForBubble());
+        pw.print("  showInShade:   "); pw.println(showInShade());
+        pw.print("  showDot:       "); pw.println(showDot());
+        pw.print("  showFlyout:    "); pw.println(showFlyout());
         pw.print("  desiredHeight: "); pw.println(getDesiredHeightString());
         pw.print("  suppressNotif: "); pw.println(shouldSuppressNotification());
         pw.print("  autoExpand:    "); pw.println(shouldAutoExpand());

@@ -62,6 +62,7 @@ public class DisplayPolicyTestsBase extends WindowTestsBase {
     static final int STATUS_BAR_HEIGHT = 10;
     static final int NAV_BAR_HEIGHT = 15;
     static final int DISPLAY_CUTOUT_HEIGHT = 8;
+    static final int INPUT_METHOD_WINDOW_TOP = 585;
 
     DisplayPolicy mDisplayPolicy;
 
@@ -77,6 +78,8 @@ public class DisplayPolicyTestsBase extends WindowTestsBase {
         resources.addOverride(R.dimen.navigation_bar_height, NAV_BAR_HEIGHT);
         resources.addOverride(R.dimen.navigation_bar_height_landscape, NAV_BAR_HEIGHT);
         resources.addOverride(R.dimen.navigation_bar_width, NAV_BAR_HEIGHT);
+        resources.addOverride(R.dimen.navigation_bar_frame_height_landscape, NAV_BAR_HEIGHT);
+        resources.addOverride(R.dimen.navigation_bar_frame_height, NAV_BAR_HEIGHT);
         doReturn(resources.getResources()).when(mDisplayPolicy).getCurrentUserResources();
         doReturn(true).when(mDisplayPolicy).hasNavigationBar();
         doReturn(true).when(mDisplayPolicy).hasStatusBar();

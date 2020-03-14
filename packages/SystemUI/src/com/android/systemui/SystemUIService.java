@@ -16,22 +16,35 @@
 
 package com.android.systemui;
 
+import android.annotation.NonNull;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
 import android.os.Process;
 import android.os.SystemProperties;
 import android.util.Slog;
 
 import com.android.internal.os.BinderInternal;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.plugins.PluginManagerImpl;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 
+import javax.inject.Inject;
+
 public class SystemUIService extends Service {
+
+    private final Handler mMainHandler;
+
+    @Inject
+    public SystemUIService(@MainHandler Handler mainHandler) {
+        super();
+        mMainHandler = mainHandler;
+    }
 
     @Override
     public void onCreate() {
@@ -55,7 +68,7 @@ public class SystemUIService extends Service {
                                     "uid " + uid + " sent too many Binder proxies to uid "
                                     + Process.myUid());
                         }
-                    }, Dependency.get(Dependency.MAIN_HANDLER));
+                    }, mMainHandler);
         }
     }
 
@@ -67,6 +80,10 @@ public class SystemUIService extends Service {
     @Override
     protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         dumpServices(((SystemUIApplication) getApplication()).getServices(), fd, pw, args);
+
+        if (args == null || args.length == 0 || args[0].equals("--config")) {
+            dumpConfig(pw);
+        }
     }
 
     static void dumpServices(
@@ -84,7 +101,7 @@ public class SystemUIService extends Service {
             }
         } else {
             String svc = args[0].toLowerCase();
-            if (Dependency.class.getName().endsWith(svc)) {
+            if (Dependency.class.getName().toLowerCase().endsWith(svc)) {
                 Dependency.staticDump(fd, pw, args);
             }
             for (SystemUI ui: services) {
@@ -93,6 +110,30 @@ public class SystemUIService extends Service {
                     ui.dump(fd, pw, args);
                 }
             }
+        }
+    }
+
+    private void dumpConfig(@NonNull PrintWriter pw) {
+        pw.println("SystemUiServiceComponents configuration:");
+
+        pw.print("vendor component: ");
+        pw.println(getResources().getString(R.string.config_systemUIVendorServiceComponent));
+
+        dumpConfig(pw, "global", R.array.config_systemUIServiceComponents);
+        dumpConfig(pw, "per-user", R.array.config_systemUIServiceComponentsPerUser);
+    }
+
+    private void dumpConfig(@NonNull PrintWriter pw, @NonNull String type, int resId) {
+        final String[] services = getResources().getStringArray(resId);
+        pw.print(type); pw.print(": ");
+        if (services == null) {
+            pw.println("N/A");
+            return;
+        }
+        pw.print(services.length);
+        pw.println(" services");
+        for (int i = 0; i < services.length; i++) {
+            pw.print("  "); pw.print(i); pw.print(": "); pw.println(services[i]);
         }
     }
 }

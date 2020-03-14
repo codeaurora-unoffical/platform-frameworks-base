@@ -29,20 +29,18 @@ import static android.view.WindowManager.LayoutParams.TYPE_TOAST;
 
 import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_LAYOUT;
 import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_WALLPAPER;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_FOCUS_LIGHT;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_KEEP_SCREEN_ON;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_ORIENTATION;
+import static com.android.server.wm.ProtoLogGroup.WM_SHOW_SURFACE_ALLOC;
+import static com.android.server.wm.ProtoLogGroup.WM_SHOW_TRANSACTIONS;
 import static com.android.server.wm.RootWindowContainerProto.DISPLAYS;
 import static com.android.server.wm.RootWindowContainerProto.WINDOWS;
 import static com.android.server.wm.RootWindowContainerProto.WINDOW_CONTAINER;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_DISPLAY;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_FOCUS_LIGHT;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_KEEP_SCREEN_ON;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_LAYOUT_REPEATS;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_ORIENTATION;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_WALLPAPER_LIGHT;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_WINDOW_TRACE;
 import static com.android.server.wm.WindowManagerDebugConfig.SHOW_LIGHT_TRANSACTIONS;
-import static com.android.server.wm.WindowManagerDebugConfig.SHOW_SURFACE_ALLOC;
-import static com.android.server.wm.WindowManagerDebugConfig.SHOW_TRANSACTIONS;
-import static com.android.server.wm.WindowManagerDebugConfig.TAG_KEEP_SCREEN_ON;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
 import static com.android.server.wm.WindowManagerService.H.WINDOW_FREEZE_TIMEOUT;
@@ -50,7 +48,6 @@ import static com.android.server.wm.WindowManagerService.UPDATE_FOCUS_NORMAL;
 import static com.android.server.wm.WindowManagerService.UPDATE_FOCUS_PLACING_SURFACES;
 import static com.android.server.wm.WindowManagerService.UPDATE_FOCUS_WILL_PLACE_SURFACES;
 import static com.android.server.wm.WindowManagerService.WINDOWS_FREEZING_SCREENS_NONE;
-import static com.android.server.wm.WindowManagerService.logSurface;
 import static com.android.server.wm.WindowSurfacePlacer.SET_ORIENTATION_CHANGE_COMPLETE;
 import static com.android.server.wm.WindowSurfacePlacer.SET_UPDATE_ROTATION;
 import static com.android.server.wm.WindowSurfacePlacer.SET_WALLPAPER_ACTION_PENDING;
@@ -70,16 +67,14 @@ import android.os.RemoteException;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.util.ArraySet;
-import android.util.EventLog;
 import android.util.Slog;
 import android.util.SparseIntArray;
 import android.util.proto.ProtoOutputStream;
-import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.SurfaceControl;
 import android.view.WindowManager;
 
-import com.android.server.EventLogTags;
+import com.android.server.protolog.common.ProtoLog;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -130,7 +125,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
     private int mTopFocusedDisplayId = INVALID_DISPLAY;
 
     // Map from the PID to the top most app which has a focused window of the process.
-    final HashMap<Integer, AppWindowToken> mTopFocusedAppByProcess = new HashMap<>();
+    final HashMap<Integer, ActivityRecord> mTopFocusedAppByProcess = new HashMap<>();
 
     // Only a separate transaction until we separate the apply surface changes
     // transaction from the global transaction.
@@ -146,9 +141,9 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
     };
 
     private static final Consumer<WindowState> sRemoveReplacedWindowsConsumer = w -> {
-        final AppWindowToken aToken = w.mAppToken;
-        if (aToken != null) {
-            aToken.removeReplacedWindowIfNeeded(w);
+        final ActivityRecord activity = w.mActivityRecord;
+        if (activity != null) {
+            activity.removeReplacedWindowIfNeeded(w);
         }
     };
 
@@ -176,7 +171,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
             if (newFocus != null) {
                 final int pidOfNewFocus = newFocus.mSession.mPid;
                 if (mTopFocusedAppByProcess.get(pidOfNewFocus) == null) {
-                    mTopFocusedAppByProcess.put(pidOfNewFocus, newFocus.mAppToken);
+                    mTopFocusedAppByProcess.put(pidOfNewFocus, newFocus.mActivityRecord);
                 }
                 if (topFocusedDisplayId == INVALID_DISPLAY) {
                     topFocusedDisplayId = dc.getDisplayId();
@@ -195,8 +190,8 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
             mTopFocusedDisplayId = topFocusedDisplayId;
             mWmService.mInputManager.setFocusedDisplay(topFocusedDisplayId);
             mWmService.mPolicy.setTopFocusedDisplay(topFocusedDisplayId);
-            if (DEBUG_FOCUS_LIGHT) Slog.v(TAG_WM, "New topFocusedDisplayId="
-                    + topFocusedDisplayId);
+            ProtoLog.v(WM_DEBUG_FOCUS_LIGHT, "New topFocusedDisplayId=%d",
+                    topFocusedDisplayId);
         }
         return changed;
     }
@@ -207,7 +202,13 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
     }
 
     @Override
-    void onChildPositionChanged() {
+    boolean isOnTop() {
+        // Considered always on top
+        return true;
+    }
+
+    @Override
+    void onChildPositionChanged(WindowContainer child) {
         mWmService.updateFocusedWindowLocked(UPDATE_FOCUS_NORMAL,
                 !mWmService.mPerDisplayFocusEnabled /* updateInputWindows */);
     }
@@ -220,36 +221,6 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
             }
         }
         return null;
-    }
-
-    DisplayContent createDisplayContent(final Display display, ActivityDisplay activityDisplay) {
-        final int displayId = display.getDisplayId();
-
-        // In select scenarios, it is possible that a DisplayContent will be created on demand
-        // rather than waiting for the controller. In this case, associate the controller and return
-        // the existing display.
-        final DisplayContent existing = getDisplayContent(displayId);
-
-        if (existing != null) {
-            existing.mAcitvityDisplay = activityDisplay;
-            existing.initializeDisplayOverrideConfiguration();
-            return existing;
-        }
-
-        final DisplayContent dc = new DisplayContent(display, mWmService, activityDisplay);
-
-        if (DEBUG_DISPLAY) Slog.v(TAG_WM, "Adding display=" + display);
-
-        mWmService.mDisplayWindowSettings.applySettingsToDisplayLocked(dc);
-        dc.initializeDisplayOverrideConfiguration();
-
-        if (mWmService.mDisplayManagerInternal != null) {
-            mWmService.mDisplayManagerInternal.setDisplayInfoOverrideFromWindowManager(
-                    displayId, dc.getDisplayInfo());
-            dc.configureDisplayPolicy();
-        }
-
-        return dc;
     }
 
     /**
@@ -265,7 +236,6 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                 continue;
             }
 
-            displayContent.initializeDisplayOverrideConfiguration();
             displayContent.reconfigureDisplayLocked();
 
             // We need to update global configuration as well if config of default display has
@@ -331,12 +301,12 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
      * NOTE: Only one AppWindowToken is allowed to exist in the system for a binder token, since
      * AppWindowToken represents an activity which can only exist on one display.
      */
-    AppWindowToken getAppWindowToken(IBinder binder) {
+    ActivityRecord getActivityRecord(IBinder binder) {
         for (int i = mChildren.size() - 1; i >= 0; --i) {
             final DisplayContent dc = mChildren.get(i);
-            final AppWindowToken atoken = dc.getAppWindowToken(binder);
-            if (atoken != null) {
-                return atoken;
+            final ActivityRecord activity = dc.getActivityRecord(binder);
+            if (activity != null) {
+                return activity;
             }
         }
         return null;
@@ -413,10 +383,10 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         }
     }
 
-    TaskStack getStack(int windowingMode, int activityType) {
+    ActivityStack getStack(int windowingMode, int activityType) {
         for (int i = mChildren.size() - 1; i >= 0; i--) {
             final DisplayContent dc = mChildren.get(i);
-            final TaskStack stack = dc.getStack(windowingMode, activityType);
+            final ActivityStack stack = dc.getStack(windowingMode, activityType);
             if (stack != null) {
                 return stack;
             }
@@ -457,13 +427,13 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
     }
 
     void removeReplacedWindows() {
-        if (SHOW_TRANSACTIONS) Slog.i(TAG, ">>> OPEN TRANSACTION removeReplacedWindows");
+        ProtoLog.i(WM_SHOW_TRANSACTIONS, ">>> OPEN TRANSACTION removeReplacedWindows");
         mWmService.openSurfaceTransaction();
         try {
             forAllWindows(sRemoveReplacedWindowsConsumer, true /* traverseTopToBottom */);
         } finally {
             mWmService.closeSurfaceTransaction("removeReplacedWindows");
-            if (SHOW_TRANSACTIONS) Slog.i(TAG, "<<< CLOSE TRANSACTION removeReplacedWindows");
+            ProtoLog.i(WM_SHOW_TRANSACTIONS, "<<< CLOSE TRANSACTION removeReplacedWindows");
         }
     }
 
@@ -472,8 +442,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
 
         final int count = mChildren.size();
         for (int i = 0; i < count; ++i) {
-            final DisplayContent dc = mChildren.get(i);
-            final int pendingChanges = animator.getPendingLayoutChanges(dc.getDisplayId());
+            final int pendingChanges = mChildren.get(i).pendingLayoutChanges;
             if ((pendingChanges & FINISH_LAYOUT_REDO_WALLPAPER) != 0) {
                 animator.mBulkUpdateParams |= SET_WALLPAPER_ACTION_PENDING;
             }
@@ -490,10 +459,8 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         final WindowSurfaceController surfaceController = winAnimator.mSurfaceController;
         boolean leakedSurface = false;
         boolean killedApps = false;
-
-        EventLog.writeEvent(EventLogTags.WM_NO_SURFACE_MEMORY, winAnimator.mWin.toString(),
+        EventLogTags.writeWmNoSurfaceMemory(winAnimator.mWin.toString(),
                 winAnimator.mSession.mPid, operation);
-
         final long callingIdentity = Binder.clearCallingIdentity();
         try {
             // There was some problem...first, do a sanity check of the window list to make sure
@@ -540,11 +507,11 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                 Slog.w(TAG_WM,
                         "Looks like we have reclaimed some memory, clearing surface for retry.");
                 if (surfaceController != null) {
-                    if (SHOW_TRANSACTIONS || SHOW_SURFACE_ALLOC) logSurface(winAnimator.mWin,
-                            "RECOVER DESTROY", false);
+                    ProtoLog.i(WM_SHOW_SURFACE_ALLOC,
+                            "SURFACE RECOVER DESTROY: %s",  winAnimator.mWin);
                     winAnimator.destroySurface();
-                    if (winAnimator.mWin.mAppToken != null) {
-                        winAnimator.mWin.mAppToken.removeStartingWindow();
+                    if (winAnimator.mWin.mActivityRecord != null) {
+                        winAnimator.mWin.mActivityRecord.removeStartingWindow();
                     }
                 }
 
@@ -652,8 +619,11 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
 
         handleResizingWindows();
 
-        if (DEBUG_ORIENTATION && mWmService.mDisplayFrozen) Slog.v(TAG,
-                "With display frozen, orientationChangeComplete=" + mOrientationChangeComplete);
+        if (mWmService.mDisplayFrozen) {
+            ProtoLog.v(WM_DEBUG_ORIENTATION,
+                    "With display frozen, orientationChangeComplete=%b",
+                    mOrientationChangeComplete);
+        }
         if (mOrientationChangeComplete) {
             if (mWmService.mWindowsFreezingScreen != WINDOWS_FREEZING_SCREENS_NONE) {
                 mWmService.mWindowsFreezingScreen = WINDOWS_FREEZING_SCREENS_NONE;
@@ -715,11 +685,11 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         }
 
         if (mUpdateRotation) {
-            if (DEBUG_ORIENTATION) Slog.d(TAG, "Performing post-rotate rotation");
+            ProtoLog.d(WM_DEBUG_ORIENTATION, "Performing post-rotate rotation");
             mUpdateRotation = updateRotationUnchecked();
         }
 
-        if (mWmService.mWaitingForDrawnCallback != null
+        if (!mWmService.mWaitingForDrawnCallbacks.isEmpty()
                 || (mOrientationChangeComplete && !isLayoutNeeded()
                 && !mUpdateRotation)) {
             mWmService.checkDrawnWindowsLocked();
@@ -786,7 +756,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                 }
             }
 
-            if (curDisplay.mAppTransition.isRunning() && !curDisplay.isAppAnimating()) {
+            if (curDisplay.mAppTransition.isRunning() && !curDisplay.isAppTransitioning()) {
                 // We have finished the animation of an app transition. To do this, we have
                 // delayed a lot of operations like showing and hiding apps, moving apps in
                 // Z-order, etc.
@@ -812,18 +782,14 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         final int defaultDw = defaultInfo.logicalWidth;
         final int defaultDh = defaultInfo.logicalHeight;
         if (mWmService.mWatermark != null) {
-            mWmService.mWatermark.positionSurface(defaultDw, defaultDh);
+            mWmService.mWatermark.positionSurface(defaultDw, defaultDh, mDisplayTransaction);
         }
         if (mWmService.mStrictModeFlash != null) {
-            mWmService.mStrictModeFlash.positionSurface(defaultDw, defaultDh);
-        }
-        if (mWmService.mCircularDisplayMask != null) {
-            mWmService.mCircularDisplayMask.positionSurface(defaultDw, defaultDh,
-                    mWmService.getDefaultDisplayRotation());
+            mWmService.mStrictModeFlash.positionSurface(defaultDw, defaultDh, mDisplayTransaction);
         }
         if (mWmService.mEmulatorDisplayOverlay != null) {
             mWmService.mEmulatorDisplayOverlay.positionSurface(defaultDw, defaultDh,
-                    mWmService.getDefaultDisplayRotation());
+                    mWmService.getDefaultDisplayRotation(), mDisplayTransaction);
         }
 
         final int count = mChildren.size();
@@ -869,29 +835,26 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         final int privateflags = attrs.privateFlags;
         boolean displayHasContent = false;
 
-        if (DEBUG_KEEP_SCREEN_ON) {
-            Slog.d(TAG_KEEP_SCREEN_ON, "handleNotObscuredLocked w: " + w
-                + ", w.mHasSurface: " + w.mHasSurface
-                + ", w.isOnScreen(): " + onScreen
-                + ", w.isDisplayedLw(): " + w.isDisplayedLw()
-                + ", w.mAttrs.userActivityTimeout: " + w.mAttrs.userActivityTimeout);
-        }
+        ProtoLog.d(WM_DEBUG_KEEP_SCREEN_ON,
+                    "handleNotObscuredLocked w: %s, w.mHasSurface: %b, w.isOnScreen(): %b, w"
+                            + ".isDisplayedLw(): %b, w.mAttrs.userActivityTimeout: %d",
+                    w, w.mHasSurface, onScreen, w.isDisplayedLw(), w.mAttrs.userActivityTimeout);
         if (w.mHasSurface && onScreen) {
             if (!syswin && w.mAttrs.userActivityTimeout >= 0 && mUserActivityTimeout < 0) {
                 mUserActivityTimeout = w.mAttrs.userActivityTimeout;
-                if (DEBUG_KEEP_SCREEN_ON) {
-                    Slog.d(TAG, "mUserActivityTimeout set to " + mUserActivityTimeout);
-                }
+                ProtoLog.d(WM_DEBUG_KEEP_SCREEN_ON, "mUserActivityTimeout set to %d",
+                        mUserActivityTimeout);
             }
         }
         if (w.mHasSurface && canBeSeen) {
             if ((attrFlags & FLAG_KEEP_SCREEN_ON) != 0) {
                 mHoldScreen = w.mSession;
                 mHoldScreenWindow = w;
-            } else if (DEBUG_KEEP_SCREEN_ON && w == mWmService.mLastWakeLockHoldingWindow) {
-                Slog.d(TAG_KEEP_SCREEN_ON, "handleNotObscuredLocked: " + w + " was holding "
-                        + "screen wakelock but no longer has FLAG_KEEP_SCREEN_ON!!! called by"
-                        + Debug.getCallers(10));
+            } else if (w == mWmService.mLastWakeLockHoldingWindow) {
+                ProtoLog.d(WM_DEBUG_KEEP_SCREEN_ON,
+                        "handleNotObscuredLocked: %s was holding screen wakelock but no longer "
+                                + "has FLAG_KEEP_SCREEN_ON!!! called by%s",
+                        w, Debug.getCallers(10));
             }
             if (!syswin && w.mAttrs.screenBrightness >= 0 && mScreenBrightness < 0) {
                 mScreenBrightness = w.mAttrs.screenBrightness;
@@ -1037,19 +1000,19 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
 
     @CallSuper
     @Override
-    public void writeToProto(ProtoOutputStream proto, long fieldId,
+    public void dumpDebug(ProtoOutputStream proto, long fieldId,
             @WindowTraceLogLevel int logLevel) {
         if (logLevel == WindowTraceLogLevel.CRITICAL && !isVisible()) {
             return;
         }
 
         final long token = proto.start(fieldId);
-        super.writeToProto(proto, WINDOW_CONTAINER, logLevel);
+        super.dumpDebug(proto, WINDOW_CONTAINER, logLevel);
         if (mWmService.mDisplayReady) {
             final int count = mChildren.size();
             for (int i = 0; i < count; ++i) {
                 final DisplayContent displayContent = mChildren.get(i);
-                displayContent.writeToProto(proto, DISPLAYS, logLevel);
+                displayContent.dumpDebugInner(proto, DISPLAYS, logLevel);
             }
         }
         if (logLevel == WindowTraceLogLevel.ALL) {
@@ -1069,7 +1032,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
     void positionChildAt(int position, DisplayContent child, boolean includingParents) {
         super.positionChildAt(position, child, includingParents);
         if (mRootActivityContainer != null) {
-            mRootActivityContainer.onChildPositionChanged(child.mAcitvityDisplay, position);
+            mRootActivityContainer.onChildPositionChanged(child, position);
         }
     }
 

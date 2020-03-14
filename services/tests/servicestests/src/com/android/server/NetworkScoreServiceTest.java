@@ -43,7 +43,6 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.content.pm.PackageManagerInternal;
 import android.content.res.Resources;
 import android.net.INetworkRecommendationProvider;
 import android.net.INetworkScoreCache;
@@ -56,6 +55,7 @@ import android.net.WifiKey;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
 import android.os.Binder;
 import android.os.Handler;
@@ -191,7 +191,7 @@ public class NetworkScoreServiceTest {
     @After
     public void tearDown() throws Exception {
         mHandlerThread.quitSafely();
-        LocalServices.removeServiceForTest(PackageManagerInternal.class);
+        LocalServices.removeServiceForTest(PermissionManagerServiceInternal.class);
     }
 
     @Test
@@ -722,7 +722,7 @@ public class NetworkScoreServiceTest {
 
     @Test
     public void testCurrentNetworkScoreCacheFilter_invalidWifiInfo_noneSsid() throws Exception {
-        when(mWifiInfo.getSSID()).thenReturn(WifiSsid.NONE);
+        when(mWifiInfo.getSSID()).thenReturn(WifiManager.UNKNOWN_SSID);
         NetworkScoreService.CurrentNetworkScoreCacheFilter cacheFilter =
                 new NetworkScoreService.CurrentNetworkScoreCacheFilter(() -> mWifiInfo);
 
@@ -796,7 +796,7 @@ public class NetworkScoreServiceTest {
         List<ScanResult> invalidScanResults = Lists.newArrayList(
                 new ScanResult(),
                 createScanResult("", SCORED_NETWORK.networkKey.wifiKey.bssid),
-                createScanResult(WifiSsid.NONE, SCORED_NETWORK.networkKey.wifiKey.bssid),
+                createScanResult(WifiManager.UNKNOWN_SSID, SCORED_NETWORK.networkKey.wifiKey.bssid),
                 createScanResult(SSID, null),
                 createScanResult(SSID, INVALID_BSSID)
         );

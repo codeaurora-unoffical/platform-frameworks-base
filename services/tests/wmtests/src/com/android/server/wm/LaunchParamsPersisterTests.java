@@ -32,21 +32,21 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Matchers.any;
 
 import android.content.ComponentName;
-import android.content.pm.PackageList;
 import android.content.pm.PackageManagerInternal;
 import android.graphics.Rect;
 import android.os.UserHandle;
 import android.platform.test.annotations.Presubmit;
-import android.view.DisplayInfo;
 
 import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.MediumTest;
 
 import com.android.server.LocalServices;
+import com.android.server.pm.PackageList;
 import com.android.server.wm.LaunchParamsController.LaunchParams;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 
 import java.io.File;
@@ -64,6 +64,7 @@ import java.util.function.Predicate;
  */
 @MediumTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class LaunchParamsPersisterTests extends ActivityTestsBase {
     private static final int TEST_USER_ID = 3;
     private static final int ALTERNATIVE_USER_ID = 0;
@@ -79,11 +80,11 @@ public class LaunchParamsPersisterTests extends ActivityTestsBase {
 
     private TestPersisterQueue mPersisterQueue;
     private File mFolder;
-    private ActivityDisplay mTestDisplay;
+    private DisplayContent mTestDisplay;
     private String mDisplayUniqueId;
-    private TaskRecord mTestTask;
-    private TaskRecord mTaskWithDifferentUser;
-    private TaskRecord mTaskWithDifferentComponent;
+    private Task mTestTask;
+    private Task mTaskWithDifferentUser;
+    private Task mTaskWithDifferentComponent;
     private PackageManagerInternal mMockPmi;
     private PackageManagerInternal.PackageListObserver mObserver;
 
@@ -103,28 +104,25 @@ public class LaunchParamsPersisterTests extends ActivityTestsBase {
         deleteRecursively(mFolder);
 
         mDisplayUniqueId = "test:" + Integer.toString(sNextUniqueId++);
-        final DisplayInfo info = new DisplayInfo();
-        mService.mContext.getDisplay().getDisplayInfo(info);
-        info.uniqueId = mDisplayUniqueId;
-        mTestDisplay = createNewActivityDisplay(info);
-        mRootActivityContainer.addChild(mTestDisplay, ActivityDisplay.POSITION_TOP);
-        when(mRootActivityContainer.getActivityDisplay(eq(mDisplayUniqueId)))
+        mTestDisplay = new TestDisplayContent.Builder(mService, 1000, 1500)
+                .setUniqueId(mDisplayUniqueId).build();
+        when(mRootActivityContainer.getDisplayContent(eq(mDisplayUniqueId)))
                 .thenReturn(mTestDisplay);
 
         ActivityStack stack = mTestDisplay.createStack(TEST_WINDOWING_MODE,
                 ACTIVITY_TYPE_STANDARD, /* onTop */ true);
         mTestTask = new TaskBuilder(mSupervisor).setComponent(TEST_COMPONENT).setStack(stack)
                 .build();
-        mTestTask.userId = TEST_USER_ID;
+        mTestTask.mUserId = TEST_USER_ID;
         mTestTask.mLastNonFullscreenBounds = TEST_BOUNDS;
         mTestTask.hasBeenVisible = true;
 
         mTaskWithDifferentComponent = new TaskBuilder(mSupervisor)
                 .setComponent(ALTERNATIVE_COMPONENT).build();
-        mTaskWithDifferentComponent.userId = TEST_USER_ID;
+        mTaskWithDifferentComponent.mUserId = TEST_USER_ID;
 
         mTaskWithDifferentUser = new TaskBuilder(mSupervisor).setComponent(TEST_COMPONENT).build();
-        mTaskWithDifferentUser.userId = ALTERNATIVE_USER_ID;
+        mTaskWithDifferentUser.mUserId = ALTERNATIVE_USER_ID;
 
         mTarget = new LaunchParamsPersister(mPersisterQueue, mSupervisor, mUserFolderGetter);
 
@@ -182,7 +180,7 @@ public class LaunchParamsPersisterTests extends ActivityTestsBase {
     public void testReturnsEmptyDisplayIfDisplayIsNotFound() {
         mTarget.saveTask(mTestTask);
 
-        when(mRootActivityContainer.getActivityDisplay(eq(mDisplayUniqueId))).thenReturn(null);
+        when(mRootActivityContainer.getDisplayContent(eq(mDisplayUniqueId))).thenReturn(null);
 
         mTarget.getLaunchParams(mTestTask, null, mResult);
 
@@ -234,7 +232,7 @@ public class LaunchParamsPersisterTests extends ActivityTestsBase {
 
         ActivityStack stack = mTestDisplay.createStack(TEST_WINDOWING_MODE,
                 ACTIVITY_TYPE_STANDARD, /* onTop */ true);
-        final TaskRecord anotherTaskOfTheSameUser = new TaskBuilder(mSupervisor)
+        final Task anotherTaskOfTheSameUser = new TaskBuilder(mSupervisor)
                 .setComponent(ALTERNATIVE_COMPONENT)
                 .setUserId(TEST_USER_ID)
                 .setStack(stack)
@@ -246,7 +244,7 @@ public class LaunchParamsPersisterTests extends ActivityTestsBase {
 
         stack = mTestDisplay.createStack(TEST_WINDOWING_MODE,
                 ACTIVITY_TYPE_STANDARD, /* onTop */ true);
-        final TaskRecord anotherTaskOfDifferentUser = new TaskBuilder(mSupervisor)
+        final Task anotherTaskOfDifferentUser = new TaskBuilder(mSupervisor)
                 .setComponent(TEST_COMPONENT)
                 .setUserId(ALTERNATIVE_USER_ID)
                 .setStack(stack)

@@ -21,11 +21,8 @@
 #include <GrContext.h>
 #endif
 #include <SkSurface.h>
-#include <ui/DisplayInfo.h>
 #include <utils/String8.h>
 #include <vector>
-
-#include "pipeline/skia/VectorDrawableAtlas.h"
 
 namespace android {
 
@@ -51,15 +48,13 @@ public:
     void trimStaleResources();
     void dumpMemoryUsage(String8& log, const RenderState* renderState = nullptr);
 
-    sp<skiapipeline::VectorDrawableAtlas> acquireVectorDrawableAtlas();
-
     size_t getCacheSize() const { return mMaxResourceBytes; }
     size_t getBackgroundCacheSize() const { return mBackgroundResourceBytes; }
 
 private:
     friend class RenderThread;
 
-    explicit CacheManager(const DisplayInfo& display);
+    explicit CacheManager();
 
 #ifdef __ANDROID__ // Layoutlib does not support hardware acceleration
     void reset(sk_sp<GrContext> grContext);
@@ -77,13 +72,6 @@ private:
     const size_t mMaxGpuFontAtlasBytes;
     const size_t mMaxCpuFontCacheBytes;
     const size_t mBackgroundCpuFontCacheBytes;
-
-    struct PipelineProps {
-        const void* pipelineKey = nullptr;
-        size_t surfaceArea = 0;
-    };
-
-    sp<skiapipeline::VectorDrawableAtlas> mVectorDrawableAtlas;
 };
 
 } /* namespace renderthread */

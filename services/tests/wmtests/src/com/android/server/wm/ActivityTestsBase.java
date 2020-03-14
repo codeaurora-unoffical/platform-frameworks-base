@@ -19,6 +19,7 @@ package com.android.server.wm;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
+import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 import static android.content.pm.ActivityInfo.RESIZE_MODE_RESIZEABLE;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
 
@@ -27,6 +28,7 @@ import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentat
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.any;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.anyBoolean;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doNothing;
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 
@@ -38,33 +40,19 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
+import android.os.Build;
 import android.os.UserHandle;
 import android.service.voice.IVoiceInteractionSession;
-import android.testing.DexmakerShareClassLoaderRule;
-import android.view.DisplayInfo;
 
 import com.android.server.AttributeCache;
 
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Rule;
 
 /**
  * A base class to handle common operations in activity related unit tests.
  */
-class ActivityTestsBase {
-
-    @Rule
-    public final DexmakerShareClassLoaderRule mDexmakerShareClassLoaderRule =
-            new DexmakerShareClassLoaderRule();
-
-    @Rule
-    public final SystemServicesTestRule mSystemServicesTestRule = new SystemServicesTestRule();
-
-    @WindowTestRunner.MethodWrapperRule
-    public final WindowManagerGlobalLockRule mLockRule =
-            new WindowManagerGlobalLockRule(mSystemServicesTestRule);
-
+class ActivityTestsBase extends SystemServiceTestsBase {
     final Context mContext = getInstrumentation().getTargetContext();
 
     ActivityTaskManagerService mService;
@@ -89,27 +77,9 @@ class ActivityTestsBase {
         mRootActivityContainer = mService.mRootActivityContainer;
     }
 
-    /** Creates a {@link TestActivityDisplay}. */
-    TestActivityDisplay createNewActivityDisplay() {
-        return TestActivityDisplay.create(mSupervisor);
-    }
-
-    TestActivityDisplay createNewActivityDisplay(DisplayInfo info) {
-        return TestActivityDisplay.create(mSupervisor, info);
-    }
-
-    /** Creates and adds a {@link TestActivityDisplay} to supervisor at the given position. */
-    TestActivityDisplay addNewActivityDisplayAt(int position) {
-        final TestActivityDisplay display = createNewActivityDisplay();
-        mRootActivityContainer.addChild(display, position);
-        return display;
-    }
-
-    /** Creates and adds a {@link TestActivityDisplay} to supervisor at the given position. */
-    TestActivityDisplay addNewActivityDisplayAt(DisplayInfo info, int position) {
-        final TestActivityDisplay display = createNewActivityDisplay(info);
-        mRootActivityContainer.addChild(display, position);
-        return display;
+    /** Creates and adds a {@link TestDisplayContent} to supervisor at the given position. */
+    TestDisplayContent addNewDisplayContentAt(int position) {
+        return new TestDisplayContent.Builder(mService, 1000, 1500).setPosition(position).build();
     }
 
     /** Sets the default minimum task size to 1 so that tests can use small task sizes */
@@ -128,8 +98,9 @@ class ActivityTestsBase {
 
         private ComponentName mComponent;
         private String mTargetActivity;
-        private TaskRecord mTaskRecord;
-        private int mUid;
+        private Task mTask;
+        private String mProcessName = "name";
+        private int mUid = 12345;
         private boolean mCreateTask;
         private ActivityStack mStack;
         private int mActivityFlags;
@@ -139,6 +110,8 @@ class ActivityTestsBase {
         private int mScreenOrientation = SCREEN_ORIENTATION_UNSPECIFIED;
         private boolean mLaunchTaskBehind;
         private int mConfigChanges;
+        private int mLaunchedFromPid;
+        private int mLaunchedFromUid;
 
         ActivityBuilder(ActivityTaskManagerService service) {
             mService = service;
@@ -159,8 +132,8 @@ class ActivityTestsBase {
                     DEFAULT_COMPONENT_PACKAGE_NAME);
         }
 
-        ActivityBuilder setTask(TaskRecord task) {
-            mTaskRecord = task;
+        ActivityBuilder setTask(Task task) {
+            mTask = task;
             return this;
         }
 
@@ -181,6 +154,11 @@ class ActivityTestsBase {
 
         ActivityBuilder setCreateTask(boolean createTask) {
             mCreateTask = createTask;
+            return this;
+        }
+
+        ActivityBuilder setProcessName(String name) {
+            mProcessName = name;
             return this;
         }
 
@@ -214,7 +192,26 @@ class ActivityTestsBase {
             return this;
         }
 
+        ActivityBuilder setLaunchedFromPid(int pid) {
+            mLaunchedFromPid = pid;
+            return this;
+        }
+
+        ActivityBuilder setLaunchedFromUid(int uid) {
+            mLaunchedFromUid = uid;
+            return this;
+        }
+
         ActivityRecord build() {
+            try {
+                mService.deferWindowLayout();
+                return buildInner();
+            } finally {
+                mService.continueWindowLayout();
+            }
+        }
+
+        ActivityRecord buildInner() {
             if (mComponent == null) {
                 final int id = sCurrentActivityId++;
                 mComponent = ComponentName.createRelative(DEFAULT_COMPONENT_PACKAGE_NAME,
@@ -222,7 +219,7 @@ class ActivityTestsBase {
             }
 
             if (mCreateTask) {
-                mTaskRecord = new TaskBuilder(mService.mStackSupervisor)
+                mTask = new TaskBuilder(mService.mStackSupervisor)
                         .setComponent(mComponent)
                         .setStack(mStack).build();
             }
@@ -231,8 +228,10 @@ class ActivityTestsBase {
             intent.setComponent(mComponent);
             final ActivityInfo aInfo = new ActivityInfo();
             aInfo.applicationInfo = new ApplicationInfo();
+            aInfo.applicationInfo.targetSdkVersion = Build.VERSION_CODES.CUR_DEVELOPMENT;
             aInfo.applicationInfo.packageName = mComponent.getPackageName();
             aInfo.applicationInfo.uid = mUid;
+            aInfo.processName = mProcessName;
             aInfo.packageName = mComponent.getPackageName();
             if (mTargetActivity != null) {
                 aInfo.targetActivity = mTargetActivity;
@@ -246,32 +245,33 @@ class ActivityTestsBase {
 
             ActivityOptions options = null;
             if (mLaunchTaskBehind) {
-                options =  ActivityOptions.makeTaskLaunchBehind();
+                options = ActivityOptions.makeTaskLaunchBehind();
             }
 
             final ActivityRecord activity = new ActivityRecord(mService, null /* caller */,
-                    0 /* launchedFromPid */, 0, null, intent, null,
-                    aInfo /*aInfo*/, new Configuration(), null /* resultTo */, null /* resultWho */,
-                    0 /* reqCode */, false /*componentSpecified*/, false /* rootVoiceInteraction */,
-                    mService.mStackSupervisor, options, null /* sourceRecord */);
+                    mLaunchedFromPid /* launchedFromPid */, mLaunchedFromUid /* launchedFromUid */,
+                    null, intent, null, aInfo /*aInfo*/, new Configuration(), null /* resultTo */,
+                    null /* resultWho */, 0 /* reqCode */, false /*componentSpecified*/,
+                    false /* rootVoiceInteraction */, mService.mStackSupervisor, options,
+                    null /* sourceRecord */);
             spyOn(activity);
-            if (mTaskRecord != null) {
+            if (mTask != null) {
                 // fullscreen value is normally read from resources in ctor, so for testing we need
                 // to set it somewhere else since we can't mock resources.
-                activity.fullscreen = true;
-                activity.setTask(mTaskRecord);
-                activity.createAppWindowToken();
-                spyOn(activity.mAppWindowToken);
+                doReturn(true).when(activity).occludesParent();
+                mTask.addChild(activity);
                 // Make visible by default...
-                activity.mAppWindowToken.setHidden(false);
+                activity.setVisible(true);
             }
 
             final WindowProcessController wpc = new WindowProcessController(mService,
-                    mService.mContext.getApplicationInfo(), "name", 12345,
+                    mService.mContext.getApplicationInfo(), mProcessName, mUid,
                     UserHandle.getUserId(12345), mock(Object.class),
                     mock(WindowProcessListener.class));
             wpc.setThread(mock(IApplicationThread.class));
             activity.setProcess(wpc);
+            doReturn(wpc).when(mService).getProcessController(
+                    activity.processName, activity.info.applicationInfo.uid);
 
             // Resume top activities to make sure all other signals in the system are connected.
             mService.mRootActivityContainer.resumeFocusedStacksTopActivities();
@@ -344,7 +344,7 @@ class ActivityTestsBase {
             return this;
         }
 
-        TaskRecord build() {
+        Task build() {
             if (mStack == null && mCreateStack) {
                 mStack = mSupervisor.mRootActivityContainer.getDefaultDisplay().createStack(
                         WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */);
@@ -364,19 +364,16 @@ class ActivityTestsBase {
             intent.setComponent(mComponent);
             intent.setFlags(mFlags);
 
-            final TaskRecord task = new TaskRecord(mSupervisor.mService, mTaskId, aInfo,
-                    intent /*intent*/, mVoiceSession, null /*_voiceInteractor*/);
+            final Task task = new Task(mSupervisor.mService, mTaskId, aInfo,
+                    intent /*intent*/, mVoiceSession, null /*_voiceInteractor*/,
+                    null /*taskDescription*/, mStack);
             spyOn(task);
-            task.userId = mUserId;
+            task.mUserId = mUserId;
 
             if (mStack != null) {
                 mStack.moveToFront("test");
-                mStack.addTask(task, true, "creating test task");
-                task.createTask(true, true);
-                spyOn(task.mTask);
+                mStack.addChild(task, true, true);
             }
-
-            task.touchActiveTime();
 
             return task;
         }
@@ -384,9 +381,9 @@ class ActivityTestsBase {
 
     static class StackBuilder {
         private final RootActivityContainer mRootActivityContainer;
-        private ActivityDisplay mDisplay;
+        private DisplayContent mDisplay;
         private int mStackId = -1;
-        private int mWindowingMode = WINDOWING_MODE_FULLSCREEN;
+        private int mWindowingMode = WINDOWING_MODE_UNDEFINED;
         private int mActivityType = ACTIVITY_TYPE_STANDARD;
         private boolean mOnTop = true;
         private boolean mCreateActivity = true;
@@ -411,7 +408,7 @@ class ActivityTestsBase {
             return this;
         }
 
-        StackBuilder setDisplay(ActivityDisplay display) {
+        StackBuilder setDisplay(DisplayContent display) {
             mDisplay = display;
             return this;
         }
@@ -445,7 +442,7 @@ class ActivityTestsBase {
                     if (mOnTop) {
                         // We move the task to front again in order to regain focus after activity
                         // added to the stack.
-                        // Or {@link ActivityDisplay#mPreferredTopFocusableStack} could be other
+                        // Or {@link DisplayContent#mPreferredTopFocusableStack} could be other
                         // stacks (e.g. home stack).
                         stack.moveToFront("createActivityStack");
                     } else {
@@ -455,7 +452,6 @@ class ActivityTestsBase {
             }
 
             spyOn(stack);
-            spyOn(stack.mTaskStack);
             doNothing().when(stack).startActivityLocked(
                     any(), any(), anyBoolean(), anyBoolean(), any());
 

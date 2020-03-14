@@ -39,8 +39,6 @@ namespace android {
 namespace os {
 namespace statsd {
 
-static const int kLogMsgHeaderSize = 28;
-
 StatsSocketListener::StatsSocketListener(std::shared_ptr<LogEventQueue> queue)
     : SocketListener(getLogSocket(), false /*start listen*/), mQueue(queue) {
 }
@@ -56,8 +54,7 @@ bool StatsSocketListener::onDataAvailable(SocketClient* cli) {
     }
 
     // + 1 to ensure null terminator if MAX_PAYLOAD buffer is received
-    char buffer[sizeof_log_id_t + sizeof(uint16_t) + sizeof(log_time) + LOGGER_ENTRY_MAX_PAYLOAD +
-                1];
+    char buffer[sizeof(android_log_header_t) + LOGGER_ENTRY_MAX_PAYLOAD + 1];
     struct iovec iov = {buffer, sizeof(buffer) - 1};
 
     alignas(4) char control[CMSG_SPACE(sizeof(struct ucred))];
@@ -96,7 +93,7 @@ bool StatsSocketListener::onDataAvailable(SocketClient* cli) {
         cred->uid = DEFAULT_OVERFLOWUID;
     }
 
-    char* ptr = ((char*)buffer) + sizeof(android_log_header_t);
+    uint8_t* ptr = ((uint8_t*)buffer) + sizeof(android_log_header_t);
     n -= sizeof(android_log_header_t);
 
     // When a log failed to write to statsd socket (e.g., due ot EBUSY), a special message would
@@ -125,18 +122,13 @@ bool StatsSocketListener::onDataAvailable(SocketClient* cli) {
         }
     }
 
-    log_msg msg;
-
-    msg.entry.len = n;
-    msg.entry.hdr_size = kLogMsgHeaderSize;
-    msg.entry.sec = time(nullptr);
-    msg.entry.pid = cred->pid;
-    msg.entry.uid = cred->uid;
-
-    memcpy(msg.buf + kLogMsgHeaderSize, ptr, n + 1);
+    // move past the 4-byte StatsEventTag
+    uint8_t* msg = ptr + sizeof(uint32_t);
+    uint32_t len = n - sizeof(uint32_t);
+    uint32_t uid = cred->uid;
 
     int64_t oldestTimestamp;
-    if (!mQueue->push(std::make_unique<LogEvent>(msg), &oldestTimestamp)) {
+    if (!mQueue->push(std::make_unique<LogEvent>(msg, len, uid), &oldestTimestamp)) {
         StatsdStats::getInstance().noteEventQueueOverflow(oldestTimestamp);
     }
 

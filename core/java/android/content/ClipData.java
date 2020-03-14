@@ -682,7 +682,7 @@ public class ClipData implements Parcelable {
         }
 
         /** @hide */
-        public void writeToProto(ProtoOutputStream proto, long fieldId) {
+        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
             final long token = proto.start(fieldId);
 
             if (mHtmlText != null) {
@@ -692,7 +692,7 @@ public class ClipData implements Parcelable {
             } else if (mUri != null) {
                 proto.write(ClipDataProto.Item.URI, mUri.toString());
             } else if (mIntent != null) {
-                mIntent.writeToProto(proto, ClipDataProto.Item.INTENT, true, true, true, true);
+                mIntent.dumpDebug(proto, ClipDataProto.Item.INTENT, true, true, true, true);
             } else {
                 proto.write(ClipDataProto.Item.NOTHING, true);
             }
@@ -1069,19 +1069,18 @@ public class ClipData implements Parcelable {
             if (!first) {
                 b.append(' ');
             }
-            mItems.get(0).toShortString(b);
-            if (mItems.size() > 1) {
-                b.append(" ...");
+            for (int i=0; i<mItems.size(); i++) {
+                b.append("{...}");
             }
         }
     }
 
     /** @hide */
-    public void writeToProto(ProtoOutputStream proto, long fieldId) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long token = proto.start(fieldId);
 
         if (mClipDescription != null) {
-            mClipDescription.writeToProto(proto, ClipDataProto.DESCRIPTION);
+            mClipDescription.dumpDebug(proto, ClipDataProto.DESCRIPTION);
         }
         if (mIcon != null) {
             final long iToken = proto.start(ClipDataProto.ICON);
@@ -1090,7 +1089,7 @@ public class ClipData implements Parcelable {
             proto.end(iToken);
         }
         for (int i = 0; i < mItems.size(); i++) {
-            mItems.get(i).writeToProto(proto, ClipDataProto.ITEMS);
+            mItems.get(i).dumpDebug(proto, ClipDataProto.ITEMS);
         }
 
         proto.end(token);

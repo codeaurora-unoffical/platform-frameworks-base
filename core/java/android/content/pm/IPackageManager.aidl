@@ -26,6 +26,7 @@ import android.content.pm.ChangedPackages;
 import android.content.pm.InstantAppInfo;
 import android.content.pm.FeatureInfo;
 import android.content.pm.IDexModuleRegisterCallback;
+import android.content.pm.InstallSourceInfo;
 import android.content.pm.IPackageInstaller;
 import android.content.pm.IPackageDeleteObserver;
 import android.content.pm.IPackageDeleteObserver2;
@@ -50,6 +51,7 @@ import android.content.pm.VersionedPackage;
 import android.content.pm.dex.IArtManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.PersistableBundle;
 import android.content.IntentSender;
@@ -236,6 +238,8 @@ interface IPackageManager {
     @UnsupportedAppUsage
     String getInstallerPackageName(in String packageName);
 
+    InstallSourceInfo getInstallSourceInfo(in String packageName);
+
     void resetApplicationPreferences(int userId);
 
     @UnsupportedAppUsage
@@ -280,7 +284,7 @@ interface IPackageManager {
 
     boolean isPackageSuspendedForUser(String packageName, int userId);
 
-    PersistableBundle getSuspendedPackageAppExtras(String packageName, int userId);
+    Bundle getSuspendedPackageAppExtras(String packageName, int userId);
 
     /**
      * Backup/restore support - only the system uid may use these.
@@ -677,15 +681,23 @@ interface IPackageManager {
 
     String getSystemTextClassifierPackageName();
 
+    String[] getSystemTextClassifierPackages();
+
     String getAttentionServicePackageName();
 
     String getWellbeingPackageName();
+
+    String[] getTelephonyPackageNames();
 
     String getAppPredictionServicePackageName();
 
     String getSystemCaptionsServicePackageName();
 
+    String getSetupWizardPackageName();
+
     String getIncidentReportApproverPackageName();
+
+    String getContentCaptureServicePackageName();
 
     boolean isPackageStateProtected(String packageName, int userId);
 

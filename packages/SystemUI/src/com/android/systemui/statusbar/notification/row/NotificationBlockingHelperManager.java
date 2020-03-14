@@ -139,7 +139,8 @@ public class NotificationBlockingHelperManager {
 
             mBlockingHelperRow.setBlockingHelperShowing(false);
             if (mBlockingHelperRow.isAttachedToWindow()) {
-                Dependency.get(NotificationEntryManager.class).updateNotifications();
+                Dependency.get(NotificationEntryManager.class).updateNotifications(
+                        "dismissCurrentBlockingHelper");
             }
             mBlockingHelperRow = null;
             return true;
@@ -165,7 +166,7 @@ public class NotificationBlockingHelperManager {
     }
 
     private LogMaker getLogMaker() {
-        return mBlockingHelperRow.getStatusBarNotification()
+        return mBlockingHelperRow.getEntry().getSbn()
             .getLogMaker()
             .setCategory(MetricsEvent.NOTIFICATION_BLOCKING_HELPER);
     }

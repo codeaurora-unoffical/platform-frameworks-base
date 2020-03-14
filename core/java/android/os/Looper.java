@@ -112,10 +112,12 @@ public final class Looper {
 
     /**
      * Initialize the current thread as a looper, marking it as an
-     * application's main looper. The main looper for your application
-     * is created by the Android environment, so you should never need
-     * to call this function yourself.  See also: {@link #prepare()}
+     * application's main looper. See also: {@link #prepare()}
+     *
+     * @deprecated The main looper for your application is created by the Android environment,
+     *   so you should never need to call this function yourself.
      */
+    @Deprecated
     public static void prepareMainLooper() {
         prepare(false);
         synchronized (Looper.class) {
@@ -413,12 +415,12 @@ public final class Looper {
     }
 
     /** @hide */
-    public void writeToProto(ProtoOutputStream proto, long fieldId) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long looperToken = proto.start(fieldId);
         proto.write(LooperProto.THREAD_NAME, mThread.getName());
         proto.write(LooperProto.THREAD_ID, mThread.getId());
         if (mQueue != null) {
-            mQueue.writeToProto(proto, LooperProto.QUEUE);
+            mQueue.dumpDebug(proto, LooperProto.QUEUE);
         }
         proto.end(looperToken);
     }

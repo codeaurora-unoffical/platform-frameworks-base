@@ -18,9 +18,6 @@ package com.android.server.wm;
 
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
-import static android.view.Display.DEFAULT_DISPLAY;
-
-import static com.android.server.wm.ActivityDisplay.POSITION_BOTTOM;
 
 import static com.google.common.truth.Truth.assertThat;
 
@@ -35,6 +32,7 @@ import androidx.test.filters.MediumTest;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.util.ArrayList;
 
@@ -44,6 +42,7 @@ import java.util.ArrayList;
  */
 @MediumTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class RunningTasksTest extends ActivityTestsBase {
 
     private static final ArraySet<Integer> PROFILE_IDS = new ArraySet<>();
@@ -58,21 +57,24 @@ public class RunningTasksTest extends ActivityTestsBase {
     @Test
     public void testCollectTasksByLastActiveTime() {
         // Create a number of stacks with tasks (of incrementing active time)
-        final ArrayList<ActivityDisplay> displays = new ArrayList<>();
-        final ActivityDisplay display = TestActivityDisplay.create(mSupervisor, DEFAULT_DISPLAY);
+        final ArrayList<DisplayContent> displays = new ArrayList<>();
+        final DisplayContent display =
+                new TestDisplayContent.Builder(mService, 1000, 2500).build();
         displays.add(display);
 
         final int numStacks = 2;
         for (int stackIndex = 0; stackIndex < numStacks; stackIndex++) {
-            final ActivityStack stack =
-                    new StackBuilder(mRootActivityContainer).setCreateActivity(false).build();
-            display.addChild(stack, POSITION_BOTTOM);
+            final ActivityStack stack = new StackBuilder(mRootActivityContainer)
+                    .setCreateActivity(false)
+                    .setDisplay(display)
+                    .setOnTop(false)
+                    .build();
         }
 
         final int numTasks = 10;
         int activeTime = 0;
         for (int i = 0; i < numTasks; i++) {
-            createTask(display.getChildAt(i % numStacks), ".Task" + i, i, activeTime++);
+            createTask(display.getStackAt(i % numStacks), ".Task" + i, i, activeTime++);
         }
 
         // Ensure that the latest tasks were returned in order of decreasing last active time,
@@ -80,8 +82,8 @@ public class RunningTasksTest extends ActivityTestsBase {
         final int numFetchTasks = 5;
         ArrayList<RunningTaskInfo> tasks = new ArrayList<>();
         mRunningTasks.getTasks(5, tasks, ACTIVITY_TYPE_UNDEFINED, WINDOWING_MODE_UNDEFINED,
-                displays, -1 /* callingUid */, true /* allowed */, true /*crossUser */,
-                PROFILE_IDS);
+                mRootActivityContainer, -1 /* callingUid */, true /* allowed */,
+                true /*crossUser */, PROFILE_IDS);
         assertThat(tasks).hasSize(numFetchTasks);
         for (int i = 0; i < numFetchTasks; i++) {
             assertEquals(numTasks - i - 1, tasks.get(i).id);
@@ -91,8 +93,8 @@ public class RunningTasksTest extends ActivityTestsBase {
         // and does not crash
         tasks.clear();
         mRunningTasks.getTasks(100, tasks, ACTIVITY_TYPE_UNDEFINED, WINDOWING_MODE_UNDEFINED,
-                displays, -1 /* callingUid */, true /* allowed */, true /* crossUser */,
-                PROFILE_IDS);
+                mRootActivityContainer, -1 /* callingUid */, true /* allowed */,
+                true /* crossUser */, PROFILE_IDS);
         assertThat(tasks).hasSize(numTasks);
         for (int i = 0; i < numTasks; i++) {
             assertEquals(numTasks - i - 1, tasks.get(i).id);
@@ -102,9 +104,9 @@ public class RunningTasksTest extends ActivityTestsBase {
     /**
      * Create a task with a single activity in it, with the given last active time.
      */
-    private TaskRecord createTask(ActivityStack stack, String className, int taskId,
+    private Task createTask(ActivityStack stack, String className, int taskId,
             int lastActiveTime) {
-        final TaskRecord task = new TaskBuilder(mService.mStackSupervisor)
+        final Task task = new TaskBuilder(mService.mStackSupervisor)
                 .setComponent(new ComponentName(mContext.getPackageName(), className))
                 .setTaskId(taskId)
                 .setStack(stack)

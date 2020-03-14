@@ -32,6 +32,7 @@ import android.view.LayoutInflater;
 import androidx.annotation.VisibleForTesting;
 import androidx.lifecycle.Observer;
 
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.colorextraction.SysuiColorExtractor;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.dock.DockManager.DockEventListener;
@@ -125,9 +126,9 @@ public final class ClockManager {
     @Inject
     public ClockManager(Context context, InjectionInflationController injectionInflater,
             PluginManager pluginManager, SysuiColorExtractor colorExtractor,
-            @Nullable DockManager dockManager) {
+            @Nullable DockManager dockManager, BroadcastDispatcher broadcastDispatcher) {
         this(context, injectionInflater, pluginManager, colorExtractor,
-                context.getContentResolver(), new CurrentUserObservable(context),
+                context.getContentResolver(), new CurrentUserObservable(broadcastDispatcher),
                 new SettingsWrapper(context.getContentResolver()), dockManager);
     }
 
@@ -243,11 +244,12 @@ public final class ClockManager {
         mPreviewClocks.reloadCurrentClock();
         mListeners.forEach((listener, clocks) -> {
             clocks.reloadCurrentClock();
-            ClockPlugin clock = clocks.getCurrentClock();
-            if (clock instanceof DefaultClockController) {
-                listener.onClockChanged(null);
+            final ClockPlugin clock = clocks.getCurrentClock();
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                listener.onClockChanged(clock instanceof DefaultClockController ? null : clock);
             } else {
-                listener.onClockChanged(clock);
+                mMainHandler.post(() -> listener.onClockChanged(
+                        clock instanceof DefaultClockController ? null : clock));
             }
         });
     }
@@ -322,7 +324,7 @@ public final class ClockManager {
             mClocks.put(plugin.getClass().getName(), plugin);
             mClockInfo.add(ClockInfo.builder()
                     .setName(plugin.getName())
-                    .setTitle(plugin.getTitle())
+                    .setTitle(plugin::getTitle)
                     .setId(id)
                     .setThumbnail(plugin::getThumbnail)
                     .setPreview(() -> plugin.getPreview(mWidth, mHeight))

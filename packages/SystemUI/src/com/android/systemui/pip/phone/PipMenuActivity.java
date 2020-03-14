@@ -90,7 +90,7 @@ public class PipMenuActivity extends Activity {
     public static final int MESSAGE_UPDATE_ACTIONS = 4;
     public static final int MESSAGE_UPDATE_DISMISS_FRACTION = 5;
     public static final int MESSAGE_ANIMATION_ENDED = 6;
-    public static final int MESSAGE_TOUCH_EVENT = 7;
+    public static final int MESSAGE_POINTER_EVENT = 7;
 
     private static final int INITIAL_DISMISS_DELAY = 3500;
     private static final int POST_INTERACTION_DISMISS_DELAY = 2000;
@@ -102,6 +102,7 @@ public class PipMenuActivity extends Activity {
     private static final float DISABLED_ACTION_ALPHA = 0.54f;
 
     private int mMenuState;
+    private boolean mResize = true;
     private boolean mAllowMenuTimeout = true;
     private boolean mAllowTouches = true;
 
@@ -165,9 +166,9 @@ public class PipMenuActivity extends Activity {
                     break;
                 }
 
-                case MESSAGE_TOUCH_EVENT: {
+                case MESSAGE_POINTER_EVENT: {
                     final MotionEvent ev = (MotionEvent) msg.obj;
-                    dispatchTouchEvent(ev);
+                    dispatchPointerEvent(ev);
                     break;
                 }
             }
@@ -219,6 +220,9 @@ public class PipMenuActivity extends Activity {
         updateFromIntent(getIntent());
         setTitle(R.string.pip_menu_title);
         setDisablePreviewScreenshots(true);
+
+        // Hide without an animation.
+        getWindow().setExitTransition(null);
     }
 
     @Override
@@ -247,6 +251,9 @@ public class PipMenuActivity extends Activity {
     protected void onStop() {
         super.onStop();
 
+        // In cases such as device lock, hide and finish it so that it can be recreated on the top
+        // next time it starts, see also {@link #onUserLeaveHint}
+        hideMenu();
         cancelDelayedFinish();
     }
 
@@ -263,6 +270,17 @@ public class PipMenuActivity extends Activity {
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode) {
         if (!isInPictureInPictureMode) {
             finish();
+        }
+    }
+
+    /**
+     * Dispatch a pointer event from {@link PipTouchHandler}.
+     */
+    private void dispatchPointerEvent(MotionEvent event) {
+        if (event.isTouchEvent()) {
+            dispatchTouchEvent(event);
+        } else {
+            dispatchGenericMotionEvent(event);
         }
     }
 
@@ -285,8 +303,6 @@ public class PipMenuActivity extends Activity {
     public void finish() {
         notifyActivityCallback(null);
         super.finish();
-        // Hide without an animation (the menu should already be invisible at this point)
-        overridePendingTransition(0, 0);
     }
 
     @Override
@@ -308,7 +324,7 @@ public class PipMenuActivity extends Activity {
             if (mMenuContainerAnimator != null) {
                 mMenuContainerAnimator.cancel();
             }
-            notifyMenuStateChange(menuState);
+            notifyMenuStateChange(menuState, resizeMenuOnShow);
             mMenuContainerAnimator = new AnimatorSet();
             ObjectAnimator menuAnim = ObjectAnimator.ofFloat(mMenuContainer, View.ALPHA,
                     mMenuContainer.getAlpha(), 1f);
@@ -355,7 +371,7 @@ public class PipMenuActivity extends Activity {
         if (mMenuState != MENU_STATE_NONE) {
             cancelDelayedFinish();
             if (notifyMenuVisibility) {
-                notifyMenuStateChange(MENU_STATE_NONE);
+                notifyMenuStateChange(MENU_STATE_NONE, mResize);
             }
             mMenuContainerAnimator = new AnimatorSet();
             ObjectAnimator menuAnim = ObjectAnimator.ofFloat(mMenuContainer, View.ALPHA,
@@ -513,11 +529,13 @@ public class PipMenuActivity extends Activity {
         mBackgroundDrawable.setAlpha(alpha);
     }
 
-    private void notifyMenuStateChange(int menuState) {
+    private void notifyMenuStateChange(int menuState, boolean resize) {
         mMenuState = menuState;
+        mResize = resize;
         Message m = Message.obtain();
         m.what = PipMenuActivityController.MESSAGE_MENU_STATE_CHANGED;
         m.arg1 = menuState;
+        m.arg2 = resize ?  1 : 0;
         sendMessage(m, "Could not notify controller of PIP menu visibility");
     }
 
@@ -556,6 +574,7 @@ public class PipMenuActivity extends Activity {
         Message m = Message.obtain();
         m.what = PipMenuActivityController.MESSAGE_UPDATE_ACTIVITY_CALLBACK;
         m.replyTo = callback;
+        m.arg1 = mResize ?  1 : 0;
         sendMessage(m, "Could not notify controller of activity finished");
     }
 

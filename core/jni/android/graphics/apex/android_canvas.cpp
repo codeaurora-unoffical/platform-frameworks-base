@@ -16,55 +16,94 @@
 
 #include "android/graphics/canvas.h"
 
+#include "TypeCast.h"
 #include "GraphicsJNI.h"
 
 #include <hwui/Canvas.h>
 #include <utils/Color.h>
 
 #include <SkBitmap.h>
+#include <SkSurface.h>
 
 using namespace android;
 
-static inline Canvas* toCanvas(ACanvas* aCanvas) {
-    return reinterpret_cast<Canvas*>(aCanvas);
-}
+/*
+ * Converts a buffer and dataspace into an SkBitmap only if the resulting bitmap can be treated as a
+ * rendering destination for a Canvas.  If the buffer is null or the format is one that we cannot
+ * render into with a Canvas then false is returned and the outBitmap param is unmodified.
+ */
+static bool convert(const ANativeWindow_Buffer* buffer,
+                    int32_t /*android_dataspace_t*/ dataspace,
+                    SkBitmap* outBitmap) {
+    if (buffer == nullptr) {
+        return false;
+    }
 
-static inline ACanvas* toACanvas(Canvas* canvas) {
-    return reinterpret_cast<ACanvas*>(canvas);
+    sk_sp<SkColorSpace> cs(uirenderer::DataSpaceToColorSpace((android_dataspace)dataspace));
+    SkImageInfo imageInfo = uirenderer::ANativeWindowToImageInfo(*buffer, cs);
+    size_t rowBytes = buffer->stride * imageInfo.bytesPerPixel();
+
+    // If SkSurface::MakeRasterDirect fails then we should as well as we will not be able to
+    // draw into the canvas.
+    sk_sp<SkSurface> surface = SkSurface::MakeRasterDirect(imageInfo, buffer->bits, rowBytes);
+    if (surface.get() != nullptr) {
+        if (outBitmap) {
+            outBitmap->setInfo(imageInfo, rowBytes);
+            outBitmap->setPixels(buffer->bits);
+        }
+        return true;
+    }
+    return false;
 }
 
 bool ACanvas_isSupportedPixelFormat(int32_t bufferFormat) {
-    ANativeWindow_Buffer buffer { 0, 0, 0, bufferFormat, nullptr, {0} };
-    const SkColorType colorType = uirenderer::ANativeWindowToImageInfo(buffer, nullptr).colorType();
-    return kUnknown_SkColorType != colorType;
+    char pixels[8];
+    ANativeWindow_Buffer buffer { 1, 1, 1, bufferFormat, pixels, {0} };
+    return convert(&buffer, HAL_DATASPACE_UNKNOWN, nullptr);
 }
 
 ACanvas* ACanvas_getNativeHandleFromJava(JNIEnv* env, jobject canvasObj) {
-    return toACanvas(GraphicsJNI::getNativeCanvas(env, canvasObj));
+    return TypeCast::toACanvas(GraphicsJNI::getNativeCanvas(env, canvasObj));
 }
 
-void ACanvas_setBuffer(ACanvas* canvas, const ANativeWindow_Buffer* buffer,
+ACanvas* ACanvas_createCanvas(const ANativeWindow_Buffer* buffer,
+                              int32_t /*android_dataspace_t*/ dataspace) {
+    SkBitmap bitmap;
+    bool isValidBuffer = convert(buffer, dataspace, &bitmap);
+    return isValidBuffer ? TypeCast::toACanvas(Canvas::create_canvas(bitmap)) : nullptr;
+}
+
+void ACanvas_destroyCanvas(ACanvas* canvas) {
+    delete TypeCast::toCanvas(canvas);
+}
+
+bool ACanvas_setBuffer(ACanvas* canvas, const ANativeWindow_Buffer* buffer,
                        int32_t /*android_dataspace_t*/ dataspace) {
     SkBitmap bitmap;
-    if (buffer != nullptr && buffer->width > 0 && buffer->height > 0) {
-        sk_sp<SkColorSpace> cs(uirenderer::DataSpaceToColorSpace((android_dataspace)dataspace));
-        SkImageInfo imageInfo = uirenderer::ANativeWindowToImageInfo(*buffer, cs);
-        ssize_t rowBytes = buffer->stride * imageInfo.bytesPerPixel();
-        bitmap.setInfo(imageInfo, rowBytes);
-        bitmap.setPixels(buffer->bits);
-    }
-
-    toCanvas(canvas)->setBitmap(bitmap);
+    bool isValidBuffer = (buffer == nullptr) ? false : convert(buffer, dataspace, &bitmap);
+    TypeCast::toCanvas(canvas)->setBitmap(bitmap);
+    return isValidBuffer;
 }
 
-void ACanvas_clipRect(ACanvas* canvas, const ARect& clipRect, bool /*doAA*/) {
+void ACanvas_clipRect(ACanvas* canvas, const ARect* clipRect, bool /*doAA*/) {
     //TODO update Canvas to take antialias param
-    toCanvas(canvas)->clipRect(clipRect.left, clipRect.top, clipRect.right, clipRect.bottom,
-                               SkClipOp::kIntersect);
+    TypeCast::toCanvas(canvas)->clipRect(clipRect->left, clipRect->top, clipRect->right,
+                                         clipRect->bottom, SkClipOp::kIntersect);
 }
 
-void ACanvas_clipOutRect(ACanvas* canvas, const ARect& clipRect, bool /*doAA*/) {
+void ACanvas_clipOutRect(ACanvas* canvas, const ARect* clipRect, bool /*doAA*/) {
     //TODO update Canvas to take antialias param
-    toCanvas(canvas)->clipRect(clipRect.left, clipRect.top, clipRect.right, clipRect.bottom,
-                               SkClipOp::kDifference);
+    TypeCast::toCanvas(canvas)->clipRect(clipRect->left, clipRect->top, clipRect->right,
+                                         clipRect->bottom, SkClipOp::kDifference);
+}
+
+void ACanvas_drawRect(ACanvas* canvas, const ARect* rect, const APaint* paint) {
+    TypeCast::toCanvas(canvas)->drawRect(rect->left, rect->top, rect->right, rect->bottom,
+                                         TypeCast::toPaintRef(paint));
+}
+
+void ACanvas_drawBitmap(ACanvas* canvas, const ABitmap* bitmap, float left, float top,
+                        const APaint* paint) {
+    TypeCast::toCanvas(canvas)->drawBitmap(TypeCast::toBitmapRef(bitmap), left, top,
+                                           TypeCast::toPaint(paint));
 }

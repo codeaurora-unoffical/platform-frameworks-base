@@ -24,6 +24,7 @@ import static com.android.systemui.DejankUtils.whitelistIpcs;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.Resources;
 import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
@@ -35,17 +36,20 @@ import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
 
+import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-import com.android.internal.telephony.IccCardConstants;
 import com.android.internal.telephony.TelephonyIntents;
 import com.android.settingslib.WirelessUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
+import com.android.systemui.dagger.qualifiers.MainResources;
 import com.android.systemui.keyguard.WakefulnessLifecycle;
 
 import java.util.List;
 import java.util.Objects;
+
+import javax.inject.Inject;
 
 /**
  * Controller that generates text including the carrier names and/or the status of all the SIM
@@ -57,6 +61,7 @@ public class CarrierTextController {
     private static final String TAG = "CarrierTextController";
 
     private final boolean mIsEmergencyCallCapable;
+    private final Handler mMainHandler;
     private boolean mTelephonyCapable;
     private boolean mShowMissingSim;
     private boolean mShowAirplaneMode;
@@ -65,6 +70,7 @@ public class CarrierTextController {
     private WifiManager mWifiManager;
     private boolean[] mSimErrorState;
     private final int mSimSlotsNumber;
+    @Nullable // Check for nullability before dispatching
     private CarrierTextCallback mCarrierTextCallback;
     private Context mContext;
     private CharSequence mSeparator;
@@ -73,12 +79,12 @@ public class CarrierTextController {
             new WakefulnessLifecycle.Observer() {
                 @Override
                 public void onFinishedWakingUp() {
-                    mCarrierTextCallback.finishedWakingUp();
+                    if (mCarrierTextCallback != null) mCarrierTextCallback.finishedWakingUp();
                 }
 
                 @Override
                 public void onStartedGoingToSleep() {
-                    mCarrierTextCallback.startedGoingToSleep();
+                    if (mCarrierTextCallback != null) mCarrierTextCallback.startedGoingToSleep();
                 }
             };
 
@@ -103,7 +109,7 @@ public class CarrierTextController {
             updateCarrierText();
         }
 
-        public void onSimStateChanged(int subId, int slotId, IccCardConstants.State simState) {
+        public void onSimStateChanged(int subId, int slotId, int simState) {
             if (slotId < 0 || slotId >= mSimSlotsNumber) {
                 Log.d(TAG, "onSimStateChanged() - slotId invalid: " + slotId
                         + " mTelephonyCapable: " + Boolean.toString(mTelephonyCapable));
@@ -157,8 +163,7 @@ public class CarrierTextController {
     public CarrierTextController(Context context, CharSequence separator, boolean showAirplaneMode,
             boolean showMissingSim) {
         mContext = context;
-        mIsEmergencyCallCapable = context.getResources().getBoolean(
-                com.android.internal.R.bool.config_voice_capable);
+        mIsEmergencyCallCapable = getTelephonyManager().isVoiceCapable();
 
         mShowAirplaneMode = showAirplaneMode;
         mShowMissingSim = showMissingSim;
@@ -166,9 +171,13 @@ public class CarrierTextController {
         mWifiManager = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
         mSeparator = separator;
         mWakefulnessLifecycle = Dependency.get(WakefulnessLifecycle.class);
-        mSimSlotsNumber = ((TelephonyManager) context.getSystemService(
-                Context.TELEPHONY_SERVICE)).getPhoneCount();
+        mSimSlotsNumber = getTelephonyManager().getSupportedModemCount();
         mSimErrorState = new boolean[mSimSlotsNumber];
+        mMainHandler = Dependency.get(Dependency.MAIN_HANDLER);
+    }
+
+    private TelephonyManager getTelephonyManager() {
+        return (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
     }
 
     /**
@@ -184,9 +193,9 @@ public class CarrierTextController {
             CharSequence[] carrierNames, int[] subOrderBySlot, boolean noSims) {
         final CharSequence carrier = "";
         CharSequence carrierTextForSimIOError = getCarrierTextForSimState(
-                IccCardConstants.State.CARD_IO_ERROR, carrier);
+                TelephonyManager.SIM_STATE_CARD_IO_ERROR, carrier);
         // mSimErrorState has the state of each sim indexed by slotID.
-        for (int index = 0; index < mSimErrorState.length; index++) {
+        for (int index = 0; index < getTelephonyManager().getActiveModemCount(); index++) {
             if (!mSimErrorState[index]) {
                 continue;
             }
@@ -219,15 +228,19 @@ public class CarrierTextController {
      * @param callback Callback to provide text updates
      */
     public void setListening(CarrierTextCallback callback) {
-        TelephonyManager telephonyManager = ((TelephonyManager) mContext
-                .getSystemService(Context.TELEPHONY_SERVICE));
+        TelephonyManager telephonyManager = getTelephonyManager();
         if (callback != null) {
             mCarrierTextCallback = callback;
             // TODO(b/140034799)
             if (whitelistIpcs(() -> ConnectivityManager.from(mContext).isNetworkSupported(
                     ConnectivityManager.TYPE_MOBILE))) {
                 mKeyguardUpdateMonitor = Dependency.get(KeyguardUpdateMonitor.class);
-                mKeyguardUpdateMonitor.registerCallback(mCallback);
+                // Keyguard update monitor expects callbacks from main thread
+                mMainHandler.post(() -> {
+                    if (mKeyguardUpdateMonitor != null) {
+                        mKeyguardUpdateMonitor.registerCallback(mCallback);
+                    }
+                });
                 mWakefulnessLifecycle.addObserver(mWakefulnessObserver);
                 telephonyManager.listen(mPhoneStateListener,
                         LISTEN_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGE);
@@ -239,7 +252,12 @@ public class CarrierTextController {
         } else {
             mCarrierTextCallback = null;
             if (mKeyguardUpdateMonitor != null) {
-                mKeyguardUpdateMonitor.removeCallback(mCallback);
+                // Keyguard update monitor expects callbacks from main thread
+                mMainHandler.post(() -> {
+                    if (mKeyguardUpdateMonitor != null) {
+                        mKeyguardUpdateMonitor.removeCallback(mCallback);
+                    }
+                });
                 mWakefulnessLifecycle.removeObserver(mWakefulnessObserver);
             }
             telephonyManager.listen(mPhoneStateListener, LISTEN_NONE);
@@ -272,7 +290,7 @@ public class CarrierTextController {
             carrierNames[i] = "";
             subsIds[i] = subId;
             subOrderBySlot[subs.get(i).getSimSlotIndex()] = i;
-            IccCardConstants.State simState = mKeyguardUpdateMonitor.getSimState(subId);
+            int simState = mKeyguardUpdateMonitor.getSimState(subId);
             CharSequence carrierName = subs.get(i).getCarrierName();
             CharSequence carrierTextForSimState = getCarrierTextForSimState(simState, carrierName);
             if (DEBUG) {
@@ -282,7 +300,7 @@ public class CarrierTextController {
                 allSimsMissing = false;
                 carrierNames[i] = carrierTextForSimState;
             }
-            if (simState == IccCardConstants.State.READY) {
+            if (simState == TelephonyManager.SIM_STATE_READY) {
                 ServiceState ss = mKeyguardUpdateMonitor.mServiceStates.get(subId);
                 if (ss != null && ss.getDataRegState() == ServiceState.STATE_IN_SERVICE) {
                     // hack for WFC (IWLAN) not turning off immediately once
@@ -364,10 +382,9 @@ public class CarrierTextController {
 
     @VisibleForTesting
     protected void postToCallback(CarrierTextCallbackInfo info) {
-        Handler handler = Dependency.get(Dependency.MAIN_HANDLER);
         final CarrierTextCallback callback = mCarrierTextCallback;
         if (callback != null) {
-            handler.post(() -> callback.updateCarrierInfo(info));
+            mMainHandler.post(() -> callback.updateCarrierInfo(info));
         }
     }
 
@@ -391,8 +408,7 @@ public class CarrierTextController {
      *
      * @return Carrier text if not in missing state, null otherwise.
      */
-    private CharSequence getCarrierTextForSimState(IccCardConstants.State simState,
-            CharSequence text) {
+    private CharSequence getCarrierTextForSimState(int simState, CharSequence text) {
         CharSequence carrierText = null;
         CarrierTextController.StatusMode status = getStatusForIccState(simState);
         switch (status) {
@@ -483,37 +499,32 @@ public class CarrierTextController {
     /**
      * Determine the current status of the lock screen given the SIM state and other stuff.
      */
-    private CarrierTextController.StatusMode getStatusForIccState(IccCardConstants.State simState) {
-        // Since reading the SIM may take a while, we assume it is present until told otherwise.
-        if (simState == null) {
-            return CarrierTextController.StatusMode.Normal;
-        }
-
+    private CarrierTextController.StatusMode getStatusForIccState(int simState) {
         final boolean missingAndNotProvisioned =
                 !Dependency.get(KeyguardUpdateMonitor.class).isDeviceProvisioned()
-                        && (simState == IccCardConstants.State.ABSENT
-                        || simState == IccCardConstants.State.PERM_DISABLED);
+                        && (simState == TelephonyManager.SIM_STATE_ABSENT
+                        || simState == TelephonyManager.SIM_STATE_PERM_DISABLED);
 
         // Assume we're NETWORK_LOCKED if not provisioned
-        simState = missingAndNotProvisioned ? IccCardConstants.State.NETWORK_LOCKED : simState;
+        simState = missingAndNotProvisioned ? TelephonyManager.SIM_STATE_NETWORK_LOCKED : simState;
         switch (simState) {
-            case ABSENT:
+            case TelephonyManager.SIM_STATE_ABSENT:
                 return CarrierTextController.StatusMode.SimMissing;
-            case NETWORK_LOCKED:
+            case TelephonyManager.SIM_STATE_NETWORK_LOCKED:
                 return CarrierTextController.StatusMode.SimMissingLocked;
-            case NOT_READY:
+            case TelephonyManager.SIM_STATE_NOT_READY:
                 return CarrierTextController.StatusMode.SimNotReady;
-            case PIN_REQUIRED:
+            case TelephonyManager.SIM_STATE_PIN_REQUIRED:
                 return CarrierTextController.StatusMode.SimLocked;
-            case PUK_REQUIRED:
+            case TelephonyManager.SIM_STATE_PUK_REQUIRED:
                 return CarrierTextController.StatusMode.SimPukLocked;
-            case READY:
+            case TelephonyManager.SIM_STATE_READY:
                 return CarrierTextController.StatusMode.Normal;
-            case PERM_DISABLED:
+            case TelephonyManager.SIM_STATE_PERM_DISABLED:
                 return CarrierTextController.StatusMode.SimPermDisabled;
-            case UNKNOWN:
+            case TelephonyManager.SIM_STATE_UNKNOWN:
                 return CarrierTextController.StatusMode.SimUnknown;
-            case CARD_IO_ERROR:
+            case TelephonyManager.SIM_STATE_CARD_IO_ERROR:
                 return CarrierTextController.StatusMode.SimIoError;
         }
         return CarrierTextController.StatusMode.SimUnknown;
@@ -560,7 +571,7 @@ public class CarrierTextController {
         return list;
     }
 
-    private CharSequence getCarrierHelpTextForSimState(IccCardConstants.State simState,
+    private CharSequence getCarrierHelpTextForSimState(int simState,
             String plmn, String spn) {
         int carrierHelpTextId = 0;
         CarrierTextController.StatusMode status = getStatusForIccState(simState);
@@ -590,6 +601,35 @@ public class CarrierTextController {
         return mContext.getText(carrierHelpTextId);
     }
 
+    public static class Builder {
+        private final Context mContext;
+        private final String mSeparator;
+        private boolean mShowAirplaneMode;
+        private boolean mShowMissingSim;
+
+        @Inject
+        public Builder(Context context, @MainResources Resources resources) {
+            mContext = context;
+            mSeparator = resources.getString(
+                    com.android.internal.R.string.kg_text_message_separator);
+        }
+
+
+        public Builder setShowAirplaneMode(boolean showAirplaneMode) {
+            mShowAirplaneMode = showAirplaneMode;
+            return this;
+        }
+
+        public Builder setShowMissingSim(boolean showMissingSim) {
+            mShowMissingSim = showMissingSim;
+            return this;
+        }
+
+        public CarrierTextController build() {
+            return new CarrierTextController(
+                    mContext, mSeparator, mShowAirplaneMode, mShowMissingSim);
+        }
+    }
     /**
      * Data structure for passing information to CarrierTextController subscribers
      */

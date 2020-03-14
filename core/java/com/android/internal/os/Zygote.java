@@ -114,6 +114,13 @@ public final class Zygote {
      */
     public static final int DEBUG_IGNORE_APP_SIGNAL_HANDLER = 1 << 17;
 
+    /**
+     * Disable runtime access to {@link android.annotation.TestApi} annotated members.
+     *
+     * <p>This only takes effect if Hidden API access restrictions are enabled as well.
+     */
+    public static final int DISABLE_TEST_API_ENFORCEMENT_POLICY = 1 << 18;
+
     /** No external storage should be mounted. */
     public static final int MOUNT_EXTERNAL_NONE = IVold.REMOUNT_MODE_NONE;
     /** Default external storage should be mounted. */
@@ -134,6 +141,9 @@ public final class Zygote {
     public static final int MOUNT_EXTERNAL_INSTALLER = IVold.REMOUNT_MODE_INSTALLER;
     /** Read-write external storage should be mounted instead of package sandbox */
     public static final int MOUNT_EXTERNAL_FULL = IVold.REMOUNT_MODE_FULL;
+
+    /** The lower file system should be bind mounted directly on external storage */
+    public static final int MOUNT_EXTERNAL_PASS_THROUGH = IVold.REMOUNT_MODE_PASS_THROUGH;
 
     /** Number of bytes sent to the Zygote over USAP pipes or the pool event FD */
     static final int USAP_MANAGEMENT_MESSAGE_BYTES = 8;
@@ -662,6 +672,7 @@ public final class Zygote {
             Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
 
             return ZygoteInit.zygoteInit(args.mTargetSdkVersion,
+                                         args.mDisabledCompatChanges,
                                          args.mRemainingArgs,
                                          null /* classLoader */);
         } finally {
@@ -946,9 +957,9 @@ public final class Zygote {
 
     // This function is called from native code in com_android_internal_os_Zygote.cpp
     @SuppressWarnings("unused")
-    private static void callPostForkSystemServerHooks() {
+    private static void callPostForkSystemServerHooks(int runtimeFlags) {
         // SystemServer specific post fork hooks run before child post fork hooks.
-        ZygoteHooks.postForkSystemServer();
+        ZygoteHooks.postForkSystemServer(runtimeFlags);
     }
 
     // This function is called from native code in com_android_internal_os_Zygote.cpp

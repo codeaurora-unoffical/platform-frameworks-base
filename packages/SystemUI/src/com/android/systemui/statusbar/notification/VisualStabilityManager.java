@@ -16,8 +16,6 @@
 
 package com.android.systemui.statusbar.notification;
 
-import static com.android.systemui.Dependency.MAIN_HANDLER_NAME;
-
 import android.os.Handler;
 import android.os.SystemClock;
 import android.view.View;
@@ -25,6 +23,7 @@ import android.view.View;
 import androidx.collection.ArraySet;
 
 import com.android.systemui.Dumpable;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.statusbar.NotificationPresenter;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
@@ -35,7 +34,6 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
 
 /**
@@ -64,27 +62,19 @@ public class VisualStabilityManager implements OnHeadsUpChangedListener, Dumpabl
 
     @Inject
     public VisualStabilityManager(
-            NotificationEntryManager notificationEntryManager,
-            @Named(MAIN_HANDLER_NAME) Handler handler) {
+            NotificationEntryManager notificationEntryManager, @MainHandler Handler handler) {
 
         mHandler = handler;
 
         notificationEntryManager.addNotificationEntryListener(new NotificationEntryListener() {
             @Override
             public void onPreEntryUpdated(NotificationEntry entry) {
-                final boolean mAmbientStateHasChanged =
+                final boolean ambientStateHasChanged =
                         entry.isAmbient() != entry.getRow().isLowPriority();
-                if (mAmbientStateHasChanged) {
+                if (ambientStateHasChanged) {
+                    // note: entries are removed in onReorderingFinished
                     mLowPriorityReorderingViews.add(entry);
                 }
-            }
-
-            @Override
-            public void onPostEntryUpdated(NotificationEntry entry) {
-                // This line is technically not required as we'll get called as the hierarchy
-                // manager will call onReorderingFinished() immediately before this.
-                // TODO: Find a way to make this relationship more explicit
-                mLowPriorityReorderingViews.remove(entry);
             }
         });
     }

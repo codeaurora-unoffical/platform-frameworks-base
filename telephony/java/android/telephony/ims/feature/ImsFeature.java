@@ -19,9 +19,9 @@ package android.telephony.ims.feature;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.SystemApi;
+import android.annotation.TestApi;
 import android.content.Context;
 import android.os.IInterface;
-import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.telephony.SubscriptionManager;
 import android.telephony.ims.aidl.IImsCapabilityCallback;
@@ -30,6 +30,7 @@ import android.util.Log;
 
 import com.android.ims.internal.IImsFeatureStatusCallback;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.telephony.util.RemoteCallbackListExt;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -43,6 +44,7 @@ import java.util.Map;
  * @hide
  */
 @SystemApi
+@TestApi
 public abstract class ImsFeature {
 
     private static final String LOG_TAG = "ImsFeature";
@@ -212,6 +214,7 @@ public abstract class ImsFeature {
     // Not Actually deprecated, but we need to remove it from the @SystemApi surface.
     @Deprecated
     @SystemApi // SystemApi only because it was leaked through type usage in a previous release.
+    @TestApi
     public static class Capabilities {
         /** @deprecated Use getters and accessors instead. */
         // Not actually deprecated, but we need to remove it from the @SystemApi surface eventually.
@@ -307,12 +310,12 @@ public abstract class ImsFeature {
     /** @hide */
     protected final Object mLock = new Object();
 
-    private final RemoteCallbackList<IImsFeatureStatusCallback> mStatusCallbacks =
-            new RemoteCallbackList<>();
+    private final RemoteCallbackListExt<IImsFeatureStatusCallback> mStatusCallbacks =
+            new RemoteCallbackListExt<>();
     private @ImsState int mState = STATE_UNAVAILABLE;
     private int mSlotId = SubscriptionManager.INVALID_SIM_SLOT_INDEX;
-    private final RemoteCallbackList<IImsCapabilityCallback> mCapabilityCallbacks =
-            new RemoteCallbackList<>();
+    private final RemoteCallbackListExt<IImsCapabilityCallback> mCapabilityCallbacks =
+            new RemoteCallbackListExt<>();
     private Capabilities mCapabilityStatus = new Capabilities();
 
     /**
@@ -388,7 +391,7 @@ public abstract class ImsFeature {
      * Internal method called by ImsFeature when setFeatureState has changed.
      */
     private void notifyFeatureState(@ImsState int state) {
-        mStatusCallbacks.broadcast((c) -> {
+        mStatusCallbacks.broadcastAction((c) -> {
             try {
                 c.notifyImsFeatureStatus(state);
             } catch (RemoteException e) {
@@ -467,7 +470,7 @@ public abstract class ImsFeature {
         synchronized (mLock) {
             mCapabilityStatus = caps.copy();
         }
-        mCapabilityCallbacks.broadcast((callback) -> {
+        mCapabilityCallbacks.broadcastAction((callback) -> {
             try {
                 callback.onCapabilitiesStatusChanged(caps.mCapabilities);
             } catch (RemoteException e) {

@@ -28,6 +28,7 @@ import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECOND
 import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 
 import android.annotation.NonNull;
+import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityManager.RecentTaskInfo;
 import android.app.ActivityManager.RunningTaskInfo;
@@ -78,6 +79,7 @@ public class ActivityManagerWrapper {
 
     // Should match the values in PhoneWindowManager
     public static final String CLOSE_SYSTEM_WINDOWS_REASON_RECENTS = "recentapps";
+    public static final String CLOSE_SYSTEM_WINDOWS_REASON_HOME_KEY = "homekey";
 
     private final PackageManager mPackageManager;
     private final BackgroundExecutor mBackgroundExecutor;
@@ -160,6 +162,23 @@ public class ActivityManagerWrapper {
     }
 
     /**
+     * Removes the outdated snapshot of home task.
+     */
+    public void invalidateHomeTaskSnapshot(final Activity homeActivity) {
+        mBackgroundExecutor.submit(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ActivityTaskManager.getService().invalidateHomeTaskSnapshot(
+                            homeActivity.getActivityToken());
+                } catch (RemoteException e) {
+                    Log.w(TAG, "Failed to invalidate home snapshot", e);
+                }
+            }
+        });
+    }
+
+    /**
      * @return the activity label, badging if necessary.
      */
     public String getBadgedActivityLabel(ActivityInfo info, int userId) {
@@ -225,14 +244,16 @@ public class ActivityManagerWrapper {
                 runner = new IRecentsAnimationRunner.Stub() {
                     @Override
                     public void onAnimationStart(IRecentsAnimationController controller,
-                            RemoteAnimationTarget[] apps, Rect homeContentInsets,
-                            Rect minimizedHomeBounds) {
+                            RemoteAnimationTarget[] apps, RemoteAnimationTarget[] wallpapers,
+                            Rect homeContentInsets, Rect minimizedHomeBounds) {
                         final RecentsAnimationControllerCompat controllerCompat =
                                 new RecentsAnimationControllerCompat(controller);
                         final RemoteAnimationTargetCompat[] appsCompat =
                                 RemoteAnimationTargetCompat.wrap(apps);
+                        final RemoteAnimationTargetCompat[] wallpapersCompat =
+                                RemoteAnimationTargetCompat.wrap(wallpapers);
                         animationHandler.onAnimationStart(controllerCompat, appsCompat,
-                                homeContentInsets, minimizedHomeBounds);
+                                wallpapersCompat, homeContentInsets, minimizedHomeBounds);
                     }
 
                     @Override

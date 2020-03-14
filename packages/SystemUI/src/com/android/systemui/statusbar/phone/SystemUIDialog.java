@@ -23,12 +23,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.UserHandle;
+import android.view.Window;
+import android.view.WindowInsets.Type;
 import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 
 
 /**
@@ -92,25 +95,31 @@ public class SystemUIDialog extends AlertDialog {
     public static void setShowForAllUsers(Dialog dialog, boolean show) {
         if (show) {
             dialog.getWindow().getAttributes().privateFlags |=
-                    WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
+                    WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
         } else {
             dialog.getWindow().getAttributes().privateFlags &=
-                    ~WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
+                    ~WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
         }
     }
 
     public static void setWindowOnTop(Dialog dialog) {
-        if (Dependency.get(KeyguardMonitor.class).isShowing()) {
-            dialog.getWindow().setType(LayoutParams.TYPE_STATUS_BAR_PANEL);
+        if (Dependency.get(KeyguardStateController.class).isShowing()) {
+            final Window window = dialog.getWindow();
+            window.setType(LayoutParams.TYPE_STATUS_BAR_PANEL);
+            window.setFitWindowInsetsTypes(
+                    window.getFitWindowInsetsTypes() & ~Type.statusBars());
         } else {
             dialog.getWindow().setType(LayoutParams.TYPE_STATUS_BAR_SUB_PANEL);
         }
     }
 
     public static AlertDialog applyFlags(AlertDialog dialog) {
-        dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_STATUS_BAR_PANEL);
-        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+        final Window window = dialog.getWindow();
+        window.setType(WindowManager.LayoutParams.TYPE_STATUS_BAR_PANEL);
+        window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED);
+        window.setFitWindowInsetsTypes(
+                    window.getFitWindowInsetsTypes() & ~Type.statusBars());
         return dialog;
     }
 
@@ -138,20 +147,21 @@ public class SystemUIDialog extends AlertDialog {
 
         private final Dialog mDialog;
         private boolean mRegistered;
+        private final BroadcastDispatcher mBroadcastDispatcher;
 
         DismissReceiver(Dialog dialog) {
             mDialog = dialog;
+            mBroadcastDispatcher = Dependency.get(BroadcastDispatcher.class);
         }
 
         void register() {
-            mDialog.getContext()
-                    .registerReceiverAsUser(this, UserHandle.CURRENT, INTENT_FILTER, null, null);
+            mBroadcastDispatcher.registerReceiver(this, INTENT_FILTER, null, UserHandle.CURRENT);
             mRegistered = true;
         }
 
         void unregister() {
             if (mRegistered) {
-                mDialog.getContext().unregisterReceiver(this);
+                mBroadcastDispatcher.unregisterReceiver(this);
                 mRegistered = false;
             }
         }

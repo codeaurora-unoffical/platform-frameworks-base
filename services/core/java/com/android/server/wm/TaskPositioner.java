@@ -21,7 +21,7 @@ import static android.app.ActivityTaskManager.RESIZE_MODE_USER_FORCED;
 import static android.os.Trace.TRACE_TAG_WINDOW_MANAGER;
 
 import static com.android.server.wm.DragResizeMode.DRAG_RESIZE_MODE_FREEFORM;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_ORIENTATION;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_ORIENTATION;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_TASK_POSITIONING;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
@@ -30,6 +30,7 @@ import static com.android.server.wm.WindowState.MINIMUM_VISIBLE_HEIGHT_IN_DP;
 import static com.android.server.wm.WindowState.MINIMUM_VISIBLE_WIDTH_IN_DP;
 
 import android.annotation.IntDef;
+import android.annotation.NonNull;
 import android.app.IActivityTaskManager;
 import android.graphics.Point;
 import android.graphics.Rect;
@@ -50,9 +51,11 @@ import android.view.InputDevice;
 import android.view.InputEvent;
 import android.view.InputWindowHandle;
 import android.view.MotionEvent;
+import android.view.SurfaceControl;
 import android.view.WindowManager;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.server.protolog.common.ProtoLog;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -63,10 +66,6 @@ class TaskPositioner implements IBinder.DeathRecipient {
     private static final String TAG = TAG_WITH_CLASS_NAME ? TAG_LOCAL : TAG_WM;
 
     private static Factory sFactory;
-
-    // The margin the pointer position has to be within the side of the screen to be
-    // considered at the side of the screen.
-    static final int SIDE_MARGIN_DIP = 100;
 
     @IntDef(flag = true,
             value = {
@@ -101,12 +100,12 @@ class TaskPositioner implements IBinder.DeathRecipient {
     private DisplayContent mDisplayContent;
     private final DisplayMetrics mDisplayMetrics = new DisplayMetrics();
     private Rect mTmpRect = new Rect();
-    private int mSideMargin;
     private int mMinVisibleWidth;
     private int mMinVisibleHeight;
 
     @VisibleForTesting
     Task mTask;
+    WindowState mWindow;
     private boolean mResizing;
     private boolean mPreserveOrientation;
     private boolean mStartOrientationWasLandscape;
@@ -134,14 +133,15 @@ class TaskPositioner implements IBinder.DeathRecipient {
 
         @Override
         public void onInputEvent(InputEvent event) {
-            if (!(event instanceof MotionEvent)
-                    || (event.getSource() & InputDevice.SOURCE_CLASS_POINTER) == 0) {
-                return;
-            }
-            final MotionEvent motionEvent = (MotionEvent) event;
             boolean handled = false;
-
             try {
+                // All returns need to be in the try block to make sure the finishInputEvent is
+                // called correctly.
+                if (!(event instanceof MotionEvent)
+                        || (event.getSource() & InputDevice.SOURCE_CLASS_POINTER) == 0) {
+                    return;
+                }
+                final MotionEvent motionEvent = (MotionEvent) event;
                 if (mDragEnded) {
                     // The drag has ended but the clean-up message has not been processed by
                     // window manager. Drop events that occur after this until window manager
@@ -241,8 +241,9 @@ class TaskPositioner implements IBinder.DeathRecipient {
 
     /**
      * @param displayContent The Display that the window being dragged is on.
+     * @param win The window which will be dragged.
      */
-    void register(DisplayContent displayContent) {
+    void register(DisplayContent displayContent, @NonNull WindowState win) {
         final Display display = displayContent.getDisplay();
 
         if (DEBUG_TASK_POSITIONING) {
@@ -259,7 +260,7 @@ class TaskPositioner implements IBinder.DeathRecipient {
         final InputChannel[] channels = InputChannel.openInputChannelPair(TAG);
         mServerChannel = channels[0];
         mClientChannel = channels[1];
-        mService.mInputManager.registerInputChannel(mServerChannel, null);
+        mService.mInputManager.registerInputChannel(mServerChannel);
 
         mInputEventReceiver = new WindowPositionerEventReceiver(
                 mClientChannel, mService.mAnimationHandler.getLooper(),
@@ -270,8 +271,7 @@ class TaskPositioner implements IBinder.DeathRecipient {
         mDragApplicationHandle.dispatchingTimeoutNanos =
                 WindowManagerService.DEFAULT_INPUT_DISPATCHING_TIMEOUT_NANOS;
 
-        mDragWindowHandle = new InputWindowHandle(mDragApplicationHandle, null,
-                display.getDisplayId());
+        mDragWindowHandle = new InputWindowHandle(mDragApplicationHandle, display.getDisplayId());
         mDragWindowHandle.name = TAG;
         mDragWindowHandle.token = mServerChannel.getToken();
         mDragWindowHandle.layer = mService.getDragLayerLocked();
@@ -301,20 +301,29 @@ class TaskPositioner implements IBinder.DeathRecipient {
         mDragWindowHandle.frameBottom = p.y;
 
         // Pause rotations before a drag.
-        if (DEBUG_ORIENTATION) {
-            Slog.d(TAG, "Pausing rotation during re-position");
-        }
+        ProtoLog.d(WM_DEBUG_ORIENTATION, "Pausing rotation during re-position");
         mDisplayContent.getDisplayRotation().pause();
 
         // Notify InputMonitor to take mDragWindowHandle.
-        mDisplayContent.getInputMonitor().updateInputWindowsLw(true /*force*/);
+        mDisplayContent.getInputMonitor().updateInputWindowsImmediately();
+        new SurfaceControl.Transaction().syncInputWindows().apply(true);
 
-        mSideMargin = dipToPixel(SIDE_MARGIN_DIP, mDisplayMetrics);
         mMinVisibleWidth = dipToPixel(MINIMUM_VISIBLE_WIDTH_IN_DP, mDisplayMetrics);
         mMinVisibleHeight = dipToPixel(MINIMUM_VISIBLE_HEIGHT_IN_DP, mDisplayMetrics);
         display.getRealSize(mMaxVisibleSize);
 
         mDragEnded = false;
+
+        try {
+            mClientCallback = win.mClient.asBinder();
+            mClientCallback.linkToDeath(this, 0 /* flags */);
+        } catch (RemoteException e) {
+            // The caller has died, so clean up TaskPositioningController.
+            mService.mTaskPositioningController.finishTaskPositioning();
+            return;
+        }
+        mWindow = win;
+        mTask = win.getTask();
     }
 
     void unregister() {
@@ -344,30 +353,22 @@ class TaskPositioner implements IBinder.DeathRecipient {
         mDisplayContent.getInputMonitor().updateInputWindowsLw(true /*force*/);
 
         // Resume rotations after a drag.
-        if (DEBUG_ORIENTATION) {
-            Slog.d(TAG, "Resuming rotation after re-position");
-        }
+        ProtoLog.d(WM_DEBUG_ORIENTATION, "Resuming rotation after re-position");
         mDisplayContent.getDisplayRotation().resume();
         mDisplayContent = null;
-        mClientCallback.unlinkToDeath(this, 0 /* flags */);
+        if (mClientCallback != null) {
+            mClientCallback.unlinkToDeath(this, 0 /* flags */);
+        }
+        mWindow = null;
     }
 
-    void startDrag(WindowState win, boolean resize, boolean preserveOrientation, float startX,
-                   float startY) {
+    void startDrag(boolean resize, boolean preserveOrientation, float startX,
+            float startY) {
         if (DEBUG_TASK_POSITIONING) {
-            Slog.d(TAG, "startDrag: win=" + win + ", resize=" + resize
+            Slog.d(TAG, "startDrag: win=" + mWindow + ", resize=" + resize
                     + ", preserveOrientation=" + preserveOrientation + ", {" + startX + ", "
                     + startY + "}");
         }
-        try {
-            mClientCallback = win.mClient.asBinder();
-            mClientCallback.linkToDeath(this, 0 /* flags */);
-        } catch (RemoteException e) {
-            // The caller has died, so clean up TaskPositioningController.
-            mService.mTaskPositioningController.finishTaskPositioning();
-            return;
-        }
-        mTask = win.getTask();
         // Use the bounds of the task which accounts for
         // multiple app windows. Don't use any bounds from win itself as it
         // may not be the same size as the task.
@@ -449,7 +450,7 @@ class TaskPositioner implements IBinder.DeathRecipient {
         }
 
         // This is a moving or scrolling operation.
-        mTask.mStack.getDimBounds(mTmpRect);
+        mTask.getTaskStack().getDimBounds(mTmpRect);
         // If a target window is covered by system bar, there is no way to move it again by touch.
         // So we exclude them from stack bounds. and then it will be shown inside stable area.
         Rect stableBounds = new Rect();
@@ -488,12 +489,6 @@ class TaskPositioner implements IBinder.DeathRecipient {
         int right = mWindowOriginalBounds.right;
         int bottom = mWindowOriginalBounds.bottom;
 
-        // The aspect which we have to respect. Note that if the orientation does not need to be
-        // preserved the aspect will be calculated as 1.0 which neutralizes the following
-        // computations.
-        final float minAspect = !mPreserveOrientation
-                ? 1.0f
-                : (mStartOrientationWasLandscape ? MIN_ASPECT : (1.0f / MIN_ASPECT));
         // Calculate the resulting width and height of the drag operation.
         int width = right - left;
         int height = bottom - top;

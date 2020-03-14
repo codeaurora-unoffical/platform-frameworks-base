@@ -17,11 +17,16 @@
 package android.net.wifi;
 
 import android.Manifest;
+import android.annotation.CallbackExecutor;
+import android.annotation.IntDef;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SuppressLint;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.content.Context;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -38,9 +43,12 @@ import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Preconditions;
 import com.android.internal.util.Protocol;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * This class provides a way to scan the Wifi universe around the device
@@ -50,26 +58,97 @@ import java.util.List;
 @SystemService(Context.WIFI_SCANNING_SERVICE)
 public class WifiScanner {
 
-    /** no band specified; use channel list instead */
-    public static final int WIFI_BAND_UNSPECIFIED = 0;      /* not specified */
+    /** @hide */
+    public static final int WIFI_BAND_INDEX_24_GHZ = 0;
+    /** @hide */
+    public static final int WIFI_BAND_INDEX_5_GHZ = 1;
+    /** @hide */
+    public static final int WIFI_BAND_INDEX_5_GHZ_DFS_ONLY = 2;
+    /** @hide */
+    public static final int WIFI_BAND_INDEX_6_GHZ = 3;
+    /** @hide */
+    public static final int WIFI_BAND_COUNT = 4;
 
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = {"WIFI_BAND_INDEX_"}, value = {
+            WIFI_BAND_INDEX_24_GHZ,
+            WIFI_BAND_INDEX_5_GHZ,
+            WIFI_BAND_INDEX_5_GHZ_DFS_ONLY,
+            WIFI_BAND_INDEX_6_GHZ})
+    public @interface WifiBandIndex {}
+
+    /** no band specified; use channel list instead */
+    public static final int WIFI_BAND_UNSPECIFIED = 0;
     /** 2.4 GHz band */
-    public static final int WIFI_BAND_24_GHZ = 1;           /* 2.4 GHz band */
+    public static final int WIFI_BAND_24_GHZ = 1 << WIFI_BAND_INDEX_24_GHZ;
     /** 5 GHz band excluding DFS channels */
-    public static final int WIFI_BAND_5_GHZ = 2;            /* 5 GHz band without DFS channels */
+    public static final int WIFI_BAND_5_GHZ = 1 << WIFI_BAND_INDEX_5_GHZ;
     /** DFS channels from 5 GHz band only */
-    public static final int WIFI_BAND_5_GHZ_DFS_ONLY  = 4;  /* 5 GHz band with DFS channels */
-    /** 5 GHz band including DFS channels */
-    public static final int WIFI_BAND_5_GHZ_WITH_DFS  = 6;  /* 5 GHz band with DFS channels */
+    public static final int WIFI_BAND_5_GHZ_DFS_ONLY  = 1 << WIFI_BAND_INDEX_5_GHZ_DFS_ONLY;
+    /** 6 GHz band */
+    public static final int WIFI_BAND_6_GHZ = 1 << WIFI_BAND_INDEX_6_GHZ;
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = {"WIFI_BAND_"}, value = {
+            WIFI_BAND_UNSPECIFIED,
+            WIFI_BAND_24_GHZ,
+            WIFI_BAND_5_GHZ,
+            WIFI_BAND_5_GHZ_DFS_ONLY,
+            WIFI_BAND_6_GHZ})
+    public @interface WifiBandBasic {}
+
+    /**
+     * Combination of bands
+     * Note that those are only the common band combinations,
+     * other combinations can be created by combining any of the basic bands above
+     */
     /** Both 2.4 GHz band and 5 GHz band; no DFS channels */
-    public static final int WIFI_BAND_BOTH = 3;             /* both bands without DFS channels */
+    public static final int WIFI_BAND_BOTH = WIFI_BAND_24_GHZ | WIFI_BAND_5_GHZ;
+    /**
+     * 2.4Ghz band + DFS channels from 5 GHz band only
+     * @hide
+     */
+    public static final int WIFI_BAND_24_GHZ_WITH_5GHZ_DFS  =
+            WIFI_BAND_24_GHZ | WIFI_BAND_5_GHZ_DFS_ONLY;
+    /** 5 GHz band including DFS channels */
+    public static final int WIFI_BAND_5_GHZ_WITH_DFS  = WIFI_BAND_5_GHZ | WIFI_BAND_5_GHZ_DFS_ONLY;
     /** Both 2.4 GHz band and 5 GHz band; with DFS channels */
-    public static final int WIFI_BAND_BOTH_WITH_DFS = 7;    /* both bands with DFS channels */
+    public static final int WIFI_BAND_BOTH_WITH_DFS =
+            WIFI_BAND_24_GHZ | WIFI_BAND_5_GHZ | WIFI_BAND_5_GHZ_DFS_ONLY;
+    /** 2.4 GHz band and 5 GHz band (no DFS channels) and 6 GHz */
+    public static final int WIFI_BAND_24_5_6_GHZ = WIFI_BAND_BOTH | WIFI_BAND_6_GHZ;
+    /** 2.4 GHz band and 5 GHz band; with DFS channels and 6 GHz */
+    public static final int WIFI_BAND_24_5_WITH_DFS_6_GHZ =
+            WIFI_BAND_BOTH_WITH_DFS | WIFI_BAND_6_GHZ;
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = {"WIFI_BAND_"}, value = {
+            WIFI_BAND_UNSPECIFIED,
+            WIFI_BAND_24_GHZ,
+            WIFI_BAND_5_GHZ,
+            WIFI_BAND_BOTH,
+            WIFI_BAND_5_GHZ_DFS_ONLY,
+            WIFI_BAND_24_GHZ_WITH_5GHZ_DFS,
+            WIFI_BAND_5_GHZ_WITH_DFS,
+            WIFI_BAND_BOTH_WITH_DFS,
+            WIFI_BAND_6_GHZ,
+            WIFI_BAND_24_5_6_GHZ,
+            WIFI_BAND_24_5_WITH_DFS_6_GHZ})
+    public @interface WifiBand {}
+
+    /**
+     * Max band value
+     * @hide
+     */
+    public static final int WIFI_BAND_MAX = 0x10;
 
     /** Minimum supported scanning period */
-    public static final int MIN_SCAN_PERIOD_MS = 1000;      /* minimum supported period */
+    public static final int MIN_SCAN_PERIOD_MS = 1000;
     /** Maximum supported scanning period */
-    public static final int MAX_SCAN_PERIOD_MS = 1024000;   /* maximum supported period */
+    public static final int MAX_SCAN_PERIOD_MS = 1024000;
 
     /** No Error */
     public static final int REASON_SUCCEEDED = 0;
@@ -98,16 +177,25 @@ public class WifiScanner {
     }
 
     /**
-     * gives you all the possible channels; channel is specified as an
-     * integer with frequency in MHz i.e. channel 1 is 2412
+     * Returns a list of all the possible channels for the given band(s).
+     *
+     * @param band one of the WifiScanner#WIFI_BAND_* constants, e.g. {@link #WIFI_BAND_24_GHZ}
+     * @return a list of all the frequencies, in MHz, for the given band(s) e.g. channel 1 is
+     * 2412, or null if an error occurred.
+     *
      * @hide
      */
+    @SystemApi
+    @NonNull
+    @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public List<Integer> getAvailableChannels(int band) {
         try {
-            Bundle bundle =  mService.getAvailableChannels(band);
-            return bundle.getIntegerArrayList(GET_AVAILABLE_CHANNELS_EXTRA);
+            Bundle bundle = mService.getAvailableChannels(band, mContext.getOpPackageName(),
+                    mContext.getFeatureId());
+            List<Integer> channels = bundle.getIntegerArrayList(GET_AVAILABLE_CHANNELS_EXTRA);
+            return channels == null ? new ArrayList<>() : channels;
         } catch (RemoteException e) {
-            return null;
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -161,24 +249,29 @@ public class WifiScanner {
      */
     public static final int REPORT_EVENT_NO_BATCH = (1 << 2);
 
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = {"SCAN_TYPE_"}, value = {
+            SCAN_TYPE_LOW_LATENCY,
+            SCAN_TYPE_LOW_POWER,
+            SCAN_TYPE_HIGH_ACCURACY})
+    public @interface ScanType {}
+
     /**
-     * This is used to indicate the purpose of the scan to the wifi chip in
-     * {@link ScanSettings#type}.
-     * On devices with multiple hardware radio chains (and hence different modes of scan),
-     * this type serves as an indication to the hardware on what mode of scan to perform.
-     * Only apps holding android.Manifest.permission.NETWORK_STACK permission can set this value.
-     *
-     * Note: This serves as an intent and not as a stipulation, the wifi chip
-     * might honor or ignore the indication based on the current radio conditions. Always
-     * use the {@link ScanResult#radioChainInfos} to figure out the radio chain configuration used
-     * to receive the corresponding scan result.
+     * Optimize the scan for lower latency.
+     * @see ScanSettings#type
      */
-    /** {@hide} */
-    public static final int TYPE_LOW_LATENCY = 0;
-    /** {@hide} */
-    public static final int TYPE_LOW_POWER = 1;
-    /** {@hide} */
-    public static final int TYPE_HIGH_ACCURACY = 2;
+    public static final int SCAN_TYPE_LOW_LATENCY = 0;
+    /**
+     * Optimize the scan for lower power usage.
+     * @see ScanSettings#type
+     */
+    public static final int SCAN_TYPE_LOW_POWER = 1;
+    /**
+     * Optimize the scan for higher accuracy.
+     * @see ScanSettings#type
+     */
+    public static final int SCAN_TYPE_HIGH_ACCURACY = 2;
 
     /** {@hide} */
     public static final String SCAN_PARAMS_SCAN_SETTINGS_KEY = "ScanSettings";
@@ -186,23 +279,21 @@ public class WifiScanner {
     public static final String SCAN_PARAMS_WORK_SOURCE_KEY = "WorkSource";
     /** {@hide} */
     public static final String REQUEST_PACKAGE_NAME_KEY = "PackageName";
+    /** {@hide} */
+    public static final String REQUEST_FEATURE_ID_KEY = "FeatureId";
 
     /**
      * scan configuration parameters to be sent to {@link #startBackgroundScan}
      */
     public static class ScanSettings implements Parcelable {
-        /**
-         * Hidden network to be scanned for.
-         * {@hide}
-         */
+        /** Hidden network to be scanned for. */
         public static class HiddenNetwork {
             /** SSID of the network */
-            public String ssid;
+            @NonNull
+            public final String ssid;
 
-            /**
-             * Default constructor for HiddenNetwork.
-             */
-            public HiddenNetwork(String ssid) {
+            /** Default constructor for HiddenNetwork. */
+            public HiddenNetwork(@NonNull String ssid) {
                 this.ssid = ssid;
             }
         }
@@ -212,12 +303,12 @@ public class WifiScanner {
         /** list of channels; used when band is set to WIFI_BAND_UNSPECIFIED */
         public ChannelSpec[] channels;
         /**
-         * list of hidden networks to scan for. Explicit probe requests are sent out for such
+         * List of hidden networks to scan for. Explicit probe requests are sent out for such
          * networks during scan. Only valid for single scan requests.
-         * {@hide}
          */
+        @NonNull
         @RequiresPermission(android.Manifest.permission.NETWORK_STACK)
-        public HiddenNetwork[] hiddenNetworks;
+        public final List<HiddenNetwork> hiddenNetworks = new ArrayList<>();
         /** period of background scan; in millisecond, 0 => single shot scan */
         public int periodInMs;
         /** must have a valid REPORT_EVENT value */
@@ -248,11 +339,24 @@ public class WifiScanner {
         public boolean isPnoScan;
         /**
          * Indicate the type of scan to be performed by the wifi chip.
-         * Default value: {@link #TYPE_LOW_LATENCY}.
-         * {@hide}
+         *
+         * On devices with multiple hardware radio chains (and hence different modes of scan),
+         * this type serves as an indication to the hardware on what mode of scan to perform.
+         * Only apps holding {@link android.Manifest.permission.NETWORK_STACK} permission can set
+         * this value.
+         *
+         * Note: This serves as an intent and not as a stipulation, the wifi chip
+         * might honor or ignore the indication based on the current radio conditions. Always
+         * use the {@link ScanResult#radioChainInfos} to figure out the radio chain configuration
+         * used to receive the corresponding scan result.
+         *
+         * One of {@link #SCAN_TYPE_LOW_LATENCY}, {@link #SCAN_TYPE_LOW_POWER},
+         * {@link #SCAN_TYPE_HIGH_ACCURACY}.
+         * Default value: {@link #SCAN_TYPE_LOW_LATENCY}.
          */
+        @ScanType
         @RequiresPermission(android.Manifest.permission.NETWORK_STACK)
-        public int type = TYPE_LOW_LATENCY;
+        public int type = SCAN_TYPE_LOW_LATENCY;
         /**
          * This scan request may ignore location settings while receiving scans. This should only
          * be used in emergency situations.
@@ -299,18 +403,14 @@ public class WifiScanner {
             } else {
                 dest.writeInt(0);
             }
-            if (hiddenNetworks != null) {
-                dest.writeInt(hiddenNetworks.length);
-                for (int i = 0; i < hiddenNetworks.length; i++) {
-                    dest.writeString(hiddenNetworks[i].ssid);
-                }
-            } else {
-                dest.writeInt(0);
+            dest.writeInt(hiddenNetworks.size());
+            for (HiddenNetwork hiddenNetwork : hiddenNetworks) {
+                dest.writeString(hiddenNetwork.ssid);
             }
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<ScanSettings> CREATOR =
+        public static final @NonNull Creator<ScanSettings> CREATOR =
                 new Creator<ScanSettings>() {
                     public ScanSettings createFromParcel(Parcel in) {
                         ScanSettings settings = new ScanSettings();
@@ -335,10 +435,10 @@ public class WifiScanner {
                             settings.channels[i] = spec;
                         }
                         int numNetworks = in.readInt();
-                        settings.hiddenNetworks = new HiddenNetwork[numNetworks];
+                        settings.hiddenNetworks.clear();
                         for (int i = 0; i < numNetworks; i++) {
                             String ssid = in.readString();
-                            settings.hiddenNetworks[i] = new HiddenNetwork(ssid);;
+                            settings.hiddenNetworks.add(new HiddenNetwork(ssid));
                         }
                         return settings;
                     }
@@ -347,7 +447,6 @@ public class WifiScanner {
                         return new ScanSettings[size];
                     }
                 };
-
     }
 
     /**
@@ -375,19 +474,27 @@ public class WifiScanner {
          */
         private int mBandScanned;
         /** all scan results discovered in this scan, sorted by timestamp in ascending order */
-        private ScanResult mResults[];
+        private final List<ScanResult> mResults;
 
-        ScanData() {}
+        ScanData() {
+            mResults = new ArrayList<>();
+        }
 
         public ScanData(int id, int flags, ScanResult[] results) {
             mId = id;
             mFlags = flags;
-            mResults = results;
+            mResults = new ArrayList<>(Arrays.asList(results));
         }
 
         /** {@hide} */
         public ScanData(int id, int flags, int bucketsScanned, int bandScanned,
                         ScanResult[] results) {
+            this(id, flags, bucketsScanned, bandScanned, new ArrayList<>(Arrays.asList(results)));
+        }
+
+        /** {@hide} */
+        public ScanData(int id, int flags, int bucketsScanned, int bandScanned,
+                        List<ScanResult> results) {
             mId = id;
             mFlags = flags;
             mBucketsScanned = bucketsScanned;
@@ -400,11 +507,9 @@ public class WifiScanner {
             mFlags = s.mFlags;
             mBucketsScanned = s.mBucketsScanned;
             mBandScanned = s.mBandScanned;
-            mResults = new ScanResult[s.mResults.length];
-            for (int i = 0; i < s.mResults.length; i++) {
-                ScanResult result = s.mResults[i];
-                ScanResult newResult = new ScanResult(result);
-                mResults[i] = newResult;
+            mResults = new ArrayList<>();
+            for (ScanResult scanResult : s.mResults) {
+                mResults.add(new ScanResult(scanResult));
             }
         }
 
@@ -427,7 +532,14 @@ public class WifiScanner {
         }
 
         public ScanResult[] getResults() {
-            return mResults;
+            return mResults.toArray(new ScanResult[0]);
+        }
+
+        /** {@hide} */
+        public void addResults(@NonNull ScanResult[] newResults) {
+            for (ScanResult result : newResults) {
+                mResults.add(new ScanResult(result));
+            }
         }
 
         /** Implement the Parcelable interface {@hide} */
@@ -437,34 +549,23 @@ public class WifiScanner {
 
         /** Implement the Parcelable interface {@hide} */
         public void writeToParcel(Parcel dest, int flags) {
-            if (mResults != null) {
-                dest.writeInt(mId);
-                dest.writeInt(mFlags);
-                dest.writeInt(mBucketsScanned);
-                dest.writeInt(mBandScanned);
-                dest.writeInt(mResults.length);
-                for (int i = 0; i < mResults.length; i++) {
-                    ScanResult result = mResults[i];
-                    result.writeToParcel(dest, flags);
-                }
-            } else {
-                dest.writeInt(0);
-            }
+            dest.writeInt(mId);
+            dest.writeInt(mFlags);
+            dest.writeInt(mBucketsScanned);
+            dest.writeInt(mBandScanned);
+            dest.writeParcelableList(mResults, 0);
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<ScanData> CREATOR =
+        public static final @NonNull Creator<ScanData> CREATOR =
                 new Creator<ScanData>() {
                     public ScanData createFromParcel(Parcel in) {
                         int id = in.readInt();
                         int flags = in.readInt();
                         int bucketsScanned = in.readInt();
                         int bandScanned = in.readInt();
-                        int n = in.readInt();
-                        ScanResult results[] = new ScanResult[n];
-                        for (int i = 0; i < n; i++) {
-                            results[i] = ScanResult.CREATOR.createFromParcel(in);
-                        }
+                        List<ScanResult> results = new ArrayList<>();
+                        in.readParcelableList(results, ScanResult.class.getClassLoader());
                         return new ScanData(id, flags, bucketsScanned, bandScanned, results);
                     }
 
@@ -505,7 +606,7 @@ public class WifiScanner {
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<ParcelableScanData> CREATOR =
+        public static final @NonNull Creator<ParcelableScanData> CREATOR =
                 new Creator<ParcelableScanData>() {
                     public ParcelableScanData createFromParcel(Parcel in) {
                         int n = in.readInt();
@@ -553,7 +654,7 @@ public class WifiScanner {
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<ParcelableScanResults> CREATOR =
+        public static final @NonNull Creator<ParcelableScanResults> CREATOR =
                 new Creator<ParcelableScanResults>() {
                     public ParcelableScanResults createFromParcel(Parcel in) {
                         int n = in.readInt();
@@ -639,6 +740,8 @@ public class WifiScanner {
         public int min5GHzRssi;
         /** Minimum 2.4GHz RSSI for a BSSID to be considered */
         public int min24GHzRssi;
+        /** Minimum 6GHz RSSI for a BSSID to be considered */
+        public int min6GHzRssi;
         /** Maximum score that a network can have before bonuses */
         public int initialScoreMax;
         /**
@@ -652,6 +755,8 @@ public class WifiScanner {
         public int secureBonus;
         /** 5GHz RSSI score bonus (applied to all 5GHz networks) */
         public int band5GHzBonus;
+        /** 6GHz RSSI score bonus (applied to all 5GHz networks) */
+        public int band6GHzBonus;
         /** Pno Network filter list */
         public PnoNetwork[] networkList;
 
@@ -665,11 +770,13 @@ public class WifiScanner {
             dest.writeInt(isConnected ? 1 : 0);
             dest.writeInt(min5GHzRssi);
             dest.writeInt(min24GHzRssi);
+            dest.writeInt(min6GHzRssi);
             dest.writeInt(initialScoreMax);
             dest.writeInt(currentConnectionBonus);
             dest.writeInt(sameNetworkBonus);
             dest.writeInt(secureBonus);
             dest.writeInt(band5GHzBonus);
+            dest.writeInt(band6GHzBonus);
             if (networkList != null) {
                 dest.writeInt(networkList.length);
                 for (int i = 0; i < networkList.length; i++) {
@@ -684,18 +791,20 @@ public class WifiScanner {
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<PnoSettings> CREATOR =
+        public static final @NonNull Creator<PnoSettings> CREATOR =
                 new Creator<PnoSettings>() {
                     public PnoSettings createFromParcel(Parcel in) {
                         PnoSettings settings = new PnoSettings();
                         settings.isConnected = in.readInt() == 1;
                         settings.min5GHzRssi = in.readInt();
                         settings.min24GHzRssi = in.readInt();
+                        settings.min6GHzRssi = in.readInt();
                         settings.initialScoreMax = in.readInt();
                         settings.currentConnectionBonus = in.readInt();
                         settings.sameNetworkBonus = in.readInt();
                         settings.secureBonus = in.readInt();
                         settings.band5GHzBonus = in.readInt();
+                        settings.band6GHzBonus = in.readInt();
                         int numNetworks = in.readInt();
                         settings.networkList = new PnoNetwork[numNetworks];
                         for (int i = 0; i < numNetworks; i++) {
@@ -751,8 +860,10 @@ public class WifiScanner {
     /**
      * Enable/Disable wifi scanning.
      *
+     * @param enable set to true to enable scanning, set to false to disable all types of scanning.
      * {@hide}
      */
+    @SystemApi
     @RequiresPermission(Manifest.permission.NETWORK_STACK)
     public void setScanningEnabled(boolean enable) {
         validateChannel();
@@ -760,33 +871,44 @@ public class WifiScanner {
     }
 
     /**
-     * Register a listener that will receive results from all single scans
-     * Either the onSuccess/onFailure will be called once when the listener is registered. After
-     * (assuming onSuccess was called) all subsequent single scan results will be delivered to the
-     * listener. It is possible that onFullResult will not be called for all results of the first
-     * scan if the listener was registered during the scan.
+     * Register a listener that will receive results from all single scans.
+     * Either the {@link ScanListener#onSuccess()} or  {@link ScanListener#onFailure(int, String)}
+     * method will be called once when the listener is registered.
+     * Afterwards (assuming onSuccess was called), all subsequent single scan results will be
+     * delivered to the listener. It is possible that onFullResult will not be called for all
+     * results of the first scan if the listener was registered during the scan.
      *
      * @param listener specifies the object to report events to. This object is also treated as a
      *                 key for this request, and must also be specified to cancel the request.
      *                 Multiple requests should also not share this object.
-     * {@hide}
      */
     @RequiresPermission(Manifest.permission.NETWORK_STACK)
-    public void registerScanListener(ScanListener listener) {
+    public void registerScanListener(@NonNull @CallbackExecutor Executor executor,
+            @NonNull ScanListener listener) {
+        Preconditions.checkNotNull(executor, "executor cannot be null");
         Preconditions.checkNotNull(listener, "listener cannot be null");
-        int key = addListener(listener);
+        int key = addListener(listener, executor);
         if (key == INVALID_KEY) return;
         validateChannel();
         mAsyncChannel.sendMessage(CMD_REGISTER_SCAN_LISTENER, 0, key);
     }
 
     /**
+     * Overload of {@link #registerScanListener(Executor, ScanListener)} that executes the callback
+     * synchronously.
+     * @hide
+     */
+    @RequiresPermission(Manifest.permission.NETWORK_STACK)
+    public void registerScanListener(@NonNull ScanListener listener) {
+        registerScanListener(new SynchronousExecutor(), listener);
+    }
+
+    /**
      * Deregister a listener for ongoing single scans
      * @param listener specifies which scan to cancel; must be same object as passed in {@link
      *  #registerScanListener}
-     * {@hide}
      */
-    public void deregisterScanListener(ScanListener listener) {
+    public void unregisterScanListener(@NonNull ScanListener listener) {
         Preconditions.checkNotNull(listener, "listener cannot be null");
         int key = removeListener(listener);
         if (key == INVALID_KEY) return;
@@ -825,6 +947,7 @@ public class WifiScanner {
         scanParams.putParcelable(SCAN_PARAMS_SCAN_SETTINGS_KEY, settings);
         scanParams.putParcelable(SCAN_PARAMS_WORK_SOURCE_KEY, workSource);
         scanParams.putString(REQUEST_PACKAGE_NAME_KEY, mContext.getOpPackageName());
+        scanParams.putString(REQUEST_FEATURE_ID_KEY, mContext.getFeatureId());
         mAsyncChannel.sendMessage(CMD_START_BACKGROUND_SCAN, 0, key, scanParams);
     }
 
@@ -841,6 +964,7 @@ public class WifiScanner {
         validateChannel();
         Bundle scanParams = new Bundle();
         scanParams.putString(REQUEST_PACKAGE_NAME_KEY, mContext.getOpPackageName());
+        scanParams.putString(REQUEST_FEATURE_ID_KEY, mContext.getFeatureId());
         mAsyncChannel.sendMessage(CMD_STOP_BACKGROUND_SCAN, 0, key, scanParams);
     }
 
@@ -853,6 +977,7 @@ public class WifiScanner {
         validateChannel();
         Bundle scanParams = new Bundle();
         scanParams.putString(REQUEST_PACKAGE_NAME_KEY, mContext.getOpPackageName());
+        scanParams.putString(REQUEST_FEATURE_ID_KEY, mContext.getFeatureId());
         Message reply =
                 mAsyncChannel.sendMessageSynchronously(CMD_GET_SCAN_RESULTS, 0, 0, scanParams);
         return reply.what == CMD_OP_SUCCEEDED;
@@ -890,6 +1015,7 @@ public class WifiScanner {
         scanParams.putParcelable(SCAN_PARAMS_SCAN_SETTINGS_KEY, settings);
         scanParams.putParcelable(SCAN_PARAMS_WORK_SOURCE_KEY, workSource);
         scanParams.putString(REQUEST_PACKAGE_NAME_KEY, mContext.getOpPackageName());
+        scanParams.putString(REQUEST_FEATURE_ID_KEY, mContext.getFeatureId());
         mAsyncChannel.sendMessage(CMD_START_SINGLE_SCAN, 0, key, scanParams);
     }
 
@@ -906,6 +1032,7 @@ public class WifiScanner {
         validateChannel();
         Bundle scanParams = new Bundle();
         scanParams.putString(REQUEST_PACKAGE_NAME_KEY, mContext.getOpPackageName());
+        scanParams.putString(REQUEST_FEATURE_ID_KEY, mContext.getFeatureId());
         mAsyncChannel.sendMessage(CMD_STOP_SINGLE_SCAN, 0, key, scanParams);
     }
 
@@ -913,10 +1040,14 @@ public class WifiScanner {
      * Retrieve the most recent scan results from a single scan request.
      * {@hide}
      */
+    @NonNull
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public List<ScanResult> getSingleScanResults() {
         validateChannel();
         Bundle scanParams = new Bundle();
         scanParams.putString(REQUEST_PACKAGE_NAME_KEY, mContext.getOpPackageName());
+        scanParams.putString(REQUEST_FEATURE_ID_KEY, mContext.getFeatureId());
         Message reply = mAsyncChannel.sendMessageSynchronously(CMD_GET_SINGLE_SCAN_RESULTS, 0, 0,
                 scanParams);
         if (reply.what == WifiScanner.CMD_OP_SUCCEEDED) {
@@ -925,7 +1056,7 @@ public class WifiScanner {
         OperationResult result = (OperationResult) reply.obj;
         Log.e(TAG, "Error retrieving SingleScan results reason: " + result.reason
                 + " description: " + result.description);
-        return new ArrayList<ScanResult>();
+        return new ArrayList<>();
     }
 
     private void startPnoScan(ScanSettings scanSettings, PnoSettings pnoSettings, int key) {
@@ -1029,7 +1160,7 @@ public class WifiScanner {
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<WifiChangeSettings> CREATOR =
+        public static final @NonNull Creator<WifiChangeSettings> CREATOR =
                 new Creator<WifiChangeSettings>() {
                     public WifiChangeSettings createFromParcel(Parcel in) {
                         return new WifiChangeSettings();
@@ -1140,7 +1271,7 @@ public class WifiScanner {
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<HotlistSettings> CREATOR =
+        public static final @NonNull Creator<HotlistSettings> CREATOR =
                 new Creator<HotlistSettings>() {
                     public HotlistSettings createFromParcel(Parcel in) {
                         HotlistSettings settings = new HotlistSettings();
@@ -1230,6 +1361,7 @@ public class WifiScanner {
     private int mListenerKey = 1;
 
     private final SparseArray mListenerMap = new SparseArray();
+    private final SparseArray<Executor> mExecutorMap = new SparseArray<>();
     private final Object mListenerMapLock = new Object();
 
     private AsyncChannel mAsyncChannel;
@@ -1240,12 +1372,15 @@ public class WifiScanner {
      * Applications will almost always want to use
      * {@link android.content.Context#getSystemService Context.getSystemService()} to retrieve
      * the standard {@link android.content.Context#WIFI_SERVICE Context.WIFI_SERVICE}.
+     *
      * @param context the application context
-     * @param service the Binder interface
+     * @param service the Binder interface for {@link Context#WIFI_SCANNING_SERVICE}
      * @param looper the Looper used to deliver callbacks
+     *
      * @hide
      */
-    public WifiScanner(Context context, IWifiScanner service, Looper looper) {
+    public WifiScanner(@NonNull Context context, @NonNull IWifiScanner service,
+            @NonNull Looper looper) {
         mContext = context;
         mService = service;
 
@@ -1274,10 +1409,14 @@ public class WifiScanner {
                 "No permission to access and change wifi or a bad initialization");
     }
 
+    private int addListener(ActionListener listener) {
+        return addListener(listener, null);
+    }
+
     // Add a listener into listener map. If the listener already exists, return INVALID_KEY and
     // send an error message to internal handler; Otherwise add the listener to the listener map and
     // return the key of the listener.
-    private int addListener(ActionListener listener) {
+    private int addListener(ActionListener listener, Executor executor) {
         synchronized (mListenerMapLock) {
             boolean keyExists = (getListenerKey(listener) != INVALID_KEY);
             // Note we need to put the listener into listener map even if it's a duplicate as the
@@ -1293,6 +1432,7 @@ public class WifiScanner {
                 message.sendToTarget();
                 return INVALID_KEY;
             } else {
+                mExecutorMap.put(key, executor);
                 return key;
             }
         }
@@ -1310,11 +1450,22 @@ public class WifiScanner {
         return key;
     }
 
-    private Object getListener(int key) {
-        if (key == INVALID_KEY) return null;
+    private static class ListenerWithExecutor {
+        @Nullable final Object mListener;
+        @Nullable final Executor mExecutor;
+
+        ListenerWithExecutor(@Nullable Object listener, @Nullable Executor executor) {
+            mListener = listener;
+            mExecutor = executor;
+        }
+    }
+
+    private ListenerWithExecutor getListenerWithExecutor(int key) {
+        if (key == INVALID_KEY) return new ListenerWithExecutor(null, null);
         synchronized (mListenerMapLock) {
             Object listener = mListenerMap.get(key);
-            return listener;
+            Executor executor = mExecutorMap.get(key);
+            return new ListenerWithExecutor(listener, executor);
         }
     }
 
@@ -1335,6 +1486,7 @@ public class WifiScanner {
         synchronized (mListenerMapLock) {
             Object listener = mListenerMap.get(key);
             mListenerMap.remove(key);
+            mExecutorMap.remove(key);
             return listener;
         }
     }
@@ -1347,6 +1499,7 @@ public class WifiScanner {
         }
         synchronized (mListenerMapLock) {
             mListenerMap.remove(key);
+            mExecutorMap.remove(key);
             return key;
         }
     }
@@ -1373,7 +1526,7 @@ public class WifiScanner {
         }
 
         /** Implement the Parcelable interface {@hide} */
-        public static final @android.annotation.NonNull Creator<OperationResult> CREATOR =
+        public static final @NonNull Creator<OperationResult> CREATOR =
                 new Creator<OperationResult>() {
                     public OperationResult createFromParcel(Parcel in) {
                         int reason = in.readInt();
@@ -1405,7 +1558,8 @@ public class WifiScanner {
                     return;
             }
 
-            Object listener = getListener(msg.arg2);
+            ListenerWithExecutor listenerWithExecutor = getListenerWithExecutor(msg.arg2);
+            Object listener = listenerWithExecutor.mListener;
 
             if (listener == null) {
                 if (DBG) Log.d(TAG, "invalid listener key = " + msg.arg2);
@@ -1414,36 +1568,52 @@ public class WifiScanner {
                 if (DBG) Log.d(TAG, "listener key = " + msg.arg2);
             }
 
+            Executor executor = listenerWithExecutor.mExecutor;
+            if (executor == null) {
+                executor = new SynchronousExecutor();
+            }
+
             switch (msg.what) {
-                    /* ActionListeners grouped together */
-                case CMD_OP_SUCCEEDED :
-                    ((ActionListener) listener).onSuccess();
-                    break;
-                case CMD_OP_FAILED : {
-                        OperationResult result = (OperationResult)msg.obj;
-                        ((ActionListener) listener).onFailure(result.reason, result.description);
-                        removeListener(msg.arg2);
-                    }
-                    break;
-                case CMD_SCAN_RESULT :
-                    ((ScanListener) listener).onResults(
-                            ((ParcelableScanData) msg.obj).getResults());
-                    return;
-                case CMD_FULL_SCAN_RESULT :
+                /* ActionListeners grouped together */
+                case CMD_OP_SUCCEEDED: {
+                    ActionListener actionListener = (ActionListener) listener;
+                    Binder.clearCallingIdentity();
+                    executor.execute(actionListener::onSuccess);
+                } break;
+                case CMD_OP_FAILED: {
+                    OperationResult result = (OperationResult) msg.obj;
+                    ActionListener actionListener = (ActionListener) listener;
+                    removeListener(msg.arg2);
+                    Binder.clearCallingIdentity();
+                    executor.execute(() ->
+                            actionListener.onFailure(result.reason, result.description));
+                } break;
+                case CMD_SCAN_RESULT: {
+                    ScanListener scanListener = (ScanListener) listener;
+                    ParcelableScanData parcelableScanData = (ParcelableScanData) msg.obj;
+                    Binder.clearCallingIdentity();
+                    executor.execute(() -> scanListener.onResults(parcelableScanData.getResults()));
+                } break;
+                case CMD_FULL_SCAN_RESULT: {
                     ScanResult result = (ScanResult) msg.obj;
-                    ((ScanListener) listener).onFullResult(result);
-                    return;
-                case CMD_SINGLE_SCAN_COMPLETED:
+                    ScanListener scanListener = ((ScanListener) listener);
+                    Binder.clearCallingIdentity();
+                    executor.execute(() -> scanListener.onFullResult(result));
+                } break;
+                case CMD_SINGLE_SCAN_COMPLETED: {
                     if (DBG) Log.d(TAG, "removing listener for single scan");
                     removeListener(msg.arg2);
-                    break;
-                case CMD_PNO_NETWORK_FOUND:
-                    ((PnoScanListener) listener).onPnoNetworkFound(
-                            ((ParcelableScanResults) msg.obj).getResults());
-                    return;
-                default:
+                } break;
+                case CMD_PNO_NETWORK_FOUND: {
+                    PnoScanListener pnoScanListener = (PnoScanListener) listener;
+                    ParcelableScanResults parcelableScanResults = (ParcelableScanResults) msg.obj;
+                    Binder.clearCallingIdentity();
+                    executor.execute(() ->
+                            pnoScanListener.onPnoNetworkFound(parcelableScanResults.getResults()));
+                } break;
+                default: {
                     if (DBG) Log.d(TAG, "Ignoring message " + msg.what);
-                    return;
+                } break;
             }
         }
     }

@@ -97,7 +97,7 @@ class ActivityStartInterceptor {
     ResolveInfo mRInfo;
     ActivityInfo mAInfo;
     String mResolvedType;
-    TaskRecord mInTask;
+    Task mInTask;
     ActivityOptions mActivityOptions;
 
     ActivityStartInterceptor(
@@ -144,7 +144,7 @@ class ActivityStartInterceptor {
      * @return true if an interception occurred
      */
     boolean intercept(Intent intent, ResolveInfo rInfo, ActivityInfo aInfo, String resolvedType,
-            TaskRecord inTask, int callingPid, int callingUid, ActivityOptions activityOptions) {
+            Task inTask, int callingPid, int callingUid, ActivityOptions activityOptions) {
         mUserManager = UserManager.get(mServiceContext);
 
         mIntent = intent;
@@ -156,14 +156,14 @@ class ActivityStartInterceptor {
         mInTask = inTask;
         mActivityOptions = activityOptions;
 
-        if (interceptSuspendedPackageIfNeeded()) {
-            // Skip the rest of interceptions as the package is suspended by device admin so
-            // no user action can undo this.
-            return true;
-        }
         if (interceptQuietProfileIfNeeded()) {
             // If work profile is turned off, skip the work challenge since the profile can only
             // be unlocked when profile's user is running.
+            return true;
+        }
+        if (interceptSuspendedPackageIfNeeded()) {
+            // Skip the rest of interceptions as the package is suspended by device admin so
+            // no user action can undo this.
             return true;
         }
         if (interceptHarmfulAppIfNeeded()) {
@@ -249,7 +249,8 @@ class ActivityStartInterceptor {
         if (PLATFORM_PACKAGE_NAME.equals(suspendingPackage)) {
             return interceptSuspendedByAdminPackage();
         }
-        final SuspendDialogInfo dialogInfo = pmi.getSuspendedDialogInfo(suspendedPackage, mUserId);
+        final SuspendDialogInfo dialogInfo = pmi.getSuspendedDialogInfo(suspendedPackage,
+                suspendingPackage, mUserId);
         mIntent = SuspendedAppActivity.createSuspendedAppInterceptIntent(suspendedPackage,
                 suspendingPackage, dialogInfo, mUserId);
         mCallingPid = mRealCallingPid;
@@ -273,7 +274,7 @@ class ActivityStartInterceptor {
         // ConfirmCredentials intent and unassign it, as otherwise the task will move to
         // front even if ConfirmCredentials is cancelled.
         if (mInTask != null) {
-            mIntent.putExtra(EXTRA_TASK_ID, mInTask.taskId);
+            mIntent.putExtra(EXTRA_TASK_ID, mInTask.mTaskId);
             mInTask = null;
         }
         if (mActivityOptions == null) {

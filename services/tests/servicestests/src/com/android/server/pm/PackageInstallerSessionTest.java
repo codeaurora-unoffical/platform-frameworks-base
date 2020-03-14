@@ -156,6 +156,8 @@ public class PackageInstallerSessionTest {
         if (isMultiPackage) {
             params.isMultiPackage = true;
         }
+        InstallSource installSource = InstallSource.create("testInstaller", null, "testInstaller",
+                false);
         return new PackageInstallerSession(
                 /* callback */ null,
                 /* context */null,
@@ -165,8 +167,8 @@ public class PackageInstallerSessionTest {
                 /* stagingManager */ null,
                 /* sessionId */ sessionId,
                 /* userId */  456,
-                /* installerPackageName */ "testInstaller",
                 /* installerUid */ -1,
+                /* installSource */ installSource,
                 /* sessionParams */ params,
                 /* createdMillis */ 0L,
                 /* stageDir */ mTmpDir,

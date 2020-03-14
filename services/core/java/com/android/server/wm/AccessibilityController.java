@@ -116,6 +116,14 @@ final class AccessibilityController {
         return result;
     }
 
+    /**
+     * Sets a callback for observing which windows are touchable for the purposes
+     * of accessibility on specified display.
+     *
+     * @param displayId The logical display id.
+     * @param callback The callback.
+     * @return {@code false} if display id is not valid or an embedded display.
+     */
     public boolean setWindowsForAccessibilityCallbackLocked(int displayId,
             WindowsForAccessibilityCallback callback) {
         if (callback != null) {
@@ -124,17 +132,20 @@ final class AccessibilityController {
                 return false;
             }
 
-            if (mWindowsForAccessibilityObserver.get(displayId) != null) {
-                final Display display = dc.getDisplay();
-                if (display.getType() == Display.TYPE_VIRTUAL && dc.getParentWindow() != null) {
-                    // The window observer of this embedded display had been set from
-                    // window manager after setting its parent window.
-                    return true;
-                } else {
-                    throw new IllegalStateException(
-                            "Windows for accessibility callback of display "
-                                    + displayId + " already set!");
+            final Display display = dc.getDisplay();
+            if (display.getType() == Display.TYPE_VIRTUAL && dc.getParentWindow() != null) {
+                // If this display is an embedded one, its window observer should have been set from
+                // window manager after setting its parent window. But if its window observer is
+                // empty, that means this mapping didn't be set, and needs to do this again.
+                // This happened when accessibility window observer is disabled and enabled again.
+                if (mWindowsForAccessibilityObserver.get(displayId) == null) {
+                    handleWindowObserverOfEmbeddedDisplayLocked(displayId, dc.getParentWindow());
                 }
+                return false;
+            } else if (mWindowsForAccessibilityObserver.get(displayId) != null) {
+                throw new IllegalStateException(
+                        "Windows for accessibility callback of display "
+                                + displayId + " already set!");
             }
             mWindowsForAccessibilityObserver.put(displayId,
                     new WindowsForAccessibilityObserver(mService, displayId, callback));
@@ -271,11 +282,11 @@ final class AccessibilityController {
         }
     }
 
-    /** NOTE: This has to be called within a surface transaction. */
-    public void drawMagnifiedRegionBorderIfNeededLocked(int displayId) {
+    public void drawMagnifiedRegionBorderIfNeededLocked(int displayId,
+            SurfaceControl.Transaction t) {
         final DisplayMagnifier displayMagnifier = mDisplayMagnifiers.get(displayId);
         if (displayMagnifier != null) {
-            displayMagnifier.drawMagnifiedRegionBorderIfNeededLocked();
+            displayMagnifier.drawMagnifiedRegionBorderIfNeededLocked(t);
         }
         // Not relevant for the window observer.
     }
@@ -431,7 +442,7 @@ final class AccessibilityController {
                 Slog.i(LOG_TAG, "Rotation: " + Surface.rotationToString(rotation)
                         + " displayId: " + displayContent.getDisplayId());
             }
-            mMagnifedViewport.onRotationChangedLocked();
+            mMagnifedViewport.onRotationChangedLocked(displayContent.getPendingTransaction());
             mHandler.sendEmptyMessage(MyHandler.MESSAGE_NOTIFY_ROTATION_CHANGED);
         }
 
@@ -536,9 +547,8 @@ final class AccessibilityController {
                     .sendToTarget();
         }
 
-        /** NOTE: This has to be called within a surface transaction. */
-        public void drawMagnifiedRegionBorderIfNeededLocked() {
-            mMagnifedViewport.drawWindowIfNeededLocked();
+        public void drawMagnifiedRegionBorderIfNeededLocked(SurfaceControl.Transaction t) {
+            mMagnifedViewport.drawWindowIfNeededLocked(t);
         }
 
         private final class MagnifiedViewport {
@@ -726,7 +736,7 @@ final class AccessibilityController {
             }
 
             private Region getLetterboxBounds(WindowState windowState) {
-                final AppWindowToken appToken = windowState.mAppToken;
+                final ActivityRecord appToken = windowState.mActivityRecord;
                 if (appToken == null) {
                     return new Region();
                 }
@@ -744,7 +754,7 @@ final class AccessibilityController {
                 return letterboxBounds;
             }
 
-            public void onRotationChangedLocked() {
+            public void onRotationChangedLocked(SurfaceControl.Transaction t) {
                 // If we are showing the magnification border, hide it immediately so
                 // the user does not see strange artifacts during rotation. The screenshot
                 // used for rotation already has the border. After the rotation is complete
@@ -758,7 +768,7 @@ final class AccessibilityController {
                     mHandler.sendMessageDelayed(message, delay);
                 }
                 recomputeBoundsLocked();
-                mWindow.updateSize();
+                mWindow.updateSize(t);
             }
 
             public void setMagnifiedRegionBorderShownLocked(boolean shown, boolean animate) {
@@ -784,10 +794,9 @@ final class AccessibilityController {
                 return mMagnificationSpec;
             }
 
-            /** NOTE: This has to be called within a surface transaction. */
-            public void drawWindowIfNeededLocked() {
+            public void drawWindowIfNeededLocked(SurfaceControl.Transaction t) {
                 recomputeBoundsLocked();
-                mWindow.drawIfNeeded();
+                mWindow.drawIfNeeded(t);
             }
 
             public void destroyWindow() {
@@ -837,10 +846,11 @@ final class AccessibilityController {
                         /* ignore */
                     }
                     mSurfaceControl = surfaceControl;
-                    mSurfaceControl.setLayer(mService.mPolicy.getWindowLayerFromTypeLw(
-                            TYPE_MAGNIFICATION_OVERLAY)
-                            * WindowManagerService.TYPE_LAYER_MULTIPLIER);
-                    mSurfaceControl.setPosition(0, 0);
+                    mService.mTransactionFactory.get().setLayer(mSurfaceControl,
+                            mService.mPolicy.getWindowLayerFromTypeLw(TYPE_MAGNIFICATION_OVERLAY)
+                                    * WindowManagerService.TYPE_LAYER_MULTIPLIER)
+                            .setPosition(mSurfaceControl, 0, 0)
+                            .apply();
                     mSurface.copyFrom(mSurfaceControl);
 
                     mAnimationController = new AnimationController(context,
@@ -905,10 +915,10 @@ final class AccessibilityController {
                     }
                 }
 
-                public void updateSize() {
+                public void updateSize(SurfaceControl.Transaction t) {
                     synchronized (mService.mGlobalLock) {
                         mWindowManager.getDefaultDisplay().getRealSize(mTempPoint);
-                        mSurfaceControl.setBufferSize(mTempPoint.x, mTempPoint.y);
+                        t.setBufferSize(mSurfaceControl, mTempPoint.x, mTempPoint.y);
                         invalidate(mDirtyRect);
                     }
                 }
@@ -923,8 +933,7 @@ final class AccessibilityController {
                     mService.scheduleAnimationLocked();
                 }
 
-                /** NOTE: This has to be called within a surface transaction. */
-                public void drawIfNeeded() {
+                public void drawIfNeeded(SurfaceControl.Transaction t) {
                     synchronized (mService.mGlobalLock) {
                         if (!mInvalidated) {
                             return;
@@ -959,9 +968,9 @@ final class AccessibilityController {
                             canvas.drawPath(path, mPaint);
 
                             mSurface.unlockCanvasAndPost(canvas);
-                            mSurfaceControl.show();
+                            t.show(mSurfaceControl);
                         } else {
-                            mSurfaceControl.hide();
+                            t.hide(mSurfaceControl);
                         }
                     }
                 }
@@ -1106,13 +1115,9 @@ final class AccessibilityController {
 
         private final Point mTempPoint = new Point();
 
-        private final Rect mTempRect = new Rect();
-
         private final Region mTempRegion = new Region();
 
         private final Region mTempRegion1 = new Region();
-
-        private final Context mContext;
 
         private final WindowManagerService mService;
 
@@ -1127,7 +1132,6 @@ final class AccessibilityController {
         public WindowsForAccessibilityObserver(WindowManagerService windowManagerService,
                 int displayId,
                 WindowsForAccessibilityCallback callback) {
-            mContext = windowManagerService.mContext;
             mService = windowManagerService;
             mCallback = callback;
             mDisplayId = displayId;

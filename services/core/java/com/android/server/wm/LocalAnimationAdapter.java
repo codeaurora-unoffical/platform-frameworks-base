@@ -49,11 +49,6 @@ class LocalAnimationAdapter implements AnimationAdapter {
     }
 
     @Override
-    public int getBackgroundColor() {
-        return mSpec.getBackgroundColor();
-    }
-
-    @Override
     public void startAnimation(SurfaceControl animationLeash, Transaction t,
             OnAnimationFinishedCallback finishCallback) {
         mAnimator.startAnimation(mSpec, animationLeash, t,
@@ -81,9 +76,9 @@ class LocalAnimationAdapter implements AnimationAdapter {
     }
 
     @Override
-    public void writeToProto(ProtoOutputStream proto) {
+    public void dumpDebug(ProtoOutputStream proto) {
         final long token = proto.start(LOCAL);
-        mSpec.writeToProto(proto, ANIMATION_SPEC);
+        mSpec.dumpDebug(proto, ANIMATION_SPEC);
         proto.end(token);
     }
 
@@ -97,13 +92,6 @@ class LocalAnimationAdapter implements AnimationAdapter {
          */
         default boolean getShowWallpaper() {
             return false;
-        }
-
-        /**
-         * @see AnimationAdapter#getBackgroundColor
-         */
-        default int getBackgroundColor() {
-            return 0;
         }
 
         /**
@@ -143,12 +131,12 @@ class LocalAnimationAdapter implements AnimationAdapter {
 
         void dump(PrintWriter pw, String prefix);
 
-        default void writeToProto(ProtoOutputStream proto, long fieldId) {
+        default void dumpDebug(ProtoOutputStream proto, long fieldId) {
             final long token = proto.start(fieldId);
-            writeToProtoInner(proto);
+            dumpDebugInner(proto);
             proto.end(token);
         }
 
-        void writeToProtoInner(ProtoOutputStream proto);
+        void dumpDebugInner(ProtoOutputStream proto);
     }
 }

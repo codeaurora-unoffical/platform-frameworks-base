@@ -26,8 +26,10 @@ cc_defaults {
         // a problem
         "-Wno-free-nonheap-object",
 
-        // clang's warning is broken, see: https://llvm.org/bugs/show_bug.cgi?id=21629
-        "-Wno-missing-braces",
+        // Clang is producing non-determistic binary when the new pass manager is
+        // enabled. Disable the new PM as a temporary workaround.
+        // b/142372146
+        "-fno-experimental-new-pass-manager",
     ],
 
     include_dirs: [
@@ -88,6 +90,7 @@ cc_defaults {
                 "libvulkan",
                 "libui",
                 "libgui",
+                "libnativedisplay",
                 "libnativewindow",
                 "libprotobuf-cpp-lite",
                 "libft2",
@@ -173,6 +176,7 @@ cc_defaults {
         "hwui/AnimatedImageThread.cpp",
         "hwui/Bitmap.cpp",
         "hwui/Canvas.cpp",
+        "hwui/ImageDecoder.cpp",
         "hwui/MinikinSkia.cpp",
         "hwui/MinikinUtils.cpp",
         "hwui/PaintImpl.cpp",
@@ -219,7 +223,6 @@ cc_defaults {
                 "pipeline/skia/SkiaPipeline.cpp",
                 "pipeline/skia/SkiaProfileRenderer.cpp",
                 "pipeline/skia/SkiaVulkanPipeline.cpp",
-                "pipeline/skia/VectorDrawableAtlas.cpp",
                 "pipeline/skia/VkFunctorDrawable.cpp",
                 "pipeline/skia/VkInteropFunctorDrawable.cpp",
                 "renderstate/RenderState.cpp",
@@ -233,12 +236,10 @@ cc_defaults {
                 "renderthread/RenderProxy.cpp",
                 "renderthread/RenderThread.cpp",
                 "service/GraphicsStatsService.cpp",
-                "surfacetexture/EGLConsumer.cpp",
-                "surfacetexture/ImageConsumer.cpp",
-                "surfacetexture/SurfaceTexture.cpp",
                 "thread/CommonPool.cpp",
                 "utils/GLUtils.cpp",
                 "utils/StringUtils.cpp",
+                "AutoBackendTextureRelease.cpp",
                 "DeferredLayerUpdater.cpp",
                 "DeviceInfo.cpp",
                 "FrameInfo.cpp",
@@ -345,7 +346,6 @@ cc_test {
         "tests/unit/ThreadBaseTests.cpp",
         "tests/unit/TypefaceTests.cpp",
         "tests/unit/VectorDrawableTests.cpp",
-        "tests/unit/VectorDrawableAtlasTests.cpp",
         "tests/unit/WebViewFunctorManagerTests.cpp",
     ],
 }

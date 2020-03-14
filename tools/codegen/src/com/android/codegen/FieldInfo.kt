@@ -1,5 +1,6 @@
 package com.android.codegen
 
+import com.github.javaparser.JavaParser
 import com.github.javaparser.ast.body.FieldDeclaration
 import com.github.javaparser.ast.expr.ClassExpr
 import com.github.javaparser.ast.expr.Name
@@ -92,6 +93,8 @@ data class FieldInfo(
     // Generic args
     val isArray = Type.endsWith("[]")
     val isList = FieldClass == "List" || FieldClass == "ArrayList"
+    val isMap = FieldClass == "Map" || FieldClass == "ArrayMap"
+            || FieldClass == "HashMap" || FieldClass == "LinkedHashMap"
     val fieldBit = bitAtExpr(index)
     var isLast = false
     val isFinal = fieldAst.isFinal
@@ -111,11 +114,12 @@ data class FieldInfo(
     val annotations by lazy {
         if (FieldClass in BUILTIN_SPECIAL_PARCELLINGS) {
             classPrinter {
-                fieldAst.addAnnotation(SingleMemberAnnotationExpr(
-                        Name(ParcelWith),
-                        ClassExpr(JAVA_PARSER
-                                .parseClassOrInterfaceType("$Parcelling.BuiltIn.For$FieldClass")
-                                .throwIfFailed())))
+                fileInfo.apply {
+                    fieldAst.addAnnotation(SingleMemberAnnotationExpr(
+                            Name(ParcelWith),
+                            ClassExpr(parseJava(JavaParser::parseClassOrInterfaceType,
+                                    "$Parcelling.BuiltIn.For$FieldClass"))))
+                }
             }
         }
         fieldAst.annotations.map { it.removeComment().toString() }
@@ -191,11 +195,11 @@ data class FieldInfo(
      * Parcel.write* and Parcel.read* method name wildcard values
      */
     val ParcelMethodsSuffix = when {
-        FieldClass in PRIMITIVE_TYPES - "char" - "boolean" +
+        FieldClass in PRIMITIVE_TYPES - "char" - "boolean" + BOXED_PRIMITIVE_TYPES +
                 listOf("String", "CharSequence", "Exception", "Size", "SizeF", "Bundle",
                         "FileDescriptor", "SparseBooleanArray", "SparseIntArray", "SparseArray") ->
             FieldClass
-        FieldClass == "Map" && fieldTypeGenegicArgs[0] == "String" -> "Map"
+        isMap && fieldTypeGenegicArgs[0] == "String" -> "Map"
         isArray -> when {
             FieldInnerType!! in (PRIMITIVE_TYPES + "String") -> FieldInnerType + "Array"
             isBinder(FieldInnerType) -> "BinderArray"

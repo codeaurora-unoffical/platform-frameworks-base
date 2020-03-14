@@ -29,6 +29,7 @@ import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 
 import androidx.collection.ArraySet;
 
@@ -51,13 +52,9 @@ import java.io.PrintWriter;
 import java.util.HashSet;
 import java.util.Stack;
 
-import javax.inject.Inject;
-import javax.inject.Singleton;
-
 /**
  * A implementation of HeadsUpManager for phone and car.
  */
-@Singleton
 public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
         VisualStabilityManager.Callback, OnHeadsUpChangedListener,
         ConfigurationController.ConfigurationListener, StateListener {
@@ -112,7 +109,6 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //  Constructor:
 
-    @Inject
     public HeadsUpManagerPhone(@NonNull final Context context,
             StatusBarStateController statusBarStateController,
             KeyguardBypassController bypassController) {
@@ -196,9 +192,9 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
             mReleaseOnExpandFinish = false;
         } else {
             for (NotificationEntry entry : mEntriesToRemoveAfterExpand) {
-                if (isAlerting(entry.key)) {
+                if (isAlerting(entry.getKey())) {
                     // Maybe the heads-up was removed already
-                    removeAlertEntry(entry.key);
+                    removeAlertEntry(entry.getKey());
                 }
             }
         }
@@ -290,7 +286,7 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
      */
     public void setRemoteInputActive(
             @NonNull NotificationEntry entry, boolean remoteInputActive) {
-        HeadsUpEntryPhone headsUpEntry = getHeadsUpEntryPhone(entry.key);
+        HeadsUpEntryPhone headsUpEntry = getHeadsUpEntryPhone(entry.getKey());
         if (headsUpEntry != null && headsUpEntry.remoteInputActive != remoteInputActive) {
             headsUpEntry.remoteInputActive = remoteInputActive;
             if (remoteInputActive) {
@@ -306,7 +302,7 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
      * area if it's pinned until it's hidden again.
      */
     public void setMenuShown(@NonNull NotificationEntry entry, boolean menuShown) {
-        HeadsUpEntry headsUpEntry = getHeadsUpEntry(entry.key);
+        HeadsUpEntry headsUpEntry = getHeadsUpEntry(entry.getKey());
         if (headsUpEntry instanceof HeadsUpEntryPhone && entry.isRowPinned()) {
             ((HeadsUpEntryPhone) headsUpEntry).setMenuShownPinned(menuShown);
         }
@@ -374,7 +370,7 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
         } else {
             if (topEntry.isChildInGroup()) {
                 final NotificationEntry groupSummary =
-                        mGroupManager.getGroupSummary(topEntry.notification);
+                        mGroupManager.getGroupSummary(topEntry.getSbn());
                 if (groupSummary != null) {
                     topEntry = groupSummary;
                 }
@@ -390,7 +386,12 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
     }
 
     private void updateRegionForNotch(Region region) {
-        DisplayCutout cutout = mStatusBarWindowView.getRootWindowInsets().getDisplayCutout();
+        WindowInsets windowInsets = mStatusBarWindowView.getRootWindowInsets();
+        if (windowInsets == null) {
+            Log.w(TAG, "StatusBarWindowView is not attached.");
+            return;
+        }
+        DisplayCutout cutout = windowInsets.getDisplayCutout();
         if (cutout == null) {
             return;
         }
@@ -423,9 +424,9 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
     public void onReorderingAllowed() {
         mAnimationStateHandler.setHeadsUpGoingAwayAnimationsAllowed(false);
         for (NotificationEntry entry : mEntriesToRemoveWhenReorderingAllowed) {
-            if (isAlerting(entry.key)) {
+            if (isAlerting(entry.getKey())) {
                 // Maybe the heads-up was removed already
-                removeAlertEntry(entry.key);
+                removeAlertEntry(entry.getKey());
             }
         }
         mEntriesToRemoveWhenReorderingAllowed.clear();
@@ -442,7 +443,7 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
 
     @Override
     protected void onAlertEntryRemoved(AlertEntry alertEntry) {
-        mKeysToRemoveWhenLeavingKeyguard.remove(alertEntry.mEntry.key);
+        mKeysToRemoveWhenLeavingKeyguard.remove(alertEntry.mEntry.getKey());
         super.onAlertEntryRemoved(alertEntry);
         mEntryPool.release((HeadsUpEntryPhone) alertEntry);
     }
@@ -527,9 +528,9 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
                 } else if (mTrackingHeadsUp) {
                     mEntriesToRemoveAfterExpand.add(entry);
                 } else if (mIsAutoHeadsUp && mStatusBarState == StatusBarState.KEYGUARD) {
-                    mKeysToRemoveWhenLeavingKeyguard.add(entry.key);
+                    mKeysToRemoveWhenLeavingKeyguard.add(entry.getKey());
                 } else {
-                    removeAlertEntry(entry.key);
+                    removeAlertEntry(entry.getKey());
                 }
             };
 
@@ -547,7 +548,7 @@ public class HeadsUpManagerPhone extends HeadsUpManager implements Dumpable,
             if (mEntriesToRemoveWhenReorderingAllowed.contains(mEntry)) {
                 mEntriesToRemoveWhenReorderingAllowed.remove(mEntry);
             }
-            mKeysToRemoveWhenLeavingKeyguard.remove(mEntry.key);
+            mKeysToRemoveWhenLeavingKeyguard.remove(mEntry.getKey());
         }
 
         @Override

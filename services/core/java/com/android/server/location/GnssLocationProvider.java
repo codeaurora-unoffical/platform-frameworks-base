@@ -67,6 +67,7 @@ import android.util.StatsLog;
 import android.util.TimeUtils;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.location.GpsNetInitiatedHandler;
 import com.android.internal.location.GpsNetInitiatedHandler.GpsNiNotification;
@@ -74,6 +75,8 @@ import com.android.internal.location.ProviderProperties;
 import com.android.internal.location.ProviderRequest;
 import com.android.internal.location.gnssmetrics.GnssMetrics;
 import com.android.internal.telephony.TelephonyIntents;
+import com.android.server.DeviceIdleInternal;
+import com.android.server.LocalServices;
 import com.android.server.location.GnssSatelliteBlacklistHelper.GnssSatelliteBlacklistCallback;
 import com.android.server.location.NtpTimeHelper.InjectNtpTimeCallback;
 
@@ -177,6 +180,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
     private static final int AGPS_SUPL_MODE_MSA = 0x02;
     private static final int AGPS_SUPL_MODE_MSB = 0x01;
 
+    private static final int UPDATE_LOW_POWER_MODE = 1;
     private static final int SET_REQUEST = 3;
     private static final int INJECT_NTP_TIME = 5;
     // PSDS stands for Predicted Satellite Data Service
@@ -297,9 +301,13 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
 
     // Timeout when holding wakelocks for downloading PSDS data.
     private static final long DOWNLOAD_PSDS_DATA_TIMEOUT_MS = 60 * 1000;
+    private static final long WAKELOCK_TIMEOUT_MILLIS = 30 * 1000;
 
     private final ExponentialBackOff mPsdsBackOff = new ExponentialBackOff(RETRY_INTERVAL,
             MAX_RETRY_INTERVAL);
+
+    private static boolean sIsInitialized = false;
+    private static boolean sStaticTestOverride = false;
 
     // True if we are enabled
     @GuardedBy("mLock")
@@ -358,6 +366,12 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
     private WorkSource mWorkSource = null;
     // True if gps should be disabled because of PowerManager controls
     private boolean mDisableGpsForPowerManager = false;
+
+    /**
+     * True if the device idle controller has determined that the device is stationary. This is only
+     * updated when the device enters idle mode.
+     */
+    private volatile boolean mIsDeviceStationary = false;
 
     /**
      * Properties loaded from PROPERTIES_FILE.
@@ -451,6 +465,15 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
     public GnssNavigationMessageProvider getGnssNavigationMessageProvider() {
         return mGnssNavigationMessageProvider;
     }
+
+    private final DeviceIdleInternal.StationaryListener mDeviceIdleStationaryListener =
+            isStationary -> {
+                mIsDeviceStationary = isStationary;
+                // Call updateLowPowerMode on handler thread so it's always called from the same
+                // thread.
+                mHandler.sendEmptyMessage(UPDATE_LOW_POWER_MODE);
+            };
+
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -467,11 +490,22 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
                 case ALARM_TIMEOUT:
                     hibernate();
                     break;
-                case PowerManager.ACTION_POWER_SAVE_MODE_CHANGED:
                 case PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED:
+                    DeviceIdleInternal deviceIdleService = LocalServices.getService(
+                            DeviceIdleInternal.class);
+                    if (mPowerManager.isDeviceIdleMode()) {
+                        deviceIdleService.registerStationaryListener(mDeviceIdleStationaryListener);
+                    } else {
+                        deviceIdleService.unregisterStationaryListener(
+                                mDeviceIdleStationaryListener);
+                    }
+                    // Intentional fall-through.
+                case PowerManager.ACTION_POWER_SAVE_MODE_CHANGED:
                 case Intent.ACTION_SCREEN_OFF:
                 case Intent.ACTION_SCREEN_ON:
-                    updateLowPowerMode();
+                    // Call updateLowPowerMode on handler thread so it's always called from the
+                    // same thread.
+                    mHandler.sendEmptyMessage(UPDATE_LOW_POWER_MODE);
                     break;
                 case CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED:
                 case TelephonyIntents.ACTION_DEFAULT_DATA_SUBSCRIPTION_CHANGED:
@@ -497,8 +531,10 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         CarrierConfigManager configManager = (CarrierConfigManager)
                 mContext.getSystemService(Context.CARRIER_CONFIG_SERVICE);
         int ddSubId = SubscriptionManager.getDefaultDataSubscriptionId();
-        String mccMnc = SubscriptionManager.isValidSubscriptionId(ddSubId)
-                ? phone.getSimOperator(ddSubId) : phone.getSimOperator();
+        if (SubscriptionManager.isValidSubscriptionId(ddSubId)) {
+            phone = phone.createForSubscriptionId(ddSubId);
+        }
+        String mccMnc = phone.getSimOperator();
         boolean isKeepLppProfile = false;
         if (!TextUtils.isEmpty(mccMnc)) {
             if (DEBUG) Log.d(TAG, "SIM MCC/MNC is available: " + mccMnc);
@@ -529,10 +565,9 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
     }
 
     private void updateLowPowerMode() {
-        // Disable GPS if we are in device idle mode.
-        boolean disableGpsForPowerManager = mPowerManager.isDeviceIdleMode();
-        final PowerSaveState result =
-                mPowerManager.getPowerSaveState(ServiceType.LOCATION);
+        // Disable GPS if we are in device idle mode and the device is stationary.
+        boolean disableGpsForPowerManager = mPowerManager.isDeviceIdleMode() && mIsDeviceStationary;
+        final PowerSaveState result = mPowerManager.getPowerSaveState(ServiceType.LOCATION);
         switch (result.locationMode) {
             case PowerManager.LOCATION_MODE_GPS_DISABLED_WHEN_SCREEN_OFF:
             case PowerManager.LOCATION_MODE_ALL_DISABLED_WHEN_SCREEN_OFF:
@@ -548,8 +583,24 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         }
     }
 
+    @VisibleForTesting
+    public static void setIsSupportedForTest(boolean override) {
+        sStaticTestOverride = override;
+    }
+
     public static boolean isSupported() {
+        if (sStaticTestOverride) {
+            return true;
+        }
+        ensureInitialized();
         return native_is_supported();
+    }
+
+    private static synchronized void ensureInitialized() {
+        if (!sIsInitialized) {
+            class_init_native();
+        }
+        sIsInitialized = true;
     }
 
     private void reloadGpsProperties() {
@@ -569,6 +620,8 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
     public GnssLocationProvider(Context context, LocationProviderManager locationProviderManager,
             Looper looper) {
         super(context, locationProviderManager);
+
+        ensureInitialized();
 
         mLooper = looper;
 
@@ -786,7 +839,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
 
         int elapsedRealtimeFlags = ELAPSED_REALTIME_HAS_TIMESTAMP_NS
                 | (location.hasElapsedRealtimeUncertaintyNanos()
-                        ? ELAPSED_REALTIME_HAS_TIME_UNCERTAINTY_NS : 0);
+                ? ELAPSED_REALTIME_HAS_TIME_UNCERTAINTY_NS : 0);
         long elapsedRealtimeNanos = location.getElapsedRealtimeNanos();
         double elapsedRealtimeUncertaintyNanos = location.getElapsedRealtimeUncertaintyNanos();
 
@@ -851,13 +904,8 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
                 if (mDownloadPsdsWakeLock.isHeld()) {
                     // This wakelock may have time-out, if a timeout was specified.
                     // Catch (and ignore) any timeout exceptions.
-                    try {
-                        mDownloadPsdsWakeLock.release();
-                        if (DEBUG) Log.d(TAG, "WakeLock released by handleDownloadPsdsData()");
-                    } catch (Exception e) {
-                        Log.i(TAG, "Wakelock timeout & release race exception in "
-                                + "handleDownloadPsdsData()", e);
-                    }
+                    mDownloadPsdsWakeLock.release();
+                    if (DEBUG) Log.d(TAG, "WakeLock released by handleDownloadPsdsData()");
                 } else {
                     Log.e(TAG, "WakeLock expired before release in "
                             + "handleDownloadPsdsData()");
@@ -977,7 +1025,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
 
         // .. but enable anyway, if there's an active settings-ignored request (e.g. ELS)
         enabled |= (mProviderRequest != null && mProviderRequest.reportLocation
-                        && mProviderRequest.locationSettingsIgnored);
+                && mProviderRequest.locationSettingsIgnored);
 
         // ... and, finally, disable anyway, if device is being shut down
         enabled &= !mShutdown;
@@ -1123,14 +1171,15 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
             if (newWork != null) {
                 for (int i = 0; i < newWork.size(); i++) {
                     mAppOps.startOpNoThrow(AppOpsManager.OP_GPS,
-                            newWork.get(i), newWork.getName(i));
+                            newWork.getUid(i), newWork.getPackageName(i));
                 }
             }
 
             // Update sources that are no longer tracked.
             if (goneWork != null) {
                 for (int i = 0; i < goneWork.size(); i++) {
-                    mAppOps.finishOp(AppOpsManager.OP_GPS, goneWork.get(i), goneWork.getName(i));
+                    mAppOps.finishOp(AppOpsManager.OP_GPS, goneWork.getUid(i),
+                            goneWork.getPackageName(i));
                 }
             }
         }
@@ -1400,11 +1449,13 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         private float[] mSvElevations;
         private float[] mSvAzimuths;
         private float[] mSvCarrierFreqs;
+        private float[] mBasebandCn0s;
     }
 
     @NativeEntryPoint
     private void reportSvStatus(int svCount, int[] svidWithFlags, float[] cn0s,
-            float[] svElevations, float[] svAzimuths, float[] svCarrierFreqs) {
+            float[] svElevations, float[] svAzimuths, float[] svCarrierFreqs,
+            float[] basebandCn0s) {
         SvStatusInfo svStatusInfo = new SvStatusInfo();
         svStatusInfo.mSvCount = svCount;
         svStatusInfo.mSvidWithFlags = svidWithFlags;
@@ -1412,6 +1463,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         svStatusInfo.mSvElevations = svElevations;
         svStatusInfo.mSvAzimuths = svAzimuths;
         svStatusInfo.mSvCarrierFreqs = svCarrierFreqs;
+        svStatusInfo.mBasebandCn0s = basebandCn0s;
 
         sendMessage(REPORT_SV_STATUS, 0, svStatusInfo);
     }
@@ -1423,7 +1475,8 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
                 info.mCn0s,
                 info.mSvElevations,
                 info.mSvAzimuths,
-                info.mSvCarrierFreqs);
+                info.mSvCarrierFreqs,
+                info.mBasebandCn0s);
 
         // Log CN0 as part of GNSS metrics
         mGnssMetrics.logCn0(info.mCn0s, info.mSvCount, info.mSvCarrierFreqs);
@@ -1432,39 +1485,38 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
             Log.v(TAG, "SV count: " + info.mSvCount);
         }
         // Calculate number of satellites used in fix.
+        GnssStatus gnssStatus = GnssStatus.wrap(
+                info.mSvCount,
+                info.mSvidWithFlags,
+                info.mCn0s,
+                info.mSvElevations,
+                info.mSvAzimuths,
+                info.mSvCarrierFreqs,
+                info.mBasebandCn0s);
         int usedInFixCount = 0;
         int maxCn0 = 0;
         int meanCn0 = 0;
-        for (int i = 0; i < info.mSvCount; i++) {
-            if ((info.mSvidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_USED_IN_FIX) != 0) {
+        for (int i = 0; i < gnssStatus.getSatelliteCount(); i++) {
+            if (gnssStatus.usedInFix(i)) {
                 ++usedInFixCount;
-                if (info.mCn0s[i] > maxCn0) {
-                    maxCn0 = (int) info.mCn0s[i];
+                if (gnssStatus.getCn0DbHz(i) > maxCn0) {
+                    maxCn0 = (int) gnssStatus.getCn0DbHz(i);
                 }
-                meanCn0 += info.mCn0s[i];
+                meanCn0 += gnssStatus.getCn0DbHz(i);
+                mGnssMetrics.logConstellationType(gnssStatus.getConstellationType(i));
             }
             if (VERBOSE) {
-                Log.v(TAG, "svid: " + (info.mSvidWithFlags[i] >> GnssStatus.SVID_SHIFT_WIDTH) +
-                        " cn0: " + info.mCn0s[i] +
-                        " elev: " + info.mSvElevations[i] +
-                        " azimuth: " + info.mSvAzimuths[i] +
-                        " carrier frequency: " + info.mSvCarrierFreqs[i] +
-                        ((info.mSvidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_HAS_EPHEMERIS_DATA) == 0
-                                ? "  " : " E") +
-                        ((info.mSvidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_HAS_ALMANAC_DATA) == 0
-                                ? "  " : " A") +
-                        ((info.mSvidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_USED_IN_FIX) == 0
-                                ? "" : "U") +
-                        ((info.mSvidWithFlags[i] &
-                                GnssStatus.GNSS_SV_FLAGS_HAS_CARRIER_FREQUENCY) == 0
-                                ? "" : "F"));
-            }
-
-            if ((info.mSvidWithFlags[i] & GnssStatus.GNSS_SV_FLAGS_USED_IN_FIX) != 0) {
-                int constellationType =
-                        (info.mSvidWithFlags[i] >> GnssStatus.CONSTELLATION_TYPE_SHIFT_WIDTH)
-                                & GnssStatus.CONSTELLATION_TYPE_MASK;
-                mGnssMetrics.logConstellationType(constellationType);
+                Log.v(TAG, "svid: " + gnssStatus.getSvid(i)
+                        + " cn0: " + gnssStatus.getCn0DbHz(i)
+                        + " basebandCn0: " + gnssStatus.getBasebandCn0DbHz(i)
+                        + " elev: " + gnssStatus.getElevationDegrees(i)
+                        + " azimuth: " + gnssStatus.getAzimuthDegrees(i)
+                        + " carrier frequency: " + gnssStatus.getCn0DbHz(i)
+                        + (gnssStatus.hasEphemerisData(i) ? " E" : "  ")
+                        + (gnssStatus.hasAlmanacData(i) ? " A" : "  ")
+                        + (gnssStatus.usedInFix(i) ? "U" : "")
+                        + (gnssStatus.hasCarrierFrequencyHz(i) ? "F" : "")
+                        + (gnssStatus.hasBasebandCn0DbHz(i) ? "B" : ""));
             }
         }
         if (usedInFixCount > 0) {
@@ -1473,7 +1525,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         // return number of sats used in fix instead of total reported
         mLocationExtras.set(usedInFixCount, meanCn0, maxCn0);
 
-        mGnssMetrics.logSvStatus(info.mSvCount, info.mSvidWithFlags, info.mSvCarrierFreqs);
+        mGnssMetrics.logSvStatus(gnssStatus);
     }
 
     @NativeEntryPoint
@@ -1863,24 +1915,17 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         String setId = null;
 
         int ddSubId = SubscriptionManager.getDefaultDataSubscriptionId();
+        if (SubscriptionManager.isValidSubscriptionId(ddSubId)) {
+            phone = phone.createForSubscriptionId(ddSubId);
+        }
         if ((flags & AGPS_RIL_REQUEST_SETID_IMSI) == AGPS_RIL_REQUEST_SETID_IMSI) {
-            if (SubscriptionManager.isValidSubscriptionId(ddSubId)) {
-                setId = phone.getSubscriberId(ddSubId);
-            }
-            if (setId == null) {
-                setId = phone.getSubscriberId();
-            }
+            setId = phone.getSubscriberId();
             if (setId != null) {
                 // This means the framework has the SIM card.
                 type = AGPS_SETID_TYPE_IMSI;
             }
         } else if ((flags & AGPS_RIL_REQUEST_SETID_MSISDN) == AGPS_RIL_REQUEST_SETID_MSISDN) {
-            if (SubscriptionManager.isValidSubscriptionId(ddSubId)) {
-                setId = phone.getLine1Number(ddSubId);
-            }
-            if (setId == null) {
-                setId = phone.getLine1Number();
-            }
+            setId = phone.getLine1Number();
             if (setId != null) {
                 // This means the framework has the SIM card.
                 type = AGPS_SETID_TYPE_MSISDN;
@@ -1963,7 +2008,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         // hold a wake lock until this message is delivered
         // note that this assumes the message will not be removed from the queue before
         // it is handled (otherwise the wake lock would be leaked).
-        mWakeLock.acquire();
+        mWakeLock.acquire(WAKELOCK_TIMEOUT_MILLIS);
         if (DEBUG) {
             Log.d(TAG, "WakeLock acquired by sendMessage(" + messageIdAsString(message) + ", " + arg
                     + ", " + obj + ")");
@@ -2004,6 +2049,9 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
                     break;
                 case REPORT_SV_STATUS:
                     handleReportSvStatus((SvStatusInfo) msg.obj);
+                    break;
+                case UPDATE_LOW_POWER_MODE:
+                    updateLowPowerMode();
                     break;
             }
             if (msg.arg2 == 1) {
@@ -2192,10 +2240,6 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
 
     // preallocated to avoid memory allocation in reportNmea()
     private byte[] mNmeaBuffer = new byte[120];
-
-    static {
-        class_init_native();
-    }
 
     private static native void class_init_native();
 

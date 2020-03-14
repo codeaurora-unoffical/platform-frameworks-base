@@ -1097,7 +1097,7 @@ public class NotificationContentView extends FrameLayout {
     }
 
     public void onNotificationUpdated(NotificationEntry entry) {
-        mStatusBarNotification = entry.notification;
+        mStatusBarNotification = entry.getSbn();
         mOnContentViewInactiveListeners.clear();
         mBeforeN = entry.targetSdk < Build.VERSION_CODES.N;
         updateAllSingleLineViews();
@@ -1139,19 +1139,21 @@ public class NotificationContentView extends FrameLayout {
     }
 
     private void applyMediaTransfer(final NotificationEntry entry) {
+        if (!entry.isMediaNotification()) {
+            return;
+        }
+
         View bigContentView = mExpandedChild;
-        if (bigContentView == null || !entry.isMediaNotification()) {
-            return;
+        if (bigContentView != null && (bigContentView instanceof ViewGroup)) {
+            mMediaTransferManager.applyMediaTransferView((ViewGroup) bigContentView,
+                    entry);
         }
 
-        View mediaActionContainer = bigContentView.findViewById(
-                com.android.internal.R.id.media_actions);
-        if (!(mediaActionContainer instanceof LinearLayout)) {
-            return;
+        View smallContentView = mContractedChild;
+        if (smallContentView != null && (smallContentView instanceof ViewGroup)) {
+            mMediaTransferManager.applyMediaTransferView((ViewGroup) smallContentView,
+                    entry);
         }
-
-        mMediaTransferManager.applyMediaTransferView((ViewGroup) mediaActionContainer,
-                entry);
     }
 
     private void applyRemoteInputAndSmartReply(final NotificationEntry entry) {
@@ -1177,7 +1179,7 @@ public class NotificationContentView extends FrameLayout {
                 : mHeadsUpInflatedSmartReplies.getSmartRepliesAndActions();
         if (DEBUG) {
             Log.d(TAG, String.format("Adding suggestions for %s, %d actions, and %d replies.",
-                    entry.notification.getKey(),
+                    entry.getSbn().getKey(),
                     mCurrentSmartRepliesAndActions.smartActions == null ? 0 :
                             mCurrentSmartRepliesAndActions.smartActions.actions.size(),
                     mCurrentSmartRepliesAndActions.smartReplies == null ? 0 :
@@ -1251,7 +1253,7 @@ public class NotificationContentView extends FrameLayout {
                 }
             }
             if (hasRemoteInput) {
-                int color = entry.notification.getNotification().color;
+                int color = entry.getSbn().getNotification().color;
                 if (color == Notification.COLOR_DEFAULT) {
                     color = mContext.getColor(R.color.default_remote_input_background);
                 }
@@ -1265,7 +1267,7 @@ public class NotificationContentView extends FrameLayout {
                 if (existingPendingIntent != null || existing.isActive()) {
                     // The current action could be gone, or the pending intent no longer valid.
                     // If we find a matching action in the new notification, focus, otherwise close.
-                    Notification.Action[] actions = entry.notification.getNotification().actions;
+                    Notification.Action[] actions = entry.getSbn().getNotification().actions;
                     if (existingPendingIntent != null) {
                         existing.setPendingIntent(existingPendingIntent);
                     }
@@ -1544,9 +1546,11 @@ public class NotificationContentView extends FrameLayout {
         }
         if (mExpandedWrapper != null) {
             mExpandedWrapper.setRemoved();
+            mMediaTransferManager.setRemoved(mExpandedChild);
         }
         if (mContractedWrapper != null) {
             mContractedWrapper.setRemoved();
+            mMediaTransferManager.setRemoved(mContractedChild);
         }
         if (mHeadsUpWrapper != null) {
             mHeadsUpWrapper.setRemoved();

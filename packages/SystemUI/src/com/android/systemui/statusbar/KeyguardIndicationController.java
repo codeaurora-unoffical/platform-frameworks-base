@@ -18,7 +18,6 @@ package com.android.systemui.statusbar;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
-import android.app.admin.DevicePolicyManager;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
@@ -50,6 +49,7 @@ import com.android.settingslib.Utils;
 import com.android.systemui.Dependency;
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
+import com.android.systemui.dock.DockManager;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController.StateListener;
 import com.android.systemui.statusbar.phone.KeyguardIndicationTextView;
@@ -57,8 +57,8 @@ import com.android.systemui.statusbar.phone.LockIcon;
 import com.android.systemui.statusbar.phone.LockscreenGestureLogger;
 import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
-import com.android.systemui.statusbar.phone.UnlockMethodCache;
 import com.android.systemui.statusbar.policy.AccessibilityController;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.policy.UserInfoController;
 import com.android.systemui.util.wakelock.SettableWakeLock;
 import com.android.systemui.util.wakelock.WakeLock;
@@ -72,7 +72,7 @@ import java.util.IllegalFormatConversionException;
  * Controls the indications and error messages shown on the Keyguard
  */
 public class KeyguardIndicationController implements StateListener,
-        UnlockMethodCache.OnUnlockMethodChangedListener {
+        KeyguardStateController.Callback {
 
     private static final String TAG = "KeyguardIndication";
     private static final boolean DEBUG_CHARGING_SPEED = false;
@@ -86,7 +86,7 @@ public class KeyguardIndicationController implements StateListener,
     private final Context mContext;
     private final ShadeController mShadeController;
     private final AccessibilityController mAccessibilityController;
-    private final UnlockMethodCache mUnlockMethodCache;
+    private final KeyguardStateController mKeyguardStateController;
     private final StatusBarStateController mStatusBarStateController;
     private final KeyguardUpdateMonitor mKeyguardUpdateMonitor;
     private ViewGroup mIndicationArea;
@@ -95,6 +95,7 @@ public class KeyguardIndicationController implements StateListener,
     private final IBatteryStats mBatteryInfo;
     private final SettableWakeLock mWakeLock;
     private final LockPatternUtils mLockPatternUtils;
+    private final DockManager mDockManager;
 
     private final int mSlowThreshold;
     private final int mFastThreshold;
@@ -103,10 +104,12 @@ public class KeyguardIndicationController implements StateListener,
     private LockscreenGestureLogger mLockscreenGestureLogger = new LockscreenGestureLogger();
 
     private String mRestingIndication;
+    private String mAlignmentIndication;
     private CharSequence mTransientIndication;
     private ColorStateList mTransientTextColorState;
     private ColorStateList mInitialTextColorState;
     private boolean mVisible;
+    private boolean mHideTransientMessageOnScreenOff;
 
     private boolean mPowerPluggedIn;
     private boolean mPowerPluggedInWired;
@@ -114,11 +117,11 @@ public class KeyguardIndicationController implements StateListener,
     private int mChargingSpeed;
     private int mChargingWattage;
     private int mBatteryLevel;
+    private long mChargingTimeRemaining;
     private String mMessageToShowOnScreenOn;
 
     private KeyguardUpdateMonitorCallback mUpdateMonitorCallback;
 
-    private final DevicePolicyManager mDevicePolicyManager;
     private boolean mDozing;
     private final ViewClippingUtil.ClippingParameters mClippingParams =
             new ViewClippingUtil.ClippingParameters() {
@@ -137,9 +140,12 @@ public class KeyguardIndicationController implements StateListener,
                 WakeLock.createPartial(context, "Doze:KeyguardIndication"),
                 Dependency.get(ShadeController.class),
                 Dependency.get(AccessibilityController.class),
-                UnlockMethodCache.getInstance(context),
+                Dependency.get(KeyguardStateController.class),
                 Dependency.get(StatusBarStateController.class),
-                Dependency.get(KeyguardUpdateMonitor.class));
+                Dependency.get(KeyguardUpdateMonitor.class),
+                Dependency.get(DockManager.class),
+                IBatteryStats.Stub.asInterface(
+                        ServiceManager.getService(BatteryStats.SERVICE_NAME)));
     }
 
     /**
@@ -148,16 +154,21 @@ public class KeyguardIndicationController implements StateListener,
     @VisibleForTesting
     KeyguardIndicationController(Context context, ViewGroup indicationArea, LockIcon lockIcon,
             LockPatternUtils lockPatternUtils, WakeLock wakeLock, ShadeController shadeController,
-            AccessibilityController accessibilityController, UnlockMethodCache unlockMethodCache,
+            AccessibilityController accessibilityController,
+            KeyguardStateController keyguardStateController,
             StatusBarStateController statusBarStateController,
-            KeyguardUpdateMonitor keyguardUpdateMonitor) {
+            KeyguardUpdateMonitor keyguardUpdateMonitor,
+            DockManager dockManager,
+            IBatteryStats iBatteryStats) {
         mContext = context;
         mLockIcon = lockIcon;
         mShadeController = shadeController;
         mAccessibilityController = accessibilityController;
-        mUnlockMethodCache = unlockMethodCache;
+        mKeyguardStateController = keyguardStateController;
         mStatusBarStateController = statusBarStateController;
         mKeyguardUpdateMonitor = keyguardUpdateMonitor;
+        mDockManager = dockManager;
+        mDockManager.addAlignmentStateListener(this::handleAlignStateChanged);
         // lock icon is not used on all form factors.
         if (mLockIcon != null) {
             mLockIcon.setOnLongClickListener(this::handleLockLongClick);
@@ -171,17 +182,14 @@ public class KeyguardIndicationController implements StateListener,
         mFastThreshold = res.getInteger(R.integer.config_chargingFastThreshold);
 
         mUserManager = context.getSystemService(UserManager.class);
-        mBatteryInfo = IBatteryStats.Stub.asInterface(
-                ServiceManager.getService(BatteryStats.SERVICE_NAME));
+        mBatteryInfo = iBatteryStats;
 
-        mDevicePolicyManager = (DevicePolicyManager) context.getSystemService(
-                Context.DEVICE_POLICY_SERVICE);
         setIndicationArea(indicationArea);
 
         mKeyguardUpdateMonitor.registerCallback(getKeyguardCallback());
         mKeyguardUpdateMonitor.registerCallback(mTickReceiver);
         mStatusBarStateController.addCallback(this);
-        mUnlockMethodCache.addListener(this);
+        mKeyguardStateController.addCallback(this);
     }
 
     public void setIndicationArea(ViewGroup indicationArea) {
@@ -209,6 +217,21 @@ public class KeyguardIndicationController implements StateListener,
         mShadeController.animateCollapsePanels(CommandQueue.FLAG_EXCLUDE_NONE, true /* force */);
     }
 
+    private void handleAlignStateChanged(int alignState) {
+        String alignmentIndication = "";
+        if (alignState == DockManager.ALIGN_STATE_POOR) {
+            alignmentIndication =
+                    mContext.getResources().getString(R.string.dock_alignment_slow_charging);
+        } else if (alignState == DockManager.ALIGN_STATE_TERRIBLE) {
+            alignmentIndication =
+                    mContext.getResources().getString(R.string.dock_alignment_not_charging);
+        }
+        if (!alignmentIndication.equals(mAlignmentIndication)) {
+            mAlignmentIndication = alignmentIndication;
+            updateIndication(false);
+        }
+    }
+
     /**
      * Gets the {@link KeyguardUpdateMonitorCallback} instance associated with this
      * {@link KeyguardIndicationController}.
@@ -232,7 +255,7 @@ public class KeyguardIndicationController implements StateListener,
         if (visible) {
             // If this is called after an error message was already shown, we should not clear it.
             // Otherwise the error message won't be shown
-            if  (!mHandler.hasMessages(MSG_HIDE_TRANSIENT)) {
+            if (!mHandler.hasMessages(MSG_HIDE_TRANSIENT)) {
                 hideTransientIndication();
             }
             updateIndication(false);
@@ -294,15 +317,17 @@ public class KeyguardIndicationController implements StateListener,
      * Shows {@param transientIndication} until it is hidden by {@link #hideTransientIndication}.
      */
     public void showTransientIndication(CharSequence transientIndication) {
-        showTransientIndication(transientIndication, mInitialTextColorState);
+        showTransientIndication(transientIndication, mInitialTextColorState,
+                false /* hideOnScreenOff */);
     }
 
     /**
      * Shows {@param transientIndication} until it is hidden by {@link #hideTransientIndication}.
      */
-    public void showTransientIndication(CharSequence transientIndication,
-            ColorStateList textColorState) {
+    private void showTransientIndication(CharSequence transientIndication,
+            ColorStateList textColorState, boolean hideOnScreenOff) {
         mTransientIndication = transientIndication;
+        mHideTransientMessageOnScreenOff = hideOnScreenOff && transientIndication != null;
         mTransientTextColorState = textColorState;
         mHandler.removeMessages(MSG_HIDE_TRANSIENT);
         mHandler.removeMessages(MSG_SWIPE_UP_TO_UNLOCK);
@@ -321,6 +346,7 @@ public class KeyguardIndicationController implements StateListener,
     public void hideTransientIndication() {
         if (mTransientIndication != null) {
             mTransientIndication = null;
+            mHideTransientMessageOnScreenOff = false;
             mHandler.removeMessages(MSG_HIDE_TRANSIENT);
             updateIndication(false);
         }
@@ -340,6 +366,9 @@ public class KeyguardIndicationController implements StateListener,
                 mTextView.setTextColor(Color.WHITE);
                 if (!TextUtils.isEmpty(mTransientIndication)) {
                     mTextView.switchIndication(mTransientIndication);
+                } else if (!TextUtils.isEmpty(mAlignmentIndication)) {
+                    mTextView.switchIndication(mAlignmentIndication);
+                    mTextView.setTextColor(Utils.getColorError(mContext));
                 } else if (mPowerPluggedIn) {
                     String indication = computePowerIndication();
                     if (animate) {
@@ -368,6 +397,9 @@ public class KeyguardIndicationController implements StateListener,
                     && mKeyguardUpdateMonitor.getUserHasTrust(userId)) {
                 mTextView.switchIndication(trustGrantedIndication);
                 mTextView.setTextColor(mInitialTextColorState);
+            } else if (!TextUtils.isEmpty(mAlignmentIndication)) {
+                mTextView.switchIndication(mAlignmentIndication);
+                mTextView.setTextColor(Utils.getColorError(mContext));
             } else if (mPowerPluggedIn) {
                 String indication = computePowerIndication();
                 if (DEBUG_CHARGING_SPEED) {
@@ -447,16 +479,7 @@ public class KeyguardIndicationController implements StateListener,
             return mContext.getResources().getString(R.string.keyguard_charged);
         }
 
-        // Try fetching charging time from battery stats.
-        long chargingTimeRemaining = 0;
-        try {
-            chargingTimeRemaining = mBatteryInfo.computeChargeTimeRemaining();
-
-        } catch (RemoteException e) {
-            Log.e(TAG, "Error calling IBatteryStats: ", e);
-        }
-        final boolean hasChargingTime = chargingTimeRemaining > 0;
-
+        final boolean hasChargingTime = mChargingTimeRemaining > 0;
         int chargingId;
         if (mPowerPluggedInWired) {
             switch (mChargingSpeed) {
@@ -489,7 +512,7 @@ public class KeyguardIndicationController implements StateListener,
             // locales will also have it in the future. For now, we still have to support the old
             // format until all languages get the new translations.
             String chargingTimeFormatted = Formatter.formatShortElapsedTimeRoundingUpToMinutes(
-                    mContext, chargingTimeRemaining);
+                    mContext, mChargingTimeRemaining);
             try {
                 return mContext.getResources().getString(chargingId, chargingTimeFormatted,
                         percentage);
@@ -543,7 +566,8 @@ public class KeyguardIndicationController implements StateListener,
             String message = mContext.getString(R.string.keyguard_retry);
             mStatusBarKeyguardViewManager.showBouncerMessage(message, mInitialTextColorState);
         } else if (mKeyguardUpdateMonitor.isScreenOn()) {
-            showTransientIndication(mContext.getString(R.string.keyguard_unlock));
+            showTransientIndication(mContext.getString(R.string.keyguard_unlock),
+                    mInitialTextColorState, true /* hideOnScreenOff */);
             hideTransientIndicationDelayed(BaseKeyguardCallback.HIDE_DELAY_MS);
         }
     }
@@ -553,7 +577,11 @@ public class KeyguardIndicationController implements StateListener,
             return;
         }
         mDozing = dozing;
-        updateIndication(false);
+        if (mHideTransientMessageOnScreenOff && mDozing) {
+            hideTransientIndication();
+        } else {
+            updateIndication(false);
+        }
     }
 
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
@@ -583,7 +611,7 @@ public class KeyguardIndicationController implements StateListener,
     }
 
     @Override
-    public void onUnlockMethodStateChanged() {
+    public void onUnlockedChanged() {
         updateIndication(!mDozing);
     }
 
@@ -601,6 +629,13 @@ public class KeyguardIndicationController implements StateListener,
             mChargingWattage = status.maxChargingWattage;
             mChargingSpeed = status.getChargingSpeed(mSlowThreshold, mFastThreshold);
             mBatteryLevel = status.level;
+            try {
+                mChargingTimeRemaining = mPowerPluggedIn
+                        ? mBatteryInfo.computeChargeTimeRemaining() : -1;
+            } catch (RemoteException e) {
+                Log.e(TAG, "Error calling IBatteryStats: ", e);
+                mChargingTimeRemaining = -1;
+            }
             updateIndication(!wasPluggedIn && mPowerPluggedInWired);
             if (mDozing) {
                 if (!wasPluggedIn && mPowerPluggedIn) {
@@ -615,8 +650,7 @@ public class KeyguardIndicationController implements StateListener,
         @Override
         public void onBiometricHelp(int msgId, String helpString,
                 BiometricSourceType biometricSourceType) {
-            KeyguardUpdateMonitor updateMonitor = Dependency.get(KeyguardUpdateMonitor.class);
-            if (!updateMonitor.isUnlockingWithBiometricAllowed()) {
+            if (!mKeyguardUpdateMonitor.isUnlockingWithBiometricAllowed()) {
                 return;
             }
             boolean showSwipeToUnlock =
@@ -624,8 +658,8 @@ public class KeyguardIndicationController implements StateListener,
             if (mStatusBarKeyguardViewManager.isBouncerShowing()) {
                 mStatusBarKeyguardViewManager.showBouncerMessage(helpString,
                         mInitialTextColorState);
-            } else if (updateMonitor.isScreenOn()) {
-                showTransientIndication(helpString);
+            } else if (mKeyguardUpdateMonitor.isScreenOn()) {
+                showTransientIndication(helpString, mInitialTextColorState, showSwipeToUnlock);
                 if (!showSwipeToUnlock) {
                     hideTransientIndicationDelayed(TRANSIENT_BIOMETRIC_ERROR_TIMEOUT);
                 }
@@ -639,8 +673,7 @@ public class KeyguardIndicationController implements StateListener,
         @Override
         public void onBiometricError(int msgId, String errString,
                 BiometricSourceType biometricSourceType) {
-            KeyguardUpdateMonitor updateMonitor = Dependency.get(KeyguardUpdateMonitor.class);
-            if (shouldSuppressBiometricError(msgId, biometricSourceType, updateMonitor)) {
+            if (shouldSuppressBiometricError(msgId, biometricSourceType, mKeyguardUpdateMonitor)) {
                 return;
             }
             animatePadlockError();
@@ -650,7 +683,7 @@ public class KeyguardIndicationController implements StateListener,
                 showSwipeUpToUnlock();
             } else if (mStatusBarKeyguardViewManager.isBouncerShowing()) {
                 mStatusBarKeyguardViewManager.showBouncerMessage(errString, mInitialTextColorState);
-            } else if (updateMonitor.isScreenOn()) {
+            } else if (mKeyguardUpdateMonitor.isScreenOn()) {
                 showTransientIndication(errString);
                 // We want to keep this message around in case the screen was off
                 hideTransientIndicationDelayed(HIDE_DELAY_MS);
@@ -690,13 +723,15 @@ public class KeyguardIndicationController implements StateListener,
 
         @Override
         public void onTrustAgentErrorMessage(CharSequence message) {
-            showTransientIndication(message, Utils.getColorError(mContext));
+            showTransientIndication(message, Utils.getColorError(mContext),
+                    false /* hideOnScreenOff */);
         }
 
         @Override
         public void onScreenTurnedOn() {
             if (mMessageToShowOnScreenOn != null) {
-                showTransientIndication(mMessageToShowOnScreenOn, Utils.getColorError(mContext));
+                showTransientIndication(mMessageToShowOnScreenOn, Utils.getColorError(mContext),
+                        false /* hideOnScreenOff */);
                 // We want to keep this message around in case the screen was off
                 hideTransientIndicationDelayed(HIDE_DELAY_MS);
                 mMessageToShowOnScreenOn = null;

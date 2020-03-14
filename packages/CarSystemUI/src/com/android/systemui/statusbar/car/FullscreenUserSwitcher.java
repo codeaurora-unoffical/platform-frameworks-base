@@ -18,6 +18,7 @@ package com.android.systemui.statusbar.car;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
+import android.car.Car;
 import android.car.trust.CarTrustAgentEnrollmentManager;
 import android.car.userlib.CarUserManagerHelper;
 import android.content.BroadcastReceiver;
@@ -25,6 +26,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.UserInfo;
+import android.content.res.Resources;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.util.Log;
@@ -33,25 +35,33 @@ import android.view.ViewStub;
 
 import androidx.recyclerview.widget.GridLayoutManager;
 
+import com.android.internal.widget.LockPatternUtils;
 import com.android.systemui.R;
+import com.android.systemui.car.CarServiceProvider;
+import com.android.systemui.dagger.qualifiers.MainResources;
 import com.android.systemui.statusbar.car.CarTrustAgentUnlockDialogHelper.OnHideListener;
 import com.android.systemui.statusbar.car.UserGridRecyclerView.UserRecord;
+
+import javax.inject.Inject;
+import javax.inject.Singleton;
 
 /**
  * Manages the fullscreen user switcher.
  */
+@Singleton
 public class FullscreenUserSwitcher {
     private static final String TAG = FullscreenUserSwitcher.class.getSimpleName();
-    // Because user 0 is headless, user count for single user is 2
-    private static final int NUMBER_OF_BACKGROUND_USERS = 1;
-    private final UserGridRecyclerView mUserGridView;
-    private final View mParent;
-    private final int mShortAnimDuration;
-    private final CarStatusBar mStatusBar;
     private final Context mContext;
+    private final Resources mResources;
     private final UserManager mUserManager;
-    private final CarTrustAgentEnrollmentManager mEnrollmentManager;
-    private CarTrustAgentUnlockDialogHelper mUnlockDialogHelper;
+    private final CarServiceProvider mCarServiceProvider;
+    private final CarTrustAgentUnlockDialogHelper mUnlockDialogHelper;
+    private final int mShortAnimDuration;
+
+    private CarStatusBar mStatusBar;
+    private View mParent;
+    private UserGridRecyclerView mUserGridView;
+    private CarTrustAgentEnrollmentManager mEnrollmentManager;
     private UserGridRecyclerView.UserRecord mSelectedUser;
     private CarUserManagerHelper mCarUserManagerHelper;
     private final BroadcastReceiver mUserUnlockReceiver = new BroadcastReceiver() {
@@ -65,29 +75,45 @@ public class FullscreenUserSwitcher {
         }
     };
 
-
-    public FullscreenUserSwitcher(CarStatusBar statusBar, ViewStub containerStub,
-            CarTrustAgentEnrollmentManager enrollmentManager, Context context) {
-        mStatusBar = statusBar;
-        mParent = containerStub.inflate();
-        mEnrollmentManager = enrollmentManager;
+    @Inject
+    public FullscreenUserSwitcher(
+            Context context,
+            @MainResources Resources resources,
+            UserManager userManager,
+            CarServiceProvider carServiceProvider,
+            CarTrustAgentUnlockDialogHelper carTrustAgentUnlockDialogHelper) {
         mContext = context;
+        mResources = resources;
+        mUserManager = userManager;
+        mCarServiceProvider = carServiceProvider;
+        mUnlockDialogHelper = carTrustAgentUnlockDialogHelper;
+
+        mShortAnimDuration = mResources.getInteger(android.R.integer.config_shortAnimTime);
+    }
+
+    /** Sets the status bar which controls the keyguard. */
+    public void setStatusBar(CarStatusBar statusBar) {
+        mStatusBar = statusBar;
+    }
+
+    /** Sets the {@link ViewStub} to show the user switcher. */
+    public void setContainer(ViewStub containerStub) {
+        mParent = containerStub.inflate();
 
         View container = mParent.findViewById(R.id.container);
 
         // Initialize user grid.
         mUserGridView = container.findViewById(R.id.user_grid);
-        GridLayoutManager layoutManager = new GridLayoutManager(context,
-                context.getResources().getInteger(R.integer.user_fullscreen_switcher_num_col));
+        GridLayoutManager layoutManager = new GridLayoutManager(mContext,
+                mResources.getInteger(R.integer.user_fullscreen_switcher_num_col));
         mUserGridView.setLayoutManager(layoutManager);
         mUserGridView.buildAdapter();
         mUserGridView.setUserSelectionListener(this::onUserSelected);
-        mCarUserManagerHelper = new CarUserManagerHelper(context);
-        mUnlockDialogHelper = new CarTrustAgentUnlockDialogHelper(mContext);
-        mUserManager = mContext.getSystemService(UserManager.class);
+        mCarUserManagerHelper = new CarUserManagerHelper(mContext);
+        mCarServiceProvider.addListener(
+                car -> mEnrollmentManager = (CarTrustAgentEnrollmentManager) car.getCarManager(
+                        Car.CAR_TRUST_AGENT_ENROLLMENT_SERVICE));
 
-        mShortAnimDuration = container.getResources()
-                .getInteger(android.R.integer.config_shortAnimTime);
         IntentFilter filter = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
         if (mUserManager.isUserUnlocked(UserHandle.USER_SYSTEM)) {
             // User0 is unlocked, switched to the initial user
@@ -105,28 +131,17 @@ public class FullscreenUserSwitcher {
     private void showDialogForInitialUser() {
         int initialUser = mCarUserManagerHelper.getInitialUser();
         UserInfo initialUserInfo = mUserManager.getUserInfo(initialUser);
-        mSelectedUser = new UserRecord(initialUserInfo,
-                /* isStartGuestSession= */ false,
-                /* isAddUser= */ false,
-                /* isForeground= */ true);
-        // For single user without trusted device, hide the user switcher.
-        if (!hasMultipleUsers() && !hasTrustedDevice(initialUser)) {
-            dismissUserSwitcher();
-            return;
-        }
-        // Show unlock dialog for initial user
-        if (hasTrustedDevice(initialUser)) {
+        mSelectedUser = new UserRecord(initialUserInfo, UserRecord.FOREGROUND_USER);
+
+        // If the initial user has screen lock and trusted device, display the unlock dialog on the
+        // keyguard.
+        if (hasScreenLock(initialUser) && hasTrustedDevice(initialUser)) {
             mUnlockDialogHelper.showUnlockDialogAfterDelay(initialUser,
                     mOnHideListener);
+        } else {
+            // If no trusted device, dismiss the keyguard.
+            dismissUserSwitcher();
         }
-    }
-
-    /**
-     * Check if there is only one possible user to login in.
-     * In a Multi-User system there is always one background user (user 0)
-     */
-    private boolean hasMultipleUsers() {
-        return mUserManager.getUserCount() > NUMBER_OF_BACKGROUND_USERS + 1;
     }
 
     /**
@@ -162,12 +177,14 @@ public class FullscreenUserSwitcher {
      */
     private void onUserSelected(UserGridRecyclerView.UserRecord record) {
         mSelectedUser = record;
-        if (hasTrustedDevice(record.mInfo.id)) {
-            mUnlockDialogHelper.showUnlockDialog(record.mInfo.id, mOnHideListener);
-            return;
-        }
-        if (Log.isLoggable(TAG, Log.DEBUG)) {
-            Log.d(TAG, "no trusted device enrolled for uid: " + record.mInfo.id);
+        if (record.mInfo != null) {
+            if (hasScreenLock(record.mInfo.id) && hasTrustedDevice(record.mInfo.id)) {
+                mUnlockDialogHelper.showUnlockDialog(record.mInfo.id, mOnHideListener);
+                return;
+            }
+            if (Log.isLoggable(TAG, Log.DEBUG)) {
+                Log.d(TAG, "no trusted device enrolled for uid: " + record.mInfo.id);
+            }
         }
         dismissUserSwitcher();
     }
@@ -177,7 +194,7 @@ public class FullscreenUserSwitcher {
             Log.e(TAG, "Request to dismiss user switcher, but no user selected");
             return;
         }
-        if (mSelectedUser.mIsForeground) {
+        if (mSelectedUser.mType == UserRecord.FOREGROUND_USER) {
             hide();
             mStatusBar.dismissKeyguard();
             return;
@@ -200,7 +217,16 @@ public class FullscreenUserSwitcher {
 
     }
 
+    private boolean hasScreenLock(int uid) {
+        LockPatternUtils lockPatternUtils = new LockPatternUtils(mContext);
+        return lockPatternUtils.getCredentialTypeForUser(uid)
+                != LockPatternUtils.CREDENTIAL_TYPE_NONE;
+    }
+
     private boolean hasTrustedDevice(int uid) {
+        if (mEnrollmentManager == null) { // car service not ready, so it cannot be available.
+            return false;
+        }
         return !mEnrollmentManager.getEnrolledDeviceInfoForUser(uid).isEmpty();
     }
 

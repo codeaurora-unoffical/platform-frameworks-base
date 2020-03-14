@@ -17,7 +17,6 @@
 package com.android.server.media;
 
 import android.annotation.NonNull;
-import android.annotation.Nullable;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -27,6 +26,7 @@ import android.media.IMediaRoute2ProviderClient;
 import android.media.MediaRoute2Info;
 import android.media.MediaRoute2ProviderInfo;
 import android.media.MediaRoute2ProviderService;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.IBinder.DeathRecipient;
@@ -42,19 +42,13 @@ import java.util.Objects;
 /**
  * Maintains a connection to a particular media route provider service.
  */
-final class MediaRoute2ProviderProxy implements ServiceConnection {
-    private static final String TAG = "MediaRoute2Provider";
+final class MediaRoute2ProviderProxy extends MediaRoute2Provider implements ServiceConnection {
+    private static final String TAG = "MR2ProviderProxy";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
     private final Context mContext;
-    private final ComponentName mComponentName;
-    private final String mUniqueId;
     private final int mUserId;
     private final Handler mHandler;
-
-    private Callback mCallback;
-
-    private MediaRoute2ProviderInfo mProviderInfo;
 
     // Connection state
     private boolean mRunning;
@@ -64,9 +58,8 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
 
     MediaRoute2ProviderProxy(@NonNull Context context, @NonNull ComponentName componentName,
             int userId) {
+        super(componentName);
         mContext = Objects.requireNonNull(context, "Context must not be null.");
-        mComponentName = Objects.requireNonNull(componentName, "Component name must not be null.");
-        mUniqueId = componentName.flattenToShortString();
         mUserId = userId;
         mHandler = new Handler();
     }
@@ -80,24 +73,23 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
         pw.println(prefix + "  mConnectionReady=" + mConnectionReady);
     }
 
-    public void setCallback(Callback callback) {
-        mCallback = callback;
-    }
-
-    public void selectRoute(String packageName, String routeId) {
+    @Override
+    public void requestSelectRoute(String packageName, String routeId, int seq) {
         if (mConnectionReady) {
-            mActiveConnection.selectRoute(packageName, routeId);
+            mActiveConnection.requestSelectRoute(packageName, routeId, seq);
             updateBinding();
         }
     }
 
+    @Override
     public void unselectRoute(String packageName, String routeId) {
         if (mConnectionReady) {
-            mActiveConnection.unselectRotue(packageName, routeId);
+            mActiveConnection.unselectRoute(packageName, routeId);
             updateBinding();
         }
     }
 
+    @Override
     public void sendControlRequest(MediaRoute2Info route, Intent request) {
         if (mConnectionReady) {
             mActiveConnection.sendControlRequest(route.getId(), request);
@@ -105,9 +97,20 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
         }
     }
 
-    @Nullable
-    public MediaRoute2ProviderInfo getProviderInfo() {
-        return mProviderInfo;
+    @Override
+    public void requestSetVolume(MediaRoute2Info route, int volume) {
+        if (mConnectionReady) {
+            mActiveConnection.requestSetVolume(route.getId(), volume);
+            updateBinding();
+        }
+    }
+
+    @Override
+    public void requestUpdateVolume(MediaRoute2Info route, int delta) {
+        if (mConnectionReady) {
+            mActiveConnection.requestUpdateVolume(route.getId(), delta);
+            updateBinding();
+        }
     }
 
     public boolean hasComponentName(String packageName, String className) {
@@ -251,16 +254,18 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
         setAndNotifyProviderInfo(info);
     }
 
-    private void setAndNotifyProviderInfo(MediaRoute2ProviderInfo info) {
-        //TODO: check if info is not updated
-        if (info == null) {
-            mProviderInfo = null;
-        } else {
-            mProviderInfo = new MediaRoute2ProviderInfo.Builder(info)
-                .setUniqueId(mUniqueId)
-                .build();
+    private void onRouteSelected(Connection connection,
+            String packageName, String routeId, Bundle controlHints, int seq) {
+        if (mActiveConnection != connection) {
+            return;
         }
-        mHandler.post(mStateChanged);
+        MediaRoute2ProviderInfo providerInfo = getProviderInfo();
+        MediaRoute2Info route = (providerInfo == null) ? null : providerInfo.getRoute(routeId);
+        if (route == null) {
+            Slog.w(TAG, this + ": Unknown route " + routeId + " is selected from remove provider");
+            return;
+        }
+        mCallback.onRouteSelected(this, packageName, route, controlHints, seq);
     }
 
     private void disconnect() {
@@ -275,19 +280,6 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
     @Override
     public String toString() {
         return "Service connection " + mComponentName.flattenToShortString();
-    }
-
-    private final Runnable mStateChanged = new Runnable() {
-        @Override
-        public void run() {
-            if (mCallback != null) {
-                mCallback.onProviderStateChanged(MediaRoute2ProviderProxy.this);
-            }
-        }
-    };
-
-    public interface Callback {
-        void onProviderStateChanged(MediaRoute2ProviderProxy provider);
     }
 
     private final class Connection implements DeathRecipient {
@@ -316,15 +308,15 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
             mClient.dispose();
         }
 
-        public void selectRoute(String packageName, String routeId) {
+        public void requestSelectRoute(String packageName, String routeId, int seq) {
             try {
-                mProvider.selectRoute(packageName, routeId);
+                mProvider.requestSelectRoute(packageName, routeId, seq);
             } catch (RemoteException ex) {
                 Slog.e(TAG, "Failed to deliver request to set discovery mode.", ex);
             }
         }
 
-        public void unselectRotue(String packageName, String routeId) {
+        public void unselectRoute(String packageName, String routeId) {
             try {
                 mProvider.unselectRoute(packageName, routeId);
             } catch (RemoteException ex) {
@@ -340,6 +332,22 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
             }
         }
 
+        public void requestSetVolume(String routeId, int volume) {
+            try {
+                mProvider.requestSetVolume(routeId, volume);
+            } catch (RemoteException ex) {
+                Slog.e(TAG, "Failed to deliver request to request set volume.", ex);
+            }
+        }
+
+        public void requestUpdateVolume(String routeId, int delta) {
+            try {
+                mProvider.requestUpdateVolume(routeId, delta);
+            } catch (RemoteException ex) {
+                Slog.e(TAG, "Failed to deliver request to request update volume.", ex);
+            }
+        }
+
         @Override
         public void binderDied() {
             mHandler.post(() -> onConnectionDied(Connection.this));
@@ -347,6 +355,11 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
 
         void postProviderInfoUpdated(MediaRoute2ProviderInfo info) {
             mHandler.post(() -> onProviderInfoUpdated(Connection.this, info));
+        }
+
+        void postRouteSelected(String packageName, String routeId, Bundle controlHints, int seq) {
+            mHandler.post(() -> onRouteSelected(Connection.this,
+                    packageName, routeId, controlHints, seq));
         }
     }
 
@@ -368,5 +381,15 @@ final class MediaRoute2ProviderProxy implements ServiceConnection {
                 connection.postProviderInfoUpdated(info);
             }
         }
+
+        @Override
+        public void notifyRouteSelected(String packageName, String routeId,
+                Bundle controlHints, int seq) {
+            Connection connection = mConnectionRef.get();
+            if (connection != null) {
+                connection.postRouteSelected(packageName, routeId, controlHints, seq);
+            }
+        }
+
     }
 }

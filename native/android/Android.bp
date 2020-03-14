@@ -36,7 +36,6 @@ cc_library_shared {
 
     srcs: [
         "asset_manager.cpp",
-        "choreographer.cpp",
         "configuration.cpp",
         "hardware_buffer_jni.cpp",
         "input.cpp",
@@ -80,7 +79,7 @@ cc_library_shared {
         "libarect",
     ],
 
-    whole_static_libs: ["libnativewindow"],
+    whole_static_libs: ["libnativedisplay", "libnativewindow"],
 
     export_static_lib_headers: ["libarect"],
 
@@ -109,4 +108,37 @@ llndk_library {
     export_include_dirs: ["include"],
     symbol_file: "libandroid_net.map.txt",
     unversioned: true,
+}
+
+
+// Aidl library for platform compat.
+cc_library_shared {
+    name: "lib-platform-compat-native-api",
+    cflags: [
+            "-Wall",
+            "-Werror",
+            "-Wno-missing-field-initializers",
+            "-Wno-unused-variable",
+            "-Wunused-parameter",
+        ],
+    shared_libs: [
+        "libbinder",
+         "libutils",
+    ],
+    aidl: {
+        local_include_dirs: ["aidl"],
+        export_aidl_headers: true,
+    },
+    srcs: [
+         ":platform-compat-native-aidl",
+    ],
+    export_include_dirs: ["aidl"],
+}
+
+filegroup {
+    name: "platform-compat-native-aidl",
+    srcs: [
+        "aidl/com/android/internal/compat/IPlatformCompatNative.aidl",
+    ],
+    path: "aidl",
 }

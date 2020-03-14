@@ -89,6 +89,16 @@ final class ChildContentCaptureSession extends ContentCaptureSession {
     }
 
     @Override
+    void internalNotifySessionResumed() {
+        getMainCaptureSession().notifySessionResumed();
+    }
+
+    @Override
+    void internalNotifySessionPaused() {
+        getMainCaptureSession().notifySessionPaused();
+    }
+
+    @Override
     boolean isContentCaptureEnabled() {
         return getMainCaptureSession().isContentCaptureEnabled();
     }

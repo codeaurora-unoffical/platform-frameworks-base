@@ -106,7 +106,7 @@ class AppErrors {
         mPackageWatchdog = watchdog;
     }
 
-    void writeToProto(ProtoOutputStream proto, long fieldId, String dumpPackage) {
+    void dumpDebug(ProtoOutputStream proto, long fieldId, String dumpPackage) {
         if (mProcessCrashTimes.getMap().isEmpty() && mBadProcesses.getMap().isEmpty()) {
             return;
         }
@@ -383,7 +383,11 @@ class AppErrors {
             // and then the delayed summary kill will be a no-op.
             final ProcessRecord p = proc;
             mService.mHandler.postDelayed(
-                    () -> killAppImmediateLocked(p, "forced", "killed for invalid state"),
+                    () -> {
+                        synchronized (mService) {
+                            killAppImmediateLocked(p, "forced", "killed for invalid state");
+                        }
+                    },
                     5000L);
         }
     }
@@ -442,7 +446,8 @@ class AppErrors {
                 RescueParty.noteAppCrash(mContext, r.uid);
             }
 
-            mPackageWatchdog.onPackageFailure(r.getPackageListWithVersionCode());
+            mPackageWatchdog.onPackageFailure(r.getPackageListWithVersionCode(),
+                    PackageWatchdog.FAILURE_REASON_APP_CRASH);
         }
 
         final int relaunchReason = r != null
@@ -896,7 +901,8 @@ class AppErrors {
         }
         // Notify PackageWatchdog without the lock held
         if (packageList != null) {
-            mPackageWatchdog.onPackageFailure(packageList);
+            mPackageWatchdog.onPackageFailure(packageList,
+                    PackageWatchdog.FAILURE_REASON_APP_NOT_RESPONDING);
         }
     }
 

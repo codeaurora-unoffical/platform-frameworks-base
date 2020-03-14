@@ -23,7 +23,6 @@ cc_library_static {
         "com_android_server_AlarmManagerService.cpp",
         "com_android_server_am_BatteryStatsService.cpp",
         "com_android_server_connectivity_Vpn.cpp",
-        "com_android_server_connectivity_tethering_OffloadHardwareInterface.cpp",
         "com_android_server_ConsumerIrService.cpp",
         "com_android_server_devicepolicy_CryptoTestHelper.cpp",
         "com_android_server_HardwarePropertiesManagerService.cpp",
@@ -125,6 +124,7 @@ cc_defaults {
         "android.hardware.gnss@1.0",
         "android.hardware.gnss@1.1",
         "android.hardware.gnss@2.0",
+        "android.hardware.gnss@2.1",
         "android.hardware.gnss.measurement_corrections@1.0",
         "android.hardware.gnss.visibility_control@1.0",
         "android.hardware.input.classifier@1.0",
@@ -133,7 +133,6 @@ cc_defaults {
         "android.hardware.power@1.0",
         "android.hardware.power@1.1",
         "android.hardware.power.stats@1.0",
-        "android.hardware.tetheroffload.config@1.0",
         "android.hardware.thermal@1.0",
         "android.hardware.tv.cec@1.0",
         "android.hardware.tv.input@1.0",
@@ -146,6 +145,7 @@ cc_defaults {
         "android.frameworks.sensorservice@1.0",
         "android.system.suspend@1.0",
         "suspend_control_aidl_interface-cpp",
+        "vintf-vibrator-cpp",
     ],
 
     static_libs: [

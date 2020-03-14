@@ -24,7 +24,6 @@ import android.app.IActivityManager;
 import android.app.IUidObserver;
 import android.app.usage.UsageStatsManager;
 import android.app.usage.UsageStatsManagerInternal;
-import android.app.usage.UsageStatsManagerInternal.AppIdleStateChangeListener;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -58,6 +57,8 @@ import com.android.internal.util.Preconditions;
 import com.android.internal.util.StatLogger;
 import com.android.server.AppStateTrackerProto.ExemptedPackage;
 import com.android.server.AppStateTrackerProto.RunAnyInBackgroundRestrictedPackages;
+import com.android.server.usage.AppStandbyInternal;
+import com.android.server.usage.AppStandbyInternal.AppIdleStateChangeListener;
 
 import java.io.PrintWriter;
 import java.util.Arrays;
@@ -71,8 +72,7 @@ import java.util.List;
  * - Temporary power save whitelist
  * - Global "force all apps standby" mode enforced by battery saver.
  *
- * Test:
-  atest $ANDROID_BUILD_TOP/frameworks/base/services/tests/servicestests/src/com/android/server/AppStateTrackerTest.java
+ * Test: atest com.android.server.AppStateTrackerTest
  */
 public class AppStateTracker {
     private static final String TAG = "AppStateTracker";
@@ -90,7 +90,7 @@ public class AppStateTracker {
     IAppOpsService mAppOpsService;
     PowerManagerInternal mPowerManagerInternal;
     StandbyTracker mStandbyTracker;
-    UsageStatsManagerInternal mUsageStatsManagerInternal;
+    AppStandbyInternal mAppStandbyInternal;
 
     private final MyHandler mHandler;
 
@@ -421,8 +421,7 @@ public class AppStateTracker {
             mAppOpsManager = Preconditions.checkNotNull(injectAppOpsManager());
             mAppOpsService = Preconditions.checkNotNull(injectIAppOpsService());
             mPowerManagerInternal = Preconditions.checkNotNull(injectPowerManagerInternal());
-            mUsageStatsManagerInternal = Preconditions.checkNotNull(
-                    injectUsageStatsManagerInternal());
+            mAppStandbyInternal = Preconditions.checkNotNull(injectAppStandbyInternal());
 
             mFlagsObserver = new FeatureFlagsObserver();
             mFlagsObserver.register();
@@ -430,7 +429,7 @@ public class AppStateTracker {
             mForceAllAppStandbyForSmallBattery =
                     mFlagsObserver.isForcedAppStandbyForSmallBatteryEnabled();
             mStandbyTracker = new StandbyTracker();
-            mUsageStatsManagerInternal.addAppIdleStateChangeListener(mStandbyTracker);
+            mAppStandbyInternal.addListener(mStandbyTracker);
 
             try {
                 mIActivityManager.registerUidObserver(new UidObserver(),
@@ -495,8 +494,8 @@ public class AppStateTracker {
     }
 
     @VisibleForTesting
-    UsageStatsManagerInternal injectUsageStatsManagerInternal() {
-        return LocalServices.getService(UsageStatsManagerInternal.class);
+    AppStandbyInternal injectAppStandbyInternal() {
+        return LocalServices.getService(AppStandbyInternal.class);
     }
 
     @VisibleForTesting
@@ -633,7 +632,7 @@ public class AppStateTracker {
 
     private final class UidObserver extends IUidObserver.Stub {
         @Override
-        public void onUidStateChanged(int uid, int procState, long procStateSeq) {
+        public void onUidStateChanged(int uid, int procState, long procStateSeq, int capability) {
             mHandler.onUidStateChanged(uid, procState);
         }
 
@@ -700,19 +699,17 @@ public class AppStateTracker {
                 Slog.d(TAG,"onAppIdleStateChanged: " + packageName + " u" + userId
                         + (idle ? " idle" : " active") + " " + bucket);
             }
-            final boolean changed;
-            if (bucket == UsageStatsManager.STANDBY_BUCKET_EXEMPTED) {
-                changed = mExemptedPackages.add(userId, packageName);
-            } else {
-                changed = mExemptedPackages.remove(userId, packageName);
+            synchronized (mLock) {
+                final boolean changed;
+                if (bucket == UsageStatsManager.STANDBY_BUCKET_EXEMPTED) {
+                    changed = mExemptedPackages.add(userId, packageName);
+                } else {
+                    changed = mExemptedPackages.remove(userId, packageName);
+                }
+                if (changed) {
+                    mHandler.notifyExemptChanged();
+                }
             }
-            if (changed) {
-                mHandler.notifyExemptChanged();
-            }
-        }
-
-        @Override
-        public void onParoleStateChanged(boolean isParoleOn) {
         }
     }
 

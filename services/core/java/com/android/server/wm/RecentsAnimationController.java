@@ -16,7 +16,6 @@
 
 package com.android.server.wm;
 
-import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 import static android.view.RemoteAnimationTarget.MODE_CLOSING;
@@ -29,8 +28,8 @@ import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_W
 import static com.android.server.wm.ActivityTaskManagerInternal.APP_TRANSITION_RECENTS_ANIM;
 import static com.android.server.wm.AnimationAdapterProto.REMOTE;
 import static com.android.server.wm.BoundsAnimationController.FADE_IN;
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_RECENTS_ANIMATIONS;
 import static com.android.server.wm.RemoteAnimationAdapterWrapperProto.TARGET;
-import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_RECENTS_ANIMATIONS;
 import static com.android.server.wm.WindowManagerInternal.AppTransitionListener;
 
 import android.annotation.IntDef;
@@ -42,10 +41,10 @@ import android.os.Binder;
 import android.os.IBinder.DeathRecipient;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Slog;
 import android.util.SparseBooleanArray;
-import android.util.SparseIntArray;
 import android.util.proto.ProtoOutputStream;
 import android.view.IRecentsAnimationController;
 import android.view.IRecentsAnimationRunner;
@@ -55,8 +54,12 @@ import android.view.SurfaceControl;
 import android.view.SurfaceControl.Transaction;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.util.function.pooled.PooledConsumer;
+import com.android.internal.util.function.pooled.PooledFunction;
+import com.android.internal.util.function.pooled.PooledLambda;
 import com.android.server.LocalServices;
 import com.android.server.inputmethod.InputMethodManagerInternal;
+import com.android.server.protolog.common.ProtoLog;
 import com.android.server.statusbar.StatusBarManagerInternal;
 import com.android.server.wm.SurfaceAnimator.OnAnimationFinishedCallback;
 import com.android.server.wm.utils.InsetUtils;
@@ -65,6 +68,7 @@ import com.google.android.collect.Sets;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 /**
  * Controls a single instance of the remote driven recents animation. In particular, this allows
@@ -93,12 +97,16 @@ public class RecentsAnimationController implements DeathRecipient {
     private IRecentsAnimationRunner mRunner;
     private final RecentsAnimationCallbacks mCallbacks;
     private final ArrayList<TaskAnimationAdapter> mPendingAnimations = new ArrayList<>();
+    private final ArrayList<WallpaperAnimationAdapter> mPendingWallpaperAnimations =
+            new ArrayList<>();
     private final int mDisplayId;
-    private final Runnable mFailsafeRunnable = () ->
-            cancelAnimation(REORDER_MOVE_TO_ORIGINAL_POSITION, "failSafeRunnable");
+    private boolean mWillFinishToHome = false;
+    private final Runnable mFailsafeRunnable = () -> cancelAnimation(
+            mWillFinishToHome ? REORDER_MOVE_TO_TOP : REORDER_MOVE_TO_ORIGINAL_POSITION,
+            "failSafeRunnable");
 
     // The recents component app token that is shown behind the visibile tasks
-    private AppWindowToken mTargetAppToken;
+    private ActivityRecord mTargetActivityRecord;
     private DisplayContent mDisplayContent;
     private int mTargetActivityType;
     private Rect mMinimizedHomeBounds = new Rect();
@@ -176,8 +184,8 @@ public class RecentsAnimationController implements DeathRecipient {
 
         @Override
         public TaskSnapshot screenshotTask(int taskId) {
-            if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "screenshotTask(" + taskId + "):"
-                    + " mCanceled=" + mCanceled);
+            ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                    "screenshotTask(%d): mCanceled=%b", taskId, mCanceled);
             final long token = Binder.clearCallingIdentity();
             try {
                 synchronized (mService.getWindowManagerLock()) {
@@ -206,8 +214,8 @@ public class RecentsAnimationController implements DeathRecipient {
 
         @Override
         public void finish(boolean moveHomeToTop, boolean sendUserLeaveHint) {
-            if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "finish(" + moveHomeToTop + "):"
-                    + " mCanceled=" + mCanceled);
+            ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                    "finish(%b): mCanceled=%b", moveHomeToTop, mCanceled);
             final long token = Binder.clearCallingIdentity();
             try {
                 synchronized (mService.getWindowManagerLock()) {
@@ -248,8 +256,8 @@ public class RecentsAnimationController implements DeathRecipient {
 
         @Override
         public void setInputConsumerEnabled(boolean enabled) {
-            if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "setInputConsumerEnabled(" + enabled + "):"
-                    + " mCanceled=" + mCanceled);
+            ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                    "setInputConsumerEnabled(%s): mCanceled=%b", enabled, mCanceled);
             final long token = Binder.clearCallingIdentity();
             try {
                 synchronized (mService.getWindowManagerLock()) {
@@ -322,6 +330,13 @@ public class RecentsAnimationController implements DeathRecipient {
                 }
             }
         }
+
+        @Override
+        public void setWillFinishToHome(boolean willFinishToHome) {
+            synchronized (mService.getWindowManagerLock()) {
+                mWillFinishToHome = willFinishToHome;
+            }
+        }
     };
 
     /**
@@ -345,23 +360,24 @@ public class RecentsAnimationController implements DeathRecipient {
      * because it may call cancelAnimation() which needs to properly clean up the controller
      * in the window manager.
      */
-    public void initialize(int targetActivityType, SparseBooleanArray recentTaskIds) {
+    public void initialize(int targetActivityType, SparseBooleanArray recentTaskIds,
+            ActivityRecord targetActivity) {
         mTargetActivityType = targetActivityType;
         mDisplayContent.mAppTransition.registerListenerLocked(mAppTransitionListener);
 
         // Make leashes for each of the visible/target tasks and add it to the recents animation to
         // be started
         final ArrayList<Task> visibleTasks = mDisplayContent.getVisibleTasks();
-        final TaskStack targetStack = mDisplayContent.getStack(WINDOWING_MODE_UNDEFINED,
+        final ActivityStack targetStack = mDisplayContent.getStack(WINDOWING_MODE_UNDEFINED,
                 targetActivityType);
         if (targetStack != null) {
-            for (int i = targetStack.getChildCount() - 1; i >= 0; i--) {
-                final Task t = targetStack.getChildAt(i);
-                if (!visibleTasks.contains(t)) {
-                    visibleTasks.add(t);
-                }
-            }
+            final PooledConsumer c = PooledLambda.obtainConsumer((t, outList) ->
+	            { if (!outList.contains(t)) outList.add(t); }, PooledLambda.__(Task.class),
+                    visibleTasks);
+            targetStack.forAllTasks(c);
+            c.recycle();
         }
+
         final int taskCount = visibleTasks.size();
         for (int i = 0; i < taskCount; i++) {
             final Task task = visibleTasks.get(i);
@@ -387,20 +403,17 @@ public class RecentsAnimationController implements DeathRecipient {
         }
 
         // Adjust the wallpaper visibility for the showing target activity
-        final AppWindowToken recentsComponentAppToken =
-                targetStack.getTopChild().getTopFullscreenAppToken();
-        if (recentsComponentAppToken != null) {
-            if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "setHomeApp("
-                    + recentsComponentAppToken.getName() + ")");
-            mTargetAppToken = recentsComponentAppToken;
-            if (recentsComponentAppToken.windowsCanBeWallpaperTarget()) {
-                mDisplayContent.pendingLayoutChanges |= FINISH_LAYOUT_REDO_WALLPAPER;
-                mDisplayContent.setLayoutNeeded();
-            }
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                "setHomeApp(%s)", targetActivity.getName());
+        mTargetActivityRecord = targetActivity;
+        if (targetActivity.windowsCanBeWallpaperTarget()) {
+            mDisplayContent.pendingLayoutChanges |= FINISH_LAYOUT_REDO_WALLPAPER;
+            mDisplayContent.setLayoutNeeded();
         }
 
         // Save the minimized home height
-        final TaskStack dockedStack = mDisplayContent.getSplitScreenPrimaryStackIgnoringVisibility();
+        final ActivityStack dockedStack =
+                mDisplayContent.getSplitScreenPrimaryStackIgnoringVisibility();
         mDisplayContent.getDockedDividerController().getHomeStackBoundsInDockedMode(
                 mDisplayContent.getConfiguration(),
                 dockedStack == null ? DOCKED_INVALID : dockedStack.getDockSide(),
@@ -416,7 +429,7 @@ public class RecentsAnimationController implements DeathRecipient {
 
     @VisibleForTesting
     AnimationAdapter addAnimation(Task task, boolean isRecentTaskInvisible) {
-        if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "addAnimation(" + task.getName() + ")");
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS, "addAnimation(%s)", task.getName());
         final TaskAnimationAdapter taskAdapter = new TaskAnimationAdapter(task,
                 isRecentTaskInvisible);
         task.startAnimation(task.getPendingTransaction(), taskAdapter, false /* hidden */);
@@ -427,72 +440,100 @@ public class RecentsAnimationController implements DeathRecipient {
 
     @VisibleForTesting
     void removeAnimation(TaskAnimationAdapter taskAdapter) {
-        if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "removeAnimation("
-                + taskAdapter.mTask.mTaskId + ")");
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                "removeAnimation(%d)", taskAdapter.mTask.mTaskId);
         taskAdapter.mTask.setCanAffectSystemUiFlags(true);
         taskAdapter.mCapturedFinishCallback.onAnimationFinished(taskAdapter);
         mPendingAnimations.remove(taskAdapter);
     }
 
+    @VisibleForTesting
+    void removeWallpaperAnimation(WallpaperAnimationAdapter wallpaperAdapter) {
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS, "removeWallpaperAnimation()");
+        wallpaperAdapter.getLeashFinishedCallback().onAnimationFinished(wallpaperAdapter);
+        mPendingWallpaperAnimations.remove(wallpaperAdapter);
+    }
+
     void startAnimation() {
-        if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "startAnimation(): mPendingStart=" + mPendingStart
-                + " mCanceled=" + mCanceled);
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                "startAnimation(): mPendingStart=%b mCanceled=%b", mPendingStart, mCanceled);
         if (!mPendingStart || mCanceled) {
             // Skip starting if we've already started or canceled the animation
             return;
         }
         try {
-            final ArrayList<RemoteAnimationTarget> appAnimations = new ArrayList<>();
-            for (int i = mPendingAnimations.size() - 1; i >= 0; i--) {
-                final TaskAnimationAdapter taskAdapter = mPendingAnimations.get(i);
-                final RemoteAnimationTarget target = taskAdapter.createRemoteAnimationApp();
-                if (target != null) {
-                    appAnimations.add(target);
-                } else {
-                    removeAnimation(taskAdapter);
-                }
-            }
+            // Create the app targets
+            final RemoteAnimationTarget[] appTargets = createAppAnimations();
 
             // Skip the animation if there is nothing to animate
-            if (appAnimations.isEmpty()) {
+            if (appTargets.length == 0) {
                 cancelAnimation(REORDER_MOVE_TO_ORIGINAL_POSITION, "startAnimation-noAppWindows");
                 return;
             }
 
-            final RemoteAnimationTarget[] appTargets = appAnimations.toArray(
-                    new RemoteAnimationTarget[appAnimations.size()]);
+            // Create the wallpaper targets
+            final RemoteAnimationTarget[] wallpaperTargets = createWallpaperAnimations();
+
             mPendingStart = false;
 
             // Perform layout if it was scheduled before to make sure that we get correct content
             // insets for the target app window after a rotation
             mDisplayContent.performLayout(false /* initial */, false /* updateInputWindows */);
 
-            final Rect minimizedHomeBounds = mTargetAppToken != null
-                    && mTargetAppToken.inSplitScreenSecondaryWindowingMode()
+            final Rect minimizedHomeBounds = mTargetActivityRecord != null
+                    && mTargetActivityRecord.inSplitScreenSecondaryWindowingMode()
                             ? mMinimizedHomeBounds
                             : null;
             final Rect contentInsets;
-            if (mTargetAppToken != null && mTargetAppToken.findMainWindow() != null) {
-                contentInsets = mTargetAppToken.findMainWindow().getContentInsets();
+            if (mTargetActivityRecord != null && mTargetActivityRecord.findMainWindow() != null) {
+                contentInsets = mTargetActivityRecord.findMainWindow().getContentInsets();
             } else {
                 // If the window for the activity had not yet been created, use the display insets.
                 mService.getStableInsets(mDisplayId, mTmpRect);
                 contentInsets = mTmpRect;
             }
-            mRunner.onAnimationStart(mController, appTargets, contentInsets, minimizedHomeBounds);
-            if (DEBUG_RECENTS_ANIMATIONS) {
-                Slog.d(TAG, "startAnimation(): Notify animation start:");
-                for (int i = 0; i < mPendingAnimations.size(); i++) {
-                    final Task task = mPendingAnimations.get(i).mTask;
-                    Slog.d(TAG, "\t" + task.mTaskId);
-                }
-            }
+            mRunner.onAnimationStart(mController, appTargets, wallpaperTargets, contentInsets,
+                    minimizedHomeBounds);
+            ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                    "startAnimation(): Notify animation start: %s",
+                    mPendingAnimations.stream()
+                            .map(anim->anim.mTask.mTaskId).collect(Collectors.toList()));
         } catch (RemoteException e) {
             Slog.e(TAG, "Failed to start recents animation", e);
         }
-        final SparseIntArray reasons = new SparseIntArray();
-        reasons.put(WINDOWING_MODE_FULLSCREEN, APP_TRANSITION_RECENTS_ANIM);
-        mService.mAtmInternal.notifyAppTransitionStarting(reasons, SystemClock.uptimeMillis());
+
+        if (mTargetActivityRecord != null) {
+            final ArrayMap<ActivityRecord, Integer> reasons = new ArrayMap<>(1);
+            reasons.put(mTargetActivityRecord, APP_TRANSITION_RECENTS_ANIM);
+            mService.mAtmService.mStackSupervisor.getActivityMetricsLogger()
+                    .notifyTransitionStarting(reasons);
+        }
+    }
+
+    private RemoteAnimationTarget[] createAppAnimations() {
+        final ArrayList<RemoteAnimationTarget> targets = new ArrayList<>();
+        for (int i = mPendingAnimations.size() - 1; i >= 0; i--) {
+            final TaskAnimationAdapter taskAdapter = mPendingAnimations.get(i);
+            final RemoteAnimationTarget target = taskAdapter.createRemoteAnimationTarget();
+            if (target != null) {
+                targets.add(target);
+            } else {
+                removeAnimation(taskAdapter);
+            }
+        }
+        return targets.toArray(new RemoteAnimationTarget[targets.size()]);
+    }
+
+    private RemoteAnimationTarget[] createWallpaperAnimations() {
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS, "createWallpaperAnimations()");
+        return WallpaperAnimationAdapter.startWallpaperAnimations(mService, 0L, 0L,
+                adapter -> {
+                    synchronized (mService.mGlobalLock) {
+                        // If the wallpaper animation is canceled, continue with the recents
+                        // animation
+                        mPendingWallpaperAnimations.remove(adapter);
+                    }
+                }, mPendingWallpaperAnimations);
     }
 
     void cancelAnimation(@ReorderMode int reorderMode, String reason) {
@@ -504,7 +545,7 @@ public class RecentsAnimationController implements DeathRecipient {
     }
 
     private void cancelAnimation(@ReorderMode int reorderMode, boolean screenshot, String reason) {
-        if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG, "cancelAnimation(): reason=" + reason);
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS, "cancelAnimation(): reason=%s", reason);
         synchronized (mService.getWindowManagerLock()) {
             if (mCanceled) {
                 // We've already canceled the animation
@@ -598,9 +639,7 @@ public class RecentsAnimationController implements DeathRecipient {
         mRecentScreenshotAnimator = new SurfaceAnimator(
                 animatable,
                 () -> {
-                    if (DEBUG_RECENTS_ANIMATIONS) {
-                        Slog.d(TAG, "mRecentScreenshotAnimator finish");
-                    }
+                    ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS, "mRecentScreenshotAnimator finish");
                     mCallbacks.onAnimationFinished(reorderMode, false /* sendUserLeaveHint */);
                 }, mService);
         mRecentScreenshotAnimator.transferAnimation(task.mSurfaceAnimator);
@@ -608,15 +647,21 @@ public class RecentsAnimationController implements DeathRecipient {
     }
 
     void cleanupAnimation(@ReorderMode int reorderMode) {
-        if (DEBUG_RECENTS_ANIMATIONS) Slog.d(TAG,
-                "cleanupAnimation(): Notify animation finished mPendingAnimations="
-                        + mPendingAnimations.size() + " reorderMode=" + reorderMode);
+        ProtoLog.d(WM_DEBUG_RECENTS_ANIMATIONS,
+                        "cleanupAnimation(): Notify animation finished mPendingAnimations=%d "
+                                + "reorderMode=%d",
+                        mPendingAnimations.size(), reorderMode);
         for (int i = mPendingAnimations.size() - 1; i >= 0; i--) {
             final TaskAnimationAdapter taskAdapter = mPendingAnimations.get(i);
             if (reorderMode == REORDER_MOVE_TO_TOP || reorderMode == REORDER_KEEP_IN_PLACE) {
                 taskAdapter.mTask.dontAnimateDimExit();
             }
             removeAnimation(taskAdapter);
+        }
+
+        for (int i = mPendingWallpaperAnimations.size() - 1; i >= 0; i--) {
+            final WallpaperAnimationAdapter wallpaperAdapter = mPendingWallpaperAnimations.get(i);
+            removeWallpaperAnimation(wallpaperAdapter);
         }
 
         // Clear any pending failsafe runnables
@@ -640,10 +685,10 @@ public class RecentsAnimationController implements DeathRecipient {
 
         // We have deferred all notifications to the target app as a part of the recents animation,
         // so if we are actually transitioning there, notify again here
-        if (mTargetAppToken != null) {
+        if (mTargetActivityRecord != null) {
             if (reorderMode == REORDER_MOVE_TO_TOP || reorderMode == REORDER_KEEP_IN_PLACE) {
                 mDisplayContent.mAppTransition.notifyAppTransitionFinishedLocked(
-                        mTargetAppToken.token);
+                        mTargetActivityRecord.token);
             }
         }
 
@@ -698,25 +743,26 @@ public class RecentsAnimationController implements DeathRecipient {
     }
 
     boolean isWallpaperVisible(WindowState w) {
-        return w != null && w.mAttrs.type == TYPE_BASE_APPLICATION && w.mAppToken != null
-                && mTargetAppToken == w.mAppToken && isTargetOverWallpaper();
+        return w != null && w.mAttrs.type == TYPE_BASE_APPLICATION && w.mActivityRecord != null
+                && mTargetActivityRecord == w.mActivityRecord && isTargetOverWallpaper();
     }
 
     /**
      * @return Whether to use the input consumer to override app input to route home/recents.
      */
-    boolean shouldApplyInputConsumer(AppWindowToken appToken) {
+    boolean shouldApplyInputConsumer(ActivityRecord activity) {
         // Only apply the input consumer if it is enabled, it is not the target (home/recents)
         // being revealed with the transition, and we are actively animating the app as a part of
         // the animation
-        return mInputConsumerEnabled && mTargetAppToken != appToken && isAnimatingApp(appToken);
+        return mInputConsumerEnabled && mTargetActivityRecord != activity
+                && isAnimatingApp(activity);
     }
 
     boolean updateInputConsumerForApp(InputWindowHandle inputWindowHandle,
             boolean hasFocus) {
         // Update the input consumer touchable region to match the target app main window
-        final WindowState targetAppMainWindow = mTargetAppToken != null
-                ? mTargetAppToken.findMainWindow()
+        final WindowState targetAppMainWindow = mTargetActivityRecord != null
+                ? mTargetActivityRecord.findMainWindow()
                 : null;
         if (targetAppMainWindow != null) {
             targetAppMainWindow.getBounds(mTmpRect);
@@ -727,15 +773,15 @@ public class RecentsAnimationController implements DeathRecipient {
         return false;
     }
 
-    boolean isTargetApp(AppWindowToken token) {
-        return mTargetAppToken != null && token == mTargetAppToken;
+    boolean isTargetApp(ActivityRecord activity) {
+        return mTargetActivityRecord != null && activity == mTargetActivityRecord;
     }
 
     private boolean isTargetOverWallpaper() {
-        if (mTargetAppToken == null) {
+        if (mTargetActivityRecord == null) {
             return false;
         }
-        return mTargetAppToken.windowsCanBeWallpaperTarget();
+        return mTargetActivityRecord.windowsCanBeWallpaperTarget();
     }
 
     boolean isAnimatingTask(Task task) {
@@ -747,22 +793,31 @@ public class RecentsAnimationController implements DeathRecipient {
         return false;
     }
 
-    private boolean isAnimatingApp(AppWindowToken appToken) {
+    boolean isAnimatingWallpaper(WallpaperWindowToken token) {
+        for (int i = mPendingWallpaperAnimations.size() - 1; i >= 0; i--) {
+            if (token == mPendingWallpaperAnimations.get(i).getToken()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isAnimatingApp(ActivityRecord activity) {
         for (int i = mPendingAnimations.size() - 1; i >= 0; i--) {
             final Task task = mPendingAnimations.get(i).mTask;
-            for (int j = task.getChildCount() - 1; j >= 0; j--) {
-                final AppWindowToken app = task.getChildAt(j);
-                if (app == appToken) {
-                    return true;
-                }
-            }
+            final PooledFunction f = PooledLambda.obtainFunction(
+                    (a, b) -> a == b, activity,
+                    PooledLambda.__(ActivityRecord.class));
+            boolean isAnimatingApp = task.forAllActivities(f);
+            f.recycle();
+            return isAnimatingApp;
         }
         return false;
     }
 
     boolean shouldIgnoreForAccessibility(WindowState windowState) {
         final Task task = windowState.getTask();
-        return task != null && isAnimatingTask(task) && !isTargetApp(windowState.mAppToken);
+        return task != null && isAnimatingTask(task) && !isTargetApp(windowState.mActivityRecord);
     }
 
     @VisibleForTesting
@@ -784,8 +839,8 @@ public class RecentsAnimationController implements DeathRecipient {
             mBounds.set(container.getDisplayedBounds());
         }
 
-        RemoteAnimationTarget createRemoteAnimationApp() {
-            final AppWindowToken topApp = mTask.getTopVisibleAppToken();
+        RemoteAnimationTarget createRemoteAnimationTarget() {
+            final ActivityRecord topApp = mTask.getTopVisibleActivity();
             final WindowState mainWindow = topApp != null
                     ? topApp.findMainWindow()
                     : null;
@@ -794,7 +849,7 @@ public class RecentsAnimationController implements DeathRecipient {
             }
             final Rect insets = new Rect();
             mainWindow.getContentInsets(insets);
-            InsetUtils.addInsets(insets, mainWindow.mAppToken.getLetterboxInsets());
+            InsetUtils.addInsets(insets, mainWindow.mActivityRecord.getLetterboxInsets());
             final int mode = topApp.getActivityType() == mTargetActivityType
                     ? MODE_OPENING
                     : MODE_CLOSING;
@@ -808,11 +863,6 @@ public class RecentsAnimationController implements DeathRecipient {
         @Override
         public boolean getShowWallpaper() {
             return false;
-        }
-
-        @Override
-        public int getBackgroundColor() {
-            return 0;
         }
 
         @Override
@@ -830,6 +880,7 @@ public class RecentsAnimationController implements DeathRecipient {
 
         @Override
         public void onAnimationCancelled(SurfaceControl animationLeash) {
+            // Cancel the animation immediately if any single task animator is canceled
             cancelAnimation(REORDER_MOVE_TO_ORIGINAL_POSITION, "taskAnimationAdapterCanceled");
         }
 
@@ -859,10 +910,10 @@ public class RecentsAnimationController implements DeathRecipient {
         }
 
         @Override
-        public void writeToProto(ProtoOutputStream proto) {
+        public void dumpDebug(ProtoOutputStream proto) {
             final long token = proto.start(REMOTE);
             if (mTarget != null) {
-                mTarget.writeToProto(proto, TARGET);
+                mTarget.dumpDebug(proto, TARGET);
             }
             proto.end(token);
         }
@@ -876,7 +927,7 @@ public class RecentsAnimationController implements DeathRecipient {
         pw.print(innerPrefix); pw.println("mCanceled=" + mCanceled);
         pw.print(innerPrefix); pw.println("mInputConsumerEnabled=" + mInputConsumerEnabled);
         pw.print(innerPrefix); pw.println("mSplitScreenMinimized=" + mSplitScreenMinimized);
-        pw.print(innerPrefix); pw.println("mTargetAppToken=" + mTargetAppToken);
+        pw.print(innerPrefix); pw.println("mTargetActivityRecord=" + mTargetActivityRecord);
         pw.print(innerPrefix); pw.println("isTargetOverWallpaper=" + isTargetOverWallpaper());
         pw.print(innerPrefix); pw.println("mRequestDeferCancelUntilNextTransition="
                 + mRequestDeferCancelUntilNextTransition);

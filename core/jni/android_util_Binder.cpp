@@ -30,12 +30,13 @@
 #include <unistd.h>
 
 #include <android-base/stringprintf.h>
-#include <binder/IInterface.h>
-#include <binder/IServiceManager.h>
-#include <binder/IPCThreadState.h>
-#include <binder/Parcel.h>
 #include <binder/BpBinder.h>
+#include <binder/IInterface.h>
+#include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
+#include <binder/Parcel.h>
 #include <binder/ProcessState.h>
+#include <binder/Stability.h>
 #include <cutils/atomic.h>
 #include <log/log.h>
 #include <utils/KeyedVector.h>
@@ -459,6 +460,9 @@ public:
         sp<JavaBBinder> b = mBinder.promote();
         if (b == NULL) {
             b = new JavaBBinder(env, obj);
+            if (mVintf) {
+                ::android::internal::Stability::markVintf(b.get());
+            }
             mBinder = b;
             ALOGV("Creating JavaBinder %p (refs %p) for Object %p, weakCount=%" PRId32 "\n",
                  b.get(), b->getWeakRefs(), obj, b->getWeakRefs()->getWeakCount());
@@ -473,9 +477,18 @@ public:
         return mBinder.promote();
     }
 
+    void markVintf() {
+        mVintf = true;
+    }
+
 private:
     Mutex           mLock;
     wp<JavaBBinder> mBinder;
+
+    // in the future, we might condense this into int32_t stability, or if there
+    // is too much binder state here, we can think about making JavaBBinder an
+    // sp here (avoid recreating it)
+    bool            mVintf = false;
 };
 
 // ----------------------------------------------------------------------------
@@ -697,6 +710,9 @@ BinderProxyNativeData* getBPNativeData(JNIEnv* env, jobject obj) {
 // same IBinder, and the original BinderProxy is still alive, return the same BinderProxy.
 jobject javaObjectForIBinder(JNIEnv* env, const sp<IBinder>& val)
 {
+    // N.B. This function is called from a @FastNative JNI method, so don't take locks around
+    // calls to Java code or block the calling thread for a long time for any reason.
+
     if (val == NULL) return NULL;
 
     if (val->checkSubclass(&gBinderOffsets)) {
@@ -962,6 +978,12 @@ static void android_os_Binder_restoreCallingWorkSource(jlong token)
     IPCThreadState::self()->restoreCallingWorkSource(token);
 }
 
+static void android_os_Binder_markVintfStability(JNIEnv* env, jobject clazz) {
+    JavaBBinderHolder* jbh =
+        (JavaBBinderHolder*) env->GetLongField(clazz, gBinderOffsets.mObject);
+    jbh->markVintf();
+}
+
 static void android_os_Binder_flushPendingCommands(JNIEnv* env, jobject clazz)
 {
     IPCThreadState::self()->flushCommands();
@@ -989,6 +1011,31 @@ static void android_os_Binder_blockUntilThreadAvailable(JNIEnv* env, jobject cla
     return IPCThreadState::self()->blockUntilThreadAvailable();
 }
 
+static jobject android_os_Binder_waitForService(
+        JNIEnv *env,
+        jclass /* clazzObj */,
+        jstring serviceNameObj) {
+
+    const jchar* serviceName = env->GetStringCritical(serviceNameObj, nullptr);
+    if (!serviceName) {
+        signalExceptionForError(env, nullptr, BAD_VALUE, true /*canThrowRemoteException*/);
+        return nullptr;
+    }
+    String16 nameCopy = String16(reinterpret_cast<const char16_t *>(serviceName),
+            env->GetStringLength(serviceNameObj));
+    env->ReleaseStringCritical(serviceNameObj, serviceName);
+
+    auto sm = android::defaultServiceManager();
+    sp<IBinder> service = sm->waitForService(nameCopy);
+
+    if (!service) {
+        signalExceptionForError(env, nullptr, NAME_NOT_FOUND, true /*canThrowRemoteException*/);
+        return nullptr;
+    }
+
+    return javaObjectForIBinder(env, service);
+}
+
 // ----------------------------------------------------------------------------
 
 static const JNINativeMethod gBinderMethods[] = {
@@ -1013,10 +1060,12 @@ static const JNINativeMethod gBinderMethods[] = {
     // @CriticalNative
     { "clearCallingWorkSource", "()J", (void*)android_os_Binder_clearCallingWorkSource },
     { "restoreCallingWorkSource", "(J)V", (void*)android_os_Binder_restoreCallingWorkSource },
+    { "markVintfStability", "()V", (void*)android_os_Binder_markVintfStability},
     { "flushPendingCommands", "()V", (void*)android_os_Binder_flushPendingCommands },
     { "getNativeBBinderHolder", "()J", (void*)android_os_Binder_getNativeBBinderHolder },
     { "getNativeFinalizer", "()J", (void*)android_os_Binder_getNativeFinalizer },
-    { "blockUntilThreadAvailable", "()V", (void*)android_os_Binder_blockUntilThreadAvailable }
+    { "blockUntilThreadAvailable", "()V", (void*)android_os_Binder_blockUntilThreadAvailable },
+    { "waitForService", "(Ljava/lang/String;)Landroid/os/IBinder;", (void*)android_os_Binder_waitForService }
 };
 
 const char* const kBinderPathName = "android/os/Binder";

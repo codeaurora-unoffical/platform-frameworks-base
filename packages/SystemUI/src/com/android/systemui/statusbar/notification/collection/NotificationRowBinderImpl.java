@@ -32,7 +32,6 @@ import android.view.ViewGroup;
 import com.android.internal.util.NotificationMessagingUtil;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
-import com.android.systemui.UiOffloadThread;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationPresenter;
@@ -61,7 +60,6 @@ public class NotificationRowBinderImpl implements NotificationRowBinder {
             Dependency.get(NotificationGroupManager.class);
     private final NotificationGutsManager mGutsManager =
             Dependency.get(NotificationGutsManager.class);
-    private final UiOffloadThread mUiOffloadThread = Dependency.get(UiOffloadThread.class);
     private final NotificationInterruptionStateProvider mNotificationInterruptionStateProvider =
             Dependency.get(NotificationInterruptionStateProvider.class);
 
@@ -81,16 +79,20 @@ public class NotificationRowBinderImpl implements NotificationRowBinder {
     private ExpandableNotificationRow.OnAppOpsClickListener mOnAppOpsClickListener;
     private BindRowCallback mBindRowCallback;
     private NotificationClicker mNotificationClicker;
-    private final NotificationLogger mNotificationLogger = Dependency.get(NotificationLogger.class);
+    private final NotificationLogger mNotificationLogger;
 
-    public NotificationRowBinderImpl(Context context, boolean allowLongPress,
+    public NotificationRowBinderImpl(
+            Context context,
+            boolean allowLongPress,
             KeyguardBypassController keyguardBypassController,
-            StatusBarStateController statusBarStateController) {
+            StatusBarStateController statusBarStateController,
+            NotificationLogger logger) {
         mContext = context;
         mMessagingUtil = new NotificationMessagingUtil(context);
         mAllowLongPress = allowLongPress;
         mKeyguardBypassController = keyguardBypassController;
         mStatusBarStateController = statusBarStateController;
+        mNotificationLogger = logger;
     }
 
     private NotificationRemoteInputManager getRemoteInputManager() {
@@ -130,13 +132,14 @@ public class NotificationRowBinderImpl implements NotificationRowBinder {
             throws InflationException {
         ViewGroup parent = mListContainer.getViewParentForNotification(entry);
         PackageManager pmUser = StatusBar.getPackageManagerForUser(mContext,
-                entry.notification.getUser().getIdentifier());
+                entry.getSbn().getUser().getIdentifier());
 
-        final StatusBarNotification sbn = entry.notification;
+        final StatusBarNotification sbn = entry.getSbn();
         if (entry.rowExists()) {
             entry.updateIcons(mContext, sbn);
             entry.reset();
             updateNotification(entry, pmUser, sbn, entry.getRow());
+            entry.getRow().setOnDismissRunnable(onDismissRunnable);
         } else {
             entry.createIcons(mContext, sbn);
             new RowInflaterTask().inflate(mContext, parent, entry,
@@ -150,7 +153,7 @@ public class NotificationRowBinderImpl implements NotificationRowBinder {
     private void bindRow(NotificationEntry entry, PackageManager pmUser,
             StatusBarNotification sbn, ExpandableNotificationRow row,
             Runnable onDismissRunnable) {
-        row.setExpansionLogger(mExpansionLogger, entry.notification.getKey());
+        row.setExpansionLogger(mExpansionLogger, entry.getSbn().getKey());
         row.setBypassController(mKeyguardBypassController);
         row.setStatusBarStateController(mStatusBarStateController);
         row.setGroupManager(mGroupManager);
@@ -207,8 +210,8 @@ public class NotificationRowBinderImpl implements NotificationRowBinder {
                 entry.reset();
                 PackageManager pmUser = StatusBar.getPackageManagerForUser(
                         mContext,
-                        entry.notification.getUser().getIdentifier());
-                updateNotification(entry, pmUser, entry.notification, entry.getRow());
+                        entry.getSbn().getUser().getIdentifier());
+                updateNotification(entry, pmUser, entry.getSbn(), entry.getRow());
             } else {
                 // Once the RowInflaterTask is done, it will pick up the updated entry, so
                 // no-op here.
@@ -242,7 +245,6 @@ public class NotificationRowBinderImpl implements NotificationRowBinder {
 
         // TODO: should updates to the entry be happening somewhere else?
         entry.setIconTag(R.id.icon_is_pre_L, entry.targetSdk < Build.VERSION_CODES.LOLLIPOP);
-        entry.autoRedacted = entry.notification.getNotification().publicVersion == null;
 
         entry.setRow(row);
         row.setOnActivatedListener(mPresenter);

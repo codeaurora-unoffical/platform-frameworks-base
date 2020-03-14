@@ -16,6 +16,8 @@
 
 package com.android.systemui.bubbles;
 
+import static com.android.systemui.statusbar.NotificationEntryHelper.modifyRanking;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.mockito.Mockito.mock;
@@ -40,6 +42,7 @@ import com.android.systemui.bubbles.BubbleData.TimeSource;
 import com.android.systemui.statusbar.NotificationEntryBuilder;
 import com.android.systemui.statusbar.NotificationTestHelper;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 
 import com.google.common.collect.ImmutableList;
 
@@ -72,6 +75,8 @@ public class BubbleDataTest extends SysuiTestCase {
     private NotificationEntry mEntryB2;
     private NotificationEntry mEntryB3;
     private NotificationEntry mEntryC1;
+    private NotificationEntry mEntryInterruptive;
+    private NotificationEntry mEntryDismissed;
 
     private Bubble mBubbleA1;
     private Bubble mBubbleA2;
@@ -99,7 +104,7 @@ public class BubbleDataTest extends SysuiTestCase {
 
     @Before
     public void setUp() throws Exception {
-        mNotificationTestHelper = new NotificationTestHelper(mContext);
+        mNotificationTestHelper = new NotificationTestHelper(mContext, mDependency);
         MockitoAnnotations.initMocks(this);
 
         mEntryA1 = createBubbleEntry(1, "a1", "package.a");
@@ -109,6 +114,15 @@ public class BubbleDataTest extends SysuiTestCase {
         mEntryB2 = createBubbleEntry(1, "b2", "package.b");
         mEntryB3 = createBubbleEntry(1, "b3", "package.b");
         mEntryC1 = createBubbleEntry(1, "c1", "package.c");
+
+        mEntryInterruptive = createBubbleEntry(1, "interruptive", "package.d");
+        modifyRanking(mEntryInterruptive)
+                .setVisuallyInterruptive(true)
+                .build();
+
+        ExpandableNotificationRow row = mNotificationTestHelper.createBubble();
+        mEntryDismissed = createBubbleEntry(1, "dismissed", "package.d");
+        mEntryDismissed.setRow(row);
 
         mBubbleA1 = new Bubble(mContext, mEntryA1);
         mBubbleA2 = new Bubble(mContext, mEntryA2);
@@ -158,6 +172,78 @@ public class BubbleDataTest extends SysuiTestCase {
         // Verify
         verifyUpdateReceived();
         assertBubbleRemoved(mBubbleA1, BubbleController.DISMISS_USER_GESTURE);
+    }
+
+    @Test
+    public void ifSuppress_hideFlyout() {
+        // Setup
+        mBubbleData.setListener(mListener);
+
+        // Test
+        mBubbleData.notificationEntryUpdated(mEntryC1, /* suppressFlyout */ true, /* showInShade */
+                true);
+
+        // Verify
+        verifyUpdateReceived();
+        BubbleData.Update update = mUpdateCaptor.getValue();
+        assertThat(update.addedBubble.showFlyout()).isFalse();
+    }
+
+    @Test
+    public void ifInterruptiveAndNotSuppressed_thenShowFlyout() {
+        // Setup
+        mBubbleData.setListener(mListener);
+
+        // Test
+        mBubbleData.notificationEntryUpdated(mEntryInterruptive,
+                false /* suppressFlyout */, true  /* showInShade */);
+
+        // Verify
+        verifyUpdateReceived();
+        BubbleData.Update update = mUpdateCaptor.getValue();
+        assertThat(update.addedBubble.showFlyout()).isTrue();
+    }
+
+    @Test
+    public void sameUpdate_InShade_thenHideFlyout() {
+        // Setup
+        mBubbleData.setListener(mListener);
+
+        // Test
+        mBubbleData.notificationEntryUpdated(mEntryC1, false /* suppressFlyout */,
+                true /* showInShade */);
+        verifyUpdateReceived();
+
+        mBubbleData.notificationEntryUpdated(mEntryC1, false /* suppressFlyout */,
+                true /* showInShade */);
+        verifyUpdateReceived();
+
+        // Verify
+        BubbleData.Update update = mUpdateCaptor.getValue();
+        assertThat(update.updatedBubble.showFlyout()).isFalse();
+    }
+
+    @Test
+    public void sameUpdate_NotInShade_showFlyout() {
+        // Setup
+        mBubbleData.setListener(mListener);
+
+        // Test
+        mBubbleData.notificationEntryUpdated(mEntryDismissed, false /* suppressFlyout */,
+                false /* showInShade */);
+        verifyUpdateReceived();
+
+        // Make it look like user swiped away row
+        mEntryDismissed.getRow().dismiss(false /* refocusOnDismiss */);
+        assertThat(mBubbleData.getBubbleWithKey(mEntryDismissed.getKey()).showInShade()).isFalse();
+
+        mBubbleData.notificationEntryUpdated(mEntryDismissed, false /* suppressFlyout */,
+                false /* showInShade */);
+        verifyUpdateReceived();
+
+        // Verify
+        BubbleData.Update update = mUpdateCaptor.getValue();
+        assertThat(update.updatedBubble.showFlyout()).isTrue();
     }
 
     // COLLAPSED / ADD
@@ -842,14 +928,14 @@ public class BubbleDataTest extends SysuiTestCase {
     }
 
     private void setPostTime(NotificationEntry entry, long postTime) {
-        when(entry.notification.getPostTime()).thenReturn(postTime);
+        when(entry.getSbn().getPostTime()).thenReturn(postTime);
     }
 
     private void setOngoing(NotificationEntry entry, boolean ongoing) {
         if (ongoing) {
-            entry.notification.getNotification().flags |= Notification.FLAG_FOREGROUND_SERVICE;
+            entry.getSbn().getNotification().flags |= Notification.FLAG_FOREGROUND_SERVICE;
         } else {
-            entry.notification.getNotification().flags &= ~Notification.FLAG_FOREGROUND_SERVICE;
+            entry.getSbn().getNotification().flags &= ~Notification.FLAG_FOREGROUND_SERVICE;
         }
     }
 
@@ -888,7 +974,8 @@ public class BubbleDataTest extends SysuiTestCase {
 
     private void sendUpdatedEntryAtTime(NotificationEntry entry, long postTime) {
         setPostTime(entry, postTime);
-        mBubbleData.notificationEntryUpdated(entry, /* suppressFlyout=*/ false);
+        mBubbleData.notificationEntryUpdated(entry, false /* suppressFlyout*/,
+                true /* showInShade */);
     }
 
     private void changeExpandedStateAtTime(boolean shouldBeExpanded, long time) {

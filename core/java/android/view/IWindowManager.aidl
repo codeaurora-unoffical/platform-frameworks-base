@@ -35,13 +35,16 @@ import android.os.ParcelFileDescriptor;
 import android.view.IApplicationToken;
 import android.view.IAppTransitionAnimationSpecsFuture;
 import android.view.IDockedStackListener;
+import android.view.IDisplayWindowListener;
 import android.view.IDisplayFoldListener;
+import android.view.IDisplayWindowRotationController;
 import android.view.IOnKeyguardExitResult;
 import android.view.IPinnedStackListener;
 import android.view.RemoteAnimationAdapter;
 import android.view.IRotationWatcher;
 import android.view.ISystemGestureExclusionListener;
 import android.view.IWallpaperVisibilityListener;
+import android.view.IWindow;
 import android.view.IWindowSession;
 import android.view.IWindowSessionCallback;
 import android.view.KeyEvent;
@@ -63,6 +66,22 @@ import android.view.SurfaceControl;
  */
 interface IWindowManager
 {
+    /**
+     * No overridden behavior is provided in terms of fixing rotation to user rotation. Use
+     * other flags to derive the default behavior, such as {@link WindowManagerService#mIsPc}
+     * and {@link WindowManagerService#mForceDesktopModeOnExternalDisplays}.
+     */
+    const int FIXED_TO_USER_ROTATION_DEFAULT = 0;
+    /**
+     * Don't fix display rotation to {@link DisplayRotation#mUserRotation} only. Always allow
+     * other factors to play a role in deciding display rotation.
+     */
+    const int FIXED_TO_USER_ROTATION_DISABLED = 1;
+    /**
+     * Only use {@link DisplayRotation#mUserRotation} as the display rotation.
+     */
+    const int FIXED_TO_USER_ROTATION_ENABLED = 2;
+
     /**
      * ===== NOTICE =====
      * The first three methods must remain the first three methods. Scripts
@@ -88,13 +107,29 @@ interface IWindowManager
     void clearForcedDisplayDensityForUser(int displayId, int userId);
     void setForcedDisplayScalingMode(int displayId, int mode); // 0 = auto, 1 = disable
 
-    void setOverscan(int displayId, int left, int top, int right, int bottom);
-
     // These can only be called when holding the MANAGE_APP_TOKENS permission.
     void setEventDispatching(boolean enabled);
     void addWindowToken(IBinder token, int type, int displayId);
     void removeWindowToken(IBinder token, int displayId);
     void prepareAppTransition(int transit, boolean alwaysKeepCurrent);
+
+    /**
+     * Sets a singular remote controller of display rotations. There can only be one. The
+     * controller is called after the display has "frozen" for a rotation and display rotation will
+     * only continue once the controller has finished calculating associated configurations.
+     */
+    void setDisplayWindowRotationController(IDisplayWindowRotationController controller);
+
+    /**
+     * Adds a root container that a client shell can populate with its own windows (usually via
+     * WindowlessWindowManager).
+     *
+     * @param client an IWindow used for window-level communication (ime, finish draw, etc.).
+     * @param windowType used by WM to determine the z-order. This is the same as the window type
+     *                   used in {@link WindowManager.LayoutParams}.
+     * @return a SurfaceControl to add things to.
+     */
+    SurfaceControl addShellRoot(int displayId, IWindow client, int windowType);
 
     /**
      * Like overridePendingAppTransitionMultiThumb, but uses a future to supply the specs. This is
@@ -266,6 +301,11 @@ interface IWindowManager
     boolean isDisplayRotationFrozen(int displayId);
 
     /**
+    *  Sets if display rotation is fixed to user specified value for given displayId.
+    */
+    void setFixedToUserRotation(int displayId, int fixedToUserRotation);
+
+    /**
      * Screenshot the current wallpaper layer, including the whole screen.
      */
     Bitmap screenshotWallpaper();
@@ -306,6 +346,11 @@ interface IWindowManager
     oneway void statusBarVisibilityChanged(int displayId, int visibility);
 
     /**
+     * Called by System UI to notify Window Manager to hide transient bars.
+     */
+    oneway void hideTransientBars(int displayId);
+
+    /**
     * When set to {@code true} the system bars will always be shown. This is true even if an app
     * requests to be fullscreen by setting the system ui visibility flags. The
     * functionality was added for the automotive case as a way to guarantee required content stays
@@ -324,12 +369,6 @@ interface IWindowManager
      * Called by System UI to notify of changes to the visibility of PIP.
      */
     oneway void setPipVisibility(boolean visible);
-
-    /**
-     * Called by System UI to notify of changes to the visibility and height of the shelf.
-     */
-    @UnsupportedAppUsage
-    void setShelfHeight(boolean visible, int shelfHeight);
 
     /**
      * Called by System UI to enable or disable haptic feedback on the navigation bar buttons.
@@ -475,6 +514,16 @@ interface IWindowManager
      * Unregisters an IDisplayFoldListener.
      */
     void unregisterDisplayFoldListener(IDisplayFoldListener listener);
+
+    /**
+     * Registers an IDisplayContainerListener
+     */
+    void registerDisplayWindowListener(IDisplayWindowListener listener);
+
+    /**
+     * Unregisters an IDisplayContainerListener.
+     */
+    void unregisterDisplayWindowListener(IDisplayWindowListener listener);
 
     /**
      * Starts a window trace.
@@ -650,4 +699,16 @@ interface IWindowManager
      * Enables/disables SurfaceFlinger layer tracing.
      */
     void setLayerTracing(boolean enabled);
+
+    /**
+     * Mirrors a specified display. The root of the mirrored hierarchy will be stored in
+     * outSurfaceControl.
+     * Requires the ACCESS_SURFACE_FLINGER permission.
+     *
+     * @param displayId The id of the display to mirror
+     * @param outSurfaceControl The SurfaceControl for the root of the mirrored hierarchy.
+     *
+     * @return true if the display was successfully mirrored.
+     */
+    boolean mirrorDisplay(int displayId, out SurfaceControl outSurfaceControl);
 }

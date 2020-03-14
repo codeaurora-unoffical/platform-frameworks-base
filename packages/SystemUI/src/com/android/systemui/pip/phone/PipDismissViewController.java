@@ -107,8 +107,9 @@ public class PipDismissViewController {
                             | LayoutParams.FLAG_NOT_FOCUSABLE,
                     PixelFormat.TRANSLUCENT);
             lp.setTitle("pip-dismiss-overlay");
-            lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
+            lp.privateFlags |= WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS;
             lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            lp.setFitWindowInsetsTypes(0 /* types */);
             mWindowManager.addView(mDismissView, lp);
         }
         mDismissView.animate().cancel();

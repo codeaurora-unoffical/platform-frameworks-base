@@ -285,8 +285,18 @@
     <!-- the padding between dots in the icon overflow -->
     <dimen name="overflow_icon_dot_padding">3dp</dimen>
 
+    <!-- Dimensions related to screenshots -->
+
     <!-- The padding on the global screenshot background image -->
     <dimen name="global_screenshot_bg_padding">20dp</dimen>
+    <dimen name="screenshot_action_container_corner_radius">10dp</dimen>
+    <dimen name="screenshot_action_container_padding">20dp</dimen>
+    <!-- Radius of the chip background on global screenshot actions -->
+    <dimen name="screenshot_button_corner_radius">20dp</dimen>
+    <dimen name="screenshot_action_chip_margin_horizontal">10dp</dimen>
+    <dimen name="screenshot_action_chip_padding_vertical">10dp</dimen>
+    <dimen name="screenshot_action_chip_padding_horizontal">15dp</dimen>
+
 
     <!-- The width of the view containing navigation buttons -->
     <dimen name="navigation_key_width">70dp</dimen>
@@ -1009,10 +1019,15 @@
     <!-- Biometric Dialog values -->
     <dimen name="biometric_dialog_biometric_icon_size">64dp</dimen>
     <dimen name="biometric_dialog_corner_size">4dp</dimen>
+    <!-- Y translation when showing/dismissing the dialog-->
     <dimen name="biometric_dialog_animation_translation_offset">350dp</dimen>
     <dimen name="biometric_dialog_border_padding">4dp</dimen>
     <dimen name="biometric_dialog_elevation">1dp</dimen>
     <dimen name="biometric_dialog_icon_padding">16dp</dimen>
+    <!-- Y translation for biometric contents when transitioning to device credential UI -->
+    <dimen name="biometric_dialog_medium_to_large_translation_offset">100dp</dimen>
+    <!-- Y translation for credential contents when animating in -->
+    <dimen name="biometric_dialog_credential_translation_offset">60dp</dimen>
 
     <!-- Wireless Charging Animation values -->
     <dimen name="wireless_charging_dots_radius_start">0dp</dimen>
@@ -1052,47 +1067,6 @@
 
     <!-- How much into a DisplayCutout's bounds we can go, on each side -->
     <dimen name="display_cutout_margin_consumption">0px</dimen>
-
-    <!-- Padding below Ongoing App Ops dialog title -->
-    <dimen name="ongoing_appops_dialog_sep">16dp</dimen>
-    <!--Padding around text items in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_text_padding">16dp</dimen>
-    <!-- Height and width of App Opp icons in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_icon_size">24dp</dimen>
-    <!-- Left margin of App Opp icons in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_icon_margin">12dp</dimen>
-    <!-- Height and width of Application icons in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_app_icon_size">32dp</dimen>
-    <!-- Height and width of Plus sign in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_app_plus_size">24dp</dimen>
-    <!-- Height of line in Ongoing App Ops dialog-->
-    <dimen name="ongoing_appops_dialog_line_height">48dp</dimen>
-    <!-- Side margin of title in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_title_margin_sides">24dp</dimen>
-    <!-- Bottom margin of items in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_items_bottom_margin">24dp</dimen>
-    <!-- Top and bottom margin of title in Ongoing App Ops dialog -->
-    <dimen name="ongoing_appops_dialog_title_margin_top_bottom">18dp</dimen>
-    <!-- Text size for Ongoing App Ops dialog title -->
-    <dimen name="ongoing_appops_dialog_title_size">20sp</dimen>
-    <!-- Text size for Ongoing App Ops dialog items -->
-    <dimen name="ongoing_appops_dialog_item_size">16sp</dimen>
-    <!-- Height of the Ongoing App Ops chip -->
-    <dimen name="ongoing_appops_chip_height">32dp</dimen>
-    <!-- Padding between background of Ongoing App Ops chip and content -->
-    <dimen name="ongoing_appops_chip_bg_padding">8dp</dimen>
-    <!-- Side padding between background of Ongoing App Ops chip and content -->
-    <dimen name="ongoing_appops_chip_side_padding">8dp</dimen>
-    <!-- Margin between icons of Ongoing App Ops chip when QQS-->
-    <dimen name="ongoing_appops_chip_icon_margin_collapsed">0dp</dimen>
-    <!-- Margin between icons of Ongoing App Ops chip when QS-->
-    <dimen name="ongoing_appops_chip_icon_margin_expanded">2dp</dimen>
-    <!-- Icon size of Ongoing App Ops chip -->
-    <dimen name="ongoing_appops_chip_icon_size">@dimen/status_bar_icon_drawing_size</dimen>
-    <!-- Radius of Ongoing App Ops chip corners -->
-    <dimen name="ongoing_appops_chip_bg_corner_radius">16dp</dimen>
-
-
     <!-- How much each bubble is elevated. -->
     <dimen name="bubble_elevation">1dp</dimen>
     <!-- How much the bubble flyout text container is elevated. -->
@@ -1115,8 +1089,6 @@
     <dimen name="bubble_touch_padding">12dp</dimen>
     <!-- Size of the circle around the bubbles when they're in the dismiss target. -->
     <dimen name="bubble_dismiss_encircle_size">52dp</dimen>
-    <!-- How much to inset the icon in the circle -->
-    <dimen name="bubble_icon_inset">16dp</dimen>
     <!-- Padding around the view displayed when the bubble is expanded -->
     <dimen name="bubble_expanded_view_padding">4dp</dimen>
     <!-- This should be at least the size of bubble_expanded_view_padding; it is used to include
@@ -1159,4 +1131,12 @@
 
     <!-- Size of the RAT type for CellularTile -->
     <dimen name="celltile_rat_type_size">10sp</dimen>
+
+    <dimen name="new_qs_vertical_margin">8dp</dimen>
+
+    <!-- Size of media cards in the QSPanel carousel -->
+    <dimen name="qs_media_height">150dp</dimen>
+    <dimen name="qs_media_width">350dp</dimen>
+    <dimen name="qs_media_padding">8dp</dimen>
+    <dimen name="qs_media_corner_radius">10dp</dimen>
 </resources>

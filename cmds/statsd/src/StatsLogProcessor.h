@@ -32,7 +32,7 @@ namespace os {
 namespace statsd {
 
 
-class StatsLogProcessor : public ConfigListener {
+class StatsLogProcessor : public ConfigListener, public virtual PackageInfoListener {
 public:
     StatsLogProcessor(const sp<UidMap>& uidMap, const sp<StatsPullerManager>& pullerManager,
                       const sp<AlarmMonitor>& anomalyAlarmMonitor,
@@ -91,6 +91,16 @@ public:
     /* Sets the active status/ttl for all configs and metrics to the status in ActiveConfigList. */
     void SetConfigsActiveState(const ActiveConfigList& activeConfigList, int64_t currentTimeNs);
 
+    /* Notify all MetricsManagers of app upgrades */
+    void notifyAppUpgrade(const int64_t& eventTimeNs, const string& apk, const int uid,
+                          const int64_t version) override;
+
+    /* Notify all MetricsManagers of app removals */
+    void notifyAppRemoved(const int64_t& eventTimeNs, const string& apk, const int uid) override;
+
+    /* Notify all MetricsManagers of uid map snapshots received */
+    void onUidMapReceived(const int64_t& eventTimeNs) override;
+
     // Reset all configs.
     void resetConfigs();
 
@@ -128,13 +138,13 @@ private:
 
     std::unordered_map<ConfigKey, sp<MetricsManager>> mMetricsManagers;
 
-    std::unordered_map<ConfigKey, long> mLastBroadcastTimes;
+    std::unordered_map<ConfigKey, int64_t> mLastBroadcastTimes;
 
     // Last time we sent a broadcast to this uid that the active configs had changed.
-    std::unordered_map<int, long> mLastActivationBroadcastTimes;
+    std::unordered_map<int, int64_t> mLastActivationBroadcastTimes;
 
     // Tracks when we last checked the bytes consumed for each config key.
-    std::unordered_map<ConfigKey, long> mLastByteSizeTimes;
+    std::unordered_map<ConfigKey, int64_t> mLastByteSizeTimes;
 
     // Tracks which config keys has metric reports on disk
     std::set<ConfigKey> mOnDiskDataConfigs;
@@ -146,6 +156,8 @@ private:
     sp<AlarmMonitor> mAnomalyAlarmMonitor;
 
     sp<AlarmMonitor> mPeriodicAlarmMonitor;
+
+    void OnLogEvent(LogEvent* event, int64_t elapsedRealtimeNs);
 
     void resetIfConfigTtlExpiredLocked(const int64_t timestampNs);
 
@@ -176,8 +188,7 @@ private:
 
     /* Check if we should send a broadcast if approaching memory limits and if we're over, we
      * actually delete the data. */
-    void flushIfNecessaryLocked(int64_t timestampNs, const ConfigKey& key,
-                                MetricsManager& metricsManager);
+    void flushIfNecessaryLocked(const ConfigKey& key, MetricsManager& metricsManager);
 
     // Maps the isolated uid in the log event to host uid if the log event contains uid fields.
     void mapIsolatedUidToHostUidIfNecessaryLocked(LogEvent* event) const;
@@ -205,7 +216,7 @@ private:
 
     int64_t mLastTimestampSeen = 0;
 
-    long mLastPullerCacheClearTimeSec = 0;
+    int64_t mLastPullerCacheClearTimeSec = 0;
 
     // Last time we wrote data to disk.
     int64_t mLastWriteTimeNs = 0;
@@ -248,19 +259,6 @@ private:
     FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_LateAlarm);
     FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_WithActivation);
 
-    FRIEND_TEST(DimensionInConditionE2eTest, TestCreateCountMetric_NoLink_OR_CombinationCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestCreateCountMetric_Link_OR_CombinationCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_NoLink_OR_CombinationCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_Link_OR_CombinationCondition);
-
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_NoLink_SimpleCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_Link_SimpleCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_PartialLink_SimpleCondition);
-
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_PartialLink_AND_CombinationCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_NoLink_AND_CombinationCondition);
-    FRIEND_TEST(DimensionInConditionE2eTest, TestDurationMetric_Link_AND_CombinationCondition);
-
     FRIEND_TEST(AnomalyDetectionE2eTest, TestSlicedCountMetric_single_bucket);
     FRIEND_TEST(AnomalyDetectionE2eTest, TestSlicedCountMetric_multiple_buckets);
     FRIEND_TEST(AnomalyDetectionE2eTest, TestDurationMetric_SUM_single_bucket);
@@ -274,6 +272,11 @@ private:
     FRIEND_TEST(MetricActivationE2eTest, TestCountMetricWithTwoDeactivations);
     FRIEND_TEST(MetricActivationE2eTest, TestCountMetricWithSameDeactivation);
     FRIEND_TEST(MetricActivationE2eTest, TestCountMetricWithTwoMetricsTwoDeactivations);
+
+    FRIEND_TEST(CountMetricE2eTest, TestSlicedState);
+    FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithMap);
+    FRIEND_TEST(CountMetricE2eTest, TestMultipleSlicedStates);
+    FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithPrimaryFields);
 
     FRIEND_TEST(DurationMetricE2eTest, TestOneBucket);
     FRIEND_TEST(DurationMetricE2eTest, TestTwoBuckets);

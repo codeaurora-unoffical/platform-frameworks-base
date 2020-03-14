@@ -74,7 +74,7 @@
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
 #include <bionic/malloc.h>
-#include <cutils/ashmem.h>
+#include <bionic/page.h>
 #include <cutils/fs.h>
 #include <cutils/multiuser.h>
 #include <cutils/sockets.h>
@@ -303,7 +303,8 @@ enum MountExternalKind {
   MOUNT_EXTERNAL_LEGACY = 4,
   MOUNT_EXTERNAL_INSTALLER = 5,
   MOUNT_EXTERNAL_FULL = 6,
-  MOUNT_EXTERNAL_COUNT = 7
+  MOUNT_EXTERNAL_PASS_THROUGH = 7,
+  MOUNT_EXTERNAL_COUNT = 8
 };
 
 // The order of entries here must be kept in sync with MountExternalKind enum values.
@@ -708,15 +709,14 @@ static void MountEmulatedStorage(uid_t uid, jint mount_mode,
 
   const userid_t user_id = multiuser_get_user_id(uid);
   const std::string user_source = StringPrintf("/mnt/user/%d", user_id);
+  const std::string pass_through_source = StringPrintf("/mnt/pass_through/%d", user_id);
   bool isFuse = GetBoolProperty(kPropFuse, false);
 
   CreateDir(user_source, 0751, AID_ROOT, AID_ROOT, fail_fn);
 
   if (isFuse) {
-    // TODO(b/135341433): Bind mount the appropriate storage view for the app given its permissions
-    // media and media_location permission access. This should prevent the kernel from incorrectly
-    // sharing a cache across permission buckets
-    BindMount(user_source, "/storage", fail_fn);
+    BindMount(mount_mode == MOUNT_EXTERNAL_PASS_THROUGH ? pass_through_source : user_source,
+              "/storage", fail_fn);
   } else {
     const std::string& storage_source = ExternalStorageViews[mount_mode];
     BindMount(storage_source, "/storage", fail_fn);
@@ -1157,7 +1157,7 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
   UnsetChldSignalHandler();
 
   if (is_system_server) {
-    env->CallStaticVoidMethod(gZygoteClass, gCallPostForkSystemServerHooks);
+    env->CallStaticVoidMethod(gZygoteClass, gCallPostForkSystemServerHooks, runtime_flags);
     if (env->ExceptionCheck()) {
       fail_fn("Error calling post fork system server hooks.");
     }
@@ -1390,9 +1390,14 @@ static int DisableExecuteOnly(struct dl_phdr_info* info,
                               void* data [[maybe_unused]]) {
   // Search for any execute-only segments and mark them read+execute.
   for (int i = 0; i < info->dlpi_phnum; i++) {
-    if ((info->dlpi_phdr[i].p_type == PT_LOAD) && (info->dlpi_phdr[i].p_flags == PF_X)) {
-      mprotect(reinterpret_cast<void*>(info->dlpi_addr + info->dlpi_phdr[i].p_vaddr),
-               info->dlpi_phdr[i].p_memsz, PROT_READ | PROT_EXEC);
+    const auto& phdr = info->dlpi_phdr[i];
+    if ((phdr.p_type == PT_LOAD) && (phdr.p_flags == PF_X)) {
+      auto addr = reinterpret_cast<void*>(info->dlpi_addr + PAGE_START(phdr.p_vaddr));
+      size_t len = PAGE_OFFSET(phdr.p_vaddr) + phdr.p_memsz;
+      if (mprotect(addr, len, PROT_READ | PROT_EXEC) == -1) {
+        ALOGE("mprotect(%p, %zu, PROT_READ | PROT_EXEC) failed: %m", addr, len);
+        return -1;
+      }
     }
   }
   // Return non-zero to exit dl_iterate_phdr.
@@ -1657,11 +1662,6 @@ static void com_android_internal_os_Zygote_nativeInitNativeState(JNIEnv* env, jc
   if (!SetTaskProfiles(0, {})) {
     ZygoteFailure(env, "zygote", nullptr, "Zygote SetTaskProfiles failed");
   }
-
-  /*
-   * ashmem initialization to avoid dlopen overhead
-   */
-  ashmem_init();
 }
 
 /**
@@ -1808,7 +1808,7 @@ int register_com_android_internal_os_Zygote(JNIEnv* env) {
   gZygoteClass = MakeGlobalRefOrDie(env, FindClassOrDie(env, kZygoteClassName));
   gCallPostForkSystemServerHooks = GetStaticMethodIDOrDie(env, gZygoteClass,
                                                           "callPostForkSystemServerHooks",
-                                                          "()V");
+                                                          "(I)V");
   gCallPostForkChildHooks = GetStaticMethodIDOrDie(env, gZygoteClass, "callPostForkChildHooks",
                                                    "(IZZLjava/lang/String;)V");
 

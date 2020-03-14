@@ -16,7 +16,10 @@
 
 #define DEBUG false  // STOPSHIP if true
 #include "Log.h"
+
 #include "MetricProducer.h"
+
+#include "state/StateTracker.h"
 
 using android::util::FIELD_COUNT_REPEATED;
 using android::util::FIELD_TYPE_ENUM;
@@ -39,6 +42,33 @@ const int FIELD_ID_ACTIVE_METRIC_ACTIVATION = 2;
 const int FIELD_ID_ACTIVE_EVENT_ACTIVATION_ATOM_MATCHER_INDEX = 1;
 const int FIELD_ID_ACTIVE_EVENT_ACTIVATION_REMAINING_TTL_NANOS = 2;
 const int FIELD_ID_ACTIVE_EVENT_ACTIVATION_STATE = 3;
+
+MetricProducer::MetricProducer(
+        const int64_t& metricId, const ConfigKey& key, const int64_t timeBaseNs,
+        const int conditionIndex, const sp<ConditionWizard>& wizard,
+        const std::unordered_map<int, std::shared_ptr<Activation>>& eventActivationMap,
+        const std::unordered_map<int, std::vector<std::shared_ptr<Activation>>>&
+                eventDeactivationMap,
+        const vector<int>& slicedStateAtoms,
+        const unordered_map<int, unordered_map<int, int64_t>>& stateGroupMap)
+    : mMetricId(metricId),
+      mConfigKey(key),
+      mTimeBaseNs(timeBaseNs),
+      mCurrentBucketStartTimeNs(timeBaseNs),
+      mCurrentBucketNum(0),
+      mCondition(initialCondition(conditionIndex)),
+      mConditionTrackerIndex(conditionIndex),
+      mConditionSliced(false),
+      mWizard(wizard),
+      mContainANYPositionInDimensionsInWhat(false),
+      mSliceByPositionALL(false),
+      mHasLinksToAllConditionDimensionsInTracker(false),
+      mEventActivationMap(eventActivationMap),
+      mEventDeactivationMap(eventDeactivationMap),
+      mIsActive(mEventActivationMap.empty()),
+      mSlicedStateAtoms(slicedStateAtoms),
+      mStateGroupMap(stateGroupMap) {
+}
 
 void MetricProducer::onMatchedLogEventLocked(const size_t matcherIndex, const LogEvent& event) {
     if (!mIsActive) {
@@ -65,9 +95,43 @@ void MetricProducer::onMatchedLogEventLocked(const size_t matcherIndex, const Lo
         condition = mCondition == ConditionState::kTrue;
     }
 
+    // Stores atom id to primary key pairs for each state atom that the metric is
+    // sliced by.
+    std::map<int, HashableDimensionKey> statePrimaryKeys;
+
+    // For states with primary fields, use MetricStateLinks to get the primary
+    // field values from the log event. These values will form a primary key
+    // that will be used to query StateTracker for the correct state value.
+    for (const auto& stateLink : mMetric2StateLinks) {
+        getDimensionForState(event.getValues(), stateLink,
+                             &statePrimaryKeys[stateLink.stateAtomId]);
+    }
+
+    // For each sliced state, query StateTracker for the state value using
+    // either the primary key from the previous step or the DEFAULT_DIMENSION_KEY.
+    //
+    // Expected functionality: for any case where the MetricStateLinks are
+    // initialized incorrectly (ex. # of state links != # of primary fields, no
+    // links are provided for a state with primary fields, links are provided
+    // in the wrong order, etc.), StateTracker will simply return kStateUnknown
+    // when queried using an incorrect key.
+    HashableDimensionKey stateValuesKey;
+    for (auto atomId : mSlicedStateAtoms) {
+        FieldValue value;
+        if (statePrimaryKeys.find(atomId) != statePrimaryKeys.end()) {
+            // found a primary key for this state, query using the key
+            getMappedStateValue(atomId, statePrimaryKeys[atomId], &value);
+        } else {
+            // if no MetricStateLinks exist for this state atom,
+            // query using the default dimension key (empty HashableDimensionKey)
+            getMappedStateValue(atomId, DEFAULT_DIMENSION_KEY, &value);
+        }
+        stateValuesKey.addValue(value);
+    }
+
     HashableDimensionKey dimensionInWhat;
     filterValues(mDimensionsInWhat, event.getValues(), &dimensionInWhat);
-    MetricDimensionKey metricKey(dimensionInWhat, DEFAULT_DIMENSION_KEY);
+    MetricDimensionKey metricKey(dimensionInWhat, stateValuesKey);
     onMatchedLogEventInternalLocked(
             matcherIndex, metricKey, conditionKey, condition, event);
 }
@@ -94,24 +158,6 @@ void MetricProducer::flushIfExpire(int64_t elapsedTimestampNs) {
     mIsActive = evaluateActiveStateLocked(elapsedTimestampNs);
     if (!mIsActive) {
         onActiveStateChangedLocked(elapsedTimestampNs);
-    }
-}
-
-void MetricProducer::addActivation(int activationTrackerIndex, const ActivationType& activationType,
-        int64_t ttl_seconds, int deactivationTrackerIndex) {
-    std::lock_guard<std::mutex> lock(mMutex);
-    // When a metric producer does not depend on any activation, its mIsActive is true.
-    // Therefore, if this is the 1st activation, mIsActive will turn to false. Otherwise it does not
-    // change.
-    if  (mEventActivationMap.empty()) {
-        mIsActive = false;
-    }
-    std::shared_ptr<Activation> activation =
-            std::make_shared<Activation>(activationType, ttl_seconds * NS_PER_SEC);
-    mEventActivationMap.emplace(activationTrackerIndex, activation);
-    if (-1 != deactivationTrackerIndex) {
-        auto& deactivationList = mEventDeactivationMap[deactivationTrackerIndex];
-        deactivationList.push_back(activation);
     }
 }
 
@@ -215,6 +261,31 @@ void MetricProducer::writeActiveMetricToProtoOutputStream(
             }
         }
         proto->end(activationToken);
+    }
+}
+
+void MetricProducer::getMappedStateValue(const int32_t atomId, const HashableDimensionKey& queryKey,
+                                         FieldValue* value) {
+    if (!StateManager::getInstance().getStateValue(atomId, queryKey, value)) {
+        value->mValue = Value(StateTracker::kStateUnknown);
+        ALOGW("StateTracker not found for state atom %d", atomId);
+        return;
+    }
+
+    // check if there is a state map for this atom
+    auto atomIt = mStateGroupMap.find(atomId);
+    if (atomIt == mStateGroupMap.end()) {
+        return;
+    }
+    auto valueIt = atomIt->second.find(value->mValue.int_value);
+    if (valueIt == atomIt->second.end()) {
+        // state map exists, but value was not put in a state group
+        // so set mValue to kStateUnknown
+        // TODO(tsaichristine): handle incomplete state maps
+        value->mValue.setInt(StateTracker::kStateUnknown);
+    } else {
+        // set mValue to group_id
+        value->mValue.setLong(valueIt->second);
     }
 }
 

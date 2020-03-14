@@ -43,31 +43,28 @@ import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.ResolveInfo;
 import android.content.pm.Signature;
 import android.content.res.Resources;
-import android.database.ContentObserver;
 import android.hardware.location.ActivityRecognitionHardware;
 import android.location.Address;
 import android.location.Criteria;
 import android.location.GeocoderParams;
 import android.location.Geofence;
-import android.location.GnssCapabilities;
 import android.location.GnssMeasurementCorrections;
 import android.location.IBatchedLocationCallback;
 import android.location.IGnssMeasurementsListener;
 import android.location.IGnssNavigationMessageListener;
 import android.location.IGnssStatusListener;
-import android.location.IGpsGeofenceHardware;
 import android.location.ILocationListener;
 import android.location.ILocationManager;
-import android.location.INetInitiatedListener;
 import android.location.Location;
 import android.location.LocationManager;
 import android.location.LocationRequest;
 import android.location.LocationTime;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.IInterface;
+import android.os.ICancellationSignal;
 import android.os.PowerManager;
 import android.os.PowerManager.ServiceType;
 import android.os.PowerManagerInternal;
@@ -81,11 +78,10 @@ import android.os.WorkSource.WorkChain;
 import android.provider.Settings;
 import android.stats.location.LocationStatsEnums;
 import android.text.TextUtils;
-import android.util.ArrayMap;
-import android.util.ArraySet;
 import android.util.EventLog;
 import android.util.Log;
 import android.util.Slog;
+import android.util.SparseArray;
 import android.util.TimeUtils;
 
 import com.android.internal.annotations.GuardedBy;
@@ -102,22 +98,15 @@ import com.android.server.location.CallerIdentity;
 import com.android.server.location.GeocoderProxy;
 import com.android.server.location.GeofenceManager;
 import com.android.server.location.GeofenceProxy;
-import com.android.server.location.GnssBatchingProvider;
-import com.android.server.location.GnssCapabilitiesProvider;
-import com.android.server.location.GnssLocationProvider;
-import com.android.server.location.GnssMeasurementCorrectionsProvider;
-import com.android.server.location.GnssMeasurementsProvider;
-import com.android.server.location.GnssNavigationMessageProvider;
-import com.android.server.location.GnssStatusListenerHelper;
-import com.android.server.location.LocationBlacklist;
 import com.android.server.location.LocationFudger;
 import com.android.server.location.LocationProviderProxy;
 import com.android.server.location.LocationRequestStatistics;
 import com.android.server.location.LocationRequestStatistics.PackageProviderKey;
 import com.android.server.location.LocationRequestStatistics.PackageStatistics;
+import com.android.server.location.LocationSettingsStore;
+import com.android.server.location.LocationUsageLogger;
 import com.android.server.location.MockProvider;
 import com.android.server.location.PassiveProvider;
-import com.android.server.location.RemoteListenerHelper;
 import com.android.server.pm.permission.PermissionManagerServiceInternal;
 
 import java.io.ByteArrayOutputStream;
@@ -132,49 +121,66 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.NoSuchElementException;
-import java.util.function.Consumer;
-import java.util.function.Function;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The service class that manages LocationProviders and issues location
  * updates and alerts.
  */
 public class LocationManagerService extends ILocationManager.Stub {
-    private static final String TAG = "LocationManagerService";
+
+    /**
+     * Controls lifecycle of LocationManagerService.
+     */
+    public static class Lifecycle extends SystemService {
+
+        private LocationManagerService mService;
+
+        public Lifecycle(Context context) {
+            super(context);
+            mService = new LocationManagerService(context);
+        }
+
+        @Override
+        public void onStart() {
+            publishBinderService(Context.LOCATION_SERVICE, mService);
+        }
+
+        @Override
+        public void onBootPhase(int phase) {
+            if (phase == PHASE_SYSTEM_SERVICES_READY) {
+                // the location service must be functioning after this boot phase
+                mService.onSystemReady();
+            } else if (phase == SystemService.PHASE_THIRD_PARTY_APPS_CAN_START) {
+                // some providers rely on third party code, so we wait to initialize
+                // providers until third party code is allowed to run
+                mService.onSystemThirdPartyAppsCanStart();
+            }
+        }
+    }
+
+    public static final String TAG = "LocationManagerService";
     public static final boolean D = Log.isLoggable(TAG, Log.DEBUG);
 
     private static final String WAKELOCK_KEY = "*location*";
 
-    // Location resolution level: no location data whatsoever
     private static final int RESOLUTION_LEVEL_NONE = 0;
-    // Location resolution level: coarse location data only
     private static final int RESOLUTION_LEVEL_COARSE = 1;
-    // Location resolution level: fine location data
     private static final int RESOLUTION_LEVEL_FINE = 2;
-
-    private static final String ACCESS_LOCATION_EXTRA_COMMANDS =
-            android.Manifest.permission.ACCESS_LOCATION_EXTRA_COMMANDS;
 
     private static final String NETWORK_LOCATION_SERVICE_ACTION =
             "com.android.location.service.v3.NetworkLocationProvider";
     private static final String FUSED_LOCATION_SERVICE_ACTION =
             "com.android.location.service.FusedLocationProvider";
 
-    private static final long NANOS_PER_MILLI = 1000000L;
-
     // The maximum interval a location request can have and still be considered "high power".
     private static final long HIGH_POWER_INTERVAL_MS = 5 * 60 * 1000;
 
+    // maximum age of a location before it is no longer considered "current"
+    private static final long MAX_CURRENT_LOCATION_AGE_MS = 10 * 1000;
+
     private static final int FOREGROUND_IMPORTANCE_CUTOFF
             = ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE;
-
-    // default background throttling interval if not overriden in settings
-    private static final long DEFAULT_BACKGROUND_THROTTLE_INTERVAL_MS = 30 * 60 * 1000;
-
-    // Default value for maximum age of last location returned to applications with foreground-only
-    // location permissions.
-    private static final long DEFAULT_LAST_LOCATION_MAX_AGE_MS = 20 * 60 * 1000;
 
     // Location Providers may sometimes deliver location updates
     // slightly faster that requested - provide grace period so
@@ -187,6 +193,8 @@ public class LocationManagerService extends ILocationManager.Stub {
     private final Object mLock = new Object();
     private final Context mContext;
     private final Handler mHandler;
+    private final LocationSettingsStore mSettingsStore;
+    private final LocationUsageLogger mLocationUsageLogger;
 
     private AppOpsManager mAppOps;
     private PackageManager mPackageManager;
@@ -197,26 +205,21 @@ public class LocationManagerService extends ILocationManager.Stub {
     private GeofenceManager mGeofenceManager;
     private LocationFudger mLocationFudger;
     private GeocoderProxy mGeocodeProvider;
-    private GnssStatusListenerHelper mGnssStatusProvider;
-    private INetInitiatedListener mNetInitiatedListener;
-    private PassiveProvider mPassiveProvider;  // track passive provider for special cases
-    private LocationBlacklist mBlacklist;
-    private GnssMeasurementsProvider mGnssMeasurementsProvider;
-    private GnssMeasurementCorrectionsProvider mGnssMeasurementCorrectionsProvider;
-    private GnssNavigationMessageProvider mGnssNavigationMessageProvider;
+    @Nullable
+    private GnssManagerService mGnssManagerService;
+    private PassiveProvider mPassiveProvider; // track passive provider for special cases
     @GuardedBy("mLock")
     private String mExtraLocationControllerPackage;
     private boolean mExtraLocationControllerPackageEnabled;
-    private IGpsGeofenceHardware mGpsGeofenceProxy;
 
     // list of currently active providers
     @GuardedBy("mLock")
-    private final ArrayList<LocationProvider> mProviders = new ArrayList<>();
+    private final ArrayList<LocationProviderManager> mProviders = new ArrayList<>();
 
     // list of non-mock providers, so that when mock providers replace real providers, they can be
     // later re-replaced
     @GuardedBy("mLock")
-    private final ArrayList<LocationProvider> mRealProviders = new ArrayList<>();
+    private final ArrayList<LocationProviderManager> mRealProviders = new ArrayList<>();
 
     @GuardedBy("mLock")
     private final HashMap<Object, Receiver> mReceivers = new HashMap<>();
@@ -235,47 +238,18 @@ public class LocationManagerService extends ILocationManager.Stub {
     private final HashMap<String, Location> mLastLocationCoarseInterval =
             new HashMap<>();
 
-    private final ArraySet<String> mBackgroundThrottlePackageWhitelist = new ArraySet<>();
-
-    private final ArraySet<String> mIgnoreSettingsPackageWhitelist = new ArraySet<>();
-
-    @GuardedBy("mLock")
-    private final ArrayMap<IBinder, LinkedListener<IGnssMeasurementsListener>>
-            mGnssMeasurementsListeners = new ArrayMap<>();
-    @GuardedBy("mLock")
-    private final ArrayMap<IBinder, LinkedListener<IGnssNavigationMessageListener>>
-            mGnssNavigationMessageListeners = new ArrayMap<>();
-    @GuardedBy("mLock")
-    private final ArrayMap<IBinder, LinkedListener<IGnssStatusListener>>
-            mGnssStatusListeners = new ArrayMap<>();
-
     // current active user on the device - other users are denied location data
     private int mCurrentUserId = UserHandle.USER_SYSTEM;
     private int[] mCurrentUserProfiles = new int[]{UserHandle.USER_SYSTEM};
-
-    private GnssLocationProvider.GnssSystemInfoProvider mGnssSystemInfoProvider;
-    private GnssLocationProvider.GnssMetricsProvider mGnssMetricsProvider;
-    private GnssCapabilitiesProvider mGnssCapabilitiesProvider;
-
-    private GnssBatchingProvider mGnssBatchingProvider;
-    @GuardedBy("mLock")
-    private IBatchedLocationCallback mGnssBatchingCallback;
-    @GuardedBy("mLock")
-    private LinkedListener<IBatchedLocationCallback> mGnssBatchingDeathCallback;
-    @GuardedBy("mLock")
-    private boolean mGnssBatchingInProgress = false;
 
     @GuardedBy("mLock")
     @PowerManager.LocationPowerSaveMode
     private int mBatterySaverMode;
 
-    @GuardedBy("mLock")
-    private final LocationUsageLogger mLocationUsageLogger;
-
-    public LocationManagerService(Context context) {
-        super();
+    private LocationManagerService(Context context) {
         mContext = context;
         mHandler = FgThread.getHandler();
+        mSettingsStore = new LocationSettingsStore(mContext, mHandler);
         mLocationUsageLogger = new LocationUsageLogger();
 
         // Let the package manager query which are the default location
@@ -287,190 +261,153 @@ public class LocationManagerService extends ILocationManager.Stub {
                         com.android.internal.R.array.config_locationProviderPackageNames));
         permissionManagerInternal.setLocationExtraPackagesProvider(
                 userId -> mContext.getResources().getStringArray(
-                      com.android.internal.R.array.config_locationExtraPackageNames));
+                        com.android.internal.R.array.config_locationExtraPackageNames));
 
-        // most startup is deferred until systemRunning()
+        // most startup is deferred until systemReady()
     }
 
-    public void systemRunning() {
+    private void onSystemReady() {
+        mSettingsStore.onSystemReady();
+
         synchronized (mLock) {
-            initializeLocked();
-        }
-    }
+            mPackageManager = mContext.getPackageManager();
+            mAppOps = mContext.getSystemService(AppOpsManager.class);
+            mPowerManager = mContext.getSystemService(PowerManager.class);
+            mActivityManager = mContext.getSystemService(ActivityManager.class);
+            mUserManager = mContext.getSystemService(UserManager.class);
 
-    @GuardedBy("mLock")
-    private void initializeLocked() {
-        mAppOps = (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE);
-        mPackageManager = mContext.getPackageManager();
-        mPowerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
-        mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
-        mUserManager = (UserManager) mContext.getSystemService(Context.USER_SERVICE);
+            mLocationFudger = new LocationFudger(mContext, mHandler);
+            mGeofenceManager = new GeofenceManager(mContext, mSettingsStore);
 
-        mLocationFudger = new LocationFudger(mContext, mHandler);
-        mBlacklist = new LocationBlacklist(mContext, mHandler);
-        mBlacklist.init();
-        mGeofenceManager = new GeofenceManager(mContext, mBlacklist);
+            PowerManagerInternal localPowerManager =
+                    LocalServices.getService(PowerManagerInternal.class);
 
-        // prepare providers
-        initializeProvidersLocked();
-
-        // add listeners
-        mAppOps.startWatchingMode(
-                AppOpsManager.OP_COARSE_LOCATION,
-                null,
-                AppOpsManager.WATCH_FOREGROUND_CHANGES,
-                new AppOpsManager.OnOpChangedInternalListener() {
-                    public void onOpChanged(int op, String packageName) {
-                        // onOpChanged invoked on ui thread, move to our thread to reduce risk of
+            // add listeners
+            mAppOps.startWatchingMode(
+                    AppOpsManager.OP_COARSE_LOCATION,
+                    null,
+                    AppOpsManager.WATCH_FOREGROUND_CHANGES,
+                    new AppOpsManager.OnOpChangedInternalListener() {
+                        public void onOpChanged(int op, String packageName) {
+                            // onOpChanged invoked on ui thread, move to our thread to reduce risk
+                            // of blocking ui thread
+                            mHandler.post(() -> {
+                                synchronized (mLock) {
+                                    onAppOpChangedLocked();
+                                }
+                            });
+                        }
+                    });
+            mPackageManager.addOnPermissionsChangeListener(
+                    uid -> {
+                        // listener invoked on ui thread, move to our thread to reduce risk of
                         // blocking ui thread
                         mHandler.post(() -> {
                             synchronized (mLock) {
-                                onAppOpChangedLocked();
+                                onPermissionsChangedLocked();
                             }
                         });
-                    }
-                });
-        mPackageManager.addOnPermissionsChangeListener(
-                uid -> {
-                    // listener invoked on ui thread, move to our thread to reduce risk of blocking
-                    // ui thread
-                    mHandler.post(() -> {
-                        synchronized (mLock) {
-                            onPermissionsChangedLocked();
-                        }
                     });
-                });
+            mActivityManager.addOnUidImportanceListener(
+                    (uid, importance) -> {
+                        // listener invoked on ui thread, move to our thread to reduce risk of
+                        // blocking ui thread
+                        mHandler.post(() -> {
+                            synchronized (mLock) {
+                                onUidImportanceChangedLocked(uid, importance);
+                            }
+                        });
+                    },
+                    FOREGROUND_IMPORTANCE_CUTOFF);
 
-        mActivityManager.addOnUidImportanceListener(
-                (uid, importance) -> {
-                    // listener invoked on ui thread, move to our thread to reduce risk of blocking
-                    // ui thread
-                    mHandler.post(() -> {
-                        synchronized (mLock) {
-                            onUidImportanceChangedLocked(uid, importance);
-                        }
+            localPowerManager.registerLowPowerModeObserver(ServiceType.LOCATION,
+                    state -> {
+                        // listener invoked on ui thread, move to our thread to reduce risk of
+                        // blocking ui thread
+                        mHandler.post(() -> {
+                            synchronized (mLock) {
+                                onBatterySaverModeChangedLocked(state.locationMode);
+                            }
+                        });
                     });
-                },
-                FOREGROUND_IMPORTANCE_CUTOFF);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.LOCATION_MODE), true,
-                new ContentObserver(mHandler) {
-                    @Override
-                    public void onChange(boolean selfChange) {
-                        synchronized (mLock) {
-                            onLocationModeChangedLocked(true);
-                        }
-                    }
-                }, UserHandle.USER_ALL);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.LOCATION_PROVIDERS_ALLOWED), true,
-                new ContentObserver(mHandler) {
-                    @Override
-                    public void onChange(boolean selfChange) {
-                        synchronized (mLock) {
-                            onProviderAllowedChangedLocked();
-                        }
-                    }
-                }, UserHandle.USER_ALL);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Global.getUriFor(Settings.Global.LOCATION_BACKGROUND_THROTTLE_INTERVAL_MS),
-                true,
-                new ContentObserver(mHandler) {
-                    @Override
-                    public void onChange(boolean selfChange) {
-                        synchronized (mLock) {
-                            onBackgroundThrottleIntervalChangedLocked();
-                        }
-                    }
-                }, UserHandle.USER_ALL);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Global.getUriFor(
-                        Settings.Global.LOCATION_BACKGROUND_THROTTLE_PACKAGE_WHITELIST),
-                true,
-                new ContentObserver(mHandler) {
-                    @Override
-                    public void onChange(boolean selfChange) {
-                        synchronized (mLock) {
-                            onBackgroundThrottleWhitelistChangedLocked();
-                        }
-                    }
-                }, UserHandle.USER_ALL);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Global.getUriFor(
-                        Settings.Global.LOCATION_IGNORE_SETTINGS_PACKAGE_WHITELIST),
-                true,
-                new ContentObserver(mHandler) {
-                    @Override
-                    public void onChange(boolean selfChange) {
-                        synchronized (mLock) {
-                            onIgnoreSettingsWhitelistChangedLocked();
-                        }
-                    }
-                }, UserHandle.USER_ALL);
-        PowerManagerInternal localPowerManager =
-                LocalServices.getService(PowerManagerInternal.class);
-        localPowerManager.registerLowPowerModeObserver(ServiceType.LOCATION,
-                state -> {
-                    // listener invoked on ui thread, move to our thread to reduce risk of blocking
-                    // ui thread
-                    mHandler.post(() -> {
-                        synchronized (mLock) {
-                            onBatterySaverModeChangedLocked(state.locationMode);
-                        }
-                    });
-                });
+            mBatterySaverMode = mPowerManager.getLocationPowerSaveMode();
 
-        new PackageMonitor() {
-            @Override
-            public void onPackageDisappeared(String packageName, int reason) {
+            mSettingsStore.addOnLocationEnabledChangedListener((userId) -> {
                 synchronized (mLock) {
-                    LocationManagerService.this.onPackageDisappearedLocked(packageName);
+                    onLocationModeChangedLocked(userId);
                 }
-            }
-        }.register(mContext, mHandler.getLooper(), true);
-
-        IntentFilter intentFilter = new IntentFilter();
-        intentFilter.addAction(Intent.ACTION_USER_SWITCHED);
-        intentFilter.addAction(Intent.ACTION_MANAGED_PROFILE_ADDED);
-        intentFilter.addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED);
-        intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
-        intentFilter.addAction(Intent.ACTION_SCREEN_ON);
-
-        mContext.registerReceiverAsUser(new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                final String action = intent.getAction();
-                if (action == null) {
-                    return;
-                }
+            });
+            mSettingsStore.addOnBackgroundThrottleIntervalChangedListener(() -> {
                 synchronized (mLock) {
-                    switch (action) {
-                        case Intent.ACTION_USER_SWITCHED:
-                            onUserChangedLocked(intent.getIntExtra(Intent.EXTRA_USER_HANDLE, 0));
-                            break;
-                        case Intent.ACTION_MANAGED_PROFILE_ADDED:
-                        case Intent.ACTION_MANAGED_PROFILE_REMOVED:
-                            onUserProfilesChangedLocked();
-                            break;
-                        case Intent.ACTION_SCREEN_ON:
-                        case Intent.ACTION_SCREEN_OFF:
-                            onScreenStateChangedLocked();
-                            break;
+                    onBackgroundThrottleIntervalChangedLocked();
+                }
+            });
+            mSettingsStore.addOnBackgroundThrottlePackageWhitelistChangedListener(() -> {
+                synchronized (mLock) {
+                    onBackgroundThrottleWhitelistChangedLocked();
+                }
+            });
+            mSettingsStore.addOnIgnoreSettingsPackageWhitelistChangedListener(() -> {
+                synchronized (mLock) {
+                    onIgnoreSettingsWhitelistChangedLocked();
+                }
+            });
+
+            new PackageMonitor() {
+                @Override
+                public void onPackageDisappeared(String packageName, int reason) {
+                    synchronized (mLock) {
+                        LocationManagerService.this.onPackageDisappearedLocked(packageName);
                     }
                 }
-            }
-        }, UserHandle.ALL, intentFilter, null, mHandler);
+            }.register(mContext, mHandler.getLooper(), true);
 
-        // switching the user from null to system here performs the bulk of the initialization work.
-        // the user being changed will cause a reload of all user specific settings, which causes
-        // provider initialization, and propagates changes until a steady state is reached
-        mCurrentUserId = UserHandle.USER_NULL;
-        onUserChangedLocked(ActivityManager.getCurrentUser());
+            IntentFilter intentFilter = new IntentFilter();
+            intentFilter.addAction(Intent.ACTION_USER_SWITCHED);
+            intentFilter.addAction(Intent.ACTION_MANAGED_PROFILE_ADDED);
+            intentFilter.addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED);
+            intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
+            intentFilter.addAction(Intent.ACTION_SCREEN_ON);
 
-        // initialize in-memory settings values
-        onBackgroundThrottleWhitelistChangedLocked();
-        onIgnoreSettingsWhitelistChangedLocked();
-        onBatterySaverModeChangedLocked(mPowerManager.getLocationPowerSaveMode());
+            mContext.registerReceiverAsUser(new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    final String action = intent.getAction();
+                    if (action == null) {
+                        return;
+                    }
+                    synchronized (mLock) {
+                        switch (action) {
+                            case Intent.ACTION_USER_SWITCHED:
+                                onUserChangedLocked(
+                                        intent.getIntExtra(Intent.EXTRA_USER_HANDLE, 0));
+                                break;
+                            case Intent.ACTION_MANAGED_PROFILE_ADDED:
+                            case Intent.ACTION_MANAGED_PROFILE_REMOVED:
+                                onUserProfilesChangedLocked();
+                                break;
+                            case Intent.ACTION_SCREEN_ON:
+                            case Intent.ACTION_SCREEN_OFF:
+                                onScreenStateChangedLocked();
+                                break;
+                        }
+                    }
+                }
+            }, UserHandle.ALL, intentFilter, null, mHandler);
+
+            // switching the user from null to system here performs the bulk of the initialization
+            // work. the user being changed will cause a reload of all user specific settings, which
+            // causes initialization, and propagates changes until a steady state is reached
+            mCurrentUserId = UserHandle.USER_NULL;
+            onUserChangedLocked(ActivityManager.getCurrentUser());
+        }
+    }
+
+    private void onSystemThirdPartyAppsCanStart() {
+        synchronized (mLock) {
+            // prepare providers
+            initializeProvidersLocked();
+        }
     }
 
     @GuardedBy("mLock")
@@ -478,20 +415,24 @@ public class LocationManagerService extends ILocationManager.Stub {
         for (Receiver receiver : mReceivers.values()) {
             receiver.updateMonitoring(true);
         }
-        for (LocationProvider p : mProviders) {
+        for (LocationProviderManager p : mProviders) {
             applyRequirementsLocked(p);
         }
     }
 
     @GuardedBy("mLock")
     private void onPermissionsChangedLocked() {
-        for (LocationProvider p : mProviders) {
+        for (LocationProviderManager p : mProviders) {
             applyRequirementsLocked(p);
         }
     }
 
     @GuardedBy("mLock")
     private void onBatterySaverModeChangedLocked(int newLocationMode) {
+        if (mBatterySaverMode == newLocationMode) {
+            return;
+        }
+
         if (D) {
             Slog.d(TAG,
                     "Battery Saver location mode changed from "
@@ -499,12 +440,9 @@ public class LocationManagerService extends ILocationManager.Stub {
                             + locationPowerSaveModeToString(newLocationMode));
         }
 
-        if (mBatterySaverMode == newLocationMode) {
-            return;
-        }
-
         mBatterySaverMode = newLocationMode;
-        for (LocationProvider p : mProviders) {
+
+        for (LocationProviderManager p : mProviders) {
             applyRequirementsLocked(p);
         }
     }
@@ -512,35 +450,24 @@ public class LocationManagerService extends ILocationManager.Stub {
     @GuardedBy("mLock")
     private void onScreenStateChangedLocked() {
         if (mBatterySaverMode == PowerManager.LOCATION_MODE_THROTTLE_REQUESTS_WHEN_SCREEN_OFF) {
-            for (LocationProvider p : mProviders) {
+            for (LocationProviderManager p : mProviders) {
                 applyRequirementsLocked(p);
             }
         }
     }
 
     @GuardedBy("mLock")
-    private void onLocationModeChangedLocked(boolean broadcast) {
+    private void onLocationModeChangedLocked(int userId) {
         if (D) {
-            Log.d(TAG, "location enabled is now " + isLocationEnabled());
+            Log.d(TAG, "[u" + userId + "] location enabled = " + isLocationEnabledForUser(userId));
         }
 
-        for (LocationProvider p : mProviders) {
-            p.onLocationModeChangedLocked();
-        }
+        Intent intent = new Intent(LocationManager.MODE_CHANGED_ACTION);
+        intent.putExtra(LocationManager.EXTRA_LOCATION_ENABLED, isLocationEnabledForUser(userId));
+        mContext.sendBroadcastAsUser(intent, UserHandle.of(userId));
 
-        if (broadcast) {
-            // needs to be sent to everyone because we don't know which user may have changed
-            // LOCATION_MODE state.
-            mContext.sendBroadcastAsUser(
-                    new Intent(LocationManager.MODE_CHANGED_ACTION),
-                    UserHandle.ALL);
-        }
-    }
-
-    @GuardedBy("mLock")
-    private void onProviderAllowedChangedLocked() {
-        for (LocationProvider p : mProviders) {
-            p.onAllowedChangedLocked();
+        for (LocationProviderManager p : mProviders) {
+            p.onUseableChangedLocked(userId);
         }
     }
 
@@ -567,7 +494,7 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @GuardedBy("mLock")
     private void onUidImportanceChangedLocked(int uid, int importance) {
-        boolean foreground = isImportanceForeground(importance);
+        boolean foreground = LocationManagerServiceUtils.isImportanceForeground(importance);
         HashSet<String> affectedProviders = new HashSet<>(mRecordsByProvider.size());
         for (Entry<String, ArrayList<UpdateRecord>> entry : mRecordsByProvider.entrySet()) {
             String provider = entry.getKey();
@@ -576,7 +503,8 @@ public class LocationManagerService extends ILocationManager.Stub {
                         && record.mIsForegroundUid != foreground) {
                     if (D) {
                         Log.d(TAG, "request from uid " + uid + " is now "
-                                + foregroundAsString(foreground));
+                                + LocationManagerServiceUtils.foregroundAsString(
+                                foreground));
                     }
                     record.updateForeground(foreground);
 
@@ -589,92 +517,25 @@ public class LocationManagerService extends ILocationManager.Stub {
         for (String provider : affectedProviders) {
             applyRequirementsLocked(provider);
         }
-
-        updateGnssDataProviderOnUidImportanceChangedLocked(mGnssMeasurementsListeners,
-                mGnssMeasurementsProvider, IGnssMeasurementsListener.Stub::asInterface,
-                uid, foreground);
-
-        updateGnssDataProviderOnUidImportanceChangedLocked(mGnssNavigationMessageListeners,
-                mGnssNavigationMessageProvider, IGnssNavigationMessageListener.Stub::asInterface,
-                uid, foreground);
-
-        updateGnssDataProviderOnUidImportanceChangedLocked(mGnssStatusListeners,
-                mGnssStatusProvider, IGnssStatusListener.Stub::asInterface, uid, foreground);
-    }
-
-    @GuardedBy("mLock")
-    private <TListener extends IInterface> void updateGnssDataProviderOnUidImportanceChangedLocked(
-            ArrayMap<IBinder, ? extends LinkedListenerBase> gnssDataListeners,
-            RemoteListenerHelper<TListener> gnssDataProvider,
-            Function<IBinder, TListener> mapBinderToListener, int uid, boolean foreground) {
-        for (Entry<IBinder, ? extends LinkedListenerBase> entry : gnssDataListeners.entrySet()) {
-            LinkedListenerBase linkedListener = entry.getValue();
-            CallerIdentity callerIdentity = linkedListener.mCallerIdentity;
-            if (callerIdentity.mUid != uid) {
-                continue;
-            }
-
-            if (D) {
-                Log.d(TAG, linkedListener.mListenerName + " from uid "
-                        + uid + " is now " + foregroundAsString(foreground));
-            }
-
-            TListener listener = mapBinderToListener.apply(entry.getKey());
-            if (foreground || isThrottlingExemptLocked(callerIdentity)) {
-                gnssDataProvider.addListener(listener, callerIdentity);
-            } else {
-                gnssDataProvider.removeListener(listener);
-            }
-        }
-    }
-
-    private static String foregroundAsString(boolean foreground) {
-        return foreground ? "foreground" : "background";
-    }
-
-    private static boolean isImportanceForeground(int importance) {
-        return importance <= FOREGROUND_IMPORTANCE_CUTOFF;
     }
 
     @GuardedBy("mLock")
     private void onBackgroundThrottleIntervalChangedLocked() {
-        for (LocationProvider provider : mProviders) {
+        for (LocationProviderManager provider : mProviders) {
             applyRequirementsLocked(provider);
         }
     }
 
     @GuardedBy("mLock")
     private void onBackgroundThrottleWhitelistChangedLocked() {
-        mBackgroundThrottlePackageWhitelist.clear();
-        mBackgroundThrottlePackageWhitelist.addAll(
-                SystemConfig.getInstance().getAllowUnthrottledLocation());
-
-        String setting = Settings.Global.getString(
-                mContext.getContentResolver(),
-                Settings.Global.LOCATION_BACKGROUND_THROTTLE_PACKAGE_WHITELIST);
-        if (!TextUtils.isEmpty(setting)) {
-            mBackgroundThrottlePackageWhitelist.addAll(Arrays.asList(setting.split(",")));
-        }
-
-        for (LocationProvider p : mProviders) {
+        for (LocationProviderManager p : mProviders) {
             applyRequirementsLocked(p);
         }
     }
 
     @GuardedBy("lock")
     private void onIgnoreSettingsWhitelistChangedLocked() {
-        mIgnoreSettingsPackageWhitelist.clear();
-        mIgnoreSettingsPackageWhitelist.addAll(
-                SystemConfig.getInstance().getAllowIgnoreLocationSettings());
-
-        String setting = Settings.Global.getString(
-                mContext.getContentResolver(),
-                Settings.Global.LOCATION_IGNORE_SETTINGS_PACKAGE_WHITELIST);
-        if (!TextUtils.isEmpty(setting)) {
-            mIgnoreSettingsPackageWhitelist.addAll(Arrays.asList(setting.split(",")));
-        }
-
-        for (LocationProvider p : mProviders) {
+        for (LocationProviderManager p : mProviders) {
             applyRequirementsLocked(p);
         }
     }
@@ -763,33 +624,21 @@ public class LocationManagerService extends ILocationManager.Stub {
     @GuardedBy("mLock")
     private void initializeProvidersLocked() {
         // create a passive location provider, which is always enabled
-        LocationProvider passiveProviderManager = new LocationProvider(PASSIVE_PROVIDER);
+        LocationProviderManager passiveProviderManager = new LocationProviderManager(
+                PASSIVE_PROVIDER);
         addProviderLocked(passiveProviderManager);
         mPassiveProvider = new PassiveProvider(mContext, passiveProviderManager);
         passiveProviderManager.attachLocked(mPassiveProvider);
 
-        if (GnssLocationProvider.isSupported()) {
-            // Create a gps location provider
-            LocationProvider gnssProviderManager = new LocationProvider(GPS_PROVIDER, true);
+        if (GnssManagerService.isGnssSupported()) {
+            // Create a gps location provider manager
+            LocationProviderManager gnssProviderManager = new LocationProviderManager(GPS_PROVIDER);
             mRealProviders.add(gnssProviderManager);
             addProviderLocked(gnssProviderManager);
 
-            GnssLocationProvider gnssProvider = new GnssLocationProvider(mContext,
-                    gnssProviderManager,
-                    mHandler.getLooper());
-            gnssProviderManager.attachLocked(gnssProvider);
-
-            mGnssSystemInfoProvider = gnssProvider.getGnssSystemInfoProvider();
-            mGnssBatchingProvider = gnssProvider.getGnssBatchingProvider();
-            mGnssMetricsProvider = gnssProvider.getGnssMetricsProvider();
-            mGnssCapabilitiesProvider = gnssProvider.getGnssCapabilitiesProvider();
-            mGnssStatusProvider = gnssProvider.getGnssStatusProvider();
-            mNetInitiatedListener = gnssProvider.getNetInitiatedListener();
-            mGnssMeasurementsProvider = gnssProvider.getGnssMeasurementsProvider();
-            mGnssMeasurementCorrectionsProvider =
-                    gnssProvider.getGnssMeasurementCorrectionsProvider();
-            mGnssNavigationMessageProvider = gnssProvider.getGnssNavigationMessageProvider();
-            mGpsGeofenceProxy = gnssProvider.getGpsGeofenceProxy();
+            mGnssManagerService = new GnssManagerService(this, mContext, gnssProviderManager,
+                    mLocationUsageLogger);
+            gnssProviderManager.attachLocked(mGnssManagerService.getGnssLocationProvider());
         }
 
         /*
@@ -814,7 +663,8 @@ public class LocationManagerService extends ILocationManager.Stub {
         ensureFallbackFusedProviderPresentLocked(pkgs);
 
         // bind to network provider
-        LocationProvider networkProviderManager = new LocationProvider(NETWORK_PROVIDER, true);
+        LocationProviderManager networkProviderManager = new LocationProviderManager(
+                NETWORK_PROVIDER);
         LocationProviderProxy networkProvider = LocationProviderProxy.createAndBind(
                 mContext,
                 networkProviderManager,
@@ -831,7 +681,7 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
 
         // bind to fused provider
-        LocationProvider fusedProviderManager = new LocationProvider(FUSED_PROVIDER);
+        LocationProviderManager fusedProviderManager = new LocationProviderManager(FUSED_PROVIDER);
         LocationProviderProxy fusedProvider = LocationProviderProxy.createAndBind(
                 mContext,
                 fusedProviderManager,
@@ -857,15 +707,17 @@ public class LocationManagerService extends ILocationManager.Stub {
             Slog.e(TAG, "no geocoder provider found");
         }
 
-        // bind to geofence provider
-        GeofenceProxy provider = GeofenceProxy.createAndBind(
-                mContext, com.android.internal.R.bool.config_enableGeofenceOverlay,
-                com.android.internal.R.string.config_geofenceProviderPackageName,
-                com.android.internal.R.array.config_locationProviderPackageNames,
-                mGpsGeofenceProxy,
-                null);
-        if (provider == null) {
-            Slog.d(TAG, "Unable to bind FLP Geofence proxy.");
+        if (mGnssManagerService != null) {
+            // bind to geofence provider
+            GeofenceProxy provider = GeofenceProxy.createAndBind(
+                    mContext, com.android.internal.R.bool.config_enableGeofenceOverlay,
+                    com.android.internal.R.string.config_geofenceProviderPackageName,
+                    com.android.internal.R.array.config_locationProviderPackageNames,
+                    mGnssManagerService.getGpsGeofenceProxy(),
+                    null);
+            if (provider == null) {
+                Slog.d(TAG, "Unable to bind FLP Geofence proxy.");
+            }
         }
 
         // bind to hardware activity recognition
@@ -902,7 +754,7 @@ public class LocationManagerService extends ILocationManager.Stub {
                     Boolean.parseBoolean(fragments[7]) /* supportsBearing */,
                     Integer.parseInt(fragments[8]) /* powerRequirement */,
                     Integer.parseInt(fragments[9]) /* accuracy */);
-            LocationProvider testProviderManager = new LocationProvider(name);
+            LocationProviderManager testProviderManager = new LocationProviderManager(name);
             addProviderLocked(testProviderManager);
             testProviderManager.attachLocked(
                     new MockProvider(mContext, testProviderManager, properties));
@@ -919,69 +771,52 @@ public class LocationManagerService extends ILocationManager.Stub {
             Log.d(TAG, "foreground user is changing to " + userId);
         }
 
-        // let providers know the current user is on the way out before changing the user
-        for (LocationProvider p : mProviders) {
-            p.onUserChangingLocked();
-        }
-
+        int oldUserId = userId;
         mCurrentUserId = userId;
         onUserProfilesChangedLocked();
 
-        mBlacklist.switchUser(userId);
-
-        // if the user changes, per-user settings may also have changed
-        onLocationModeChangedLocked(false);
-        onProviderAllowedChangedLocked();
-
-        // always force useability to be rechecked, even if no per-user settings have changed
-        for (LocationProvider p : mProviders) {
-            p.onUseableChangedLocked(false);
+        // let providers know the current user has changed
+        for (LocationProviderManager p : mProviders) {
+            p.onUseableChangedLocked(oldUserId);
+            p.onUseableChangedLocked(mCurrentUserId);
         }
     }
 
-    private class LocationProvider implements AbstractLocationProvider.LocationProviderManager {
+    /**
+     * Location provider manager, manages a LocationProvider.
+     */
+    class LocationProviderManager implements AbstractLocationProvider.LocationProviderManager {
 
         private final String mName;
 
-        // whether this provider should respect LOCATION_PROVIDERS_ALLOWED (ie gps and network)
-        private final boolean mIsManagedBySettings;
-
         // remember to clear binder identity before invoking any provider operation
         @GuardedBy("mLock")
-        @Nullable protected AbstractLocationProvider mProvider;
+        @Nullable
+        protected AbstractLocationProvider mProvider;
 
         @GuardedBy("mLock")
-        private boolean mUseable;  // combined state
-        @GuardedBy("mLock")
-        private boolean mAllowed;  // state of LOCATION_PROVIDERS_ALLOWED
+        private SparseArray<Boolean> mUseable;  // combined state for each user id
         @GuardedBy("mLock")
         private boolean mEnabled;  // state of provider
 
         @GuardedBy("mLock")
-        @Nullable private ProviderProperties mProperties;
+        @Nullable
+        private ProviderProperties mProperties;
 
-        private LocationProvider(String name) {
-            this(name, false);
-        }
-
-        private LocationProvider(String name, boolean isManagedBySettings) {
+        private LocationProviderManager(String name) {
             mName = name;
-            mIsManagedBySettings = isManagedBySettings;
 
             mProvider = null;
-            mUseable = false;
-            mAllowed = !mIsManagedBySettings;
+            mUseable = new SparseArray<>(1);
             mEnabled = false;
             mProperties = null;
 
-            if (mIsManagedBySettings) {
-                // since we assume providers are disabled by default
-                Settings.Secure.putStringForUser(
-                        mContext.getContentResolver(),
-                        Settings.Secure.LOCATION_PROVIDERS_ALLOWED,
-                        "-" + mName,
-                        mCurrentUserId);
-            }
+            // update LOCATION_PROVIDERS_ALLOWED for best effort backwards compatibility
+            Settings.Secure.putStringForUser(
+                    mContext.getContentResolver(),
+                    Settings.Secure.LOCATION_PROVIDERS_ALLOWED,
+                    "-" + mName,
+                    mCurrentUserId);
         }
 
         @GuardedBy("mLock")
@@ -994,7 +829,10 @@ public class LocationManagerService extends ILocationManager.Stub {
             }
 
             mProvider = provider;
-            onUseableChangedLocked(false);
+
+            // it would be more correct to call this for all users, but we know this can only
+            // affect the current user since providers are disabled for non-current users
+            onUseableChangedLocked(mCurrentUserId);
         }
 
         public String getName() {
@@ -1061,12 +899,9 @@ public class LocationManagerService extends ILocationManager.Stub {
 
             pw.increaseIndent();
 
-            pw.println("useable=" + mUseable);
-            if (!mUseable) {
+            pw.println("useable=" + isUseableLocked(mCurrentUserId));
+            if (!isUseableLocked(mCurrentUserId)) {
                 pw.println("attached=" + (mProvider != null));
-                if (mIsManagedBySettings) {
-                    pw.println("allowed=" + mAllowed);
-                }
                 pw.println("enabled=" + mEnabled);
             }
 
@@ -1088,6 +923,12 @@ public class LocationManagerService extends ILocationManager.Stub {
 
         @Override
         public void onReportLocation(Location location) {
+            // likelihood of a 0,0 bug is far greater than this being a valid location
+            if (!isMock() && location.getLatitude() == 0 && location.getLongitude() == 0) {
+                Slog.w(TAG, "blocking 0,0 location from " + mName + " provider");
+                return;
+            }
+
             synchronized (mLock) {
                 handleLocationChangedLocked(location, this);
             }
@@ -1095,23 +936,17 @@ public class LocationManagerService extends ILocationManager.Stub {
 
         @Override
         public void onReportLocation(List<Location> locations) {
+            if (mGnssManagerService == null) {
+                return;
+            }
             synchronized (mLock) {
-                LocationProvider gpsProvider = getLocationProviderLocked(GPS_PROVIDER);
+                LocationProviderManager gpsProvider = getLocationProviderLocked(GPS_PROVIDER);
                 if (gpsProvider == null || !gpsProvider.isUseableLocked()) {
                     Slog.w(TAG, "reportLocationBatch() called without user permission");
                     return;
                 }
 
-                if (mGnssBatchingCallback == null) {
-                    Slog.e(TAG, "reportLocationBatch() called without active Callback");
-                    return;
-                }
-
-                try {
-                    mGnssBatchingCallback.onLocationBatch(locations);
-                } catch (RemoteException e) {
-                    Slog.e(TAG, "mGnssBatchingCallback.onLocationBatch failed", e);
-                }
+                mGnssManagerService.onReportLocation(locations);
             }
         }
 
@@ -1127,7 +962,10 @@ public class LocationManagerService extends ILocationManager.Stub {
                 }
 
                 mEnabled = enabled;
-                onUseableChangedLocked(false);
+
+                // it would be more correct to call this for all users, but we know this can only
+                // affect the current user since providers are disabled for non-current users
+                onUseableChangedLocked(mCurrentUserId);
             }
         }
 
@@ -1139,94 +977,49 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
 
         @GuardedBy("mLock")
-        public void onLocationModeChangedLocked() {
-            onUseableChangedLocked(false);
-        }
-
-        @GuardedBy("mLock")
-        public void onAllowedChangedLocked() {
-            if (mIsManagedBySettings) {
-                String allowedProviders = Settings.Secure.getStringForUser(
-                        mContext.getContentResolver(),
-                        Settings.Secure.LOCATION_PROVIDERS_ALLOWED,
-                        mCurrentUserId);
-                boolean allowed = TextUtils.delimitedStringContains(allowedProviders, ',', mName);
-
-                if (allowed == mAllowed) {
-                    return;
-                }
-
-                if (D) {
-                    Log.d(TAG, mName + " provider allowed is now " + mAllowed);
-                }
-
-                mAllowed = allowed;
-                onUseableChangedLocked(true);
-            }
-        }
-
-        @GuardedBy("mLock")
         public boolean isUseableLocked() {
-            return isUseableForUserLocked(mCurrentUserId);
+            return isUseableLocked(mCurrentUserId);
         }
 
         @GuardedBy("mLock")
-        public boolean isUseableForUserLocked(int userId) {
-            return isCurrentProfileLocked(userId) && mUseable;
+        public boolean isUseableLocked(int userId) {
+            return mUseable.get(userId, Boolean.FALSE);
         }
 
         @GuardedBy("mLock")
-        private boolean isUseableIgnoringAllowedLocked() {
-            return mProvider != null && mProviders.contains(this) && isLocationEnabled()
-                    && mEnabled;
-        }
-
-        @GuardedBy("mLock")
-        public void onUseableChangedLocked(boolean isAllowedChanged) {
+        public void onUseableChangedLocked(int userId) {
             // if any property that contributes to "useability" here changes state, it MUST result
             // in a direct or indrect call to onUseableChangedLocked. this allows the provider to
             // guarantee that it will always eventually reach the correct state.
-            boolean useableIgnoringAllowed = isUseableIgnoringAllowedLocked();
-            boolean useable = useableIgnoringAllowed && mAllowed;
+            boolean useable = mProvider != null && mProviders.contains(this)
+                    && isCurrentProfileLocked(userId) && isLocationEnabledForUser(userId)
+                    && mEnabled;
 
-            // update deprecated provider allowed settings for backwards compatibility, and do this
-            // even if there is no change in overall useability state. this may result in trying to
-            // overwrite the same value, but Settings handles deduping this.
-            if (mIsManagedBySettings) {
-                // a "-" change derived from the allowed setting should not be overwritten, but a
-                // "+" change should be corrected if necessary
-                if (useableIgnoringAllowed && !isAllowedChanged) {
-                    Settings.Secure.putStringForUser(
-                            mContext.getContentResolver(),
-                            Settings.Secure.LOCATION_PROVIDERS_ALLOWED,
-                            "+" + mName,
-                            mCurrentUserId);
-                } else if (!useableIgnoringAllowed) {
-                    Settings.Secure.putStringForUser(
-                            mContext.getContentResolver(),
-                            Settings.Secure.LOCATION_PROVIDERS_ALLOWED,
-                            "-" + mName,
-                            mCurrentUserId);
-                }
-
-                // needs to be sent to all users because whether or not a provider is enabled for
-                // a given user is complicated... we broadcast to everyone and let them figure it
-                // out via isProviderEnabled()
-                Intent intent = new Intent(LocationManager.PROVIDERS_CHANGED_ACTION);
-                intent.putExtra(LocationManager.EXTRA_PROVIDER_NAME, mName);
-                mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-            }
-
-            if (useable == mUseable) {
+            if (useable == isUseableLocked(userId)) {
                 return;
             }
-            mUseable = useable;
+            mUseable.put(userId, useable);
 
             if (D) {
-                Log.d(TAG, mName + " provider useable is now " + mUseable);
+                Log.d(TAG, "[u" + userId + "] " + mName + " provider useable = " + useable);
             }
 
-            if (!mUseable) {
+            // fused and passive provider never get public updates for legacy reasons
+            if (!FUSED_PROVIDER.equals(mName) && !PASSIVE_PROVIDER.equals(mName)) {
+                // update LOCATION_PROVIDERS_ALLOWED for best effort backwards compatibility
+                Settings.Secure.putStringForUser(
+                        mContext.getContentResolver(),
+                        Settings.Secure.LOCATION_PROVIDERS_ALLOWED,
+                        (useable ? "+" : "-") + mName,
+                        userId);
+
+                Intent intent = new Intent(LocationManager.PROVIDERS_CHANGED_ACTION);
+                intent.putExtra(LocationManager.EXTRA_PROVIDER_NAME, mName);
+                intent.putExtra(LocationManager.EXTRA_PROVIDER_ENABLED, useable);
+                mContext.sendBroadcastAsUser(intent, UserHandle.of(userId));
+            }
+
+            if (!useable) {
                 // If any provider has been disabled, clear all last locations for all
                 // providers. This is to be on the safe side in case a provider has location
                 // derived from this disabled provider.
@@ -1236,18 +1029,9 @@ public class LocationManagerService extends ILocationManager.Stub {
 
             updateProviderUseableLocked(this);
         }
-
-        @GuardedBy("mLock")
-        public void onUserChangingLocked() {
-            // when the user is about to change, we set this provider to un-useable, and notify all
-            // of the current user clients. when the user is finished changing, useability will be
-            // updated back via onLocationModeChanged() and onAllowedChanged().
-            mUseable = false;
-            updateProviderUseableLocked(this);
-        }
     }
 
-    private class MockLocationProvider extends LocationProvider {
+    private class MockLocationProvider extends LocationProviderManager {
 
         private ProviderRequest mCurrentRequest;
 
@@ -1300,7 +1084,8 @@ public class LocationManagerService extends ILocationManager.Stub {
      * A wrapper class holding either an ILocationListener or a PendingIntent to receive
      * location updates.
      */
-    private final class Receiver extends LinkedListenerBase implements PendingIntent.OnFinished {
+    private final class Receiver extends LocationManagerServiceUtils.LinkedListenerBase implements
+            PendingIntent.OnFinished {
         private static final long WAKELOCK_TIMEOUT_MILLIS = 60 * 1000;
         private final int mAllowedResolutionLevel;  // resolution level allowed to receiver
 
@@ -1320,8 +1105,10 @@ public class LocationManagerService extends ILocationManager.Stub {
         PowerManager.WakeLock mWakeLock;
 
         private Receiver(ILocationListener listener, PendingIntent intent, int pid, int uid,
-                String packageName, WorkSource workSource, boolean hideFromAppOps) {
-            super(new CallerIdentity(uid, pid, packageName), "LocationListener");
+                String packageName, @Nullable String featureId, WorkSource workSource,
+                boolean hideFromAppOps, @NonNull String listenerIdentifier) {
+            super(new CallerIdentity(uid, pid, packageName, featureId, listenerIdentifier),
+                    "LocationListener");
             mListener = listener;
             mPendingIntent = intent;
             if (listener != null) {
@@ -1394,7 +1181,8 @@ public class LocationManagerService extends ILocationManager.Stub {
                 // See if receiver has any enabled update records.  Also note if any update records
                 // are high power (has a high power provider with an interval under a threshold).
                 for (UpdateRecord updateRecord : mUpdateRecords.values()) {
-                    LocationProvider provider = getLocationProviderLocked(updateRecord.mProvider);
+                    LocationProviderManager provider = getLocationProviderLocked(
+                            updateRecord.mProvider);
                     if (provider == null) {
                         continue;
                     }
@@ -1445,7 +1233,8 @@ public class LocationManagerService extends ILocationManager.Stub {
             if (!currentlyMonitoring) {
                 if (allowMonitoring) {
                     return mAppOps.startOpNoThrow(op, mCallerIdentity.mUid,
-                            mCallerIdentity.mPackageName) == AppOpsManager.MODE_ALLOWED;
+                            mCallerIdentity.mPackageName, false, mCallerIdentity.mFeatureId, null)
+                            == AppOpsManager.MODE_ALLOWED;
                 }
             } else {
                 if (!allowMonitoring
@@ -1537,6 +1326,16 @@ public class LocationManagerService extends ILocationManager.Stub {
             return true;
         }
 
+        public void callRemovedLocked() {
+            if (mListener != null) {
+                try {
+                    mListener.onRemoved();
+                } catch (RemoteException e) {
+                    // doesn't matter
+                }
+            }
+        }
+
         @Override
         public void binderDied() {
             if (D) Log.d(TAG, "Remote " + mListenerName + " died.");
@@ -1614,169 +1413,74 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @Override
     public int getGnssYearOfHardware() {
-        if (mGnssSystemInfoProvider != null) {
-            return mGnssSystemInfoProvider.getGnssYearOfHardware();
-        } else {
-            return 0;
-        }
+        return mGnssManagerService == null ? 0 : mGnssManagerService.getGnssYearOfHardware();
     }
 
     @Override
     @Nullable
     public String getGnssHardwareModelName() {
-        if (mGnssSystemInfoProvider != null) {
-            return mGnssSystemInfoProvider.getGnssHardwareModelName();
-        } else {
-            return null;
-        }
-    }
-
-    private boolean hasGnssPermissions(String packageName) {
-        synchronized (mLock) {
-            int allowedResolutionLevel = getCallerAllowedResolutionLevel();
-            checkResolutionLevelIsSufficientForProviderUseLocked(
-                    allowedResolutionLevel,
-                    GPS_PROVIDER);
-
-            int pid = Binder.getCallingPid();
-            int uid = Binder.getCallingUid();
-            long identity = Binder.clearCallingIdentity();
-            try {
-                return checkLocationAccess(pid, uid, packageName, allowedResolutionLevel);
-            } finally {
-                Binder.restoreCallingIdentity(identity);
-            }
-        }
+        return mGnssManagerService == null ? "" : mGnssManagerService.getGnssHardwareModelName();
     }
 
     @Override
     public int getGnssBatchSize(String packageName) {
-        mContext.enforceCallingPermission(android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to access hardware batching");
-
-        if (hasGnssPermissions(packageName) && mGnssBatchingProvider != null) {
-            return mGnssBatchingProvider.getBatchSize();
-        } else {
-            return 0;
-        }
+        return mGnssManagerService == null ? 0 : mGnssManagerService.getGnssBatchSize(packageName);
     }
 
     @Override
-    public boolean addGnssBatchingCallback(IBatchedLocationCallback callback, String packageName) {
-        mContext.enforceCallingPermission(android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to access hardware batching");
+    public boolean addGnssBatchingCallback(IBatchedLocationCallback callback, String packageName,
+            String featureId, String listenerIdentifier) {
+        Preconditions.checkNotNull(listenerIdentifier);
 
-        if (!hasGnssPermissions(packageName) || mGnssBatchingProvider == null) {
-            return false;
-        }
-
-        CallerIdentity callerIdentity = new CallerIdentity(Binder.getCallingUid(),
-                Binder.getCallingPid(), packageName);
-        synchronized (mLock) {
-            mGnssBatchingCallback = callback;
-            mGnssBatchingDeathCallback =  new LinkedListener<>(callback,
-                    "BatchedLocationCallback", callerIdentity,
-                    (IBatchedLocationCallback listener) -> {
-                        stopGnssBatch();
-                        removeGnssBatchingCallback();
-                    });
-            if (!linkToListenerDeathNotificationLocked(callback.asBinder(),
-                    mGnssBatchingDeathCallback)) {
-                return false;
-            }
-            return true;
-        }
+        return mGnssManagerService == null ? false : mGnssManagerService.addGnssBatchingCallback(
+                callback, packageName, featureId, listenerIdentifier);
     }
 
     @Override
     public void removeGnssBatchingCallback() {
-        synchronized (mLock) {
-            unlinkFromListenerDeathNotificationLocked(mGnssBatchingCallback.asBinder(),
-                    mGnssBatchingDeathCallback);
-            mGnssBatchingCallback = null;
-            mGnssBatchingDeathCallback = null;
-        }
+        if (mGnssManagerService != null) mGnssManagerService.removeGnssBatchingCallback();
     }
 
     @Override
     public boolean startGnssBatch(long periodNanos, boolean wakeOnFifoFull, String packageName) {
-        mContext.enforceCallingPermission(android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to access hardware batching");
-
-        if (!hasGnssPermissions(packageName) || mGnssBatchingProvider == null) {
-            return false;
-        }
-
-        synchronized (mLock) {
-            if (mGnssBatchingInProgress) {
-                // Current design does not expect multiple starts to be called repeatedly
-                Log.e(TAG, "startGnssBatch unexpectedly called w/o stopping prior batch");
-                // Try to clean up anyway, and continue
-                stopGnssBatch();
-            }
-
-            mGnssBatchingInProgress = true;
-            return mGnssBatchingProvider.start(periodNanos, wakeOnFifoFull);
-        }
+        return mGnssManagerService == null ? false : mGnssManagerService.startGnssBatch(periodNanos,
+                wakeOnFifoFull, packageName);
     }
 
     @Override
     public void flushGnssBatch(String packageName) {
-        mContext.enforceCallingPermission(android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to access hardware batching");
-
-        if (!hasGnssPermissions(packageName)) {
-            Log.e(TAG, "flushGnssBatch called without GNSS permissions");
-            return;
-        }
-
-        synchronized (mLock) {
-            if (!mGnssBatchingInProgress) {
-                Log.w(TAG, "flushGnssBatch called with no batch in progress");
-            }
-
-            if (mGnssBatchingProvider != null) {
-                mGnssBatchingProvider.flush();
-            }
-        }
+        if (mGnssManagerService != null) mGnssManagerService.flushGnssBatch(packageName);
     }
 
     @Override
     public boolean stopGnssBatch() {
-        mContext.enforceCallingPermission(android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to access hardware batching");
-
-        synchronized (mLock) {
-            if (mGnssBatchingProvider != null) {
-                mGnssBatchingInProgress = false;
-                return mGnssBatchingProvider.stop();
-            } else {
-                return false;
-            }
-        }
+        return mGnssManagerService == null ? false : mGnssManagerService.stopGnssBatch();
     }
 
     @GuardedBy("mLock")
-    private void addProviderLocked(LocationProvider provider) {
+    private void addProviderLocked(LocationProviderManager provider) {
         Preconditions.checkState(getLocationProviderLocked(provider.getName()) == null);
 
         mProviders.add(provider);
 
-        provider.onAllowedChangedLocked();  // allowed state may change while provider was inactive
-        provider.onUseableChangedLocked(false);
+        // it would be more correct to call this for all users, but we know this can only
+        // affect the current user since providers are disabled for non-current users
+        provider.onUseableChangedLocked(mCurrentUserId);
     }
 
     @GuardedBy("mLock")
-    private void removeProviderLocked(LocationProvider provider) {
+    private void removeProviderLocked(LocationProviderManager provider) {
         if (mProviders.remove(provider)) {
-            provider.onUseableChangedLocked(false);
+            // it would be more correct to call this for all users, but we know this can only
+            // affect the current user since providers are disabled for non-current users
+            provider.onUseableChangedLocked(mCurrentUserId);
         }
     }
 
     @GuardedBy("mLock")
     @Nullable
-    private LocationProvider getLocationProviderLocked(String providerName) {
-        for (LocationProvider provider : mProviders) {
+    private LocationProviderManager getLocationProviderLocked(String providerName) {
+        for (LocationProviderManager provider : mProviders) {
             if (providerName.equals(provider.getName())) {
                 return provider;
             }
@@ -1827,7 +1531,7 @@ public class LocationManagerService extends ILocationManager.Stub {
             // network and fused providers are ok with COARSE or FINE
             return RESOLUTION_LEVEL_COARSE;
         } else {
-            for (LocationProvider lp : mProviders) {
+            for (LocationProviderManager lp : mProviders) {
                 if (!lp.getName().equals(provider)) {
                     continue;
                 }
@@ -1894,11 +1598,12 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
     }
 
-    private boolean reportLocationAccessNoThrow(
-            int pid, int uid, String packageName, int allowedResolutionLevel) {
+    private boolean reportLocationAccessNoThrow(int pid, int uid, String packageName,
+            @Nullable String featureId, int allowedResolutionLevel, @Nullable String message) {
         int op = resolutionLevelToOp(allowedResolutionLevel);
         if (op >= 0) {
-            if (mAppOps.noteOpNoThrow(op, uid, packageName) != AppOpsManager.MODE_ALLOWED) {
+            if (mAppOps.noteOpNoThrow(op, uid, packageName, featureId, message)
+                    != AppOpsManager.MODE_ALLOWED) {
                 return false;
             }
         }
@@ -1926,7 +1631,7 @@ public class LocationManagerService extends ILocationManager.Stub {
     public List<String> getAllProviders() {
         synchronized (mLock) {
             ArrayList<String> providers = new ArrayList<>(mProviders.size());
-            for (LocationProvider provider : mProviders) {
+            for (LocationProviderManager provider : mProviders) {
                 String name = provider.getName();
                 if (FUSED_PROVIDER.equals(name)) {
                     continue;
@@ -1947,7 +1652,7 @@ public class LocationManagerService extends ILocationManager.Stub {
         int allowedResolutionLevel = getCallerAllowedResolutionLevel();
         synchronized (mLock) {
             ArrayList<String> providers = new ArrayList<>(mProviders.size());
-            for (LocationProvider provider : mProviders) {
+            for (LocationProviderManager provider : mProviders) {
                 String name = provider.getName();
                 if (FUSED_PROVIDER.equals(name)) {
                     continue;
@@ -1997,7 +1702,7 @@ public class LocationManagerService extends ILocationManager.Stub {
     }
 
     @GuardedBy("mLock")
-    private void updateProviderUseableLocked(LocationProvider provider) {
+    private void updateProviderUseableLocked(LocationProviderManager provider) {
         boolean useable = provider.isUseableLocked();
 
         ArrayList<Receiver> deadReceivers = null;
@@ -2036,14 +1741,14 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @GuardedBy("mLock")
     private void applyRequirementsLocked(String providerName) {
-        LocationProvider provider = getLocationProviderLocked(providerName);
+        LocationProviderManager provider = getLocationProviderLocked(providerName);
         if (provider != null) {
             applyRequirementsLocked(provider);
         }
     }
 
     @GuardedBy("mLock")
-    private void applyRequirementsLocked(LocationProvider provider) {
+    private void applyRequirementsLocked(LocationProviderManager provider) {
         ArrayList<UpdateRecord> records = mRecordsByProvider.get(provider.getName());
         WorkSource worksource = new WorkSource();
         ProviderRequest providerRequest = new ProviderRequest();
@@ -2055,10 +1760,7 @@ public class LocationManagerService extends ILocationManager.Stub {
 
             long identity = Binder.clearCallingIdentity();
             try {
-                backgroundThrottleInterval = Settings.Global.getLong(
-                        mContext.getContentResolver(),
-                        Settings.Global.LOCATION_BACKGROUND_THROTTLE_INTERVAL_MS,
-                        DEFAULT_BACKGROUND_THROTTLE_INTERVAL_MS);
+                backgroundThrottleInterval = mSettingsStore.getBackgroundThrottleIntervalMs();
             } finally {
                 Binder.restoreCallingIdentity(identity);
             }
@@ -2166,11 +1868,11 @@ public class LocationManagerService extends ILocationManager.Stub {
         if (workSource.size() > 0) {
             // If the WorkSource has one or more non-chained UIDs, make sure they're accompanied
             // by tags.
-            return workSource.getName(0) != null;
+            return workSource.getPackageName(0) != null;
         } else {
             // For now, make sure callers have supplied an attribution tag for use with
             // AppOpsManager. This might be relaxed in the future.
-            final ArrayList<WorkChain> workChains = workSource.getWorkChains();
+            final List<WorkChain> workChains = workSource.getWorkChains();
             return workChains != null && !workChains.isEmpty() &&
                     workChains.get(0).getAttributionTag() != null;
         }
@@ -2178,25 +1880,22 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @Override
     public String[] getBackgroundThrottlingWhitelist() {
-        synchronized (mLock) {
-            return mBackgroundThrottlePackageWhitelist.toArray(new String[0]);
-        }
+        return mSettingsStore.getBackgroundThrottlePackageWhitelist().toArray(new String[0]);
     }
 
     @Override
     public String[] getIgnoreSettingsWhitelist() {
-        synchronized (mLock) {
-            return mIgnoreSettingsPackageWhitelist.toArray(new String[0]);
-        }
+        return mSettingsStore.getIgnoreSettingsPackageWhitelist().toArray(new String[0]);
     }
 
     @GuardedBy("mLock")
-    private boolean isThrottlingExemptLocked(CallerIdentity callerIdentity) {
+    public boolean isThrottlingExemptLocked(CallerIdentity callerIdentity) {
         if (callerIdentity.mUid == Process.SYSTEM_UID) {
             return true;
         }
 
-        if (mBackgroundThrottlePackageWhitelist.contains(callerIdentity.mPackageName)) {
+        if (mSettingsStore.getBackgroundThrottlePackageWhitelist().contains(
+                callerIdentity.mPackageName)) {
             return true;
         }
 
@@ -2210,7 +1909,7 @@ public class LocationManagerService extends ILocationManager.Stub {
             return false;
         }
 
-        if (mIgnoreSettingsPackageWhitelist.contains(
+        if (mSettingsStore.getIgnoreSettingsPackageWhitelist().contains(
                 record.mReceiver.mCallerIdentity.mPackageName)) {
             return true;
         }
@@ -2227,17 +1926,21 @@ public class LocationManagerService extends ILocationManager.Stub {
         private boolean mIsForegroundUid;
         private Location mLastFixBroadcast;
         private Throwable mStackTrace;  // for debugging only
+        private long mExpirationRealtimeMs;
 
         /**
          * Note: must be constructed with lock held.
          */
         private UpdateRecord(String provider, LocationRequest request, Receiver receiver) {
+            mExpirationRealtimeMs = request.getExpirationRealtimeMs(SystemClock.elapsedRealtime());
             mProvider = provider;
             mRealRequest = request;
             mRequest = request;
             mReceiver = receiver;
-            mIsForegroundUid = isImportanceForeground(
-                    mActivityManager.getPackageImportance(mReceiver.mCallerIdentity.mPackageName));
+            mIsForegroundUid =
+                    LocationManagerServiceUtils.isImportanceForeground(
+                            mActivityManager.getPackageImportance(
+                                    mReceiver.mCallerIdentity.mPackageName));
 
             if (D && receiver.mCallerIdentity.mPid == Process.myPid()) {
                 mStackTrace = new Throwable();
@@ -2329,14 +2032,15 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @GuardedBy("mLock")
     private Receiver getReceiverLocked(ILocationListener listener, int pid, int uid,
-            String packageName, WorkSource workSource, boolean hideFromAppOps) {
+            String packageName, @Nullable String featureId, WorkSource workSource,
+            boolean hideFromAppOps, @NonNull String listenerIdentifier) {
         IBinder binder = listener.asBinder();
         Receiver receiver = mReceivers.get(binder);
         if (receiver == null) {
-            receiver = new Receiver(listener, null, pid, uid, packageName, workSource,
-                    hideFromAppOps);
-            if (!linkToListenerDeathNotificationLocked(receiver.getListener().asBinder(),
-                    receiver)) {
+            receiver = new Receiver(listener, null, pid, uid, packageName, featureId, workSource,
+                    hideFromAppOps, listenerIdentifier);
+            if (!receiver.linkToListenerDeathNotificationLocked(
+                    receiver.getListener().asBinder())) {
                 return null;
             }
             mReceivers.put(binder, receiver);
@@ -2346,11 +2050,12 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @GuardedBy("mLock")
     private Receiver getReceiverLocked(PendingIntent intent, int pid, int uid, String packageName,
-            WorkSource workSource, boolean hideFromAppOps) {
+            @Nullable String featureId, WorkSource workSource, boolean hideFromAppOps,
+            @NonNull String listenerIdentifier) {
         Receiver receiver = mReceivers.get(intent);
         if (receiver == null) {
-            receiver = new Receiver(null, intent, pid, uid, packageName, workSource,
-                    hideFromAppOps);
+            receiver = new Receiver(null, intent, pid, uid, packageName, featureId, workSource,
+                    hideFromAppOps, listenerIdentifier);
             mReceivers.put(intent, receiver);
         }
         return receiver;
@@ -2412,7 +2117,10 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @Override
     public void requestLocationUpdates(LocationRequest request, ILocationListener listener,
-            PendingIntent intent, String packageName) {
+            PendingIntent intent, String packageName, String featureId,
+            String listenerIdentifier) {
+        Preconditions.checkNotNull(listenerIdentifier);
+
         synchronized (mLock) {
             if (request == null) request = DEFAULT_LOCATION_REQUEST;
             checkPackageName(packageName);
@@ -2466,11 +2174,11 @@ public class LocationManagerService extends ILocationManager.Stub {
 
                 Receiver receiver;
                 if (intent != null) {
-                    receiver = getReceiverLocked(intent, pid, uid, packageName, workSource,
-                            hideFromAppOps);
+                    receiver = getReceiverLocked(intent, pid, uid, packageName, featureId,
+                            workSource, hideFromAppOps, listenerIdentifier);
                 } else {
-                    receiver = getReceiverLocked(listener, pid, uid, packageName, workSource,
-                            hideFromAppOps);
+                    receiver = getReceiverLocked(listener, pid, uid, packageName, featureId,
+                            workSource, hideFromAppOps, listenerIdentifier);
                 }
                 requestLocationUpdatesLocked(sanitizedRequest, receiver, uid, packageName);
             } finally {
@@ -2490,7 +2198,7 @@ public class LocationManagerService extends ILocationManager.Stub {
             throw new IllegalArgumentException("provider name must not be null");
         }
 
-        LocationProvider provider = getLocationProviderLocked(name);
+        LocationProviderManager provider = getLocationProviderLocked(name);
         if (provider == null) {
             throw new IllegalArgumentException("provider doesn't exist: " + name);
         }
@@ -2539,9 +2247,10 @@ public class LocationManagerService extends ILocationManager.Stub {
         synchronized (mLock) {
             Receiver receiver;
             if (intent != null) {
-                receiver = getReceiverLocked(intent, pid, uid, packageName, null, false);
+                receiver = getReceiverLocked(intent, pid, uid, packageName, null, null, false, "");
             } else {
-                receiver = getReceiverLocked(listener, pid, uid, packageName, null, false);
+                receiver = getReceiverLocked(listener, pid, uid, packageName, null, null, false,
+                        "");
             }
 
             long identity = Binder.clearCallingIdentity();
@@ -2558,8 +2267,8 @@ public class LocationManagerService extends ILocationManager.Stub {
         if (D) Log.i(TAG, "remove " + Integer.toHexString(System.identityHashCode(receiver)));
 
         if (mReceivers.remove(receiver.mKey) != null && receiver.isListener()) {
-            unlinkFromListenerDeathNotificationLocked(receiver.getListener().asBinder(),
-                    receiver);
+            receiver.unlinkFromListenerDeathNotificationLocked(
+                    receiver.getListener().asBinder());
             receiver.clearPendingBroadcastsLocked();
         }
 
@@ -2585,7 +2294,7 @@ public class LocationManagerService extends ILocationManager.Stub {
     }
 
     @Override
-    public Location getLastLocation(LocationRequest r, String packageName) {
+    public Location getLastLocation(LocationRequest r, String packageName, String featureId) {
         synchronized (mLock) {
             LocationRequest request = r != null ? r : DEFAULT_LOCATION_REQUEST;
             int allowedResolutionLevel = getCallerAllowedResolutionLevel();
@@ -2598,7 +2307,8 @@ public class LocationManagerService extends ILocationManager.Stub {
             final int uid = Binder.getCallingUid();
             final long identity = Binder.clearCallingIdentity();
             try {
-                if (mBlacklist.isBlacklisted(packageName)) {
+                if (mSettingsStore.isLocationPackageBlacklisted(UserHandle.getUserId(uid),
+                        packageName)) {
                     if (D) {
                         Log.d(TAG, "not returning last loc for blacklisted app: "
                                 + packageName);
@@ -2606,12 +2316,11 @@ public class LocationManagerService extends ILocationManager.Stub {
                     return null;
                 }
 
-
                 // Figure out the provider. Either its explicitly request (deprecated API's),
                 // or use the fused provider
                 String name = request.getProvider();
                 if (name == null) name = LocationManager.FUSED_PROVIDER;
-                LocationProvider provider = getLocationProviderLocked(name);
+                LocationProviderManager provider = getLocationProviderLocked(name);
                 if (provider == null) return null;
 
                 // only the current user or location providers may get location this way
@@ -2638,12 +2347,9 @@ public class LocationManagerService extends ILocationManager.Stub {
 
                 // Don't return stale location to apps with foreground-only location permission.
                 String op = resolutionLevelToOpStr(allowedResolutionLevel);
-                long locationAgeMs = SystemClock.elapsedRealtime()
-                        - location.getElapsedRealtimeNanos() / NANOS_PER_MILLI;
-                if ((locationAgeMs > Settings.Global.getLong(
-                        mContext.getContentResolver(),
-                        Settings.Global.LOCATION_LAST_LOCATION_MAX_AGE_MILLIS,
-                        DEFAULT_LAST_LOCATION_MAX_AGE_MS))
+                long locationAgeMs = TimeUnit.NANOSECONDS.toMillis(
+                        SystemClock.elapsedRealtime() - location.getElapsedRealtimeNanos());
+                if (locationAgeMs > mSettingsStore.getMaxLastLocationAgeMs()
                         && (mAppOps.unsafeCheckOp(op, uid, packageName)
                         == AppOpsManager.MODE_FOREGROUND)) {
                     return null;
@@ -2661,12 +2367,12 @@ public class LocationManagerService extends ILocationManager.Stub {
                 }
                 // Don't report location access if there is no last location to deliver.
                 if (lastLocation != null) {
-                    if (!reportLocationAccessNoThrow(
-                            pid, uid, packageName, allowedResolutionLevel)) {
+                    if (!reportLocationAccessNoThrow(pid, uid, packageName, featureId,
+                            allowedResolutionLevel, null)) {
                         if (D) {
                             Log.d(TAG, "not returning last loc for no op app: " + packageName);
                         }
-                        lastLocation =  null;
+                        lastLocation = null;
                     }
                 }
                 return lastLocation;
@@ -2674,6 +2380,53 @@ public class LocationManagerService extends ILocationManager.Stub {
                 Binder.restoreCallingIdentity(identity);
             }
         }
+    }
+
+    @Override
+    public boolean getCurrentLocation(LocationRequest locationRequest,
+            ICancellationSignal remoteCancellationSignal, ILocationListener listener,
+            String packageName, String featureId, String listenerIdentifier) {
+        // side effect of validating locationRequest and packageName
+        Location lastLocation = getLastLocation(locationRequest, packageName, featureId);
+        if (lastLocation != null) {
+            long locationAgeMs = TimeUnit.NANOSECONDS.toMillis(
+                    SystemClock.elapsedRealtimeNanos() - lastLocation.getElapsedRealtimeNanos());
+
+            long identity = Binder.clearCallingIdentity();
+            try {
+                if (locationAgeMs < MAX_CURRENT_LOCATION_AGE_MS) {
+                    try {
+                        listener.onLocationChanged(lastLocation);
+                        return true;
+                    } catch (RemoteException e) {
+                        Log.w(TAG, e);
+                        return false;
+                    }
+                }
+
+                // packageName already validated by getLastLocation() call above
+                boolean foreground = LocationManagerServiceUtils.isImportanceForeground(
+                        mActivityManager.getPackageImportance(packageName));
+                if (!foreground) {
+                    if (locationAgeMs < mSettingsStore.getBackgroundThrottleIntervalMs()) {
+                        // not allowed to request new locations, so we can't return anything
+                        return false;
+                    }
+                }
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        requestLocationUpdates(locationRequest, listener, null, packageName, featureId,
+                listenerIdentifier);
+        CancellationSignal cancellationSignal = CancellationSignal.fromTransport(
+                remoteCancellationSignal);
+        if (cancellationSignal != null) {
+            cancellationSignal.setOnCancelListener(
+                    () -> removeUpdates(listener, null, packageName));
+        }
+        return true;
     }
 
     @Override
@@ -2696,15 +2449,8 @@ public class LocationManagerService extends ILocationManager.Stub {
         mContext.enforceCallingPermission(android.Manifest.permission.ACCESS_FINE_LOCATION,
                 "Access Fine Location permission not granted to inject Location");
 
-        if (location == null) {
-            if (D) {
-                Log.d(TAG, "injectLocation(): called with null location");
-            }
-            return false;
-        }
-
         synchronized (mLock) {
-            LocationProvider provider = getLocationProviderLocked(location.getProvider());
+            LocationProviderManager provider = getLocationProviderLocked(location.getProvider());
             if (provider == null || !provider.isUseableLocked()) {
                 return false;
             }
@@ -2723,7 +2469,9 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @Override
     public void requestGeofence(LocationRequest request, Geofence geofence, PendingIntent intent,
-            String packageName) {
+            String packageName, String featureId, String listenerIdentifier) {
+        Preconditions.checkNotNull(listenerIdentifier);
+
         if (request == null) request = DEFAULT_LOCATION_REQUEST;
         int allowedResolutionLevel = getCallerAllowedResolutionLevel();
         checkResolutionLevelIsSufficientForGeofenceUse(allowedResolutionLevel);
@@ -2768,9 +2516,8 @@ public class LocationManagerService extends ILocationManager.Stub {
                         mActivityManager.getPackageImportance(packageName));
             }
 
-            mGeofenceManager.addFence(sanitizedRequest, geofence, intent,
-                    allowedResolutionLevel,
-                    uid, packageName);
+            mGeofenceManager.addFence(sanitizedRequest, geofence, intent, allowedResolutionLevel,
+                    uid, packageName, featureId, listenerIdentifier);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -2806,220 +2553,66 @@ public class LocationManagerService extends ILocationManager.Stub {
     }
 
     @Override
-    public boolean registerGnssStatusCallback(IGnssStatusListener listener, String packageName) {
-        return addGnssDataListener(listener, packageName, "GnssStatusListener",
-                mGnssStatusProvider, mGnssStatusListeners,
-                this::unregisterGnssStatusCallback);
+    public boolean registerGnssStatusCallback(IGnssStatusListener listener, String packageName,
+            String featureId) {
+        return mGnssManagerService == null ? false : mGnssManagerService.registerGnssStatusCallback(
+                listener, packageName, featureId);
     }
 
     @Override
     public void unregisterGnssStatusCallback(IGnssStatusListener listener) {
-        removeGnssDataListener(listener, mGnssStatusProvider, mGnssStatusListeners);
+        if (mGnssManagerService != null) mGnssManagerService.unregisterGnssStatusCallback(listener);
     }
 
     @Override
-    public boolean addGnssMeasurementsListener(
-            IGnssMeasurementsListener listener, String packageName) {
-        return addGnssDataListener(listener, packageName, "GnssMeasurementsListener",
-                mGnssMeasurementsProvider, mGnssMeasurementsListeners,
-                this::removeGnssMeasurementsListener);
+    public boolean addGnssMeasurementsListener(IGnssMeasurementsListener listener,
+            String packageName, String featureId, String listenerIdentifier) {
+        Preconditions.checkNotNull(listenerIdentifier);
+
+        return mGnssManagerService == null ? false
+                : mGnssManagerService.addGnssMeasurementsListener(listener, packageName, featureId,
+                       listenerIdentifier);
     }
 
     @Override
     public void removeGnssMeasurementsListener(IGnssMeasurementsListener listener) {
-        removeGnssDataListener(listener, mGnssMeasurementsProvider, mGnssMeasurementsListeners);
-    }
-
-    private abstract static class LinkedListenerBase implements IBinder.DeathRecipient {
-        protected final CallerIdentity mCallerIdentity;
-        protected final String mListenerName;
-
-        private LinkedListenerBase(@NonNull CallerIdentity callerIdentity,
-                @NonNull String listenerName) {
-            mCallerIdentity = callerIdentity;
-            mListenerName = listenerName;
-        }
-
-        @Override
-        public String toString() {
-            return mListenerName + "[" + mCallerIdentity.mPackageName + "(" + mCallerIdentity.mPid
-                    + ")]";
-        }
-    }
-
-    private static class LinkedListener<TListener> extends LinkedListenerBase {
-        private final TListener mListener;
-        private final Consumer<TListener> mBinderDeathCallback;
-
-        private LinkedListener(@NonNull TListener listener, String listenerName,
-                @NonNull CallerIdentity callerIdentity,
-                @NonNull Consumer<TListener> binderDeathCallback) {
-            super(callerIdentity, listenerName);
-            mListener = listener;
-            mBinderDeathCallback = binderDeathCallback;
-        }
-
-        @Override
-        public void binderDied() {
-            if (D) Log.d(TAG, "Remote " + mListenerName + " died.");
-            mBinderDeathCallback.accept(mListener);
-        }
-    }
-
-    private <TListener extends IInterface> boolean addGnssDataListener(
-            TListener listener, String packageName, String listenerName,
-            RemoteListenerHelper<TListener> gnssDataProvider,
-            ArrayMap<IBinder, LinkedListener<TListener>> gnssDataListeners,
-            Consumer<TListener> binderDeathCallback) {
-        if (!hasGnssPermissions(packageName) || gnssDataProvider == null) {
-            return false;
-        }
-
-        CallerIdentity callerIdentity = new CallerIdentity(Binder.getCallingUid(),
-                Binder.getCallingPid(), packageName);
-        LinkedListener<TListener> linkedListener = new LinkedListener<>(listener,
-                listenerName, callerIdentity, binderDeathCallback);
-        IBinder binder = listener.asBinder();
-        synchronized (mLock) {
-            if (!linkToListenerDeathNotificationLocked(binder, linkedListener)) {
-                return false;
-            }
-
-            gnssDataListeners.put(binder, linkedListener);
-            long identity = Binder.clearCallingIdentity();
-            try {
-                if (gnssDataProvider == mGnssMeasurementsProvider
-                        || gnssDataProvider == mGnssStatusProvider) {
-                    mLocationUsageLogger.logLocationApiUsage(
-                            LocationStatsEnums.USAGE_STARTED,
-                            gnssDataProvider == mGnssMeasurementsProvider
-                                ? LocationStatsEnums.API_ADD_GNSS_MEASUREMENTS_LISTENER
-                                : LocationStatsEnums.API_REGISTER_GNSS_STATUS_CALLBACK,
-                            packageName,
-                            /* LocationRequest= */ null,
-                            /* hasListener= */ true,
-                            /* hasIntent= */ false,
-                            /* geofence= */ null,
-                            mActivityManager.getPackageImportance(packageName));
-                }
-                if (isThrottlingExemptLocked(callerIdentity)
-                        || isImportanceForeground(
-                        mActivityManager.getPackageImportance(packageName))) {
-                    gnssDataProvider.addListener(listener, callerIdentity);
-                }
-                return true;
-            } finally {
-                Binder.restoreCallingIdentity(identity);
-            }
-        }
-    }
-
-    private <TListener extends IInterface> void removeGnssDataListener(
-            TListener listener, RemoteListenerHelper<TListener> gnssDataProvider,
-            ArrayMap<IBinder, LinkedListener<TListener>> gnssDataListeners) {
-        if (gnssDataProvider == null) {
-            return;
-        }
-
-        IBinder binder = listener.asBinder();
-        synchronized (mLock) {
-            LinkedListener<TListener> linkedListener = gnssDataListeners.remove(binder);
-            if (linkedListener == null) {
-                return;
-            }
-            long identity = Binder.clearCallingIdentity();
-            try {
-                if (gnssDataProvider == mGnssMeasurementsProvider
-                        || gnssDataProvider == mGnssStatusProvider) {
-                    mLocationUsageLogger.logLocationApiUsage(
-                            LocationStatsEnums.USAGE_ENDED,
-                            gnssDataProvider == mGnssMeasurementsProvider
-                                ? LocationStatsEnums.API_ADD_GNSS_MEASUREMENTS_LISTENER
-                                : LocationStatsEnums.API_REGISTER_GNSS_STATUS_CALLBACK,
-                            linkedListener.mCallerIdentity.mPackageName,
-                            /* LocationRequest= */ null,
-                            /* hasListener= */ true,
-                            /* hasIntent= */ false,
-                            /* geofence= */ null,
-                            mActivityManager.getPackageImportance(
-                                    linkedListener.mCallerIdentity.mPackageName));
-                }
-            } finally {
-                Binder.restoreCallingIdentity(identity);
-            }
-            unlinkFromListenerDeathNotificationLocked(binder, linkedListener);
-            gnssDataProvider.removeListener(listener);
-        }
-    }
-
-    private boolean linkToListenerDeathNotificationLocked(IBinder binder,
-            LinkedListenerBase linkedListener) {
-        try {
-            binder.linkToDeath(linkedListener, 0 /* flags */);
-            return true;
-        } catch (RemoteException e) {
-            // if the remote process registering the listener is already dead, just swallow the
-            // exception and return
-            Log.w(TAG, "Could not link " + linkedListener.mListenerName + " death callback.", e);
-            return false;
-        }
-    }
-
-    private boolean unlinkFromListenerDeathNotificationLocked(IBinder binder,
-            LinkedListenerBase linkedListener) {
-        try {
-            binder.unlinkToDeath(linkedListener, 0 /* flags */);
-            return true;
-        } catch (NoSuchElementException e) {
-            // if the death callback isn't connected (it should be...), log error,
-            // swallow the exception and return
-            Log.w(TAG, "Could not unlink " + linkedListener.mListenerName + " death callback.", e);
-            return false;
+        if (mGnssManagerService != null) {
+            mGnssManagerService.removeGnssMeasurementsListener(
+                    listener);
         }
     }
 
     @Override
     public void injectGnssMeasurementCorrections(
             GnssMeasurementCorrections measurementCorrections, String packageName) {
-        mContext.enforceCallingPermission(
-                android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to inject GNSS measurement corrections.");
-        if (!hasGnssPermissions(packageName)) {
-            Slog.e(TAG, "Can not inject GNSS corrections due to no permission.");
-            return;
+        if (mGnssManagerService != null) {
+            mGnssManagerService.injectGnssMeasurementCorrections(
+                    measurementCorrections, packageName);
         }
-        if (mGnssMeasurementCorrectionsProvider == null) {
-            Slog.e(TAG, "Can not inject GNSS corrections. GNSS measurement corrections provider "
-                    + "not available.");
-            return;
-        }
-        mGnssMeasurementCorrectionsProvider.injectGnssMeasurementCorrections(
-                measurementCorrections);
     }
 
     @Override
     public long getGnssCapabilities(String packageName) {
-        mContext.enforceCallingPermission(
-                android.Manifest.permission.LOCATION_HARDWARE,
-                "Location Hardware permission not granted to obtain GNSS chipset capabilities.");
-        if (!hasGnssPermissions(packageName) || mGnssCapabilitiesProvider == null) {
-            return GnssCapabilities.INVALID_CAPABILITIES;
-        }
-        return mGnssCapabilitiesProvider.getGnssCapabilities();
+        return mGnssManagerService == null ? 0L : mGnssManagerService.getGnssCapabilities(
+                packageName);
     }
 
     @Override
-    public boolean addGnssNavigationMessageListener(
-            IGnssNavigationMessageListener listener, String packageName) {
-        return addGnssDataListener(listener, packageName, "GnssNavigationMessageListener",
-                mGnssNavigationMessageProvider, mGnssNavigationMessageListeners,
-                this::removeGnssNavigationMessageListener);
+    public boolean addGnssNavigationMessageListener(IGnssNavigationMessageListener listener,
+            String packageName, String featureId, String listenerIdentifier) {
+        Preconditions.checkNotNull(listenerIdentifier);
+
+        return mGnssManagerService == null ? false
+                : mGnssManagerService.addGnssNavigationMessageListener(listener, packageName,
+                        featureId, listenerIdentifier);
     }
 
     @Override
     public void removeGnssNavigationMessageListener(IGnssNavigationMessageListener listener) {
-        removeGnssDataListener(listener, mGnssNavigationMessageProvider,
-                mGnssNavigationMessageListeners);
+        if (mGnssManagerService != null) {
+            mGnssManagerService.removeGnssNavigationMessageListener(
+                    listener);
+        }
     }
 
     @Override
@@ -3028,6 +2621,10 @@ public class LocationManagerService extends ILocationManager.Stub {
             // throw NullPointerException to remain compatible with previous implementation
             throw new NullPointerException();
         }
+
+        mContext.enforceCallingOrSelfPermission(
+                Manifest.permission.ACCESS_LOCATION_EXTRA_COMMANDS, null);
+
         synchronized (mLock) {
             checkResolutionLevelIsSufficientForProviderUseLocked(getCallerAllowedResolutionLevel(),
                     providerName);
@@ -3037,13 +2634,7 @@ public class LocationManagerService extends ILocationManager.Stub {
                     LocationStatsEnums.API_SEND_EXTRA_COMMAND,
                     providerName);
 
-            // and check for ACCESS_LOCATION_EXTRA_COMMANDS
-            if ((mContext.checkCallingOrSelfPermission(ACCESS_LOCATION_EXTRA_COMMANDS)
-                    != PERMISSION_GRANTED)) {
-                throw new SecurityException("Requires ACCESS_LOCATION_EXTRA_COMMANDS permission");
-            }
-
-            LocationProvider provider = getLocationProviderLocked(providerName);
+            LocationProviderManager provider = getLocationProviderLocked(providerName);
             if (provider != null) {
                 provider.sendExtraCommand(command, extras);
             }
@@ -3059,25 +2650,14 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @Override
     public boolean sendNiResponse(int notifId, int userResponse) {
-        if (Binder.getCallingUid() != Process.myUid()) {
-            throw new SecurityException(
-                    "calling sendNiResponse from outside of the system is not allowed");
-        }
-        try {
-            return mNetInitiatedListener.sendNiResponse(notifId, userResponse);
-        } catch (RemoteException e) {
-            Slog.e(TAG, "RemoteException in LocationManagerService.sendNiResponse");
-            return false;
-        }
+        return mGnssManagerService == null ? false : mGnssManagerService.sendNiResponse(notifId,
+                userResponse);
     }
 
     @Override
     public ProviderProperties getProviderProperties(String providerName) {
         synchronized (mLock) {
-            checkResolutionLevelIsSufficientForProviderUseLocked(getCallerAllowedResolutionLevel(),
-                    providerName);
-
-            LocationProvider provider = getLocationProviderLocked(providerName);
+            LocationProviderManager provider = getLocationProviderLocked(providerName);
             if (provider == null) {
                 return null;
             }
@@ -3090,13 +2670,22 @@ public class LocationManagerService extends ILocationManager.Stub {
         mContext.enforceCallingOrSelfPermission(Manifest.permission.READ_DEVICE_CONFIG,
                 Manifest.permission.READ_DEVICE_CONFIG + " permission required");
         synchronized (mLock) {
-            for (LocationProvider provider : mProviders) {
+            for (LocationProviderManager provider : mProviders) {
                 if (provider.getPackagesLocked().contains(packageName)) {
                     return true;
                 }
             }
-
             return false;
+        }
+    }
+
+    @Override
+    public List<String> getProviderPackages(String providerName) {
+        mContext.enforceCallingOrSelfPermission(Manifest.permission.READ_DEVICE_CONFIG,
+                Manifest.permission.READ_DEVICE_CONFIG + " permission required");
+        synchronized (mLock) {
+            LocationProviderManager provider = getLocationProviderLocked(providerName);
+            return provider == null ? Collections.emptyList() : provider.getPackagesLocked();
         }
     }
 
@@ -3133,10 +2722,6 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
     }
 
-    private boolean isLocationEnabled() {
-        return isLocationEnabledForUser(mCurrentUserId);
-    }
-
     @Override
     public boolean isLocationEnabledForUser(int userId) {
         // Check INTERACT_ACROSS_USERS permission if userId is not current user id.
@@ -3148,11 +2733,7 @@ public class LocationManagerService extends ILocationManager.Stub {
 
         long identity = Binder.clearCallingIdentity();
         try {
-            return Settings.Secure.getIntForUser(
-                        mContext.getContentResolver(),
-                        Settings.Secure.LOCATION_MODE,
-                        Settings.Secure.LOCATION_MODE_OFF,
-                        userId) != Settings.Secure.LOCATION_MODE_OFF;
+            return mSettingsStore.isLocationEnabled(userId);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -3172,8 +2753,8 @@ public class LocationManagerService extends ILocationManager.Stub {
         if (FUSED_PROVIDER.equals(providerName)) return false;
 
         synchronized (mLock) {
-            LocationProvider provider = getLocationProviderLocked(providerName);
-            return provider != null && provider.isUseableForUserLocked(userId);
+            LocationProviderManager provider = getLocationProviderLocked(providerName);
+            return provider != null && provider.isUseableLocked(userId);
         }
     }
 
@@ -3187,9 +2768,9 @@ public class LocationManagerService extends ILocationManager.Stub {
 
         // Check whether sufficient time has passed
         long minTime = record.mRealRequest.getFastestInterval();
-        long delta = (loc.getElapsedRealtimeNanos() - lastLoc.getElapsedRealtimeNanos())
-                / NANOS_PER_MILLI;
-        if (delta < minTime - MAX_PROVIDER_SCHEDULING_JITTER_MS) {
+        long deltaMs = TimeUnit.NANOSECONDS.toMillis(
+                loc.getElapsedRealtimeNanos() - lastLoc.getElapsedRealtimeNanos());
+        if (deltaMs < minTime - MAX_PROVIDER_SCHEDULING_JITTER_MS) {
             return false;
         }
 
@@ -3207,11 +2788,11 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
 
         // Check whether the expiry date has passed
-        return record.mRealRequest.getExpireAt() >= now;
+        return record.mExpirationRealtimeMs >= now;
     }
 
     @GuardedBy("mLock")
-    private void handleLocationChangedLocked(Location location, LocationProvider provider) {
+    private void handleLocationChangedLocked(Location location, LocationProviderManager provider) {
         if (!mProviders.contains(provider)) {
             return;
         }
@@ -3244,9 +2825,9 @@ public class LocationManagerService extends ILocationManager.Stub {
                 mLastLocationCoarseInterval.put(provider.getName(), lastLocationCoarseInterval);
             }
         }
-        long timeDiffNanos = location.getElapsedRealtimeNanos()
-                - lastLocationCoarseInterval.getElapsedRealtimeNanos();
-        if (timeDiffNanos > LocationFudger.FASTEST_INTERVAL_MS * NANOS_PER_MILLI) {
+        long timeDeltaMs = TimeUnit.NANOSECONDS.toMillis(location.getElapsedRealtimeNanos()
+                - lastLocationCoarseInterval.getElapsedRealtimeNanos());
+        if (timeDeltaMs > LocationFudger.FASTEST_INTERVAL_MS) {
             lastLocationCoarseInterval.set(location);
         }
         // Don't ever return a coarse location that is more recent than the allowed update
@@ -3288,7 +2869,8 @@ public class LocationManagerService extends ILocationManager.Stub {
                 continue;
             }
 
-            if (mBlacklist.isBlacklisted(receiver.mCallerIdentity.mPackageName)) {
+            if (mSettingsStore.isLocationPackageBlacklisted(receiverUserId,
+                    receiver.mCallerIdentity.mPackageName)) {
                 if (D) {
                     Log.d(TAG, "skipping loc update for blacklisted app: " +
                             receiver.mCallerIdentity.mPackageName);
@@ -3319,7 +2901,9 @@ public class LocationManagerService extends ILocationManager.Stub {
                             receiver.mCallerIdentity.mPid,
                             receiver.mCallerIdentity.mUid,
                             receiver.mCallerIdentity.mPackageName,
-                            receiver.mAllowedResolutionLevel)) {
+                            receiver.mCallerIdentity.mFeatureId,
+                            receiver.mAllowedResolutionLevel,
+                            "Location sent to " + receiver.mCallerIdentity.mListenerIdentifier)) {
                         if (D) {
                             Log.d(TAG, "skipping loc update for no op app: "
                                     + receiver.mCallerIdentity.mPackageName);
@@ -3336,7 +2920,9 @@ public class LocationManagerService extends ILocationManager.Stub {
             }
 
             // track expired records
-            if (r.mRealRequest.getNumUpdates() <= 0 || r.mRealRequest.getExpireAt() < now) {
+            if (r.mRealRequest.getNumUpdates() <= 0 || r.mExpirationRealtimeMs < now) {
+                // notify the client it can remove this listener
+                r.mReceiver.callRemovedLocked();
                 if (deadUpdateRecords == null) {
                     deadUpdateRecords = new ArrayList<>();
                 }
@@ -3438,13 +3024,8 @@ public class LocationManagerService extends ILocationManager.Stub {
         synchronized (mLock) {
             long identity = Binder.clearCallingIdentity();
             try {
-                LocationProvider oldProvider = getLocationProviderLocked(name);
+                LocationProviderManager oldProvider = getLocationProviderLocked(name);
                 if (oldProvider != null) {
-                    if (oldProvider.isMock()) {
-                        throw new IllegalArgumentException(
-                                "Provider \"" + name + "\" already exists");
-                    }
-
                     removeProviderLocked(oldProvider);
                 }
 
@@ -3467,16 +3048,16 @@ public class LocationManagerService extends ILocationManager.Stub {
         synchronized (mLock) {
             long identity = Binder.clearCallingIdentity();
             try {
-                LocationProvider testProvider = getLocationProviderLocked(name);
+                LocationProviderManager testProvider = getLocationProviderLocked(name);
                 if (testProvider == null || !testProvider.isMock()) {
-                    throw new IllegalArgumentException("Provider \"" + name + "\" unknown");
+                    return;
                 }
 
                 removeProviderLocked(testProvider);
 
                 // reinstate real provider if available
-                LocationProvider realProvider = null;
-                for (LocationProvider provider : mRealProviders) {
+                LocationProviderManager realProvider = null;
+                for (LocationProviderManager provider : mRealProviders) {
                     if (name.equals(provider.getName())) {
                         realProvider = provider;
                         break;
@@ -3500,7 +3081,7 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
 
         synchronized (mLock) {
-            LocationProvider testProvider = getLocationProviderLocked(providerName);
+            LocationProviderManager testProvider = getLocationProviderLocked(providerName);
             if (testProvider == null || !testProvider.isMock()) {
                 throw new IllegalArgumentException("Provider \"" + providerName + "\" unknown");
             }
@@ -3524,7 +3105,7 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
 
         synchronized (mLock) {
-            LocationProvider testProvider = getLocationProviderLocked(providerName);
+            LocationProviderManager testProvider = getLocationProviderLocked(providerName);
             if (testProvider == null || !testProvider.isMock()) {
                 throw new IllegalArgumentException("Provider \"" + providerName + "\" unknown");
             }
@@ -3542,7 +3123,7 @@ public class LocationManagerService extends ILocationManager.Stub {
         }
 
         synchronized (mLock) {
-            LocationProvider testProvider = getLocationProviderLocked(providerName);
+            LocationProviderManager testProvider = getLocationProviderLocked(providerName);
             if (testProvider == null || !testProvider.isMock()) {
                 throw new IllegalArgumentException("Provider \"" + providerName + "\" unknown");
             }
@@ -3566,10 +3147,8 @@ public class LocationManagerService extends ILocationManager.Stub {
         IndentingPrintWriter ipw = new IndentingPrintWriter(pw, "  ");
 
         synchronized (mLock) {
-            if (args.length > 0 && args[0].equals("--gnssmetrics")) {
-                if (mGnssMetricsProvider != null) {
-                    pw.append(mGnssMetricsProvider.getGnssMetricsAsProtoString());
-                }
+            if (mGnssManagerService != null && args.length > 0 && args[0].equals("--gnssmetrics")) {
+                mGnssManagerService.dump(fd, pw, args);
                 return;
             }
 
@@ -3581,7 +3160,7 @@ public class LocationManagerService extends ILocationManager.Stub {
                     + TimeUtils.formatDuration(SystemClock.elapsedRealtime()));
             ipw.println("Current user: " + mCurrentUserId + " " + Arrays.toString(
                     mCurrentUserProfiles));
-            ipw.println("Location Mode: " + isLocationEnabled());
+            ipw.println("Location Mode: " + isLocationEnabledForUser(mCurrentUserId));
             ipw.println("Battery Saver Location Mode: "
                     + locationPowerSaveModeToString(mBatterySaverMode));
 
@@ -3601,27 +3180,6 @@ public class LocationManagerService extends ILocationManager.Stub {
                     ipw.println(record);
                 }
                 ipw.decreaseIndent();
-            }
-            ipw.decreaseIndent();
-
-            ipw.println("GnssMeasurement Listeners:");
-            ipw.increaseIndent();
-            for (LinkedListenerBase listener : mGnssMeasurementsListeners.values()) {
-                ipw.println(listener + ": " + isThrottlingExemptLocked(listener.mCallerIdentity));
-            }
-            ipw.decreaseIndent();
-
-            ipw.println("GnssNavigationMessage Listeners:");
-            ipw.increaseIndent();
-            for (LinkedListenerBase listener : mGnssNavigationMessageListeners.values()) {
-                ipw.println(listener + ": " + isThrottlingExemptLocked(listener.mCallerIdentity));
-            }
-            ipw.decreaseIndent();
-
-            ipw.println("GnssStatus Listeners:");
-            ipw.increaseIndent();
-            for (LinkedListenerBase listener : mGnssStatusListeners.values()) {
-                ipw.println(listener + ": " + isThrottlingExemptLocked(listener.mCallerIdentity));
             }
             ipw.decreaseIndent();
 
@@ -3654,32 +3212,10 @@ public class LocationManagerService extends ILocationManager.Stub {
                 mGeofenceManager.dump(ipw);
                 ipw.decreaseIndent();
             }
-          
-            if (mBlacklist != null) {
-                mBlacklist.dump(ipw);
-            }
 
             if (mExtraLocationControllerPackage != null) {
                 ipw.println("Location Controller Extra Package: " + mExtraLocationControllerPackage
                         + (mExtraLocationControllerPackageEnabled ? " [enabled]" : "[disabled]"));
-            }
-
-            if (!mBackgroundThrottlePackageWhitelist.isEmpty()) {
-                ipw.println("Throttling Whitelisted Packages:");
-                ipw.increaseIndent();
-                for (String packageName : mBackgroundThrottlePackageWhitelist) {
-                    ipw.println(packageName);
-                }
-                ipw.decreaseIndent();
-            }
-
-            if (!mIgnoreSettingsPackageWhitelist.isEmpty()) {
-                ipw.println("Bypass Whitelisted Packages:");
-                ipw.increaseIndent();
-                for (String packageName : mIgnoreSettingsPackageWhitelist) {
-                    ipw.println(packageName);
-                }
-                ipw.decreaseIndent();
             }
 
             if (mLocationFudger != null) {
@@ -3689,16 +3225,24 @@ public class LocationManagerService extends ILocationManager.Stub {
                 ipw.decreaseIndent();
             }
 
+            ipw.println("Location Settings:");
+            ipw.increaseIndent();
+            mSettingsStore.dump(fd, ipw, args);
+            ipw.decreaseIndent();
+
             ipw.println("Location Providers:");
             ipw.increaseIndent();
-            for (LocationProvider provider : mProviders) {
+            for (LocationProviderManager provider : mProviders) {
                 provider.dumpLocked(fd, ipw, args);
             }
             ipw.decreaseIndent();
+        }
 
-            if (mGnssBatchingInProgress) {
-                ipw.println("GNSS batching in progress");
-            }
+        if (mGnssManagerService != null) {
+            ipw.println("GNSS:");
+            ipw.increaseIndent();
+            mGnssManagerService.dump(fd, ipw, args);
+            ipw.decreaseIndent();
         }
     }
 }

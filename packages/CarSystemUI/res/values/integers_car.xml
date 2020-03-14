@@ -20,11 +20,6 @@
     <!-- Full screen user switcher column number TODO: move to support library-->
     <integer name="user_fullscreen_switcher_num_col">3</integer>
 
-    <!-- Number of milliseconds user can spend driving with the keyguard up. After that, we switch to Guest. -->
-    <!-- If the number is negative, the feature is disabled.
-         If it's zero, we switch to guest immediately as we start driving. -->
-    <integer name="driving_on_keyguard_timeout_ms">-1</integer>
-
     <!--Percentage of the screen height, from the bottom, that a notification panel being
     partially closed at will result in it remaining open if released-->
     <integer name="notification_settle_open_percentage">20</integer>
@@ -34,4 +29,9 @@
     <!-- The delay before the unlock dialog pops up -->
     <integer name="unlock_dialog_delay_ms">0</integer>
 
+    <!-- Timeout values in milliseconds for displaying volume dialog-->
+    <integer name="car_volume_dialog_display_normal_timeout">3000</integer>
+    <integer name="car_volume_dialog_display_hovering_timeout">16000</integer>
+    <integer name="car_volume_dialog_display_expanded_normal_timeout">6000</integer>
+    <integer name="car_volume_dialog_display_expanded_hovering_timeout">32000</integer>
 </resources>

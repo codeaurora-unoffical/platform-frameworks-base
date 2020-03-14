@@ -24,12 +24,23 @@ import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.content.Context;
 import android.os.IBinder;
-import android.os.IStatsManager;
+import android.os.IPullAtomCallback;
+import android.os.IPullAtomResultReceiver;
+import android.os.IStatsCompanionService;
 import android.os.IStatsPullerCallback;
+import android.os.IStatsd;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.util.AndroidException;
 import android.util.Slog;
+import android.util.StatsEvent;
+import android.util.StatsEventParcel;
+
+import com.android.internal.annotations.GuardedBy;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * API for statsd clients to send configurations and retrieve data.
@@ -41,9 +52,14 @@ public final class StatsManager {
     private static final String TAG = "StatsManager";
     private static final boolean DEBUG = false;
 
+    private static final Object sLock = new Object();
     private final Context mContext;
 
-    private IStatsManager mService;
+    @GuardedBy("sLock")
+    private IStatsd mService;
+
+    @GuardedBy("sLock")
+    private IStatsCompanionService mStatsCompanion;
 
     /**
      * Long extra of uid that added the relevant stats config.
@@ -87,6 +103,9 @@ public final class StatsManager {
      */
     public static final String ACTION_STATSD_STARTED = "android.app.action.STATSD_STARTED";
 
+    private static final long DEFAULT_COOL_DOWN_NS = 1_000_000_000L; // 1 second.
+    private static final long DEFAULT_TIMEOUT_NS = 10_000_000_000L; // 10 seconds.
+
     /**
      * Constructor for StatsManagerClient.
      *
@@ -108,9 +127,9 @@ public final class StatsManager {
      */
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public void addConfig(long configKey, byte[] config) throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 // can throw IllegalArgumentException
                 service.addConfiguration(configKey, config, mContext.getOpPackageName());
             } catch (RemoteException e) {
@@ -145,9 +164,9 @@ public final class StatsManager {
      */
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public void removeConfig(long configKey) throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 service.removeConfiguration(configKey, mContext.getOpPackageName());
             } catch (RemoteException e) {
                 Slog.e(TAG, "Failed to connect to statsd when removing configuration");
@@ -206,9 +225,9 @@ public final class StatsManager {
     public void setBroadcastSubscriber(
             PendingIntent pendingIntent, long configKey, long subscriberId)
             throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (pendingIntent != null) {
                     // Extracts IIntentSender from the PendingIntent and turns it into an IBinder.
                     IBinder intentSender = pendingIntent.getTarget().asBinder();
@@ -260,9 +279,9 @@ public final class StatsManager {
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public void setFetchReportsOperation(PendingIntent pendingIntent, long configKey)
             throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (pendingIntent == null) {
                     service.removeDataFetchOperation(configKey, mContext.getOpPackageName());
                 } else {
@@ -298,9 +317,9 @@ public final class StatsManager {
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public @NonNull long[] setActiveConfigsChangedOperation(@Nullable PendingIntent pendingIntent)
             throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (pendingIntent == null) {
                     service.removeActiveConfigsChangedOperation(mContext.getOpPackageName());
                     return new long[0];
@@ -346,9 +365,9 @@ public final class StatsManager {
      */
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public byte[] getReports(long configKey) throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 return service.getData(configKey, mContext.getOpPackageName());
             } catch (RemoteException e) {
                 Slog.e(TAG, "Failed to connect to statsd when getting data");
@@ -383,9 +402,9 @@ public final class StatsManager {
      */
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public byte[] getStatsMetadata() throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 return service.getMetadata(mContext.getOpPackageName());
             } catch (RemoteException e) {
                 Slog.e(TAG, "Failed to connect to statsd when getting metadata");
@@ -418,9 +437,9 @@ public final class StatsManager {
     @RequiresPermission(allOf = {DUMP, PACKAGE_USAGE_STATS})
     public long[] getRegisteredExperimentIds()
             throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (service == null) {
                     if (DEBUG) {
                         Slog.d(TAG, "Failed to find statsd when getting experiment IDs");
@@ -449,13 +468,15 @@ public final class StatsManager {
      * @throws StatsUnavailableException if unsuccessful due to failing to connect to stats service
      *
      * @hide
+     * @deprecated Please use registerPullAtomCallback
      */
+    @Deprecated
     @RequiresPermission(allOf = { DUMP, PACKAGE_USAGE_STATS })
     public void setPullerCallback(int atomTag, IStatsPullerCallback callback)
             throws StatsUnavailableException {
-        synchronized (this) {
+        synchronized (sLock) {
             try {
-                IStatsManager service = getIStatsManagerLocked();
+                IStatsd service = getIStatsdLocked();
                 if (callback == null) {
                     service.unregisterPullerCallback(atomTag, mContext.getOpPackageName());
                 } else {
@@ -472,20 +493,178 @@ public final class StatsManager {
         }
     }
 
+
+    /**
+     * Registers a callback for an atom when that atom is to be pulled. The stats service will
+     * invoke pullData in the callback when the stats service determines that this atom needs to be
+     * pulled.
+     *
+     * @param atomTag           The tag of the atom for this puller callback.
+     * @param metadata          Optional metadata specifying the timeout, cool down time, and
+     *                          additive fields for mapping isolated to host uids.
+     * @param callback          The callback to be invoked when the stats service pulls the atom.
+     * @param executor          The executor in which to run the callback
+     * @throws RemoteException  if unsuccessful due to failing to connect to system server.
+     *
+     * @hide
+     */
+    public void registerPullAtomCallback(int atomTag, @Nullable PullAtomMetadata metadata,
+            @NonNull StatsPullAtomCallback callback, @NonNull Executor executor)
+            throws RemoteException, SecurityException {
+        long coolDownNs = metadata == null ? DEFAULT_COOL_DOWN_NS : metadata.mCoolDownNs;
+        long timeoutNs = metadata == null ? DEFAULT_TIMEOUT_NS : metadata.mTimeoutNs;
+        int[] additiveFields = metadata == null ? new int[0] : metadata.mAdditiveFields;
+        if (additiveFields == null) {
+            additiveFields = new int[0];
+        }
+        synchronized (sLock) {
+            IStatsCompanionService service = getIStatsCompanionServiceLocked();
+            PullAtomCallbackInternal rec =
+                    new PullAtomCallbackInternal(atomTag, callback, executor);
+            service.registerPullAtomCallback(atomTag, coolDownNs, timeoutNs, additiveFields, rec);
+        }
+    }
+
+    private static class PullAtomCallbackInternal extends IPullAtomCallback.Stub {
+        public final int mAtomId;
+        public final StatsPullAtomCallback mCallback;
+        public final Executor mExecutor;
+
+        PullAtomCallbackInternal(int atomId, StatsPullAtomCallback callback, Executor executor) {
+            mAtomId = atomId;
+            mCallback = callback;
+            mExecutor = executor;
+        }
+
+        @Override
+        public void onPullAtom(int atomTag, IPullAtomResultReceiver resultReceiver) {
+            mExecutor.execute(() -> {
+                List<StatsEvent> data = new ArrayList<>();
+                boolean success = mCallback.onPullAtom(atomTag, data);
+                StatsEventParcel[] parcels = new StatsEventParcel[data.size()];
+                for (int i = 0; i < data.size(); i++) {
+                    parcels[i].buffer = data.get(i).getBytes();
+                }
+                try {
+                    resultReceiver.pullFinished(atomTag, success, parcels);
+                } catch (RemoteException e) {
+                    Slog.w(TAG, "StatsPullResultReceiver failed for tag " + mAtomId);
+                }
+            });
+        }
+    }
+
+    /**
+     * Metadata required for registering a StatsPullAtomCallback.
+     * All fields are optional, and defaults will be used for fields that are unspecified.
+     *
+     * @hide
+     */
+    public static class PullAtomMetadata {
+        private final long mCoolDownNs;
+        private final long mTimeoutNs;
+        private final int[] mAdditiveFields;
+
+        // Private Constructor for builder
+        private PullAtomMetadata(long coolDownNs, long timeoutNs, int[] additiveFields) {
+            mCoolDownNs = coolDownNs;
+            mTimeoutNs = timeoutNs;
+            mAdditiveFields = additiveFields;
+        }
+
+        /**
+         * Returns a new PullAtomMetadata.Builder object for constructing PullAtomMetadata for
+         * StatsManager#registerPullAtomCallback
+         */
+        public static PullAtomMetadata.Builder newBuilder() {
+            return new PullAtomMetadata.Builder();
+        }
+
+        /**
+         * Builder for PullAtomMetadata.
+         */
+        public static class Builder {
+            private long mCoolDownNs;
+            private long mTimeoutNs;
+            private int[] mAdditiveFields;
+
+            private Builder() {
+                mCoolDownNs = DEFAULT_COOL_DOWN_NS;
+                mTimeoutNs = DEFAULT_TIMEOUT_NS;
+                mAdditiveFields = null;
+            }
+
+            /**
+             * Set the cool down time of the pull in nanoseconds. If two successive pulls are issued
+             * within the cool down, a cached version of the first will be used for the second.
+             */
+            @NonNull
+            public Builder setCoolDownNs(long coolDownNs) {
+                mCoolDownNs = coolDownNs;
+                return this;
+            }
+
+            /**
+             * Set the maximum time the pull can take in nanoseconds.
+             */
+            @NonNull
+            public Builder setTimeoutNs(long timeoutNs) {
+                mTimeoutNs = timeoutNs;
+                return this;
+            }
+
+            /**
+             * Set the additive fields of this pulled atom.
+             *
+             * This is only applicable for atoms which have a uid field. When tasks are run in
+             * isolated processes, the data will be attributed to the host uid. Additive fields
+             * will be combined when the non-additive fields are the same.
+             */
+            @NonNull
+            public Builder setAdditiveFields(int[] additiveFields) {
+                mAdditiveFields = additiveFields;
+                return this;
+            }
+
+            /**
+             * Builds and returns a PullAtomMetadata object with the values set in the builder and
+             * defaults for unset fields.
+             */
+            @NonNull
+            public PullAtomMetadata build() {
+                return new PullAtomMetadata(mCoolDownNs, mTimeoutNs, mAdditiveFields);
+            }
+        }
+    }
+
+    /**
+     * Callback interface for pulling atoms requested by the stats service.
+     *
+     * @hide
+     */
+    public interface StatsPullAtomCallback {
+        /**
+         * Pull data for the specified atom tag, filling in the provided list of StatsEvent data.
+         * @return if the pull was successful
+         */
+        boolean onPullAtom(int atomTag, List<StatsEvent> data);
+    }
+
     private class StatsdDeathRecipient implements IBinder.DeathRecipient {
         @Override
         public void binderDied() {
-            synchronized (this) {
+            synchronized (sLock) {
                 mService = null;
             }
         }
     }
 
-    private IStatsManager getIStatsManagerLocked() throws StatsUnavailableException {
+    @GuardedBy("sLock")
+    private IStatsd getIStatsdLocked() throws StatsUnavailableException {
         if (mService != null) {
             return mService;
         }
-        mService = IStatsManager.Stub.asInterface(ServiceManager.getService("stats"));
+        mService = IStatsd.Stub.asInterface(ServiceManager.getService("stats"));
         if (mService == null) {
             throw new StatsUnavailableException("could not be found");
         }
@@ -495,6 +674,16 @@ public final class StatsManager {
             throw new StatsUnavailableException("could not connect when linkToDeath", e);
         }
         return mService;
+    }
+
+    @GuardedBy("sLock")
+    private IStatsCompanionService getIStatsCompanionServiceLocked() {
+        if (mStatsCompanion != null) {
+            return mStatsCompanion;
+        }
+        mStatsCompanion = IStatsCompanionService.Stub.asInterface(
+                ServiceManager.getService("statscompanion"));
+        return mStatsCompanion;
     }
 
     /**

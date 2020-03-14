@@ -15,8 +15,9 @@
 package com.android.systemui;
 
 import android.annotation.Nullable;
+import android.app.AlarmManager;
 import android.app.INotificationManager;
-import android.content.res.Configuration;
+import android.app.IWallpaperManager;
 import android.hardware.SensorPrivacyManager;
 import android.hardware.display.NightDisplayListener;
 import android.os.Handler;
@@ -29,6 +30,7 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.internal.util.Preconditions;
+import com.android.keyguard.KeyguardSecurityModel;
 import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.keyguard.clock.ClockManager;
 import com.android.settingslib.bluetooth.LocalBluetoothManager;
@@ -37,6 +39,10 @@ import com.android.systemui.assist.AssistManager;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.colorextraction.SysuiColorExtractor;
+import com.android.systemui.dagger.qualifiers.BgHandler;
+import com.android.systemui.dagger.qualifiers.BgLooper;
+import com.android.systemui.dagger.qualifiers.MainHandler;
+import com.android.systemui.dagger.qualifiers.MainLooper;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.fragments.FragmentService;
 import com.android.systemui.keyguard.ScreenLifecycle;
@@ -50,12 +56,13 @@ import com.android.systemui.plugins.VolumeDialogController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.power.EnhancedEstimates;
 import com.android.systemui.power.PowerUI;
-import com.android.systemui.privacy.PrivacyItemController;
 import com.android.systemui.recents.OverviewProxyService;
+import com.android.systemui.recents.Recents;
 import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.DevicePolicyManagerWrapper;
 import com.android.systemui.shared.system.PackageManagerWrapper;
+import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.NavigationBarController;
 import com.android.systemui.statusbar.NotificationListener;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
@@ -66,15 +73,16 @@ import com.android.systemui.statusbar.SmartReplyController;
 import com.android.systemui.statusbar.VibratorHelper;
 import com.android.systemui.statusbar.notification.NotificationAlertingManager;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
+import com.android.systemui.statusbar.notification.NotificationEntryManager.KeyguardEnvironment;
 import com.android.systemui.statusbar.notification.NotificationFilter;
 import com.android.systemui.statusbar.notification.NotificationInterruptionStateProvider;
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
-import com.android.systemui.statusbar.notification.collection.NotificationData.KeyguardEnvironment;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
 import com.android.systemui.statusbar.notification.row.ChannelEditorDialogController;
 import com.android.systemui.statusbar.notification.row.NotificationBlockingHelperManager;
 import com.android.systemui.statusbar.notification.row.NotificationGutsManager;
 import com.android.systemui.statusbar.phone.AutoHideController;
+import com.android.systemui.statusbar.phone.DozeParameters;
 import com.android.systemui.statusbar.phone.KeyguardDismissUtil;
 import com.android.systemui.statusbar.phone.LightBarController;
 import com.android.systemui.statusbar.phone.LockscreenGestureLogger;
@@ -83,6 +91,7 @@ import com.android.systemui.statusbar.phone.NavigationModeController;
 import com.android.systemui.statusbar.phone.NotificationGroupAlertTransferHelper;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.statusbar.phone.ShadeController;
+import com.android.systemui.statusbar.phone.StatusBar;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
 import com.android.systemui.statusbar.phone.StatusBarWindowController;
 import com.android.systemui.statusbar.policy.AccessibilityController;
@@ -96,7 +105,7 @@ import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import com.android.systemui.statusbar.policy.ExtensionController;
 import com.android.systemui.statusbar.policy.FlashlightController;
 import com.android.systemui.statusbar.policy.HotspotController;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.policy.LocationController;
 import com.android.systemui.statusbar.policy.NetworkController;
 import com.android.systemui.statusbar.policy.NextAlarmController;
@@ -110,10 +119,12 @@ import com.android.systemui.statusbar.policy.UserSwitcherController;
 import com.android.systemui.statusbar.policy.ZenModeController;
 import com.android.systemui.tuner.TunablePadding.TunablePaddingService;
 import com.android.systemui.tuner.TunerService;
-import com.android.systemui.util.AsyncSensorManager;
 import com.android.systemui.util.leak.GarbageMonitor;
 import com.android.systemui.util.leak.LeakDetector;
 import com.android.systemui.util.leak.LeakReporter;
+import com.android.systemui.util.sensors.AsyncSensorManager;
+import com.android.systemui.wm.DisplayWindowController;
+import com.android.systemui.wm.SystemWindows;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -144,16 +155,12 @@ public class Dependency {
     /**
      * Key for getting a the main looper.
      */
-    public static final String MAIN_LOOPER_NAME = "main_looper";
+    private static final String MAIN_LOOPER_NAME = "main_looper";
 
     /**
      * Key for getting a background Looper for background work.
      */
-    public static final String BG_LOOPER_NAME = "background_looper";
-    /**
-     * Key for getting a background Handler for background work.
-     */
-    public static final String BG_HANDLER_NAME = "background_handler";
+    private static final String BG_LOOPER_NAME = "background_looper";
     /**
      * Key for getting a Handler for receiving time tick broadcasts on.
      */
@@ -161,7 +168,7 @@ public class Dependency {
     /**
      * Generic handler on the main thread.
      */
-    public static final String MAIN_HANDLER_NAME = "main_handler";
+    private static final String MAIN_HANDLER_NAME = "main_handler";
 
     /**
      * An email address to send memory leak reports to by default.
@@ -182,10 +189,6 @@ public class Dependency {
      * Key for getting a mainer Looper.
      */
     public static final DependencyKey<Looper> MAIN_LOOPER = new DependencyKey<>(MAIN_LOOPER_NAME);
-    /**
-     * Key for getting a background Handler for background work.
-     */
-    public static final DependencyKey<Handler> BG_HANDLER = new DependencyKey<>(BG_HANDLER_NAME);
     /**
      * Key for getting a Handler for receiving time tick broadcasts on.
      */
@@ -220,7 +223,7 @@ public class Dependency {
     @Inject Lazy<FlashlightController> mFlashlightController;
     @Inject Lazy<UserSwitcherController> mUserSwitcherController;
     @Inject Lazy<UserInfoController> mUserInfoController;
-    @Inject Lazy<KeyguardMonitor> mKeyguardMonitor;
+    @Inject Lazy<KeyguardStateController> mKeyguardMonitor;
     @Inject Lazy<KeyguardUpdateMonitor> mKeyguardUpdateMonitor;
     @Inject Lazy<BatteryController> mBatteryController;
     @Inject Lazy<NightDisplayListener> mNightDisplayListener;
@@ -295,11 +298,10 @@ public class Dependency {
     @Inject Lazy<SensorPrivacyManager> mSensorPrivacyManager;
     @Inject Lazy<AutoHideController> mAutoHideController;
     @Inject Lazy<ForegroundServiceNotificationListener> mForegroundServiceNotificationListener;
-    @Inject Lazy<PrivacyItemController> mPrivacyItemController;
-    @Inject @Named(BG_LOOPER_NAME) Lazy<Looper> mBgLooper;
-    @Inject @Named(BG_HANDLER_NAME) Lazy<Handler> mBgHandler;
-    @Inject @Named(MAIN_LOOPER_NAME) Lazy<Looper> mMainLooper;
-    @Inject @Named(MAIN_HANDLER_NAME) Lazy<Handler> mMainHandler;
+    @Inject @BgLooper Lazy<Looper> mBgLooper;
+    @Inject @BgHandler Lazy<Handler> mBgHandler;
+    @Inject @MainLooper Lazy<Looper> mMainLooper;
+    @Inject @MainHandler Lazy<Handler> mMainHandler;
     @Inject @Named(TIME_TICK_HANDLER_NAME) Lazy<Handler> mTimeTickHandler;
     @Nullable
     @Inject @Named(LEAK_REPORT_EMAIL_NAME) Lazy<String> mLeakReportEmail;
@@ -314,30 +316,28 @@ public class Dependency {
     @Inject Lazy<INotificationManager> mINotificationManager;
     @Inject Lazy<FalsingManager> mFalsingManager;
     @Inject Lazy<SysUiState> mSysUiStateFlagsContainer;
+    @Inject Lazy<AlarmManager> mAlarmManager;
+    @Inject Lazy<KeyguardSecurityModel> mKeyguardSecurityModel;
+    @Inject Lazy<DozeParameters> mDozeParameters;
+    @Inject Lazy<IWallpaperManager> mWallpaperManager;
+    @Inject Lazy<CommandQueue> mCommandQueue;
+    @Inject Lazy<Recents> mRecents;
+    @Inject Lazy<StatusBar> mStatusBar;
+    @Inject Lazy<DisplayWindowController> mDisplayWindowController;
+    @Inject Lazy<SystemWindows> mSystemWindows;
 
     @Inject
     public Dependency() {
     }
 
-
     /**
      * Initialize Depenency.
      */
-    public static void initDependencies(SystemUIRootComponent rootComponent) {
-        if (sDependency != null) {
-            return;
-        }
-        sDependency = new Dependency();
-        rootComponent.createDependency().createSystemUI(sDependency);
-        sDependency.start();
-    }
-
     protected void start() {
         // TODO: Think about ways to push these creation rules out of Dependency to cut down
         // on imports.
         mProviders.put(TIME_TICK_HANDLER, mTimeTickHandler::get);
         mProviders.put(BG_LOOPER, mBgLooper::get);
-        mProviders.put(BG_HANDLER, mBgHandler::get);
         mProviders.put(MAIN_LOOPER, mMainLooper::get);
         mProviders.put(MAIN_HANDLER, mMainHandler::get);
         mProviders.put(ActivityStarter.class, mActivityStarter::get);
@@ -363,7 +363,7 @@ public class Dependency {
 
         mProviders.put(FlashlightController.class, mFlashlightController::get);
 
-        mProviders.put(KeyguardMonitor.class, mKeyguardMonitor::get);
+        mProviders.put(KeyguardStateController.class, mKeyguardMonitor::get);
 
         mProviders.put(KeyguardUpdateMonitor.class, mKeyguardUpdateMonitor::get);
 
@@ -497,7 +497,6 @@ public class Dependency {
         mProviders.put(ForegroundServiceNotificationListener.class,
                 mForegroundServiceNotificationListener::get);
         mProviders.put(ClockManager.class, mClockManager::get);
-        mProviders.put(PrivacyItemController.class, mPrivacyItemController::get);
         mProviders.put(ActivityManagerWrapper.class, mActivityManagerWrapper::get);
         mProviders.put(DevicePolicyManagerWrapper.class, mDevicePolicyManagerWrapper::get);
         mProviders.put(PackageManagerWrapper.class, mPackageManagerWrapper::get);
@@ -508,6 +507,15 @@ public class Dependency {
         mProviders.put(INotificationManager.class, mINotificationManager::get);
         mProviders.put(FalsingManager.class, mFalsingManager::get);
         mProviders.put(SysUiState.class, mSysUiStateFlagsContainer::get);
+        mProviders.put(AlarmManager.class, mAlarmManager::get);
+        mProviders.put(KeyguardSecurityModel.class, mKeyguardSecurityModel::get);
+        mProviders.put(DozeParameters.class, mDozeParameters::get);
+        mProviders.put(IWallpaperManager.class, mWallpaperManager::get);
+        mProviders.put(CommandQueue.class, mCommandQueue::get);
+        mProviders.put(Recents.class, mRecents::get);
+        mProviders.put(StatusBar.class, mStatusBar::get);
+        mProviders.put(DisplayWindowController.class, mDisplayWindowController::get);
+        mProviders.put(SystemWindows.class, mSystemWindows::get);
 
         // TODO(b/118592525): to support multi-display , we start to add something which is
         //                    per-display, while others may be global. I think it's time to add
@@ -544,15 +552,6 @@ public class Dependency {
                 .filter(obj -> obj instanceof Dumpable && (controller == null
                         || obj.getClass().getName().toLowerCase().endsWith(controller)))
                 .forEach(o -> ((Dumpable) o).dump(fd, pw, args));
-    }
-
-    protected static void staticOnConfigurationChanged(Configuration newConfig) {
-        sDependency.onConfigurationChanged(newConfig);
-    }
-
-    protected synchronized void onConfigurationChanged(Configuration newConfig) {
-        mDependencies.values().stream().filter(obj -> obj instanceof ConfigurationChangedReceiver)
-                .forEach(o -> ((ConfigurationChangedReceiver) o).onConfigurationChanged(newConfig));
     }
 
     protected final <T> T getDependency(Class<T> cls) {

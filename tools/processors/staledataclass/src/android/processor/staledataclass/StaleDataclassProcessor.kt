@@ -182,6 +182,11 @@ class StaleDataclassProcessor: AbstractProcessor() {
                 .filterNot {
                     it.kind == ElementKind.CLASS
                             || it.kind == ElementKind.CONSTRUCTOR
+                            || it.kind == ElementKind.INTERFACE
+                            || it.kind == ElementKind.ENUM
+                            || it.kind == ElementKind.ANNOTATION_TYPE
+                            || it.kind == ElementKind.INSTANCE_INIT
+                            || it.kind == ElementKind.STATIC_INIT
                             || isGenerated(it)
                 }.map {
                     elemToString(it)
@@ -203,7 +208,16 @@ class StaleDataclassProcessor: AbstractProcessor() {
         val refreshCmd = if (file != null) {
             "$CODEGEN_NAME $file"
         } else {
-            "find \$ANDROID_BUILD_TOP -path */${clazz.replace('.', '/')}.java -exec $CODEGEN_NAME {} \\;"
+            var gotTopLevelCalssName = false
+            val filePath = clazz.split(".")
+                    .takeWhile { word ->
+                        if (!gotTopLevelCalssName && word[0].isUpperCase()) {
+                            gotTopLevelCalssName = true
+                            return@takeWhile true
+                        }
+                        !gotTopLevelCalssName
+                    }.joinToString("/")
+            "find \$ANDROID_BUILD_TOP -path */$filePath.java -exec $CODEGEN_NAME {} \\;"
         }
     }
 

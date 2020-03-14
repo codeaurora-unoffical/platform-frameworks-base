@@ -46,6 +46,8 @@ import java.util.stream.Collectors;
  * <tr><th>Name</th><th>Value Type</th><th>Description</th></tr>
  * <tr><td>{@link #KEY_MIME}</td><td>String</td><td>The type of the format.</td></tr>
  * <tr><td>{@link #KEY_MAX_INPUT_SIZE}</td><td>Integer</td><td>optional, maximum size of a buffer of input data</td></tr>
+ * <tr><td>{@link #KEY_PIXEL_ASPECT_RATIO_WIDTH}</td><td>Integer</td><td>optional, the pixel aspect ratio width</td></tr>
+ * <tr><td>{@link #KEY_PIXEL_ASPECT_RATIO_HEIGHT}</td><td>Integer</td><td>optional, the pixel aspect ratio height</td></tr>
  * <tr><td>{@link #KEY_BIT_RATE}</td><td>Integer</td><td><b>encoder-only</b>, desired bitrate in bits/second</td></tr>
  * </table>
  *
@@ -99,6 +101,8 @@ import java.util.stream.Collectors;
  * <tr><td>{@link #KEY_AAC_MAX_OUTPUT_CHANNEL_COUNT}</td><td>Integer</td><td><b>decoder-only</b>, optional, if content is AAC audio, specifies the maximum number of channels the decoder outputs.</td></tr>
  * <tr><td>{@link #KEY_AAC_DRC_EFFECT_TYPE}</td><td>Integer</td><td><b>decoder-only</b>, optional, if content is AAC audio, specifies the MPEG-D DRC effect type to use.</td></tr>
  * <tr><td>{@link #KEY_CHANNEL_MASK}</td><td>Integer</td><td>optional, a mask of audio channel assignments</td></tr>
+ * <tr><td>{@link #KEY_ENCODER_DELAY}</td><td>Integer</td><td>optional, the number of frames to trim from the start of the decoded audio stream.</td></tr>
+ * <tr><td>{@link #KEY_ENCODER_PADDING}</td><td>Integer</td><td>optional, the number of frames to trim from the end of the decoded audio stream.</td></tr>
  * <tr><td>{@link #KEY_FLAC_COMPRESSION_LEVEL}</td><td>Integer</td><td><b>encoder-only</b>, optional, if content is FLAC audio, specifies the desired compression level.</td></tr>
  * </table>
  *
@@ -211,6 +215,15 @@ public final class MediaFormat {
     public static final String KEY_MIME = "mime";
 
     /**
+     * An optional key describing the low latency decoding mode. This is an optional parameter
+     * that applies only to decoders. If enabled, the decoder doesn't hold input and output
+     * data more than required by the codec standards.
+     * The associated value is an integer (0 or 1): 1 when low-latency decoding is enabled,
+     * 0 otherwise. The default value is 0.
+     */
+    public static final String KEY_LOW_LATENCY = "low-latency";
+
+    /**
      * A key describing the language of the content, using either ISO 639-1
      * or 639-2/T codes.  The associated value is a string.
      */
@@ -259,6 +272,18 @@ public final class MediaFormat {
      * The associated value is an integer
      */
     public static final String KEY_MAX_INPUT_SIZE = "max-input-size";
+
+    /**
+     * A key describing the pixel aspect ratio width.
+     * The associated value is an integer
+     */
+    public static final String KEY_PIXEL_ASPECT_RATIO_WIDTH = "sar-width";
+
+    /**
+     * A key describing the pixel aspect ratio height.
+     * The associated value is an integer
+     */
+    public static final String KEY_PIXEL_ASPECT_RATIO_HEIGHT = "sar-height";
 
     /**
      * A key describing the average bitrate in bits/sec.
@@ -558,6 +583,18 @@ public final class MediaFormat {
      * The associated value is an integer.
      */
     public static final String KEY_CHANNEL_MASK = "channel-mask";
+
+    /**
+     * A key describing the number of frames to trim from the start of the decoded audio stream.
+     * The associated value is an integer.
+     */
+    public static final String KEY_ENCODER_DELAY = "encoder-delay";
+
+    /**
+     * A key describing the number of frames to trim from the end of the decoded audio stream.
+     * The associated value is an integer.
+     */
+    public static final String KEY_ENCODER_PADDING = "encoder-padding";
 
     /**
      * A key describing the AAC profile to be used (AAC audio formats only).

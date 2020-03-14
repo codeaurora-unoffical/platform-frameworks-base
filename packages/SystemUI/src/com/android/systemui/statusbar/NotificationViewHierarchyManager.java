@@ -16,8 +16,6 @@
 
 package com.android.systemui.statusbar;
 
-import static com.android.systemui.Dependency.MAIN_HANDLER_NAME;
-
 import android.content.Context;
 import android.content.res.Resources;
 import android.os.Handler;
@@ -29,6 +27,7 @@ import android.view.ViewGroup;
 
 import com.android.systemui.R;
 import com.android.systemui.bubbles.BubbleController;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.notification.DynamicPrivacyController;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
@@ -38,8 +37,8 @@ import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
-import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.util.Assert;
+import com.android.systemui.util.Utils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,10 +46,7 @@ import java.util.List;
 import java.util.Stack;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
-
-import dagger.Lazy;
 
 /**
  * NotificationViewHierarchyManager manages updating the view hierarchy of notification views based
@@ -76,9 +72,6 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
     private final SysuiStatusBarStateController mStatusBarStateController;
     private final NotificationEntryManager mEntryManager;
 
-    // Lazy
-    private final Lazy<ShadeController> mShadeController;
-
     /**
      * {@code true} if notifications not part of a group should by default be rendered in their
      * expanded state. If {@code false}, then only the first notification will be expanded if
@@ -88,6 +81,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
     private final BubbleController mBubbleController;
     private final DynamicPrivacyController mDynamicPrivacyController;
     private final KeyguardBypassController mBypassController;
+    private final Context mContext;
 
     private NotificationPresenter mPresenter;
     private NotificationListContainer mListContainer;
@@ -99,17 +93,16 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
     private boolean mIsHandleDynamicPrivacyChangeScheduled;
 
     @Inject
-    public NotificationViewHierarchyManager(Context context,
-            @Named(MAIN_HANDLER_NAME) Handler mainHandler,
+    public NotificationViewHierarchyManager(Context context, @MainHandler Handler mainHandler,
             NotificationLockscreenUserManager notificationLockscreenUserManager,
             NotificationGroupManager groupManager,
             VisualStabilityManager visualStabilityManager,
             StatusBarStateController statusBarStateController,
             NotificationEntryManager notificationEntryManager,
-            Lazy<ShadeController> shadeController,
             KeyguardBypassController bypassController,
             BubbleController bubbleController,
             DynamicPrivacyController privacyController) {
+        mContext = context;
         mHandler = mainHandler;
         mLockscreenUserManager = notificationLockscreenUserManager;
         mBypassController = bypassController;
@@ -117,7 +110,6 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
         mVisualStabilityManager = visualStabilityManager;
         mStatusBarStateController = (SysuiStatusBarStateController) statusBarStateController;
         mEntryManager = notificationEntryManager;
-        mShadeController = shadeController;
         Resources res = context.getResources();
         mAlwaysExpandNonGroupedNotification =
                 res.getBoolean(R.bool.config_alwaysExpandNonGroupedNotifications);
@@ -140,20 +132,21 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
         Assert.isMainThread();
         beginUpdate();
 
-        ArrayList<NotificationEntry> activeNotifications = mEntryManager.getNotificationData()
-                .getActiveNotifications();
+        List<NotificationEntry> activeNotifications = mEntryManager.getVisibleNotifications();
         ArrayList<ExpandableNotificationRow> toShow = new ArrayList<>(activeNotifications.size());
         final int N = activeNotifications.size();
         for (int i = 0; i < N; i++) {
             NotificationEntry ent = activeNotifications.get(i);
+            boolean hideMedia = Utils.useQsMediaPlayer(mContext);
             if (ent.isRowDismissed() || ent.isRowRemoved()
-                    || mBubbleController.isBubbleNotificationSuppressedFromShade(ent.key)) {
+                    || (ent.isMediaNotification() && hideMedia)
+                    || mBubbleController.isBubbleNotificationSuppressedFromShade(ent.getKey())) {
                 // we don't want to update removed notifications because they could
                 // temporarily become children if they were isolated before.
                 continue;
             }
 
-            int userId = ent.notification.getUserId();
+            int userId = ent.getSbn().getUserId();
 
             // Display public version of the notification if we need to redact.
             // TODO: This area uses a lot of calls into NotificationLockscreenUserManager.
@@ -174,8 +167,8 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                     currentUserId);
             ent.setSensitive(sensitive, deviceSensitive);
             ent.getRow().setNeedsRedaction(needsRedaction);
-            if (mGroupManager.isChildInGroupWithSummary(ent.notification)) {
-                NotificationEntry summary = mGroupManager.getGroupSummary(ent.notification);
+            if (mGroupManager.isChildInGroupWithSummary(ent.getSbn())) {
+                NotificationEntry summary = mGroupManager.getGroupSummary(ent.getSbn());
                 List<ExpandableNotificationRow> orderedChildren =
                         mTmpChildOrderMap.get(summary.getRow());
                 if (orderedChildren == null) {
@@ -203,7 +196,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
         }
 
         for (ExpandableNotificationRow viewToRemove : viewsToRemove) {
-            if (mGroupManager.isChildInGroupWithSummary(viewToRemove.getStatusBarNotification())) {
+            if (mGroupManager.isChildInGroupWithSummary(viewToRemove.getEntry().getSbn())) {
                 // we are only transferring this notification to its parent, don't generate an
                 // animation
                 mListContainer.setChildTransferInProgress(true);
@@ -337,8 +330,8 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                 }
                 for (ExpandableNotificationRow remove : toRemove) {
                     parent.removeChildNotification(remove);
-                    if (mEntryManager.getNotificationData().get(
-                            remove.getStatusBarNotification().getKey()) == null) {
+                    if (mEntryManager.getActiveNotificationUnfiltered(
+                            remove.getEntry().getSbn().getKey()) == null) {
                         // We only want to add an animation if the view is completely removed
                         // otherwise it's just a transfer
                         mListContainer.notifyGroupChildRemoved(remove,
@@ -382,7 +375,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
             ExpandableNotificationRow row = stack.pop();
             NotificationEntry entry = row.getEntry();
             boolean isChildNotification =
-                    mGroupManager.isChildInGroupWithSummary(entry.notification);
+                    mGroupManager.isChildInGroupWithSummary(entry.getSbn());
 
             row.setOnKeyguard(onKeyguard);
 
@@ -394,15 +387,15 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                         && !row.isLowPriority()));
             }
 
-            int userId = entry.notification.getUserId();
+            int userId = entry.getSbn().getUserId();
             boolean suppressedSummary = mGroupManager.isSummaryOfSuppressedGroup(
-                    entry.notification) && !entry.isRowRemoved();
+                    entry.getSbn()) && !entry.isRowRemoved();
             boolean showOnKeyguard = mLockscreenUserManager.shouldShowOnKeyguard(entry);
             if (!showOnKeyguard) {
                 // min priority notifications should show if their summary is showing
-                if (mGroupManager.isChildInGroupWithSummary(entry.notification)) {
+                if (mGroupManager.isChildInGroupWithSummary(entry.getSbn())) {
                     NotificationEntry summary = mGroupManager.getLogicalGroupSummary(
-                            entry.notification);
+                            entry.getSbn());
                     if (summary != null && mLockscreenUserManager.shouldShowOnKeyguard(summary)) {
                         showOnKeyguard = true;
                     }

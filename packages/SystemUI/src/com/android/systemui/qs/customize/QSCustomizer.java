@@ -32,6 +32,7 @@ import android.widget.LinearLayout;
 import android.widget.Toolbar;
 import android.widget.Toolbar.OnMenuItemClickListener;
 
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
 import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -46,8 +47,8 @@ import com.android.systemui.qs.QSDetailClipper;
 import com.android.systemui.qs.QSTileHost;
 import com.android.systemui.statusbar.phone.LightBarController;
 import com.android.systemui.statusbar.phone.NotificationsQuickSettingsContainer;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
-import com.android.systemui.statusbar.policy.KeyguardMonitor.Callback;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.statusbar.policy.KeyguardStateController.Callback;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -68,7 +69,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
 
     private final QSDetailClipper mClipper;
     private final LightBarController mLightBarController;
-    private KeyguardMonitor mKeyguardMonitor;
+    private KeyguardStateController mKeyguardStateController;
     private final ScreenLifecycle mScreenLifecycle;
     private final TileQueryHelper mTileQueryHelper;
     private final View mTransparentView;
@@ -89,8 +90,9 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
     @Inject
     public QSCustomizer(Context context, AttributeSet attrs,
             LightBarController lightBarController,
-            KeyguardMonitor keyguardMonitor,
-            ScreenLifecycle screenLifecycle) {
+            KeyguardStateController keyguardStateController,
+            ScreenLifecycle screenLifecycle,
+            TileQueryHelper tileQueryHelper) {
         super(new ContextThemeWrapper(context, R.style.edit_theme), attrs);
 
         LayoutInflater.from(getContext()).inflate(R.layout.qs_customize_panel_content, this);
@@ -113,10 +115,17 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
         mRecyclerView = findViewById(android.R.id.list);
         mTransparentView = findViewById(R.id.customizer_transparent_view);
         mTileAdapter = new TileAdapter(getContext());
-        mTileQueryHelper = new TileQueryHelper(context, mTileAdapter);
+        mTileQueryHelper = tileQueryHelper;
+        mTileQueryHelper.setListener(mTileAdapter);
         mRecyclerView.setAdapter(mTileAdapter);
         mTileAdapter.getItemTouchHelper().attachToRecyclerView(mRecyclerView);
-        GridLayoutManager layout = new GridLayoutManager(getContext(), 3);
+        GridLayoutManager layout = new GridLayoutManager(getContext(), 3) {
+            @Override
+            public void onInitializeAccessibilityNodeInfoForItem(RecyclerView.Recycler recycler,
+                    RecyclerView.State state, View host, AccessibilityNodeInfoCompat info) {
+                // Do not read row and column every time it changes.
+            }
+        };
         layout.setSpanSizeLookup(mTileAdapter.getSizeLookup());
         mRecyclerView.setLayoutManager(layout);
         mRecyclerView.addItemDecoration(mTileAdapter.getItemDecoration());
@@ -124,7 +133,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
         animator.setMoveDuration(TileAdapter.MOVE_DURATION);
         mRecyclerView.setItemAnimator(animator);
         mLightBarController = lightBarController;
-        mKeyguardMonitor = keyguardMonitor;
+        mKeyguardStateController = keyguardStateController;
         mScreenLifecycle = screenLifecycle;
         updateNavBackDrop(getResources().getConfiguration());
     }
@@ -187,7 +196,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
             queryTiles();
             mNotifQsContainer.setCustomizerAnimating(true);
             mNotifQsContainer.setCustomizerShowing(true);
-            mKeyguardMonitor.addCallback(mKeyguardCallback);
+            mKeyguardStateController.addCallback(mKeyguardCallback);
             updateNavColors();
         }
     }
@@ -203,7 +212,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
             queryTiles();
             mNotifQsContainer.setCustomizerAnimating(false);
             mNotifQsContainer.setCustomizerShowing(true);
-            mKeyguardMonitor.addCallback(mKeyguardCallback);
+            mKeyguardStateController.addCallback(mKeyguardCallback);
             updateNavColors();
         }
     }
@@ -227,7 +236,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
             }
             mNotifQsContainer.setCustomizerAnimating(animate);
             mNotifQsContainer.setCustomizerShowing(false);
-            mKeyguardMonitor.removeCallback(mKeyguardCallback);
+            mKeyguardStateController.removeCallback(mKeyguardCallback);
             updateNavColors();
         }
     }
@@ -283,7 +292,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
 
     public void saveInstanceState(Bundle outState) {
         if (isShown) {
-            mKeyguardMonitor.removeCallback(mKeyguardCallback);
+            mKeyguardStateController.removeCallback(mKeyguardCallback);
         }
         outState.putBoolean(EXTRA_QS_CUSTOMIZING, mCustomizing);
     }
@@ -315,7 +324,7 @@ public class QSCustomizer extends LinearLayout implements OnMenuItemClickListene
         @Override
         public void onKeyguardShowingChanged() {
             if (!isAttachedToWindow()) return;
-            if (mKeyguardMonitor.isShowing() && !mOpening) {
+            if (mKeyguardStateController.isShowing() && !mOpening) {
                 hide();
             }
         }

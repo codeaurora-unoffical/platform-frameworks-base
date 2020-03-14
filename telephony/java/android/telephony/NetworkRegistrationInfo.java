@@ -24,7 +24,7 @@ import android.annotation.TestApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.telephony.AccessNetworkConstants.TransportType;
-import android.telephony.TelephonyManager.NetworkType;
+import android.telephony.Annotation.NetworkType;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -90,7 +90,7 @@ public final class NetworkRegistrationInfo implements Parcelable {
      * Dual Connectivity(EN-DC).
      * @hide
      */
-    public static final int NR_STATE_NONE = -1;
+    public static final int NR_STATE_NONE = 0;
 
     /**
      * The device is camped on an LTE cell that supports E-UTRA-NR Dual Connectivity(EN-DC) but
@@ -323,9 +323,12 @@ public final class NetworkRegistrationInfo implements Parcelable {
     public @Domain int getDomain() { return mDomain; }
 
     /**
+     * Get the 5G NR connection state.
+     *
      * @return the 5G NR connection state.
      * @hide
      */
+    @SystemApi
     public @NRState int getNrState() {
         return mNrState;
     }

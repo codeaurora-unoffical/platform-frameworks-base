@@ -18,21 +18,19 @@ package com.android.server.wm;
 
 import static android.view.Display.INVALID_DISPLAY;
 
-import static com.android.server.wm.ActivityDisplay.POSITION_TOP;
-
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 import android.content.pm.ApplicationInfo;
 import android.platform.test.annotations.Presubmit;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
 
@@ -43,6 +41,7 @@ import org.mockito.Mockito;
  *  atest WmTests:WindowProcessControllerTests
  */
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class WindowProcessControllerTests extends ActivityTestsBase {
 
     WindowProcessController mWpc;
@@ -62,33 +61,33 @@ public class WindowProcessControllerTests extends ActivityTestsBase {
         assertEquals(INVALID_DISPLAY, mWpc.getDisplayId());
 
         // Register to display 1 as a listener.
-        TestActivityDisplay testActivityDisplay1 = createTestActivityDisplayInContainer();
-        mWpc.registerDisplayConfigurationListenerLocked(testActivityDisplay1);
-        assertTrue(testActivityDisplay1.containsListener(mWpc));
-        assertEquals(testActivityDisplay1.mDisplayId, mWpc.getDisplayId());
+        TestDisplayContent testDisplayContent1 = createTestDisplayContentInContainer();
+        mWpc.registerDisplayConfigurationListenerLocked(testDisplayContent1);
+        assertTrue(testDisplayContent1.containsListener(mWpc));
+        assertEquals(testDisplayContent1.mDisplayId, mWpc.getDisplayId());
 
         // Move to display 2.
-        TestActivityDisplay testActivityDisplay2 = createTestActivityDisplayInContainer();
-        mWpc.registerDisplayConfigurationListenerLocked(testActivityDisplay2);
-        assertFalse(testActivityDisplay1.containsListener(mWpc));
-        assertTrue(testActivityDisplay2.containsListener(mWpc));
-        assertEquals(testActivityDisplay2.mDisplayId, mWpc.getDisplayId());
+        TestDisplayContent testDisplayContent2 = createTestDisplayContentInContainer();
+        mWpc.registerDisplayConfigurationListenerLocked(testDisplayContent2);
+        assertFalse(testDisplayContent1.containsListener(mWpc));
+        assertTrue(testDisplayContent2.containsListener(mWpc));
+        assertEquals(testDisplayContent2.mDisplayId, mWpc.getDisplayId());
 
-        // Null ActivityDisplay will not change anything.
+        // Null DisplayContent will not change anything.
         mWpc.registerDisplayConfigurationListenerLocked(null);
-        assertTrue(testActivityDisplay2.containsListener(mWpc));
-        assertEquals(testActivityDisplay2.mDisplayId, mWpc.getDisplayId());
+        assertTrue(testDisplayContent2.containsListener(mWpc));
+        assertEquals(testDisplayContent2.mDisplayId, mWpc.getDisplayId());
 
         // Unregister listener will remove the wpc from registered displays.
         mWpc.unregisterDisplayConfigurationListenerLocked();
-        assertFalse(testActivityDisplay1.containsListener(mWpc));
-        assertFalse(testActivityDisplay2.containsListener(mWpc));
+        assertFalse(testDisplayContent1.containsListener(mWpc));
+        assertFalse(testDisplayContent2.containsListener(mWpc));
         assertEquals(INVALID_DISPLAY, mWpc.getDisplayId());
 
         // Unregistration still work even if the display was removed.
-        mWpc.registerDisplayConfigurationListenerLocked(testActivityDisplay1);
-        assertEquals(testActivityDisplay1.mDisplayId, mWpc.getDisplayId());
-        mRootActivityContainer.removeChild(testActivityDisplay1);
+        mWpc.registerDisplayConfigurationListenerLocked(testDisplayContent1);
+        assertEquals(testDisplayContent1.mDisplayId, mWpc.getDisplayId());
+        mRootActivityContainer.removeChild(testDisplayContent1);
         mWpc.unregisterDisplayConfigurationListenerLocked();
         assertEquals(INVALID_DISPLAY, mWpc.getDisplayId());
     }
@@ -97,7 +96,7 @@ public class WindowProcessControllerTests extends ActivityTestsBase {
     public void testSetRunningRecentsAnimation() {
         mWpc.setRunningRecentsAnimation(true);
         mWpc.setRunningRecentsAnimation(false);
-        mService.mH.runWithScissors(() -> {}, 0);
+        waitHandlerIdle(mService.mH);
 
         InOrder orderVerifier = Mockito.inOrder(mMockListener);
         orderVerifier.verify(mMockListener).setRunningRemoteAnimation(eq(true));
@@ -108,7 +107,7 @@ public class WindowProcessControllerTests extends ActivityTestsBase {
     public void testSetRunningRemoteAnimation() {
         mWpc.setRunningRemoteAnimation(true);
         mWpc.setRunningRemoteAnimation(false);
-        mService.mH.runWithScissors(() -> {}, 0);
+        waitHandlerIdle(mService.mH);
 
         InOrder orderVerifier = Mockito.inOrder(mMockListener);
         orderVerifier.verify(mMockListener).setRunningRemoteAnimation(eq(true));
@@ -122,7 +121,7 @@ public class WindowProcessControllerTests extends ActivityTestsBase {
 
         mWpc.setRunningRecentsAnimation(false);
         mWpc.setRunningRemoteAnimation(false);
-        mService.mH.runWithScissors(() -> {}, 0);
+        waitHandlerIdle(mService.mH);
 
         InOrder orderVerifier = Mockito.inOrder(mMockListener);
         orderVerifier.verify(mMockListener, times(3)).setRunningRemoteAnimation(eq(true));
@@ -130,9 +129,7 @@ public class WindowProcessControllerTests extends ActivityTestsBase {
         orderVerifier.verifyNoMoreInteractions();
     }
 
-    private TestActivityDisplay createTestActivityDisplayInContainer() {
-        final TestActivityDisplay testActivityDisplay = createNewActivityDisplay();
-        mRootActivityContainer.addChild(testActivityDisplay, POSITION_TOP);
-        return testActivityDisplay;
+    private TestDisplayContent createTestDisplayContentInContainer() {
+        return new TestDisplayContent.Builder(mService, 1000, 1500).build();
     }
 }

@@ -37,11 +37,13 @@ import android.app.IStopUserCallback;
 import android.app.IUidObserver;
 import android.app.KeyguardManager;
 import android.app.ProfilerInfo;
+import android.app.UserSwitchObserver;
 import android.app.WaitResult;
 import android.app.usage.AppStandbyInfo;
 import android.app.usage.ConfigurationStats;
 import android.app.usage.IUsageStatsManager;
 import android.app.usage.UsageStatsManager;
+import android.compat.Compatibility;
 import android.content.ComponentCallbacks2;
 import android.content.ComponentName;
 import android.content.Context;
@@ -80,15 +82,17 @@ import android.os.UserHandle;
 import android.os.UserManager;
 import android.text.TextUtils;
 import android.util.ArrayMap;
+import android.util.ArraySet;
 import android.util.DebugUtils;
 import android.util.DisplayMetrics;
 import android.util.proto.ProtoOutputStream;
 import android.view.Display;
 
+import com.android.internal.compat.CompatibilityChangeConfig;
 import com.android.internal.util.HexDump;
 import com.android.internal.util.MemInfoReader;
 import com.android.internal.util.Preconditions;
-import com.android.server.compat.CompatConfig;
+import com.android.server.compat.PlatformCompat;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -1016,18 +1020,23 @@ final class ActivityManagerShellCommand extends ShellCommand {
 
     int runBugReport(PrintWriter pw) throws RemoteException {
         String opt;
-        int bugreportType = ActivityManager.BUGREPORT_OPTION_FULL;
+        boolean fullBugreport = true;
         while ((opt=getNextOption()) != null) {
             if (opt.equals("--progress")) {
-                bugreportType = ActivityManager.BUGREPORT_OPTION_INTERACTIVE;
+                fullBugreport = false;
+                mInterface.requestInteractiveBugReport();
             } else if (opt.equals("--telephony")) {
-                bugreportType = ActivityManager.BUGREPORT_OPTION_TELEPHONY;
+                fullBugreport = false;
+                // no title and description specified
+                mInterface.requestTelephonyBugReport("" /* no title */, "" /* no descriptions */);
             } else {
                 getErrPrintWriter().println("Error: Unknown option: " + opt);
                 return -1;
             }
         }
-        mInterface.requestBugReport(bugreportType);
+        if (fullBugreport) {
+            mInterface.requestFullBugReport();
+        }
         pw.println("Your lovely bug report is being created; please be patient.");
         return 0;
     }
@@ -1465,7 +1474,8 @@ final class ActivityManagerShellCommand extends ShellCommand {
         }
 
         @Override
-        public void onUidStateChanged(int uid, int procState, long procStateSeq) throws RemoteException {
+        public void onUidStateChanged(int uid, int procState, long procStateSeq, int capability)
+                throws RemoteException {
             synchronized (this) {
                 final StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskWrites();
                 try {
@@ -1473,7 +1483,9 @@ final class ActivityManagerShellCommand extends ShellCommand {
                     mPw.print(" procstate ");
                     mPw.print(ProcessList.makeProcStateString(procState));
                     mPw.print(" seq ");
-                    mPw.println(procStateSeq);
+                    mPw.print(procStateSeq);
+                    mPw.print(" capability ");
+                    mPw.println(capability);
                     mPw.flush();
                 } finally {
                     StrictMode.setThreadPolicy(oldPolicy);
@@ -1721,6 +1733,30 @@ final class ActivityManagerShellCommand extends ShellCommand {
         return 0;
     }
 
+    private void switchUserAndWaitForComplete(int userId) throws RemoteException {
+        // Register switch observer.
+        final CountDownLatch switchLatch = new CountDownLatch(1);
+        mInterface.registerUserSwitchObserver(
+                new UserSwitchObserver() {
+                    @Override
+                    public void onUserSwitchComplete(int newUserId) {
+                        if (userId == newUserId) {
+                            switchLatch.countDown();
+                        }
+                    }
+                }, ActivityManagerShellCommand.class.getName());
+
+        // Switch.
+        mInterface.switchUser(userId);
+
+        // Wait.
+        try {
+            switchLatch.await(USER_OPERATION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            getErrPrintWriter().println("Thread interrupted unexpectedly.");
+        }
+    }
+
     int runSwitchUser(PrintWriter pw) throws RemoteException {
         UserManager userManager = mInternal.mContext.getSystemService(UserManager.class);
         final int userSwitchable = userManager.getUserSwitchability();
@@ -1728,8 +1764,23 @@ final class ActivityManagerShellCommand extends ShellCommand {
             getErrPrintWriter().println("Error: " + userSwitchable);
             return -1;
         }
-        String user = getNextArgRequired();
-        mInterface.switchUser(Integer.parseInt(user));
+        boolean wait = false;
+        String opt;
+        while ((opt = getNextOption()) != null) {
+            if ("-w".equals(opt)) {
+                wait = true;
+            } else {
+                getErrPrintWriter().println("Error: unknown option: " + opt);
+                return -1;
+            }
+        }
+
+        int userId = Integer.parseInt(getNextArgRequired());
+        if (wait) {
+            switchUserAndWaitForComplete(userId);
+        } else {
+            mInterface.switchUser(userId);
+        }
         return 0;
     }
 
@@ -2854,37 +2905,53 @@ final class ActivityManagerShellCommand extends ShellCommand {
         return 0;
     }
 
-    private int runCompat(PrintWriter pw) {
-        final CompatConfig config = CompatConfig.get();
+    private int runCompat(PrintWriter pw) throws RemoteException {
+        final PlatformCompat platformCompat = (PlatformCompat)
+                ServiceManager.getService(Context.PLATFORM_COMPAT_SERVICE);
         String toggleValue = getNextArgRequired();
+        if (toggleValue.equals("reset-all")) {
+            final String packageName = getNextArgRequired();
+            pw.println("Reset all changes for " + packageName + " to default value.");
+            platformCompat.clearOverrides(packageName);
+            return 0;
+        }
         long changeId;
         String changeIdString = getNextArgRequired();
         try {
             changeId = Long.parseLong(changeIdString);
         } catch (NumberFormatException e) {
-            changeId = config.lookupChangeId(changeIdString);
+            changeId = platformCompat.lookupChangeId(changeIdString);
         }
         if (changeId == -1) {
             pw.println("Unknown or invalid change: '" + changeIdString + "'.");
+            return -1;
         }
         String packageName = getNextArgRequired();
-        switch(toggleValue) {
+        if (!platformCompat.isKnownChangeId(changeId)) {
+            pw.println("Warning! Change " + changeId + " is not known yet. Enabling/disabling it"
+                    + " could have no effect.");
+        }
+        ArraySet<Long> enabled = new ArraySet<>();
+        ArraySet<Long> disabled = new ArraySet<>();
+        switch (toggleValue) {
             case "enable":
-                if (!config.addOverride(changeId, packageName, true)) {
-                    pw.println("Warning! Change " + changeId + " is not known yet. Enabling it"
-                            + " could have no effect.");
-                }
+                enabled.add(changeId);
                 pw.println("Enabled change " + changeId + " for " + packageName + ".");
+                CompatibilityChangeConfig overrides =
+                        new CompatibilityChangeConfig(
+                                new Compatibility.ChangeConfig(enabled, disabled));
+                platformCompat.setOverrides(overrides, packageName);
                 return 0;
             case "disable":
-                if (!config.addOverride(changeId, packageName, false)) {
-                    pw.println("Warning! Change " + changeId + " is not known yet. Disabling it"
-                            + " could have no effect.");
-                }
+                disabled.add(changeId);
                 pw.println("Disabled change " + changeId + " for " + packageName + ".");
+                overrides =
+                        new CompatibilityChangeConfig(
+                                new Compatibility.ChangeConfig(enabled, disabled));
+                platformCompat.setOverrides(overrides, packageName);
                 return 0;
             case "reset":
-                if (config.removeOverride(changeId, packageName)) {
+                if (platformCompat.clearOverride(changeId, packageName)) {
                     pw.println("Reset change " + changeId + " for " + packageName
                             + " to default value.");
                 } else {
@@ -3003,7 +3070,8 @@ final class ActivityManagerShellCommand extends ShellCommand {
             pw.println("      --allow-background-activity-starts: The receiver may start activities");
             pw.println("          even if in the background.");
             pw.println("  instrument [-r] [-e <NAME> <VALUE>] [-p <FILE>] [-w]");
-            pw.println("          [--user <USER_ID> | current] [--no-hidden-api-checks]");
+            pw.println("          [--user <USER_ID> | current]");
+            pw.println("          [--no-hidden-api-checks [--no-test-api-access]]");
             pw.println("          [--no-isolated-storage]");
             pw.println("          [--no-window-animation] [--abi <ABI>] <COMPONENT>");
             pw.println("      Start an Instrumentation.  Typically this target <COMPONENT> is in the");
@@ -3023,6 +3091,8 @@ final class ActivityManagerShellCommand extends ShellCommand {
             pw.println("      --user <USER_ID> | current: Specify user instrumentation runs in;");
             pw.println("          current user if not specified.");
             pw.println("      --no-hidden-api-checks: disable restrictions on use of hidden API.");
+            pw.println("      --no-test-api-access: do not allow access to test APIs, if hidden");
+            pw.println("          API checks are enabled.");
             pw.println("      --no-isolated-storage: don't use isolated storage sandbox and ");
             pw.println("          mount full external storage");
             pw.println("      --no-window-animation: turn off window animations while running.");
@@ -3203,8 +3273,14 @@ final class ActivityManagerShellCommand extends ShellCommand {
             pw.println("      without restarting any processes.");
             pw.println("  write");
             pw.println("      Write all pending state to storage.");
-            pw.println("  compat enable|disable|reset <CHANGE_ID|CHANGE_NAME> <PACKAGE_NAME>");
-            pw.println("      Toggles a change either by id or by name for <PACKAGE_NAME>.");
+            pw.println("  compat [COMMAND] [...]: sub-commands for toggling app-compat changes.");
+            pw.println("         enable|disable|reset <CHANGE_ID|CHANGE_NAME> <PACKAGE_NAME>");
+            pw.println("            Toggles a change either by id or by name for <PACKAGE_NAME>.");
+            pw.println("            It kills <PACKAGE_NAME> (to allow the toggle to take effect).");
+            pw.println("         reset-all <PACKAGE_NAME>");
+            pw.println("            Removes all existing overrides for all changes for ");
+            pw.println("            <PACKAGE_NAME> (back to default behaviour).");
+            pw.println("            It kills <PACKAGE_NAME> (to allow the toggle to take effect).");
             pw.println();
             Intent.printIntentArgsHelp(pw, "");
         }

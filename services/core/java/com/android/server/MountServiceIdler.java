@@ -99,32 +99,28 @@ public class MountServiceIdler extends JobService {
     public static void scheduleIdlePass(Context context) {
         JobScheduler tm = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
 
-        final long today3AM = MidnightInTime(0, 0).getTimeInMillis();
-        final long today4AM = MidnightInTime(0, 1).getTimeInMillis();
+        final long today3AM = offsetFromTodayMidnight(0, 3).getTimeInMillis();
+        final long today4AM = offsetFromTodayMidnight(0, 4).getTimeInMillis();
+        final long tomorrow3AM = offsetFromTodayMidnight(1, 3).getTimeInMillis();
 
-        long nextScheduleTime, maxScheduleTime;
+        long nextScheduleTime;
         if (System.currentTimeMillis() > today3AM && System.currentTimeMillis() < today4AM) {
             nextScheduleTime = TimeUnit.SECONDS.toMillis(10);
-            maxScheduleTime = today4AM - System.currentTimeMillis();
         } else {
-            final long tomorrow3AM = MidnightInTime(1, 0).getTimeInMillis();
-            final long twodays3AM = MidnightInTime(2, 0).getTimeInMillis();
             nextScheduleTime = tomorrow3AM - System.currentTimeMillis(); // 3AM tomorrow
-            maxScheduleTime = twodays3AM - System.currentTimeMillis();   // 3AM in two days
         }
 
         JobInfo.Builder builder = new JobInfo.Builder(MOUNT_JOB_ID, sIdleService);
         builder.setRequiresDeviceIdle(true);
-        builder.setRequiresCharging(true);
+        builder.setRequiresBatteryNotLow(true);
         builder.setMinimumLatency(nextScheduleTime);
-        builder.setOverrideDeadline(maxScheduleTime);
         tm.schedule(builder.build());
     }
 
-    private static Calendar MidnightInTime(int nDays, int nHours) {
+    private static Calendar offsetFromTodayMidnight(int nDays, int nHours) {
         Calendar calendar = Calendar.getInstance();
         calendar.setTimeInMillis(System.currentTimeMillis());
-        calendar.set(Calendar.HOUR_OF_DAY, 3 + nHours);
+        calendar.set(Calendar.HOUR_OF_DAY, nHours);
         calendar.set(Calendar.MINUTE, 0);
         calendar.set(Calendar.SECOND, 0);
         calendar.set(Calendar.MILLISECOND, 0);

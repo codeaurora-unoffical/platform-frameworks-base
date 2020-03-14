@@ -27,8 +27,8 @@ import android.service.notification.StatusBarNotification;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.systemui.Dependency;
 import com.android.systemui.ForegroundServiceController;
+import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
-import com.android.systemui.statusbar.notification.collection.NotificationData;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.statusbar.phone.ShadeController;
@@ -37,24 +37,30 @@ import com.android.systemui.statusbar.phone.StatusBar;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
-/** Component which manages the various reasons a notification might be filtered out. */
+/** Component which manages the various reasons a notification might be filtered out.*/
+// TODO: delete NotificationFilter.java after migrating to new NotifPipeline b/145659174.
+//  Notification filtering is taken care of across the different Coordinators (mostly
+//  KeyguardCoordinator.java)
 @Singleton
 public class NotificationFilter {
 
     private final NotificationGroupManager mGroupManager = Dependency.get(
             NotificationGroupManager.class);
+    private final StatusBarStateController mStatusBarStateController;
 
-    private NotificationData.KeyguardEnvironment mEnvironment;
+    private NotificationEntryManager.KeyguardEnvironment mEnvironment;
     private ShadeController mShadeController;
     private ForegroundServiceController mFsc;
     private NotificationLockscreenUserManager mUserManager;
 
     @Inject
-    public NotificationFilter() {}
+    public NotificationFilter(StatusBarStateController statusBarStateController) {
+        mStatusBarStateController = statusBarStateController;
+    }
 
-    private NotificationData.KeyguardEnvironment getEnvironment() {
+    private NotificationEntryManager.KeyguardEnvironment getEnvironment() {
         if (mEnvironment == null) {
-            mEnvironment = Dependency.get(NotificationData.KeyguardEnvironment.class);
+            mEnvironment = Dependency.get(NotificationEntryManager.KeyguardEnvironment.class);
         }
         return mEnvironment;
     }
@@ -85,7 +91,7 @@ public class NotificationFilter {
      * @return true if the provided notification should NOT be shown right now.
      */
     public boolean shouldFilterOut(NotificationEntry entry) {
-        final StatusBarNotification sbn = entry.notification;
+        final StatusBarNotification sbn = entry.getSbn();
         if (!(getEnvironment().isDeviceProvisioned()
                 || showNotificationEvenIfUnprovisioned(sbn))) {
             return true;
@@ -102,15 +108,15 @@ public class NotificationFilter {
             return true;
         }
 
-        if (getShadeController().isDozing() && entry.shouldSuppressAmbient()) {
+        if (mStatusBarStateController.isDozing() && entry.shouldSuppressAmbient()) {
             return true;
         }
 
-        if (!getShadeController().isDozing() && entry.shouldSuppressNotificationList()) {
+        if (!mStatusBarStateController.isDozing() && entry.shouldSuppressNotificationList()) {
             return true;
         }
 
-        if (entry.isSuspended()) {
+        if (entry.getRanking().isSuspended()) {
             return true;
         }
 

@@ -16,8 +16,9 @@
 
 package android.hardware.biometrics;
 
+import static android.hardware.biometrics.BiometricManager.Authenticators;
+
 import android.annotation.UnsupportedAppUsage;
-import android.app.KeyguardManager;
 
 
 /**
@@ -86,12 +87,10 @@ public interface BiometricConstants {
     int BIOMETRIC_ERROR_LOCKOUT = 7;
 
     /**
-     * Hardware vendors may extend this list if there are conditions that do not fall under one of
-     * the above categories. Vendors are responsible for providing error strings for these errors.
-     * These messages are typically reserved for internal operations such as enrollment, but may be
-     * used to express vendor errors not otherwise covered. Applications are expected to show the
-     * error message string if they happen, but are advised not to rely on the message id since they
-     * will be device and vendor-specific
+     * OEMs should use this constant if there are conditions that do not fit under any of the other
+     * publicly defined constants, and must provide appropriate strings for these
+     * errors to the {@link BiometricPrompt.AuthenticationCallback#onAuthenticationError(int,
+     * CharSequence)} callback. OEMs should expect that the error message will be shown to users.
      */
     int BIOMETRIC_ERROR_VENDOR = 8;
 
@@ -128,10 +127,17 @@ public interface BiometricConstants {
 
     /**
      * The device does not have pin, pattern, or password set up. See
-     * {@link BiometricPrompt.Builder#setDeviceCredentialAllowed(boolean)} and
-     * {@link KeyguardManager#isDeviceSecure()}
+     * {@link BiometricPrompt.Builder#setAllowedAuthenticators(int)},
+     * {@link Authenticators#DEVICE_CREDENTIAL}, and {@link BiometricManager#canAuthenticate(int)}.
      */
     int BIOMETRIC_ERROR_NO_DEVICE_CREDENTIAL = 14;
+
+    /**
+     * This constant is only used by SystemUI. It notifies SystemUI that authentication was paused
+     * because the authentication attempt was unsuccessful.
+     * @hide
+     */
+    int BIOMETRIC_PAUSED_REJECTED = 100;
 
     /**
      * @hide

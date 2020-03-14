@@ -382,7 +382,7 @@ public abstract class AccessibilityService extends Service {
         void onServiceConnected();
         void init(int connectionId, IBinder windowToken);
         /** The detected gesture information for different displays */
-        boolean onGesture(AccessibilityGestureInfo gestureInfo);
+        boolean onGesture(AccessibilityGestureEvent gestureInfo);
         boolean onKeyEvent(KeyEvent event);
         /** Magnification changed callbacks for different displays */
         void onMagnificationChanged(int displayId, @NonNull Region region,
@@ -517,7 +517,7 @@ public abstract class AccessibilityService extends Service {
     }
 
     /**
-     * Called by {@link #onGesture(AccessibilityGestureInfo)} when the user performs a specific
+     * Called by {@link #onGesture(AccessibilityGestureEvent)} when the user performs a specific
      * gesture on the default display.
      *
      * <strong>Note:</strong> To receive gestures an accessibility service must
@@ -528,7 +528,7 @@ public abstract class AccessibilityService extends Service {
      * @param gestureId The unique id of the performed gesture.
      *
      * @return Whether the gesture was handled.
-     * @deprecated Override {@link #onGesture(AccessibilityGestureInfo)} instead.
+     * @deprecated Override {@link #onGesture(AccessibilityGestureEvent)} instead.
      *
      * @see #GESTURE_SWIPE_UP
      * @see #GESTURE_SWIPE_UP_AND_LEFT
@@ -564,14 +564,14 @@ public abstract class AccessibilityService extends Service {
      * <strong>Note:</strong> The default implementation calls {@link #onGesture(int)} when the
      * touch screen is default display.
      *
-     * @param gestureInfo The information of gesture.
+     * @param gestureEvent The information of gesture.
      *
      * @return Whether the gesture was handled.
      *
      */
-    public boolean onGesture(@NonNull AccessibilityGestureInfo gestureInfo) {
-        if (gestureInfo.getDisplayId() == Display.DEFAULT_DISPLAY) {
-            onGesture(gestureInfo.getGestureId());
+    public boolean onGesture(@NonNull AccessibilityGestureEvent gestureEvent) {
+        if (gestureEvent.getDisplayId() == Display.DEFAULT_DISPLAY) {
+            onGesture(gestureEvent.getGestureId());
         }
         return false;
     }
@@ -605,7 +605,7 @@ public abstract class AccessibilityService extends Service {
     }
 
     /**
-     * Gets the windows on the screen. This method returns only the windows
+     * Gets the windows on the screen of the default display. This method returns only the windows
      * that a sighted user can interact with, as opposed to all windows.
      * For example, if there is a modal dialog shown and the user cannot touch
      * anything behind it, then only the modal window will be reported
@@ -629,6 +629,34 @@ public abstract class AccessibilityService extends Service {
      */
     public List<AccessibilityWindowInfo> getWindows() {
         return AccessibilityInteractionClient.getInstance().getWindows(mConnectionId);
+    }
+
+    /**
+     * Gets the windows on the screen of all displays. This method returns only the windows
+     * that a sighted user can interact with, as opposed to all windows.
+     * For example, if there is a modal dialog shown and the user cannot touch
+     * anything behind it, then only the modal window will be reported
+     * (assuming it is the top one). For convenience the returned windows
+     * are ordered in a descending layer order, which is the windows that
+     * are on top are reported first. Since the user can always
+     * interact with the window that has input focus by typing, the focused
+     * window is always returned (even if covered by a modal window).
+     * <p>
+     * <strong>Note:</strong> In order to access the windows your service has
+     * to declare the capability to retrieve window content by setting the
+     * {@link android.R.styleable#AccessibilityService_canRetrieveWindowContent}
+     * property in its meta-data. For details refer to {@link #SERVICE_META_DATA}.
+     * Also the service has to opt-in to retrieve the interactive windows by
+     * setting the {@link AccessibilityServiceInfo#FLAG_RETRIEVE_INTERACTIVE_WINDOWS}
+     * flag.
+     * </p>
+     *
+     * @return The windows of all displays if there are windows and the service is can retrieve
+     *         them, otherwise an empty list. The key of SparseArray is display ID.
+     */
+    @NonNull
+    public final SparseArray<List<AccessibilityWindowInfo>> getWindowsOnAllDisplays() {
+        return AccessibilityInteractionClient.getInstance().getWindowsOnAllDisplays(mConnectionId);
     }
 
     /**
@@ -822,6 +850,7 @@ public abstract class AccessibilityService extends Service {
         GestureResultCallbackInfo callbackInfo;
         synchronized (mLock) {
             callbackInfo = mGestureStatusCallbackInfos.get(sequence);
+            mGestureStatusCallbackInfos.remove(sequence);
         }
         final GestureResultCallbackInfo finalCallbackInfo = callbackInfo;
         if ((callbackInfo != null) && (callbackInfo.gestureDescription != null)
@@ -1725,8 +1754,8 @@ public abstract class AccessibilityService extends Service {
             }
 
             @Override
-            public boolean onGesture(AccessibilityGestureInfo gestureInfo) {
-                return AccessibilityService.this.onGesture(gestureInfo);
+            public boolean onGesture(AccessibilityGestureEvent gestureEvent) {
+                return AccessibilityService.this.onGesture(gestureEvent);
             }
 
             @Override
@@ -1826,7 +1855,7 @@ public abstract class AccessibilityService extends Service {
         }
 
         @Override
-        public void onGesture(AccessibilityGestureInfo gestureInfo) {
+        public void onGesture(AccessibilityGestureEvent gestureInfo) {
             Message message = mCaller.obtainMessageO(DO_ON_GESTURE, gestureInfo);
             mCaller.sendMessage(message);
         }
@@ -1942,7 +1971,7 @@ public abstract class AccessibilityService extends Service {
 
                 case DO_ON_GESTURE: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
-                        mCallback.onGesture((AccessibilityGestureInfo) message.obj);
+                        mCallback.onGesture((AccessibilityGestureEvent) message.obj);
                     }
                 } return;
 

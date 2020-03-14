@@ -19,7 +19,6 @@ package com.android.internal.telephony;
 import android.app.PendingIntent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.telephony.IFinancialSmsCallback;
 import com.android.internal.telephony.SmsRawData;
 
 /**
@@ -570,20 +569,29 @@ interface ISms {
             int subId, String callingPkg, String prefixes, in PendingIntent intent);
 
     /**
-     * Get sms inbox messages for the calling financial app.
-     *
-     * @param subId the SIM id.
-     * @param callingPkg the package name of the calling app.
-     * @param params parameters to filter the sms messages.
-     * @param callback the callback interface to deliver the result.
-     */
-    void getSmsMessagesForFinancialApp(
-        int subId, String callingPkg, in Bundle params, in IFinancialSmsCallback callback);
-
-    /**
      * Check if the destination is a possible premium short code.
      *
      * @param destAddress the destination address to test for possible short code
      */
-    int checkSmsShortCodeDestination(int subId, String callingApk, String destAddress, String countryIso);
+    int checkSmsShortCodeDestination(int subId, String callingApk, String callingFeatureId,
+            String destAddress, String countryIso);
+
+    /**
+     * Gets the SMSC address from (U)SIM.
+     *
+     * @param subId the subscription Id.
+     * @param callingPackage the package name of the calling app.
+     * @return the SMSC address string, null if failed.
+     */
+    String getSmscAddressFromIccEfForSubscriber(int subId, String callingPackage);
+
+    /**
+     * Sets the SMSC address on (U)SIM.
+     *
+     * @param smsc the SMSC address string.
+     * @param subId the subscription Id.
+     * @param callingPackage the package name of the calling app.
+     * @return true for success, false otherwise.
+     */
+    boolean setSmscAddressOnIccEfForSubscriber(String smsc, int subId, String callingPackage);
 }

@@ -387,6 +387,12 @@
     </string-array>
 
     <!-- List of regexpressions describing the interface (if any) that represent tetherable
+         Wifi P2P interfaces.  If the device doesn't want to support tethering over Wifi P2p this
+         should be empty.  An example would be "p2p-p2p.*" -->
+    <string-array translatable="false" name="config_tether_wifi_p2p_regexs">
+    </string-array>
+
+    <!-- List of regexpressions describing the interface (if any) that represent tetherable
          WiMAX interfaces.  If the device doesn't want to support tethering over Wifi this
          should be empty.  An example would be "softap.*" -->
     <string-array translatable="false" name="config_tether_wimax_regexs">
@@ -432,6 +438,18 @@
         <item>eth3;12,13,14,15;ip=192.168.0.12/24;1</item>
         -->
     </string-array>
+
+    <!-- Configuration of network interfaces that support WakeOnLAN -->
+    <string-array translatable="false" name="config_wakeonlan_supported_interfaces">
+        <!--
+        <item>wlan0</item>
+        <item>eth0</item>
+        -->
+    </string-array>
+
+    <!-- Package name for the default CellBroadcastService module [DO NOT TRANSLATE] -->
+    <string name="cellbroadcast_default_package" translatable="false">com.android.cellbroadcastservice
+    </string>
 
     <!-- If the mobile hotspot feature requires provisioning, a package name and class name
         can be provided to launch a supported application that provisions the devices.
@@ -490,7 +508,7 @@
         -->
     <string translatable="false" name="config_mobile_hotspot_provision_app_no_ui"></string>
     <!-- Sent in response to a provisioning check. The caller must hold the
-         permission android.permission.CONNECTIVITY_INTERNAL for Settings to
+         permission android.permission.TETHER_PRIVILEGED for Settings to
          receive this response.
 
          See config_mobile_hotspot_provision_response
@@ -511,7 +529,7 @@
 
              - TYPE_ETHERNET (9) is prepended to this list, and
 
-             - the return value of TelephonyManager.getTetherApnRequired()
+             - the return value of TelephonyManager.isTetheringApnRequired()
                determines how the array is further modified:
 
                    * TRUE (DUN REQUIRED).
@@ -551,206 +569,6 @@
     <!-- a DUN-requiring CDMA device, the DUN APN will just support just DUN. -->
     <string-array translatable="false" name="config_cdma_dun_supported_types">
     </string-array>
-
-    <!-- Boolean indicating whether the wifi chipset has dual frequency band support -->
-    <bool translatable="false" name="config_wifi_dual_band_support">false</bool>
-
-    <!-- Maximum number of concurrent WiFi interfaces in AP mode -->
-    <integer translatable="false" name="config_wifi_max_ap_interfaces">1</integer>
-
-    <!-- Boolean indicating whether the wifi chipset requires the softap band be -->
-    <!-- converted from 5GHz to ANY due to hardware restrictions -->
-    <bool translatable="false" name="config_wifi_convert_apband_5ghz_to_any">false</bool>
-
-    <!-- Boolean indicating whether 802.11r Fast BSS Transition is enabled on this platform -->
-    <bool translatable="false" name="config_wifi_fast_bss_transition_enabled">false</bool>
-
-    <!-- Device type information conforming to Annex B format in WiFi Direct specification.
-         The default represents a dual-mode smartphone -->
-    <string translatable="false" name="config_wifi_p2p_device_type">10-0050F204-5</string>
-
-    <!-- Boolean indicating whether the wifi chipset supports background scanning mechanism.
-         This mechanism allows the host to remain in suspend state and the dongle to actively
-         scan and wake the host when a configured SSID is detected by the dongle. This chipset
-         capability can provide power savings when wifi needs to be always kept on. -->
-    <bool translatable="false" name="config_wifi_background_scan_support">false</bool>
-
-    <!-- Boolean indicating we re-try re-associating once upon disconnection and RSSI is high failure  -->
-    <bool translatable="true" name="config_wifi_enable_disconnection_debounce">true</bool>
-
-    <!-- Boolean indicating whether or not to revert to default country code when cellular
-         radio is unable to find any MCC information to infer wifi country code from -->
-    <bool translatable="false" name="config_wifi_revert_country_code_on_cellular_loss">false</bool>
-
-    <!-- Integer size limit, in KB, for a single WifiLogger ringbuffer, in default logging mode -->
-    <integer translatable="false" name="config_wifi_logger_ring_buffer_default_size_limit_kb">32</integer>
-
-    <!-- Integer size limit, in KB, for a single WifiLogger ringbuffer, in verbose logging mode -->
-    <integer translatable="false" name="config_wifi_logger_ring_buffer_verbose_size_limit_kb">1024</integer>
-
-    <!-- Array indicating wifi fatal firmware alert error code list from driver -->
-    <integer-array translatable="false" name="config_wifi_fatal_firmware_alert_error_code_list">
-        <!-- Example:
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        -->
-    </integer-array>
-
-    <!-- Boolean indicating whether or not wifi should turn off when emergency call is made -->
-    <bool translatable="false" name="config_wifi_turn_off_during_emergency_call">false</bool>
-
-    <!-- Integer specifying the basic autojoin parameters -->
-    <integer translatable="false" name="config_wifi_framework_5GHz_preference_boost_threshold">-65</integer>
-    <integer translatable="false" name="config_wifi_framework_5GHz_preference_boost_factor">40</integer>
-    <integer translatable="false" name="config_wifi_framework_5GHz_preference_penalty_threshold">-75</integer>
-    <integer translatable="false" name="config_wifi_framework_RSSI_SCORE_OFFSET">85</integer>
-    <integer translatable="false" name="config_wifi_framework_RSSI_SCORE_SLOPE">4</integer>
-    <integer translatable="false" name="config_wifi_framework_SAME_BSSID_AWARD">24</integer>
-    <integer translatable="false" name="config_wifi_framework_LAST_SELECTION_AWARD">480</integer>
-    <integer translatable="false" name="config_wifi_framework_PASSPOINT_SECURITY_AWARD">40</integer>
-    <integer translatable="false" name="config_wifi_framework_SECURITY_AWARD">80</integer>
-    <!-- Integer specifying the base interval in seconds for the exponential backoff scan for autojoin -->
-    <integer translatable="false" name="config_wifi_framework_exponential_backoff_scan_base_interval">20</integer>
-    <!-- Integers specifying the max packet Tx/Rx rates for full scan -->
-    <integer translatable="false" name="config_wifi_framework_max_tx_rate_for_full_scan">8</integer>
-    <integer translatable="false" name="config_wifi_framework_max_rx_rate_for_full_scan">16</integer>
-    <!-- Integers specifying the min packet Tx/Rx rates in packets per second for staying on the same network -->
-    <integer translatable="false" name="config_wifi_framework_min_tx_rate_for_staying_on_network">16</integer>
-    <integer translatable="false" name="config_wifi_framework_min_rx_rate_for_staying_on_network">16</integer>
-    <!-- Integer parameters of the wifi to cellular handover feature
-         wifi should not stick to bad networks -->
-    <!-- Integer threshold for low network score, should be somewhat less than the entry threshhold -->
-    <integer translatable="false" name="config_wifi_framework_wifi_score_bad_rssi_threshold_5GHz">-80</integer>
-    <!-- Integer threshold, do not connect to APs with RSSI lower than the entry threshold -->
-    <integer translatable="false" name="config_wifi_framework_wifi_score_entry_rssi_threshold_5GHz">-77</integer>
-    <integer translatable="false" name="config_wifi_framework_wifi_score_low_rssi_threshold_5GHz">-70</integer>
-    <integer translatable="false" name="config_wifi_framework_wifi_score_good_rssi_threshold_5GHz">-57</integer>
-    <integer translatable="false" name="config_wifi_framework_wifi_score_bad_rssi_threshold_24GHz">-83</integer>
-    <integer translatable="false" name="config_wifi_framework_wifi_score_entry_rssi_threshold_24GHz">-80</integer>
-    <integer translatable="false" name="config_wifi_framework_wifi_score_low_rssi_threshold_24GHz">-73</integer>
-    <integer translatable="false" name="config_wifi_framework_wifi_score_good_rssi_threshold_24GHz">-60</integer>
-
-    <!-- Integer delay in milliseconds before shutting down soft AP when there
-         are no connected devices. Framework will enforce a minimum limit on
-         this value and this setting will be overridden if the provided value is
-         smaller than the limit. -->
-    <integer translatable="false" name="config_wifi_framework_soft_ap_timeout_delay">600000</integer>
-
-    <string  translatable="false" name="config_wifi_random_mac_oui">DA-A1-19</string>
-    <string  translatable="false" name="config_wifi_framework_sap_2G_channel_list">1,6,11</string>
-
-    <bool translatable="false" name="config_wifi_framework_cellular_handover_enable_user_triggered_adjustment">true</bool>
-
-    <!-- Integer packet threshold used to allow scan while associated -->
-    <integer translatable="false" name="config_wifi_framework_associated_full_scan_tx_packet_threshold">5</integer>
-    <integer translatable="false" name="config_wifi_framework_associated_full_scan_rx_packet_threshold">10</integer>
-    <integer translatable="false" name="config_wifi_framework_associated_partial_scan_tx_packet_threshold">40</integer>
-    <integer translatable="false" name="config_wifi_framework_associated_partial_scan_rx_packet_threshold">80</integer>
-    <integer translatable="false" name="config_wifi_framework_network_switch_tx_packet_threshold">2</integer>
-    <integer translatable="false" name="config_wifi_framework_network_switch_rx_packet_threshold">20</integer>
-
-    <!-- Integer indicating wpa_supplicant scan interval in milliseconds -->
-    <integer translatable="false" name="config_wifi_supplicant_scan_interval">15000</integer>
-
-    <!-- Integer indicating amount of time failed networks areblacklisted for the purpose
-         of network switching in milliseconds -->
-    <integer translatable="false" name="config_wifi_network_switching_blacklist_time">172800000</integer>
-
-    <!-- Integer indicating wpa_supplicant scan interval when p2p is connected in milliseconds -->
-    <integer translatable="false" name="config_wifi_scan_interval_p2p_connected">60000</integer>
-
-    <!-- Integer indicating disconnect mode short scan interval in milliseconds -->
-    <integer translatable="false" name="config_wifi_disconnected_short_scan_interval">15000</integer>
-
-    <!-- Integer indicating associated partial scan short interval in milliseconds -->
-    <integer translatable="false" name="config_wifi_associated_short_scan_interval">20000</integer>
-
-    <!-- Integer indicating associated full scan backoff, representing a fraction: xx/8 -->
-    <integer translatable="false" name="config_wifi_framework_associated_full_scan_backoff">12</integer>
-
-    <!-- Integer indicating associated full scan max interval in milliseconds -->
-    <integer translatable="false" name="config_wifi_framework_associated_full_scan_max_interval">300000</integer>
-
-    <!-- Integer indicating associated full scan max total dwell time in milliseconds -->
-    <integer translatable="false" name="config_wifi_framework_associated_full_scan_max_total_dwell_time">500</integer>
-
-    <!-- Integer indicating associated full scan max num active channels -->
-    <integer translatable="false" name="config_wifi_framework_associated_partial_scan_max_num_active_channels">6</integer>
-
-    <!-- Integer indicating RSSI boost given to current network -->
-    <integer translatable="false" name="config_wifi_framework_current_network_boost">16</integer>
-
-    <!-- Integer delay in milliseconds before set wlan interface up during watchdog recovery -->
-    <integer translatable="false" name="config_wifi_framework_recovery_timeout_delay">2000</integer>
-
-    <!-- Integer indicating how to handle beacons with uninitialized RSSI value of 0 -->
-    <integer translatable="false" name="config_wifi_framework_scan_result_rssi_level_patchup_value">-85</integer>
-
-    <!-- Boolean indicating associated network selection is allowed -->
-    <bool translatable="false" name="config_wifi_framework_enable_associated_network_selection">true</bool>
-
-    <!-- Boolean indicating whether single radio chain scan results are to be used for network selection -->
-    <bool translatable="false" name="config_wifi_framework_use_single_radio_chain_scan_results_network_selection">true</bool>
-
-    <!-- Boolean indicating that wifi only link configuratios that have exact same credentials (i.e PSK) -->
-    <bool translatable="false" name="config_wifi_only_link_same_credential_configurations">true</bool>
-
-    <!-- Boolean indicating whether framework needs to set the tx power limit for meeting SAR requirements -->
-    <bool translatable="false" name="config_wifi_framework_enable_sar_tx_power_limit">false</bool>
-
-    <!-- Boolean indicating whether framework should use detection of softAP mode to set the tx
-         power limit for meeting SAR requirements -->
-    <bool translatable="false" name="config_wifi_framework_enable_soft_ap_sar_tx_power_limit">false</bool>
-
-    <!-- Boolean indicating whether framework needs to use body proximity to set the tx power limit
-         for meeting SAR requirements -->
-    <bool translatable="false" name="config_wifi_framework_enable_body_proximity_sar_tx_power_limit">false</bool>
-
-    <!-- String for the sensor type for body/head proximity for SAR -->
-    <string translatable="false" name="config_wifi_sar_sensor_type"></string>
-
-    <!-- Integer indicating event id by sar sensor for free space -->
-    <integer translatable="false" name="config_wifi_framework_sar_free_space_event_id">1</integer>
-
-    <!-- Integer indicating event id by sar sensor for near hand -->
-    <integer translatable="false" name="config_wifi_framework_sar_near_hand_event_id">2</integer>
-
-    <!-- Integer indicating event id by sar sensor for near head -->
-    <integer translatable="false" name="config_wifi_framework_sar_near_head_event_id">3</integer>
-
-    <!-- Integer indicating event id by sar sensor for near body -->
-    <integer translatable="false" name="config_wifi_framework_sar_near_body_event_id">4</integer>
-
-    <!-- Wifi driver supports batched scan -->
-    <bool translatable="false" name="config_wifi_batched_scan_supported">false</bool>
-
-    <!-- Wifi driver supports Automatic channel selection (ACS) for softap -->
-    <bool translatable="false" name="config_wifi_softap_acs_supported">false</bool>
-
-    <!-- Channel list restriction to Automatic channel selection (ACS) for softap. If the device
-         doesn't want to restrict channels this should be empty. Value is a comma separated channel
-         string and/or channel range string like '1-6,11' -->
-    <string translatable="false" name="config_wifi_softap_acs_supported_channel_list"></string>
-
-    <!-- Wifi driver supports IEEE80211AC for softap -->
-    <bool translatable="false" name="config_wifi_softap_ieee80211ac_supported">false</bool>
-
-    <!-- Indicates that local-only hotspot should be brought up at 5GHz.  This option is
-         for automotive builds only (the one that have PackageManager#FEATURE_AUTOMOTIVE) -->
-    <bool translatable="false" name="config_wifi_local_only_hotspot_5ghz">false</bool>
-
-    <!-- Indicates that connected MAC randomization is supported on this device -->
-    <bool translatable="false" name="config_wifi_connected_mac_randomization_supported">false</bool>
-
-    <!-- Indicates that p2p MAC randomization is supported on this device -->
-    <bool translatable="false" name="config_wifi_p2p_mac_randomization_supported">false</bool>
-
-    <!-- flag for activating paranoid MAC randomization on a limited set of SSIDs -->
-    <bool translatable="false" name="config_wifi_aggressive_randomization_ssid_whitelist_enabled">false</bool>
-
-    <!-- Indicates that wifi link probing is supported on this device -->
-    <bool translatable="false" name="config_wifi_link_probing_supported">false</bool>
 
     <!-- Flag indicating whether we should enable the automatic brightness.
          Software implementation will be used if config_hardware_auto_brightness_available is not set -->
@@ -1140,6 +958,14 @@
          Otherwise, the device may fail to wake out of suspend reliably.
          The default is false. -->
     <bool name="config_suspendWhenScreenOffDueToProximity">false</bool>
+
+    <!-- The time in milliseconds of prolonged user inactivity after which device goes to sleep,
+         even if wakelocks are held. -->
+    <integer name="config_attentiveTimeout">-1</integer>
+
+    <!-- How long to show a warning message to user before the device goes to sleep after prolonged
+         user inactivity. -->
+    <integer name="config_attentiveWarningDuration">30000</integer>
 
     <!-- Control the behavior when the user long presses the power button.
             0 - Nothing
@@ -2047,6 +1873,10 @@
     <bool name="config_showDefaultEmergency">false</bool>
     <!-- Whether the default home settings should be shown. -->
     <bool name="config_showDefaultHome">true</bool>
+    <!-- The name of the package that will hold the call redirection role by default. -->
+    <string name="config_defaultCallRedirection" translatable="false"></string>
+    <!-- The name of the package that will hold the call screening role by default. -->
+    <string name="config_defaultCallScreening" translatable="false"></string>
 
     <!-- Enable/disable default bluetooth profiles:
         HSP_AG, ObexObjectPush, Audio, NAP -->
@@ -2318,8 +2148,6 @@
     <integer name="config_dreamsBatteryLevelDrainCutoff">5</integer>
     <!-- Limit of how long the device can remain unlocked due to attention checking.  -->
     <integer name="config_attentionMaximumExtension">330000</integer> <!-- 5 minutes and 30 sec.-->
-    <!-- How long we should wait until we give up on receiving an attention API callback.  -->
-    <integer name="config_attentionApiTimeout">2000</integer> <!-- 2 seconds -->
 
     <!-- ComponentName of a dream to show whenever the system would otherwise have
          gone to sleep.  When the PowerManager is asked to go to sleep, it will instead
@@ -2527,6 +2355,18 @@
          will be locked. -->
     <bool name="config_multiuserDelayUserDataLocking">false</bool>
 
+    <!-- Whether to only install system packages on a user if they're whitelisted for that user
+         type. These are flags and can be freely combined.
+         0 (0b000) - disable whitelist (install all system packages; no logging)
+         1 (0b001) - enforce (only install system packages if they are whitelisted)
+         2 (0b010) - log (log when a non-whitelisted package is run)
+         4 (0b100) - treat any package not mentioned in the whitelist file as implicitly whitelisted
+         8 (0b1000) - ignore OTAs (don't install system packages during OTAs)
+        Note: This list must be kept current with PACKAGE_WHITELIST_MODE_PROP in
+        frameworks/base/services/core/java/com/android/server/pm/UserSystemPackageInstaller.java -->
+    <integer name="config_userTypePackageWhitelistMode">13</integer> <!-- 0b1101 -->
+    <!-- TODO(b/143200798): Change to value 5, i.e. 0b0101, when b/143200798 is resolved. -->
+
     <!-- Whether UI for multi user should be shown -->
     <bool name="config_enableMultiUserUI">false</bool>
 
@@ -2581,10 +2421,6 @@
     <!-- Configure ethernet tcp buffersizes in the form:
          rmem_min,rmem_def,rmem_max,wmem_min,wmem_def,wmem_max -->
     <string name="config_ethernet_tcp_buffers" translatable="false">524288,1048576,3145728,524288,1048576,2097152</string>
-
-    <!-- Configure wifi tcp buffersizes in the form:
-         rmem_min,rmem_def,rmem_max,wmem_min,wmem_def,wmem_max -->
-    <string name="config_wifi_tcp_buffers" translatable="false">524288,1048576,2097152,262144,524288,1048576</string>
 
     <!-- Whether WiFi display is supported by this device.
          There are many prerequisites for this feature to work correctly.
@@ -2794,6 +2630,18 @@
         <item>353</item>
     </string-array>
 
+    <!-- Ims supported call barring MMI code -->
+    <string-array translatable="false" name="config_callBarringMMI_for_ims">
+        <item>33</item>
+        <item>331</item>
+        <item>332</item>
+        <item>35</item>
+        <item>351</item>
+        <item>330</item>
+        <item>333</item>
+        <item>353</item>
+    </string-array>
+
     <!-- Override the default detection behavior for the framework method
          android.view.ViewConfiguration#hasPermanentMenuKey().
          Valid settings are:
@@ -2816,13 +2664,11 @@
     <!-- Package name for default network scorer app; overridden by product overlays. -->
     <string name="config_defaultNetworkScorerPackageName"></string>
 
-    <!-- Feature flag to enable memory efficient task snapshots that are used in recents optimized
-         for low memory devices and replace the app transition starting window with the splash
-         screen. -->
-    <bool name="config_lowRamTaskSnapshotsAndRecents">false</bool>
-
     <!-- The amount to scale fullscreen snapshots for Overview and snapshot starting windows. -->
     <item name="config_fullTaskSnapshotScale" format="float" type="dimen">1.0</item>
+
+    <!-- Feature flag to store TaskSnapshot in 16 bit pixel format to save memory. -->
+    <bool name="config_use16BitTaskSnapshotPixelFormat">false</bool>
 
     <!-- Determines whether recent tasks are provided to the user. Default device has recents
          property. If this is false, then the following recents config flags are ignored. -->
@@ -3011,9 +2857,6 @@
 
     <!-- String array containing numbers that shouldn't be logged. Country-specific. -->
     <string-array name="unloggable_phone_numbers" />
-
-    <!-- Flag specifying whether or not IMS will use the dynamic ImsResolver -->
-    <bool name="config_dynamic_bind_ims">false</bool>
 
     <!-- Cellular data service package name to bind to by default. If none is specified in an overlay, an
          empty string is passed in -->
@@ -3521,6 +3364,9 @@
     <!-- emergency call number for the emergency affordance -->
     <string name="config_emergency_call_number" translatable="false">112</string>
 
+    <!-- Package name that provides Emergency Dialer -->
+    <string name="config_emergency_dialer_package">com.android.phone</string>
+
     <!-- Do not translate. Mcc codes whose existence trigger the presence of emergency
          affordances-->
     <integer-array name="config_emergency_mcc_codes" translatable="false">
@@ -3658,12 +3504,32 @@
     -->
     <string name="config_defaultTextClassifierPackage" translatable="false"></string>
 
+    <!-- A list of the default system textclassifier service package name. Only one of the packages
+         will be activated and the fist package is the default system textclassifier service. OS
+         only tries to bind the first trusted service and the others can be selected via device
+         config. These services must be trusted, as they can be activated without explicit consent
+         of the user. Example: "com.android.textclassifier"
+    -->
+    <string-array name="config_defaultTextClassifierPackages" translatable="false">
+        <item>android.ext.services</item>
+    </string-array>
+
     <!-- The package name for the default wellbeing app.
          This package must be trusted, as it has the permissions to control other applications
          on the device.
          Example: "com.android.wellbeing"
      -->
     <string name="config_defaultWellbeingPackage" translatable="false"></string>
+
+
+    <!-- The package name for the system telephony apps.
+         This package must be trusted, as it will be granted with permissions with special telephony
+         protection level. Note, framework by default support multiple telephony apps, each package
+         name is separated by comma.
+         Example: "com.android.phone,com.android.stk,com.android.providers.telephony"
+         (Note: shell is included for testing purposes)
+     -->
+    <string name="config_telephonyPackages" translatable="false">"com.android.phone,com.android.stk,com.android.providers.telephony,com.android.ons,com.android.cellbroadcastservice,com.android.cellbroadcastreceiver,com.android.shell"</string>
 
     <!-- The component name for the default system attention service.
          This service must be trusted, as it can be activated without explicit consent of the user.
@@ -3834,6 +3700,8 @@
          instead of 'Emergency calls only' when SIM is unready. -->
     <string-array translatable="false" name="config_display_no_service_when_sim_unready">
         <item>"DE"</item>
+        <item>"GB"</item>
+        <item>"JP"</item>
     </string-array>
 
     <!-- Class names of device specific services inheriting com.android.server.SystemService. The
@@ -4239,6 +4107,14 @@
     <!-- Which binder services to include in incident reports containing restricted images. -->
     <string-array name="config_restrictedImagesServices" translatable="false"/>
 
+    <!-- List of biometric sensors on the device, in decreasing strength. Consumed by AuthService
+         when registering authenticators with BiometricService. Format must be ID:Modality:Strength,
+         where: IDs are unique per device, Modality as defined in BiometricAuthenticator.java,
+         and Strength as defined in Authenticators.java -->
+    <string-array name="config_biometric_sensors" translatable="false" >
+        <item>0:2:15</item> <!-- ID0:Fingerprint:Strong -->
+    </string-array>
+
     <!-- Messages that should not be shown to the user during face auth enrollment. This should be
          used to hide messages that may be too chatty or messages that the user can't do much about.
          Entries are defined in android.hardware.biometrics.face@1.0 types.hal -->
@@ -4282,11 +4158,11 @@
 
     <!-- Trigger a warning for notifications with RemoteView objects that are larger in bytes than
     this value (default 1MB)-->
-    <integer name="config_notificationWarnRemoteViewSizeBytes">1000000</integer>
+    <integer name="config_notificationWarnRemoteViewSizeBytes">2000000</integer>
 
     <!-- Strip notification RemoteView objects that are larger in bytes than this value (also log)
     (default 2MB) -->
-    <integer name="config_notificationStripRemoteViewSizeBytes">2000000</integer>
+    <integer name="config_notificationStripRemoteViewSizeBytes">5000000</integer>
 
     <!-- Contains a blacklist of apps that should not get pre-installed carrier app permission
          grants, even if the UICC claims that the app should be privileged. See b/138150105 -->
@@ -4308,4 +4184,34 @@
          create additional screen real estate outside beyond the keyboard. Note that the user needs
          to have a confirmed way to dismiss the keyboard when desired. -->
     <bool name="config_automotiveHideNavBarForKeyboard">false</bool>
+
+    <!-- Whether or not to show the built-in charging animation when the device begins charging
+         wirelessly. -->
+    <bool name="config_showBuiltinWirelessChargingAnim">true</bool>
+
+    <!-- A list of potential packages, in priority order, that can supply rules to
+         AppIntegrityManager. These need to be apps on the system partition. -->
+    <string-array name="config_integrityRuleProviderPackages" translatable="false">
+        <!-- Add packages here -->
+    </string-array>
+
+    <!-- When true, enables the whitelisted app to handle bug reports from power menu short press. -->
+    <bool name="config_bugReportHandlerEnabled">false</bool>
+
+    <!-- The package name for the default bug report handler app from power menu short press. This app must be whitelisted. -->
+    <string name="config_defaultBugReportHandlerApp" translatable="false"></string>
+
+    <!-- The default value used for RawContacts.ACCOUNT_NAME when contacts are inserted without this
+         column set. These contacts are stored locally on the device and will not be removed even
+         if no android.account.Account with this name exists. A null string will be used if the
+         value is left empty. When this is non-empty then config_rawContactsLocalAccountType
+         should also be non-empty.  -->
+    <string name="config_rawContactsLocalAccountName" translatable="false"></string>
+
+    <!-- The default value used for RawContacts.ACCOUNT_TYPE when contacts are inserted without this
+         column set. These contacts are stored locally on the device and will not be removed even
+         if no android.account.Account with this type exists. A null string will be used if the
+         value is left empty.  When this is non-empty then config_rawContactsLocalAccountName
+         should also be non-empty.-->
+    <string name="config_rawContactsLocalAccountType" translatable="false"></string>
 </resources>

@@ -21,9 +21,13 @@ cc_binary_host {
     name: "stats-log-api-gen",
     srcs: [
         "Collation.cpp",
+        "java_writer.cpp",
+        "java_writer_q.cpp",
         "main.cpp",
+        "utils.cpp",
     ],
     cflags: [
+        "-DSTATS_SCHEMA_LEGACY",
         "-Wall",
         "-Werror",
     ],
@@ -95,7 +99,7 @@ genrule {
     ],
 }
 
-cc_library_shared {
+cc_library {
     name: "libstatslog",
     host_supported: true,
     generated_sources: ["statslog.cpp"],

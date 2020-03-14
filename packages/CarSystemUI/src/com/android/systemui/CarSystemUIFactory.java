@@ -18,52 +18,17 @@ package com.android.systemui;
 
 import android.content.Context;
 
-import com.android.internal.widget.LockPatternUtils;
-import com.android.keyguard.ViewMediatorCallback;
-import com.android.systemui.statusbar.car.CarFacetButtonController;
-import com.android.systemui.statusbar.car.CarStatusBarKeyguardViewManager;
-import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
-import com.android.systemui.volume.CarVolumeDialogComponent;
-import com.android.systemui.volume.VolumeDialogComponent;
-
-import javax.inject.Singleton;
-
-import dagger.Component;
+import com.android.systemui.dagger.SystemUIRootComponent;
 
 /**
  * Class factory to provide car specific SystemUI components.
  */
 public class CarSystemUIFactory extends SystemUIFactory {
 
-    private CarDependencyComponent mCarDependencyComponent;
-
     @Override
     protected SystemUIRootComponent buildSystemUIRootComponent(Context context) {
-        mCarDependencyComponent = DaggerCarSystemUIFactory_CarDependencyComponent.builder()
-                .contextHolder(new ContextHolder(context))
-                .build();
         return DaggerCarSystemUIRootComponent.builder()
-                .dependencyProvider(new com.android.systemui.DependencyProvider())
                 .contextHolder(new ContextHolder(context))
                 .build();
-    }
-
-    public CarDependencyComponent getCarDependencyComponent() {
-        return mCarDependencyComponent;
-    }
-
-    public StatusBarKeyguardViewManager createStatusBarKeyguardViewManager(Context context,
-            ViewMediatorCallback viewMediatorCallback, LockPatternUtils lockPatternUtils) {
-        return new CarStatusBarKeyguardViewManager(context, viewMediatorCallback, lockPatternUtils);
-    }
-
-    public VolumeDialogComponent createVolumeDialogComponent(SystemUI systemUi, Context context) {
-        return new CarVolumeDialogComponent(systemUi, context);
-    }
-
-    @Singleton
-    @Component(modules = ContextHolder.class)
-    public interface CarDependencyComponent {
-        CarFacetButtonController getCarFacetButtonController();
     }
 }

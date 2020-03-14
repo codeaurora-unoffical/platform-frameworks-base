@@ -43,6 +43,7 @@ import android.util.AtomicFile;
 import android.util.Slog;
 import android.util.SparseIntArray;
 
+import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.IndentingPrintWriter;
 import com.android.server.usage.UsageStatsDatabase.StatCombiner;
 
@@ -51,6 +52,7 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -107,8 +109,12 @@ class UserUsageStatsService {
         mSystemTimeSnapshot = System.currentTimeMillis();
     }
 
-    void init(final long currentTimeMillis) {
+    void init(final long currentTimeMillis, HashMap<String, Long> installedPackages) {
+        readPackageMappingsLocked(installedPackages);
         mDatabase.init(currentTimeMillis);
+        if (mDatabase.wasUpgradePerformed()) {
+            mDatabase.prunePackagesDataOnUpgrade(installedPackages);
+        }
 
         int nullCount = 0;
         for (int i = 0; i < mCurrentStats.length; i++) {
@@ -140,17 +146,16 @@ class UserUsageStatsService {
         }
 
         // During system reboot, add a DEVICE_SHUTDOWN event to the end of event list, the timestamp
-        // is last time UsageStatsDatabase is persisted to disk.
+        // is last time UsageStatsDatabase is persisted to disk or the last event's time whichever
+        // is higher (because the file system timestamp is round down to integral seconds).
         // Also add a DEVICE_STARTUP event with current system timestamp.
         final IntervalStats currentDailyStats = mCurrentStats[INTERVAL_DAILY];
         if (currentDailyStats != null) {
-            // File system timestamp only has precision of 1 second, add 1000ms to make up
-            // for the loss of round up.
-            final Event shutdownEvent =
-                    new Event(DEVICE_SHUTDOWN, currentDailyStats.lastTimeSaved + 1000);
+            final Event shutdownEvent = new Event(DEVICE_SHUTDOWN,
+                    Math.max(currentDailyStats.lastTimeSaved, currentDailyStats.endTime));
             shutdownEvent.mPackage = Event.DEVICE_EVENT_PACKAGE_NAME;
             currentDailyStats.addEvent(shutdownEvent);
-            final Event startupEvent = new Event(DEVICE_STARTUP, currentTimeMillis);
+            final Event startupEvent = new Event(DEVICE_STARTUP, System.currentTimeMillis());
             startupEvent.mPackage = Event.DEVICE_EVENT_PACKAGE_NAME;
             currentDailyStats.addEvent(startupEvent);
         }
@@ -160,13 +165,58 @@ class UserUsageStatsService {
         }
     }
 
-    void userUnlocked(long currentTimeMillis) {
-        init(currentTimeMillis);
-    }
-
     void userStopped() {
         // Flush events to disk immediately to guarantee persistence.
         persistActiveStats();
+    }
+
+    int onPackageRemoved(String packageName, long timeRemoved) {
+        return mDatabase.onPackageRemoved(packageName, timeRemoved);
+    }
+
+    private void readPackageMappingsLocked(HashMap<String, Long> installedPackages) {
+        mDatabase.readMappingsLocked();
+        updatePackageMappingsLocked(installedPackages);
+    }
+
+    /**
+     * Queries Job Scheduler for any pending data prune jobs and if any exist, it updates the
+     * package mappings in memory by removing those tokens.
+     * This will only happen once per device boot, when the user is unlocked for the first time.
+     *
+     * @param installedPackages map of installed packages (package_name:package_install_time)
+     */
+    private void updatePackageMappingsLocked(HashMap<String, Long> installedPackages) {
+        if (ArrayUtils.isEmpty(installedPackages)) {
+            return;
+        }
+
+        final long timeNow = System.currentTimeMillis();
+        final ArrayList<String> removedPackages = new ArrayList<>();
+        // populate list of packages that are found in the mappings but not in the installed list
+        for (int i = mDatabase.mPackagesTokenData.packagesToTokensMap.size() - 1; i >= 0; i--) {
+            final String packageName = mDatabase.mPackagesTokenData.packagesToTokensMap.keyAt(i);
+            if (!installedPackages.containsKey(packageName)) {
+                removedPackages.add(packageName);
+            }
+        }
+        if (removedPackages.isEmpty()) {
+            return;
+        }
+
+        // remove packages in the mappings that are no longer installed and persist to disk
+        for (int i = removedPackages.size() - 1; i >= 0; i--) {
+            mDatabase.mPackagesTokenData.removePackage(removedPackages.get(i), timeNow);
+        }
+        try {
+            mDatabase.writeMappingsLocked();
+        } catch (Exception e) {
+            Slog.w(TAG, "Unable to write updated package mappings file on service initialization.");
+        }
+    }
+
+    boolean pruneUninstalledPackagesData() {
+        return mDatabase.pruneUninstalledPackagesData();
     }
 
     private void onTimeChanged(long oldTime, long newTime) {
@@ -400,6 +450,7 @@ class UserUsageStatsService {
             if (results == null) {
                 results = new ArrayList<>();
             }
+            mDatabase.filterStats(currentStats);
             combiner.combine(currentStats, true, results);
         }
 
@@ -524,6 +575,8 @@ class UserUsageStatsService {
         if (mStatsChanged) {
             Slog.i(TAG, mLogPrefix + "Flushing usage stats to disk");
             try {
+                mDatabase.obfuscateCurrentStats(mCurrentStats);
+                mDatabase.writeMappingsLocked();
                 for (int i = 0; i < mCurrentStats.length; i++) {
                     mDatabase.putUsageStats(i, mCurrentStats[i]);
                 }
@@ -698,6 +751,10 @@ class UserUsageStatsService {
 
     void dumpDatabaseInfo(IndentingPrintWriter ipw) {
         mDatabase.dump(ipw, false);
+    }
+
+    void dumpMappings(IndentingPrintWriter ipw) {
+        mDatabase.dumpMappings(ipw);
     }
 
     void dumpFile(IndentingPrintWriter ipw, String[] args) {

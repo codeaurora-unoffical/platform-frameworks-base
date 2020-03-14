@@ -15,8 +15,6 @@
  */
 package com.android.systemui.tuner;
 
-import static com.android.systemui.Dependency.MAIN_HANDLER_NAME;
-
 import android.app.ActivityManager;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -36,6 +34,8 @@ import android.util.ArraySet;
 import com.android.internal.util.ArrayUtils;
 import com.android.systemui.DejankUtils;
 import com.android.systemui.DemoMode;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dagger.qualifiers.MainHandler;
 import com.android.systemui.qs.QSTileHost;
 import com.android.systemui.settings.CurrentUserTracker;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
@@ -46,7 +46,6 @@ import java.util.HashSet;
 import java.util.Set;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 import javax.inject.Singleton;
 
 
@@ -83,8 +82,8 @@ public class TunerServiceImpl extends TunerService {
     /**
      */
     @Inject
-    public TunerServiceImpl(Context context, @Named(MAIN_HANDLER_NAME) Handler mainHandler,
-            LeakDetector leakDetector) {
+    public TunerServiceImpl(Context context, @MainHandler Handler mainHandler,
+            LeakDetector leakDetector, BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mContentResolver = mContext.getContentResolver();
         mLeakDetector = leakDetector;
@@ -97,7 +96,7 @@ public class TunerServiceImpl extends TunerService {
         }
 
         mCurrentUser = ActivityManager.getCurrentUser();
-        mUserTracker = new CurrentUserTracker(mContext) {
+        mUserTracker = new CurrentUserTracker(broadcastDispatcher) {
             @Override
             public void onUserSwitched(int newUserId) {
                 mCurrentUser = newUserId;

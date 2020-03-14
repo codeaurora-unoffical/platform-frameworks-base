@@ -116,7 +116,7 @@ public class BluetoothUtils {
         }
         return new Pair<>(
                 getBluetoothDrawable(context,
-                        com.android.internal.R.drawable.ic_settings_bluetooth),
+                        com.android.internal.R.drawable.ic_settings_bluetooth).mutate(),
                 context.getString(R.string.bluetooth_talkback_bluetooth));
     }
 
@@ -150,7 +150,7 @@ public class BluetoothUtils {
                     context.getContentResolver().takePersistableUriPermission(iconUri,
                             Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } catch (SecurityException e) {
-                    Log.e(TAG, "Failed to take persistable permission for: " + iconUri);
+                    Log.e(TAG, "Failed to take persistable permission for: " + iconUri, e);
                 }
                 try {
                     final Bitmap bitmap = MediaStore.Images.Media.getBitmap(
@@ -165,6 +165,8 @@ public class BluetoothUtils {
                     }
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to get drawable for: " + iconUri, e);
+                } catch (SecurityException e) {
+                    Log.e(TAG, "Failed to get permission for: " + iconUri, e);
                 }
             }
         }

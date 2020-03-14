@@ -13,13 +13,15 @@ import android.util.Log;
 import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Describes the source of some work that may be done by someone else.
- * Currently the public representation of what a work source is is not
+ * Currently the public representation of what a work source is not
  * defined; this is an opaque container.
  */
 public class WorkSource implements Parcelable {
@@ -48,7 +50,7 @@ public class WorkSource implements Parcelable {
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     static WorkSource sNewbWork;
     /**
-     * For returning gone work form a modification operation.
+     * For returning gone work from a modification operation.
      */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     static WorkSource sGoneWork;
@@ -91,8 +93,14 @@ public class WorkSource implements Parcelable {
         }
     }
 
-    /** @hide */
+
+    /**
+     * Creates a work source with the given uid.
+     * @param uid the uid performing the work
+     * @hide
+     */
     @TestApi
+    @SystemApi
     public WorkSource(int uid) {
         mNum = 1;
         mUids = new int[] { uid, 0 };
@@ -100,14 +108,18 @@ public class WorkSource implements Parcelable {
         mChains = null;
     }
 
-    /** @hide */
-    public WorkSource(int uid, String name) {
-        if (name == null) {
-            throw new NullPointerException("Name can't be null");
-        }
+    /**
+     * Creates a work source with the given uid and package name.
+     * @param uid the uid performing the work
+     * @param packageName the package performing the work
+     * @hide
+     */
+    @SystemApi
+    public WorkSource(int uid, @NonNull String packageName) {
+        Preconditions.checkNotNull(packageName, "packageName can't be null");
         mNum = 1;
         mUids = new int[] { uid, 0 };
-        mNames = new String[] { name, null };
+        mNames = new String[] { packageName, null };
         mChains = null;
     }
 
@@ -137,15 +149,34 @@ public class WorkSource implements Parcelable {
                 Global.CHAINED_BATTERY_ATTRIBUTION_ENABLED, 0) == 1;
     }
 
-    /** @hide */
+    /**
+     * Returns the size of this work source.
+     * @hide
+     */
     @TestApi
+    @SystemApi
     public int size() {
         return mNum;
     }
 
-    /** @hide */
-    @TestApi
+    /**
+     * @deprecated use {{@link #getUid(int)}} instead.
+     * @hide
+     */
+    @UnsupportedAppUsage
+    @Deprecated
     public int get(int index) {
+        return getUid(index);
+    }
+
+    /**
+     * Get the uid at the given index.
+     * If {@code index} < 0 or {@code index} >= {@link #size() N}, then the behavior is undefined.
+     * @hide
+     */
+    @TestApi
+    @SystemApi
+    public int getUid(int index) {
         return mUids[index];
     }
 
@@ -164,9 +195,25 @@ public class WorkSource implements Parcelable {
         return mNum > 0 ? mUids[0] : mChains.get(0).getAttributionUid();
     }
 
-    /** @hide */
-    @TestApi
+    /**
+     * @deprecated use {{@link #getPackageName(int)}} instead.
+     * @hide
+     */
+    @UnsupportedAppUsage
+    @Deprecated
     public String getName(int index) {
+        return getPackageName(index);
+    }
+
+    /**
+     * Get the package name at the given index.
+     * If {@code index} < 0 or {@code index} >= {@link #size() N}, then the behavior is undefined.
+     * @hide
+     */
+    @TestApi
+    @SystemApi
+    @Nullable
+    public String getPackageName(int index) {
         return mNames != null ? mNames[index] : null;
     }
 
@@ -175,9 +222,8 @@ public class WorkSource implements Parcelable {
      * intact.
      *
      * <p>Useful when combining with another WorkSource that doesn't have names.
-     * @hide
      */
-    public void clearNames() {
+    private void clearNames() {
         if (mNames != null) {
             mNames = null;
             // Clear out any duplicate uids now that we don't have names to disambiguate them.
@@ -403,6 +449,22 @@ public class WorkSource implements Parcelable {
     }
 
     /**
+     * Returns a copy of this work source without any package names.
+     * If any {@link WorkChain WorkChains} are present, they are left intact.
+     *
+     * @return a {@link WorkSource} without any package names.
+     * @hide
+     */
+    @SystemApi
+    @TestApi
+    @NonNull
+    public WorkSource withoutNames() {
+        final WorkSource copy = new WorkSource(this);
+        copy.clearNames();
+        return copy;
+    }
+
+    /**
      * Legacy API: DO NOT USE. Only in use from unit tests.
      *
      * @hide
@@ -419,6 +481,7 @@ public class WorkSource implements Parcelable {
     }
 
     /** @hide */
+    @UnsupportedAppUsage
     @TestApi
     public boolean add(int uid) {
         if (mNum <= 0) {
@@ -439,6 +502,7 @@ public class WorkSource implements Parcelable {
     }
 
     /** @hide */
+    @UnsupportedAppUsage
     @TestApi
     public boolean add(int uid, String name) {
         if (mNum <= 0) {
@@ -518,6 +582,8 @@ public class WorkSource implements Parcelable {
      *
      * @hide for internal use only.
      */
+    @SystemApi
+    @TestApi
     public boolean isEmpty() {
         return mNum == 0 && (mChains == null || mChains.isEmpty());
     }
@@ -526,7 +592,9 @@ public class WorkSource implements Parcelable {
      * @return the list of {@code WorkChains} associated with this {@code WorkSource}.
      * @hide
      */
-    public ArrayList<WorkChain> getWorkChains() {
+    @SystemApi
+    @Nullable
+    public List<WorkChain> getWorkChains() {
         return mChains;
     }
 
@@ -1150,7 +1218,7 @@ public class WorkSource implements Parcelable {
     }
 
     /** @hide */
-    public void writeToProto(ProtoOutputStream proto, long fieldId) {
+    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
         final long workSourceToken = proto.start(fieldId);
         for (int i = 0; i < mNum; i++) {
             final long contentProto = proto.start(WorkSourceProto.WORK_SOURCE_CONTENTS);

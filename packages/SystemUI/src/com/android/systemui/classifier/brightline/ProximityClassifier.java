@@ -23,7 +23,9 @@ import android.provider.DeviceConfig;
 import android.view.MotionEvent;
 
 import com.android.systemui.util.DeviceConfigProxy;
-import com.android.systemui.util.ProximitySensor;
+import com.android.systemui.util.sensors.ProximitySensor;
+
+import java.util.Locale;
 
 
 /**
@@ -119,6 +121,16 @@ class ProximityClassifier extends FalsingClassifier {
         }
 
         return false;
+    }
+
+    @Override
+    String getReason() {
+        return String.format(
+                (Locale) null,
+                "{percentInProximity=%f, threshold=%f, distanceClassifier=%s}",
+                mPercentNear,
+                mPercentCoveredThreshold,
+                mDistanceClassifier.getReason());
     }
 
     /**

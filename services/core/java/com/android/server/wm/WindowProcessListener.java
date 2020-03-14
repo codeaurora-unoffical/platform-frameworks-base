@@ -17,7 +17,6 @@
 package com.android.server.wm;
 
 import android.util.proto.ProtoOutputStream;
-import android.view.IRemoteAnimationRunner;
 import android.view.RemoteAnimationAdapter;
 
 /**
@@ -61,7 +60,7 @@ public interface WindowProcessListener {
 
     /** App died :(...oh well */
     void appDied();
-    void writeToProto(ProtoOutputStream proto, long fieldId);
+    void dumpDebug(ProtoOutputStream proto, long fieldId);
 
     /**
      * Sets if the process is currently running a remote animation, which is taken a signal for

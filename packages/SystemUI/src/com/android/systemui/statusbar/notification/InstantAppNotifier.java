@@ -17,6 +17,7 @@
 package com.android.systemui.statusbar.notification;
 
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
+import static android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECONDARY;
@@ -31,6 +32,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.SynchronousUserSwitchObserver;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
@@ -51,34 +53,42 @@ import com.android.internal.messages.nano.SystemMessageProto.SystemMessage;
 import com.android.systemui.Dependency;
 import com.android.systemui.DockedStackExistsListener;
 import com.android.systemui.R;
-import com.android.systemui.SysUiServiceProvider;
 import com.android.systemui.SystemUI;
 import com.android.systemui.UiOffloadThread;
 import com.android.systemui.statusbar.CommandQueue;
-import com.android.systemui.statusbar.policy.KeyguardMonitor;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.util.NotificationChannels;
 
 import java.util.List;
 
-/** The clsss to show notification(s) of instant apps. This may show multiple notifications on
+import javax.inject.Inject;
+import javax.inject.Singleton;
+
+/** The class to show notification(s) of instant apps. This may show multiple notifications on
  * splitted screen.
  */
+@Singleton
 public class InstantAppNotifier extends SystemUI
-        implements CommandQueue.Callbacks, KeyguardMonitor.Callback {
+        implements CommandQueue.Callbacks, KeyguardStateController.Callback {
     private static final String TAG = "InstantAppNotifier";
     public static final int NUM_TASKS_FOR_INSTANT_APP_INFO = 5;
 
     private final Handler mHandler = new Handler();
     private final UiOffloadThread mUiOffloadThread = Dependency.get(UiOffloadThread.class);
     private final ArraySet<Pair<String, Integer>> mCurrentNotifs = new ArraySet<>();
+    private final CommandQueue mCommandQueue;
     private boolean mDockedStackExists;
-    private KeyguardMonitor mKeyguardMonitor;
+    private KeyguardStateController mKeyguardStateController;
 
-    public InstantAppNotifier() {}
+    @Inject
+    public InstantAppNotifier(Context context, CommandQueue commandQueue) {
+        super(context);
+        mCommandQueue = commandQueue;
+    }
 
     @Override
     public void start() {
-        mKeyguardMonitor = Dependency.get(KeyguardMonitor.class);
+        mKeyguardStateController = Dependency.get(KeyguardStateController.class);
 
         // listen for user / profile change.
         try {
@@ -87,8 +97,8 @@ public class InstantAppNotifier extends SystemUI
             // Ignore
         }
 
-        SysUiServiceProvider.getComponent(mContext, CommandQueue.class).addCallback(this);
-        mKeyguardMonitor.addCallback(this);
+        mCommandQueue.addCallback(this);
+        mKeyguardStateController.addCallback(this);
 
         DockedStackExistsListener.register(
                 exists -> {
@@ -152,7 +162,8 @@ public class InstantAppNotifier extends SystemUI
                                     focusedStack.configuration.windowConfiguration
                                             .getWindowingMode();
                             if (windowingMode == WINDOWING_MODE_FULLSCREEN
-                                    || windowingMode == WINDOWING_MODE_SPLIT_SCREEN_SECONDARY) {
+                                    || windowingMode == WINDOWING_MODE_SPLIT_SCREEN_SECONDARY
+                                    || windowingMode == WINDOWING_MODE_FREEFORM) {
                                 checkAndPostForStack(focusedStack, notifs, noMan, pm);
                             }
                         }

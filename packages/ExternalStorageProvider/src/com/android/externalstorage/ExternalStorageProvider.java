@@ -16,6 +16,7 @@
 
 package com.android.externalstorage;
 
+import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.usage.StorageStatsManager;
 import android.content.ContentResolver;
@@ -49,6 +50,7 @@ import android.util.Log;
 import android.util.Pair;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.content.FileSystemProvider;
 import com.android.internal.util.IndentingPrintWriter;
 
@@ -128,17 +130,17 @@ public class ExternalStorageProvider extends FileSystemProvider {
     }
 
     @Override
-    protected int enforceReadPermissionInner(Uri uri, String callingPkg, IBinder callerToken)
-            throws SecurityException {
+    protected int enforceReadPermissionInner(Uri uri, String callingPkg,
+            @Nullable String featureId, IBinder callerToken) throws SecurityException {
         enforceShellRestrictions();
-        return super.enforceReadPermissionInner(uri, callingPkg, callerToken);
+        return super.enforceReadPermissionInner(uri, callingPkg, featureId, callerToken);
     }
 
     @Override
-    protected int enforceWritePermissionInner(Uri uri, String callingPkg, IBinder callerToken)
-            throws SecurityException {
+    protected int enforceWritePermissionInner(Uri uri, String callingPkg,
+            @Nullable String featureId, IBinder callerToken) throws SecurityException {
         enforceShellRestrictions();
-        return super.enforceWritePermissionInner(uri, callingPkg, callerToken);
+        return super.enforceWritePermissionInner(uri, callingPkg, featureId, callerToken);
     }
 
     public void updateVolumes() {
@@ -161,12 +163,12 @@ public class ExternalStorageProvider extends FileSystemProvider {
             final String title;
             final UUID storageUuid;
             if (volume.getType() == VolumeInfo.TYPE_EMULATED) {
-                // We currently only support a single emulated volume mounted at
+                // We currently only support a single emulated volume per user mounted at
                 // a time, and it's always considered the primary
                 if (DEBUG) Log.d(TAG, "Found primary volume: " + volume);
                 rootId = ROOT_ID_PRIMARY_EMULATED;
 
-                if (VolumeInfo.ID_EMULATED_INTERNAL.equals(volume.getId())) {
+                if (volume.isPrimaryEmulatedForUser(userId)) {
                     // This is basically the user's primary device storage.
                     // Use device name for the volume since this is likely same thing
                     // the user sees when they mount their phone on another device.
@@ -298,6 +300,42 @@ public class ExternalStorageProvider extends FileSystemProvider {
         return projection != null ? projection : DEFAULT_ROOT_PROJECTION;
     }
 
+    /**
+     * Check that the directory is the root of storage or blocked file from tree.
+     *
+     * @param docId the docId of the directory to be checked
+     * @return true, should be blocked from tree. Otherwise, false.
+     */
+    @Override
+    protected boolean shouldBlockFromTree(@NonNull String docId) {
+        try {
+            final File dir = getFileForDocId(docId, false /* visible */);
+
+            // the file is null or it is not a directory
+            if (dir == null || !dir.isDirectory()) {
+                return false;
+            }
+
+            final String path = getPathFromDocId(docId);
+
+            // Block the root of the storage
+            if (path.isEmpty()) {
+                return true;
+            }
+
+            // Block Download folder from tree
+            if (TextUtils.equals(Environment.DIRECTORY_DOWNLOADS.toLowerCase(),
+                    path.toLowerCase())) {
+                return true;
+            }
+
+            return false;
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Failed to determine if " + docId + " should block from tree " + ": " + e);
+        }
+    }
+
     @Override
     protected String getDocIdForFile(File file) throws FileNotFoundException {
         return getDocIdForFileMaybeCreate(file, false);
@@ -380,6 +418,23 @@ public class ExternalStorageProvider extends FileSystemProvider {
             throws FileNotFoundException {
         RootInfo root = getRootFromDocId(docId);
         return Pair.create(root, buildFile(root, docId, visible, true));
+    }
+
+    @VisibleForTesting
+    static String getPathFromDocId(String docId) {
+        final int splitIndex = docId.indexOf(':', 1);
+        final String path = docId.substring(splitIndex + 1);
+
+        if (path.isEmpty()) {
+            return path;
+        }
+
+        // remove trailing "/"
+        if (path.charAt(path.length() - 1) == '/') {
+            return path.substring(0, path.length() - 1);
+        } else {
+            return path;
+        }
     }
 
     private RootInfo getRootFromDocId(String docId) throws FileNotFoundException {

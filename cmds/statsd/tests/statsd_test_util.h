@@ -104,6 +104,37 @@ Predicate CreateIsSyncingPredicate();
 // Create a Predicate proto for app is in background.
 Predicate CreateIsInBackgroundPredicate();
 
+// Create State proto for screen state atom.
+State CreateScreenState();
+
+// Create State proto for uid process state atom.
+State CreateUidProcessState();
+
+// Create State proto for overlay state atom.
+State CreateOverlayState();
+
+State CreateScreenStateWithOnOffMap();
+
+State CreateScreenStateWithInDozeMap();
+
+// Create StateGroup proto for ScreenState ON group
+StateMap_StateGroup CreateScreenStateOnGroup();
+
+// Create StateGroup proto for ScreenState OFF group
+StateMap_StateGroup CreateScreenStateOffGroup();
+
+// Create StateMap proto for ScreenState ON/OFF map
+StateMap CreateScreenStateOnOffMap();
+
+// Create StateGroup proto for ScreenState IN DOZE group
+StateMap_StateGroup CreateScreenStateInDozeGroup();
+
+// Create StateGroup proto for ScreenState NOT IN DOZE group
+StateMap_StateGroup CreateScreenStateNotDozeGroup();
+
+// Create StateMap proto for ScreenState IN DOZE map
+StateMap CreateScreenStateInDozeMap();
+
 // Add a predicate to the predicate combination.
 void addPredicateToPredicateCombination(const Predicate& predicate, Predicate* combination);
 
@@ -161,6 +192,9 @@ std::unique_ptr<LogEvent> CreateSyncEndEvent(
 std::unique_ptr<LogEvent> CreateAppCrashEvent(
     const int uid, uint64_t timestampNs);
 
+// Create log event for an app crash.
+std::unique_ptr<LogEvent> CreateAppCrashOccurredEvent(const int uid, uint64_t timestampNs);
+
 // Create log event for acquiring wakelock.
 std::unique_ptr<LogEvent> CreateAcquireWakelockEvent(
         const std::vector<AttributionNodeInternal>& attributions, const string& wakelockName,
@@ -174,6 +208,10 @@ std::unique_ptr<LogEvent> CreateReleaseWakelockEvent(
 // Create log event for releasing wakelock.
 std::unique_ptr<LogEvent> CreateIsolatedUidChangedEvent(
     int isolatedUid, int hostUid, bool is_create, uint64_t timestampNs);
+
+// Create log event for uid process state change.
+std::unique_ptr<LogEvent> CreateUidProcessStateChangedEvent(
+        int uid, const android::app::ProcessStateEnum state, uint64_t timestampNs);
 
 // Helper function to create an AttributionNodeInternal proto.
 AttributionNodeInternal CreateAttribution(const int& uid, const string& tag);

@@ -83,8 +83,9 @@ public @interface UnsupportedAppUsage {
      * <p>Possible values are:
      * <ul>
      *     <li>
-     *         {@link android.os.Build.VERSION_CODES#O} or {@link android.os.Build.VERSION_CODES#P},
-     *         to limit access to apps targeting these SDKs (or earlier).
+     *         An API level like {@link android.os.Build.VERSION_CODES#O} - in which case the API is
+     *         available up to and including the specified release. Or, in other words, the API is
+     *         blacklisted (unavailable) from the next API level from the one specified.
      *     </li>
      *     <li>
      *         absent (default value) - All apps can access this API, but doing so may result in
@@ -93,10 +94,6 @@ public @interface UnsupportedAppUsage {
      *     </li>
      *
      * </ul>
-     *
-     * Note, if this is set to {@link android.os.Build.VERSION_CODES#O}, apps targeting O
-     * maintenance releases will also be allowed to use the API, and similarly for any future
-     * maintenance releases of P.
      *
      * @return The maximum value for an apps targetSdkVersion in order to access this API.
      */
@@ -149,6 +146,18 @@ public @interface UnsupportedAppUsage {
      */
     @SuppressWarnings("JavadocReference")
     String publicAlternatives() default "";
+
+    /**
+     * Override the default source position when generating an index of the annotations.
+     *
+     * <p>This is intended for use by tools that generate java source code, to point to the
+     * original source position of the annotation, rather than the position within the generated
+     * code. It should never be set manually.
+     *
+     * <p>The format of the value is "path/to/file:startline:startcol:endline:endcol" indicating
+     * the position of the annotation itself.
+     */
+    String overrideSourcePosition() default "";
 
     /**
      * Container for {@link UnsupportedAppUsage} that allows it to be applied repeatedly to types.

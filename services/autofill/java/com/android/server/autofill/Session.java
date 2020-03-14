@@ -1112,6 +1112,14 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
 
     // AutoFillUiCallback
     @Override
+    public void cancelSession() {
+        synchronized (mLock) {
+            removeSelfLocked();
+        }
+    }
+
+    // AutoFillUiCallback
+    @Override
     public void startIntentSenderAndFinishSession(IntentSender intentSender) {
         startIntentSender(intentSender, null);
     }
@@ -3267,6 +3275,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
         if (mDestroyed) {
             return null;
         }
+
         unlinkClientVultureLocked();
         mUi.destroyAll(mPendingSaveUi, this, true);
         mUi.clearCallback(this);

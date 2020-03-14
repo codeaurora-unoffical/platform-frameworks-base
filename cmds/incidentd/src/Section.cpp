@@ -476,10 +476,28 @@ status_t DumpsysSection::BlockingCall(int pipeWriteFd) const {
 // initialization only once in Section.cpp.
 map<log_id_t, log_time> LogSection::gLastLogsRetrieved;
 
-LogSection::LogSection(int id, log_id_t logID) : WorkerThreadSection(id), mLogID(logID) {
-    name = "logcat ";
-    name += android_log_id_to_name(logID);
-    switch (logID) {
+LogSection::LogSection(int id, const char* logID, ...) : WorkerThreadSection(id), mLogMode(logModeBase) {
+    name = "logcat -b ";
+    name += logID;
+
+    va_list args;
+    va_start(args, logID);
+    mLogID = android_name_to_log_id(logID);
+    while(true) {
+        const char* arg = va_arg(args, const char*);
+        if (arg == NULL) {
+            break;
+        }
+        if (!strcmp(arg, "-L")) {
+          // Read from last logcat buffer
+          mLogMode = mLogMode | ANDROID_LOG_PSTORE;
+        }
+        name += " ";
+        name += arg;
+    }
+    va_end(args);
+
+    switch (mLogID) {
         case LOG_ID_EVENTS:
         case LOG_ID_STATS:
         case LOG_ID_SECURITY:
@@ -512,9 +530,8 @@ status_t LogSection::BlockingCall(int pipeWriteFd) const {
     // Open log buffer and getting logs since last retrieved time if any.
     unique_ptr<logger_list, void (*)(logger_list*)> loggers(
             gLastLogsRetrieved.find(mLogID) == gLastLogsRetrieved.end()
-                    ? android_logger_list_alloc(ANDROID_LOG_RDONLY | ANDROID_LOG_NONBLOCK, 0, 0)
-                    : android_logger_list_alloc_time(ANDROID_LOG_RDONLY | ANDROID_LOG_NONBLOCK,
-                                                     gLastLogsRetrieved[mLogID], 0),
+                    ? android_logger_list_alloc(mLogMode, 0, 0)
+                    : android_logger_list_alloc_time(mLogMode, gLastLogsRetrieved[mLogID], 0),
             android_logger_list_free);
 
     if (android_logger_open(loggers.get(), mLogID) == NULL) {
@@ -546,16 +563,16 @@ status_t LogSection::BlockingCall(int pipeWriteFd) const {
             ;
             android_log_list_element elem;
 
-            lastTimestamp.tv_sec = msg.entry_v1.sec;
-            lastTimestamp.tv_nsec = msg.entry_v1.nsec;
+            lastTimestamp.tv_sec = msg.entry.sec;
+            lastTimestamp.tv_nsec = msg.entry.nsec;
 
             // format a BinaryLogEntry
             uint64_t token = proto.start(LogProto::BINARY_LOGS);
-            proto.write(BinaryLogEntry::SEC, msg.entry_v1.sec);
-            proto.write(BinaryLogEntry::NANOSEC, msg.entry_v1.nsec);
-            proto.write(BinaryLogEntry::UID, (int)msg.entry_v4.uid);
-            proto.write(BinaryLogEntry::PID, msg.entry_v1.pid);
-            proto.write(BinaryLogEntry::TID, msg.entry_v1.tid);
+            proto.write(BinaryLogEntry::SEC, (int32_t)msg.entry.sec);
+            proto.write(BinaryLogEntry::NANOSEC, (int32_t)msg.entry.nsec);
+            proto.write(BinaryLogEntry::UID, (int)msg.entry.uid);
+            proto.write(BinaryLogEntry::PID, msg.entry.pid);
+            proto.write(BinaryLogEntry::TID, (int32_t)msg.entry.tid);
             proto.write(BinaryLogEntry::TAG_INDEX,
                         get4LE(reinterpret_cast<uint8_t const*>(msg.msg())));
             do {
@@ -603,7 +620,7 @@ status_t LogSection::BlockingCall(int pipeWriteFd) const {
             }
         } else {
             AndroidLogEntry entry;
-            err = android_log_processLogBuffer(&msg.entry_v1, &entry);
+            err = android_log_processLogBuffer(&msg.entry, &entry);
             if (err != NO_ERROR) {
                 ALOGW("[%s] fails to process to an entry.\n", this->name.string());
                 break;

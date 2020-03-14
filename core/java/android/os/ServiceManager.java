@@ -102,6 +102,10 @@ public final class ServiceManager {
     });
 
     @UnsupportedAppUsage
+    public ServiceManager() {
+    }
+
+    @UnsupportedAppUsage
     private static IServiceManager getIServiceManager() {
         if (sServiceManager != null) {
             return sServiceManager;
@@ -136,7 +140,7 @@ public final class ServiceManager {
 
     /**
      * Returns a reference to a service with the given name, or throws
-     * {@link NullPointerException} if none is found.
+     * {@link ServiceNotFoundException} if none is found.
      *
      * @hide
      */

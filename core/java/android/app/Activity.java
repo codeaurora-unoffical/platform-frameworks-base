@@ -76,7 +76,6 @@ import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager.ServiceNotFoundException;
 import android.os.StrictMode;
-import android.os.SystemProperties;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.text.Selection;
@@ -727,7 +726,7 @@ public class Activity extends ContextThemeWrapper
         implements LayoutInflater.Factory2,
         Window.Callback, KeyEvent.Callback,
         OnCreateContextMenuListener, ComponentCallbacks2,
-        Window.OnWindowDismissedCallback, WindowControllerCallback,
+        Window.OnWindowDismissedCallback,
         AutofillManager.AutofillClient, ContentCaptureManager.ContentCaptureClient {
     private static final String TAG = "Activity";
     private static final boolean DEBUG_LIFECYCLE = false;
@@ -769,17 +768,6 @@ public class Activity extends ContextThemeWrapper
     private static final String AUTO_FILL_AUTH_WHO_PREFIX = "@android:autoFillAuth:";
 
     private static final String KEYBOARD_SHORTCUTS_RECEIVER_PKG_NAME = "com.android.systemui";
-
-    private static final int LOG_AM_ON_CREATE_CALLED = 30057;
-    private static final int LOG_AM_ON_START_CALLED = 30059;
-    private static final int LOG_AM_ON_RESUME_CALLED = 30022;
-    private static final int LOG_AM_ON_PAUSE_CALLED = 30021;
-    private static final int LOG_AM_ON_STOP_CALLED = 30049;
-    private static final int LOG_AM_ON_RESTART_CALLED = 30058;
-    private static final int LOG_AM_ON_DESTROY_CALLED = 30060;
-    private static final int LOG_AM_ON_ACTIVITY_RESULT_CALLED = 30062;
-    private static final int LOG_AM_ON_TOP_RESUMED_GAINED_CALLED = 30064;
-    private static final int LOG_AM_ON_TOP_RESUMED_LOST_CALLED = 30065;
 
     private static class ManagedDialog {
         Dialog mDialog;
@@ -949,6 +937,62 @@ public class Activity extends ContextThemeWrapper
     /** Track last dispatched multi-window and PiP mode to client, internal debug purpose **/
     private Boolean mLastDispatchedIsInMultiWindowMode;
     private Boolean mLastDispatchedIsInPictureInPictureMode;
+
+    private final WindowControllerCallback mWindowControllerCallback =
+            new WindowControllerCallback() {
+        /**
+         * Moves the activity between {@link WindowConfiguration#WINDOWING_MODE_FREEFORM} windowing
+         * mode and {@link WindowConfiguration#WINDOWING_MODE_FULLSCREEN}.
+         *
+         * @hide
+         */
+        @Override
+        public void toggleFreeformWindowingMode() throws RemoteException {
+            ActivityTaskManager.getService().toggleFreeformWindowingMode(mToken);
+        }
+
+        /**
+         * Puts the activity in picture-in-picture mode if the activity supports.
+         * @see android.R.attr#supportsPictureInPicture
+         * @hide
+         */
+        @Override
+        public void enterPictureInPictureModeIfPossible() {
+            if (mActivityInfo.supportsPictureInPicture()) {
+                enterPictureInPictureMode();
+            }
+        }
+
+        @Override
+        public boolean isTaskRoot() {
+            try {
+                return ActivityTaskManager.getService().getTaskForActivity(mToken, true) >= 0;
+            } catch (RemoteException e) {
+                return false;
+            }
+        }
+
+        /**
+         * Update the forced status bar color.
+         * @hide
+         */
+        @Override
+        public void updateStatusBarColor(int color) {
+            mTaskDescription.setStatusBarColor(color);
+            setTaskDescription(mTaskDescription);
+        }
+
+        /**
+         * Update the forced navigation bar color.
+         * @hide
+         */
+        @Override
+        public void updateNavigationBarColor(int color) {
+            mTaskDescription.setNavigationBarColor(color);
+            setTaskDescription(mTaskDescription);
+        }
+
+    };
 
     private static native String getDlWarning();
 
@@ -1864,8 +1908,13 @@ public class Activity extends ContextThemeWrapper
     final void performTopResumedActivityChanged(boolean isTopResumedActivity, String reason) {
         onTopResumedActivityChanged(isTopResumedActivity);
 
-        writeEventLog(isTopResumedActivity
-                ? LOG_AM_ON_TOP_RESUMED_GAINED_CALLED : LOG_AM_ON_TOP_RESUMED_LOST_CALLED, reason);
+        if (isTopResumedActivity) {
+            EventLogTags.writeWmOnTopResumedGainedCalled(mIdent, getComponentName().getClassName(),
+                    reason);
+        } else {
+            EventLogTags.writeWmOnTopResumedLostCalled(mIdent, getComponentName().getClassName(),
+                    reason);
+        }
     }
 
     void setVoiceInteractor(IVoiceInteractor voiceInteractor) {
@@ -1925,11 +1974,15 @@ public class Activity extends ContextThemeWrapper
     }
 
     /**
-     * Like {@link #isVoiceInteraction}, but only returns true if this is also the root
-     * of a voice interaction.  That is, returns true if this activity was directly
+     * Like {@link #isVoiceInteraction}, but only returns {@code true} if this is also the root
+     * of a voice interaction.  That is, returns {@code true} if this activity was directly
      * started by the voice interaction service as the initiation of a voice interaction.
      * Otherwise, for example if it was started by another activity while under voice
-     * interaction, returns false.
+     * interaction, returns {@code false}.
+     * If the activity {@link android.R.styleable#AndroidManifestActivity_launchMode launchMode} is
+     * {@code singleTask}, it forces the activity to launch in a new task, separate from the one
+     * that started it. Therefore, there is no longer a relationship between them, and
+     * {@link #isVoiceInteractionRoot()} return {@code false} in this case.
      */
     public boolean isVoiceInteractionRoot() {
         try {
@@ -2471,19 +2524,10 @@ public class Activity extends ContextThemeWrapper
 
         if (mAutoFillResetNeeded) {
             getAutofillManager().onInvisibleForAutofill();
-        }
-
-        if (isFinishing()) {
-            if (mAutoFillResetNeeded) {
-                getAutofillManager().onActivityFinishing();
-            } else if (mIntent != null
-                    && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN)) {
-                // Activity was launched when user tapped a link in the Autofill Save UI - since
-                // user launched another activity, the Save UI should not be restored when this
-                // activity is finished.
-                getAutofillManager().onPendingSaveUi(AutofillManager.PENDING_UI_OPERATION_CANCEL,
-                        mIntent.getIBinderExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN));
-            }
+        } else if (mIntent != null
+                && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN)
+                && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_CROSS_ACTIVITY)) {
+            restoreAutofillSaveUi();
         }
         mEnterAnimationComplete = false;
     }
@@ -2520,6 +2564,10 @@ public class Activity extends ContextThemeWrapper
     protected void onDestroy() {
         if (DEBUG_LIFECYCLE) Slog.v(TAG, "onDestroy " + this);
         mCalled = true;
+
+        if (isFinishing() && mAutoFillResetNeeded) {
+            getAutofillManager().onActivityFinishing();
+        }
 
         // dismiss any dialogs we are managing.
         if (mManagedDialogs != null) {
@@ -2560,9 +2608,12 @@ public class Activity extends ContextThemeWrapper
     }
 
     /**
-     * Report to the system that your app is now fully drawn, purely for diagnostic
-     * purposes (calling it does not impact the visible behavior of the activity).
-     * This is only used to help instrument application launch times, so that the
+     * Report to the system that your app is now fully drawn, for diagnostic and
+     * optimization purposes.  The system may adjust optimizations to prioritize
+     * work that happens before reportFullyDrawn is called, to improve app startup.
+     * Misrepresenting the startup window by calling reportFullyDrawn too late or too
+     * early may decrease application and startup performance.<p>
+     * This is also used to help instrument application launch times, so that the
      * app can report when it is fully in a usable state; without this, the only thing
      * the system itself can determine is the point at which the activity's window
      * is <em>first</em> drawn and displayed.  To participate in app launch time
@@ -2571,6 +2622,9 @@ public class Activity extends ContextThemeWrapper
      * entirely drawn your UI and populated with all of the significant data.  You
      * can safely call this method any time after first launch as well, in which case
      * it will simply be ignored.
+     * <p>If this method is called before the activity's window is <em>first</em> drawn
+     * and displayed as measured by the system, the reported time here will be shifted
+     * to the system measured time.
      */
     public void reportFullyDrawn() {
         if (mDoReportFullyDrawn) {
@@ -2793,6 +2847,7 @@ public class Activity extends ContextThemeWrapper
      * @see View#onMovedToDisplay(int, Configuration)
      * @hide
      */
+    @UnsupportedAppUsage
     @TestApi
     public void onMovedToDisplay(int displayId, Configuration config) {
     }
@@ -3914,29 +3969,6 @@ public class Activity extends ContextThemeWrapper
         }
     }
 
-
-    /**
-     * Moves the activity between {@link WindowConfiguration#WINDOWING_MODE_FREEFORM} windowing mode
-     * and {@link WindowConfiguration#WINDOWING_MODE_FULLSCREEN}.
-     *
-     * @hide
-     */
-    @Override
-    public void toggleFreeformWindowingMode() throws RemoteException {
-        ActivityTaskManager.getService().toggleFreeformWindowingMode(mToken);
-    }
-
-    /**
-     * Puts the activity in picture-in-picture mode if the activity supports.
-     * @see android.R.attr#supportsPictureInPicture
-     * @hide
-     */
-    @Override
-    public void enterPictureInPictureModeIfPossible() {
-        if (mActivityInfo.supportsPictureInPicture()) {
-            enterPictureInPictureMode();
-        }
-    }
 
     /**
      * Called to process key events.  You can override this to intercept all
@@ -5524,6 +5556,21 @@ public class Activity extends ContextThemeWrapper
      */
     @Override
     public void startActivity(Intent intent, @Nullable Bundle options) {
+        if (mIntent != null && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN)
+                && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_CROSS_ACTIVITY)) {
+            if (TextUtils.equals(getPackageName(),
+                    intent.resolveActivity(getPackageManager()).getPackageName())) {
+                // Apply Autofill restore mechanism on the started activity by startActivity()
+                final IBinder token =
+                        mIntent.getIBinderExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN);
+                // Remove restore ability from current activity
+                mIntent.removeExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN);
+                mIntent.removeExtra(AutofillManager.EXTRA_RESTORE_CROSS_ACTIVITY);
+                // Put restore token
+                intent.putExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN, token);
+                intent.putExtra(AutofillManager.EXTRA_RESTORE_CROSS_ACTIVITY, true);
+            }
+        }
         if (options != null) {
             startActivityForResult(intent, -1, options);
         } else {
@@ -6254,9 +6301,21 @@ public class Activity extends ContextThemeWrapper
         // Activity was launched when user tapped a link in the Autofill Save UI - Save UI must
         // be restored now.
         if (mIntent != null && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN)) {
-            getAutofillManager().onPendingSaveUi(AutofillManager.PENDING_UI_OPERATION_RESTORE,
-                    mIntent.getIBinderExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN));
+            restoreAutofillSaveUi();
         }
+    }
+
+    /**
+     * Restores Autofill Save UI
+     */
+    private void restoreAutofillSaveUi() {
+        final IBinder token =
+                mIntent.getIBinderExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN);
+        // Make only restore Autofill once
+        mIntent.removeExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN);
+        mIntent.removeExtra(AutofillManager.EXTRA_RESTORE_CROSS_ACTIVITY);
+        getAutofillManager().onPendingSaveUi(AutofillManager.PENDING_UI_OPERATION_RESTORE,
+                token);
     }
 
     /**
@@ -6557,13 +6616,8 @@ public class Activity extends ContextThemeWrapper
      *
      * @return True if this is the root activity, else false.
      */
-    @Override
     public boolean isTaskRoot() {
-        try {
-            return ActivityTaskManager.getService().getTaskForActivity(mToken, true) >= 0;
-        } catch (RemoteException e) {
-            return false;
-        }
+        return mWindowControllerCallback.isTaskRoot();
     }
 
     /**
@@ -7094,14 +7148,28 @@ public class Activity extends ContextThemeWrapper
     }
 
     /**
-     * Convert a translucent themed Activity {@link android.R.attr#windowIsTranslucent} to a
-     * fullscreen opaque Activity.
+     * Convert an activity, which particularly with {@link android.R.attr#windowIsTranslucent} or
+     * {@link android.R.attr#windowIsFloating} attribute, to a fullscreen opaque activity, or
+     * convert it from opaque back to translucent.
+     *
+     * @param translucent {@code true} convert from opaque to translucent.
+     *                    {@code false} convert from translucent to opaque.
+     * @return The result of setting translucency. Return {@code true} if set successfully,
+     *         {@code false} otherwise.
+     */
+    public boolean setTranslucent(boolean translucent) {
+        if (translucent) {
+            return convertToTranslucent(null /* callback */, null /* options */);
+        } else {
+            return convertFromTranslucentInternal();
+        }
+    }
+
+    /**
+     * Convert an activity to a fullscreen opaque activity.
      * <p>
-     * Call this whenever the background of a translucent Activity has changed to become opaque.
-     * Doing so will allow the {@link android.view.Surface} of the Activity behind to be released.
-     * <p>
-     * This call has no effect on non-translucent activities or on activities with the
-     * {@link android.R.attr#windowIsFloating} attribute.
+     * Call this whenever the background of a translucent activity has changed to become opaque.
+     * Doing so will allow the {@link android.view.Surface} of the activity behind to be released.
      *
      * @see #convertToTranslucent(android.app.Activity.TranslucentConversionListener,
      * ActivityOptions)
@@ -7111,31 +7179,33 @@ public class Activity extends ContextThemeWrapper
      */
     @SystemApi
     public void convertFromTranslucent() {
+        convertFromTranslucentInternal();
+    }
+
+    private boolean convertFromTranslucentInternal() {
         try {
             mTranslucentCallback = null;
             if (ActivityTaskManager.getService().convertFromTranslucent(mToken)) {
                 WindowManagerGlobal.getInstance().changeCanvasOpacity(mToken, true);
+                return true;
             }
         } catch (RemoteException e) {
             // pass
         }
+        return false;
     }
 
     /**
-     * Convert a translucent themed Activity {@link android.R.attr#windowIsTranslucent} back from
-     * opaque to translucent following a call to {@link #convertFromTranslucent()}.
+     * Convert an activity to a translucent activity.
      * <p>
-     * Calling this allows the Activity behind this one to be seen again. Once all such Activities
+     * Calling this allows the activity behind this one to be seen again. Once all such activities
      * have been redrawn {@link TranslucentConversionListener#onTranslucentConversionComplete} will
      * be called indicating that it is safe to make this activity translucent again. Until
      * {@link TranslucentConversionListener#onTranslucentConversionComplete} is called the image
-     * behind the frontmost Activity will be indeterminate.
-     * <p>
-     * This call has no effect on non-translucent activities or on activities with the
-     * {@link android.R.attr#windowIsFloating} attribute.
+     * behind the frontmost activity will be indeterminate.
      *
-     * @param callback the method to call when all visible Activities behind this one have been
-     * drawn and it is safe to make this Activity translucent again.
+     * @param callback the method to call when all visible activities behind this one have been
+     * drawn and it is safe to make this activity translucent again.
      * @param options activity options delivered to the activity below this one. The options
      * are retrieved using {@link #getActivityOptions}.
      * @return <code>true</code> if Window was opaque and will become translucent or
@@ -7739,7 +7809,7 @@ public class Activity extends ContextThemeWrapper
         mFragments.attachHost(null /*parent*/);
 
         mWindow = new PhoneWindow(this, window, activityConfigCallback);
-        mWindow.setWindowControllerCallback(this);
+        mWindow.setWindowControllerCallback(mWindowControllerCallback);
         mWindow.setCallback(this);
         mWindow.setOnWindowDismissedCallback(this);
         mWindow.getLayoutInflater().setPrivateFactory(this);
@@ -7830,7 +7900,8 @@ public class Activity extends ContextThemeWrapper
         } else {
             onCreate(icicle);
         }
-        writeEventLog(LOG_AM_ON_CREATE_CALLED, "performCreate");
+        EventLogTags.writeWmOnCreateCalled(mIdent, getComponentName().getClassName(),
+                "performCreate");
         mActivityTransitionState.readState(icicle);
 
         mVisibleFromClient = !mWindow.getWindowStyle().getBoolean(
@@ -7852,7 +7923,7 @@ public class Activity extends ContextThemeWrapper
         mCalled = false;
         mFragments.execPendingActions();
         mInstrumentation.callActivityOnStart(this);
-        writeEventLog(LOG_AM_ON_START_CALLED, reason);
+        EventLogTags.writeWmOnStartCalled(mIdent, getComponentName().getClassName(), reason);
 
         if (!mCalled) {
             throw new SuperNotCalledException(
@@ -7862,13 +7933,10 @@ public class Activity extends ContextThemeWrapper
         mFragments.dispatchStart();
         mFragments.reportLoaderStart();
 
+        // Warn app developers if the dynamic linker logged anything during startup.
         boolean isAppDebuggable =
                 (mApplication.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-
-        // This property is set for all non-user builds except final release
-        boolean isDlwarningEnabled = SystemProperties.getInt("ro.bionic.ld.warning", 0) == 1;
-
-        if (isAppDebuggable || isDlwarningEnabled) {
+        if (isAppDebuggable) {
             String dlwarning = getDlWarning();
             if (dlwarning != null) {
                 String appName = getApplicationInfo().loadLabel(getPackageManager())
@@ -7933,7 +8001,7 @@ public class Activity extends ContextThemeWrapper
 
             mCalled = false;
             mInstrumentation.callActivityOnRestart(this);
-            writeEventLog(LOG_AM_ON_RESTART_CALLED, reason);
+            EventLogTags.writeWmOnRestartCalled(mIdent, getComponentName().getClassName(), reason);
             if (!mCalled) {
                 throw new SuperNotCalledException(
                     "Activity " + mComponent.toShortString() +
@@ -7966,7 +8034,7 @@ public class Activity extends ContextThemeWrapper
         mCalled = false;
         // mResumed is set by the instrumentation
         mInstrumentation.callActivityOnResume(this);
-        writeEventLog(LOG_AM_ON_RESUME_CALLED, reason);
+        EventLogTags.writeWmOnResumeCalled(mIdent, getComponentName().getClassName(), reason);
         if (!mCalled) {
             throw new SuperNotCalledException(
                 "Activity " + mComponent.toShortString() +
@@ -8005,7 +8073,8 @@ public class Activity extends ContextThemeWrapper
         mFragments.dispatchPause();
         mCalled = false;
         onPause();
-        writeEventLog(LOG_AM_ON_PAUSE_CALLED, "performPause");
+        EventLogTags.writeWmOnPausedCalled(mIdent, getComponentName().getClassName(),
+                "performPause");
         mResumed = false;
         if (!mCalled && getApplicationInfo().targetSdkVersion
                 >= android.os.Build.VERSION_CODES.GINGERBREAD) {
@@ -8045,7 +8114,7 @@ public class Activity extends ContextThemeWrapper
 
             mCalled = false;
             mInstrumentation.callActivityOnStop(this);
-            writeEventLog(LOG_AM_ON_STOP_CALLED, reason);
+            EventLogTags.writeWmOnStopCalled(mIdent, getComponentName().getClassName(), reason);
             if (!mCalled) {
                 throw new SuperNotCalledException(
                     "Activity " + mComponent.toShortString() +
@@ -8075,7 +8144,8 @@ public class Activity extends ContextThemeWrapper
         mWindow.destroy();
         mFragments.dispatchDestroy();
         onDestroy();
-        writeEventLog(LOG_AM_ON_DESTROY_CALLED, "performDestroy");
+        EventLogTags.writeWmOnDestroyCalled(mIdent, getComponentName().getClassName(),
+                "performDestroy");
         mFragments.doLoaderDestroy();
         if (mVoiceInteractor != null) {
             mVoiceInteractor.detachActivity();
@@ -8168,7 +8238,9 @@ public class Activity extends ContextThemeWrapper
                 frag.onActivityResult(requestCode, resultCode, data);
             }
         }
-        writeEventLog(LOG_AM_ON_ACTIVITY_RESULT_CALLED, reason);
+
+        EventLogTags.writeWmOnActivityResultCalled(mIdent, getComponentName().getClassName(),
+                reason);
     }
 
     /**
@@ -8593,11 +8665,6 @@ public class Activity extends ContextThemeWrapper
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
-    }
-
-    /** Log a lifecycle event for current user id and component class. */
-    private void writeEventLog(int event, String reason) {
-        EventLog.writeEvent(event, mIdent, getComponentName().getClassName(), reason);
     }
 
     class HostCallbacks extends FragmentHostCallback<Activity> {

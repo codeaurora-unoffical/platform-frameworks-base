@@ -20,7 +20,11 @@ import static android.content.pm.PackageManager.FEATURE_FINGERPRINT;
 
 import android.annotation.IntDef;
 import android.annotation.IntRange;
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.ChangeId;
+import android.compat.annotation.EnabledAfter;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -31,8 +35,10 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.hardware.fingerprint.FingerprintManager;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.os.RemoteException;
 import android.util.AttributeSet;
 import android.util.SparseArray;
 import android.util.TypedValue;
@@ -42,6 +48,7 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import com.android.internal.R;
+import com.android.internal.compat.IPlatformCompat;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -298,6 +305,11 @@ public class AccessibilityServiceInfo implements Parcelable {
      /**
      * This flag indicates to the system that the accessibility service requests that an
      * accessibility button be shown within the system's navigation area, if available.
+      * <p>
+      *   <strong>Note:</strong> For accessibility services targeting APIs greater than
+      *   {@link Build.VERSION_CODES#Q API 29}, this flag must be specified in the
+      *   accessibility service metadata file. Otherwise, it will be ignored.
+      * </p>
      */
     public static final int FLAG_REQUEST_ACCESSIBILITY_BUTTON = 0x00000100;
 
@@ -413,6 +425,12 @@ public class AccessibilityServiceInfo implements Parcelable {
      * <p>
      *   <strong>Can be dynamically set at runtime.</strong>
      * </p>
+     * <p>
+     *   <strong>Note:</strong> Accessibility services with targetSdkVersion greater than
+     *   {@link Build.VERSION_CODES#Q API 29} cannot dynamically set the
+     *   {@link #FLAG_REQUEST_ACCESSIBILITY_BUTTON} at runtime. It must be specified in the
+     *   accessibility service metadata file.
+     * </p>
      * @see #DEFAULT
      * @see #FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
      * @see #FLAG_REQUEST_TOUCH_EXPLORATION_MODE
@@ -428,7 +446,7 @@ public class AccessibilityServiceInfo implements Parcelable {
 
     /**
      * Whether or not the service has crashed and is awaiting restart. Only valid from {@link
-     * android.view.accessibility.AccessibilityManager#getEnabledAccessibilityServiceList(int)},
+     * android.view.accessibility.AccessibilityManager#getInstalledAccessibilityServiceList()},
      * because that is populated from the internal list of running services.
      *
      * @hide
@@ -485,6 +503,30 @@ public class AccessibilityServiceInfo implements Parcelable {
      * Non localized description of the accessibility service.
      */
     private String mNonLocalizedDescription;
+
+    /**
+     * For accessibility services targeting APIs greater than {@link Build.VERSION_CODES#Q API 29},
+     * {@link #FLAG_REQUEST_ACCESSIBILITY_BUTTON} must be specified in the accessibility service
+     * metadata file. Otherwise, it will be ignored.
+     */
+    @ChangeId
+    @EnabledAfter(targetSdkVersion = android.os.Build.VERSION_CODES.Q)
+    private static final long REQUEST_ACCESSIBILITY_BUTTON_CHANGE = 136293963L;
+
+    /**
+     * Resource id of the animated image of the accessibility service.
+     */
+    private int mAnimatedImageRes;
+
+    /**
+     * Resource id of the html description of the accessibility service.
+     */
+    private int mHtmlDescriptionRes;
+
+    /**
+     * Non localized html description of the accessibility service.
+     */
+    private String mNonLocalizedHtmlDescription;
 
     /**
      * Creates a new instance.
@@ -601,6 +643,20 @@ public class AccessibilityServiceInfo implements Parcelable {
                     mNonLocalizedSummary = nonLocalizedSummary.toString().trim();
                 }
             }
+            peekedValue = asAttributes.peekValue(
+                    com.android.internal.R.styleable.AccessibilityService_animatedImageDrawable);
+            if (peekedValue != null) {
+                mAnimatedImageRes = peekedValue.resourceId;
+            }
+            peekedValue = asAttributes.peekValue(
+                    com.android.internal.R.styleable.AccessibilityService_htmlDescription);
+            if (peekedValue != null) {
+                mHtmlDescriptionRes = peekedValue.resourceId;
+                final CharSequence nonLocalizedHtmlDescription = peekedValue.coerceToString();
+                if (nonLocalizedHtmlDescription != null) {
+                    mNonLocalizedHtmlDescription = nonLocalizedHtmlDescription.toString().trim();
+                }
+            }
             asAttributes.recycle();
         } catch (NameNotFoundException e) {
             throw new XmlPullParserException( "Unable to create context for: "
@@ -613,13 +669,23 @@ public class AccessibilityServiceInfo implements Parcelable {
     }
 
     /**
-     * Updates the properties that an AccessibilitySerivice can change dynamically.
+     * Updates the properties that an AccessibilityService can change dynamically.
+     * <p>
+     * Note: A11y services targeting APIs > Q, it cannot update flagRequestAccessibilityButton
+     * dynamically.
+     * </p>
      *
+     * @param platformCompat The platform compat service to check the compatibility change.
      * @param other The info from which to update the properties.
      *
      * @hide
      */
-    public void updateDynamicallyConfigurableProperties(AccessibilityServiceInfo other) {
+    public void updateDynamicallyConfigurableProperties(IPlatformCompat platformCompat,
+            AccessibilityServiceInfo other) {
+        if (isRequestAccessibilityButtonChangeEnabled(platformCompat)) {
+            other.flags &= ~FLAG_REQUEST_ACCESSIBILITY_BUTTON;
+            other.flags |= (flags & FLAG_REQUEST_ACCESSIBILITY_BUTTON);
+        }
         eventTypes = other.eventTypes;
         packageNames = other.packageNames;
         feedbackType = other.feedbackType;
@@ -627,6 +693,20 @@ public class AccessibilityServiceInfo implements Parcelable {
         mNonInteractiveUiTimeout = other.mNonInteractiveUiTimeout;
         mInteractiveUiTimeout = other.mInteractiveUiTimeout;
         flags = other.flags;
+    }
+
+    private boolean isRequestAccessibilityButtonChangeEnabled(IPlatformCompat platformCompat) {
+        if (mResolveInfo == null) {
+            return true;
+        }
+        try {
+            if (platformCompat != null) {
+                return platformCompat.isChangeEnabled(REQUEST_ACCESSIBILITY_BUTTON_CHANGE,
+                        mResolveInfo.serviceInfo.applicationInfo);
+            }
+        } catch (RemoteException ignore) {
+        }
+        return mResolveInfo.serviceInfo.applicationInfo.targetSdkVersion > Build.VERSION_CODES.Q;
     }
 
     /**
@@ -675,6 +755,18 @@ public class AccessibilityServiceInfo implements Parcelable {
      */
     public String getSettingsActivityName() {
         return mSettingsActivityName;
+    }
+
+    /**
+     * The animated image resource id.
+     * <p>
+     *    <strong>Statically set from
+     *    {@link AccessibilityService#SERVICE_META_DATA meta-data}.</strong>
+     * </p>
+     * @return The animated image resource id.
+     */
+    public int getAnimatedImageRes() {
+        return mAnimatedImageRes;
     }
 
     /**
@@ -784,6 +876,29 @@ public class AccessibilityServiceInfo implements Parcelable {
     }
 
     /**
+     * The localized html description of the accessibility service.
+     * <p>
+     *    <strong>Statically set from
+     *    {@link AccessibilityService#SERVICE_META_DATA meta-data}.</strong>
+     * </p>
+     * @return The localized html description.
+     */
+    @Nullable
+    public String loadHtmlDescription(@NonNull PackageManager packageManager) {
+        if (mHtmlDescriptionRes == 0) {
+            return mNonLocalizedHtmlDescription;
+        }
+
+        final ServiceInfo serviceInfo = mResolveInfo.serviceInfo;
+        final CharSequence htmlDescription = packageManager.getText(serviceInfo.packageName,
+                mHtmlDescriptionRes, serviceInfo.applicationInfo);
+        if (htmlDescription != null) {
+            return htmlDescription.toString().trim();
+        }
+        return null;
+    }
+
+    /**
      * Set the recommended time that non-interactive controls need to remain on the screen to
      * support the user.
      * <p>
@@ -866,7 +981,10 @@ public class AccessibilityServiceInfo implements Parcelable {
         parcel.writeInt(mSummaryResId);
         parcel.writeString(mNonLocalizedSummary);
         parcel.writeInt(mDescriptionResId);
+        parcel.writeInt(mAnimatedImageRes);
+        parcel.writeInt(mHtmlDescriptionRes);
         parcel.writeString(mNonLocalizedDescription);
+        parcel.writeString(mNonLocalizedHtmlDescription);
     }
 
     private void initFromParcel(Parcel parcel) {
@@ -885,7 +1003,10 @@ public class AccessibilityServiceInfo implements Parcelable {
         mSummaryResId = parcel.readInt();
         mNonLocalizedSummary = parcel.readString();
         mDescriptionResId = parcel.readInt();
+        mAnimatedImageRes = parcel.readInt();
+        mHtmlDescriptionRes = parcel.readInt();
         mNonLocalizedDescription = parcel.readString();
+        mNonLocalizedHtmlDescription = parcel.readString();
     }
 
     @Override

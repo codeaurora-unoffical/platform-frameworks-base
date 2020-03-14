@@ -24,7 +24,7 @@ import android.graphics.Rect;
 import android.os.RemoteException;
 import android.perftests.utils.BenchmarkState;
 import android.perftests.utils.PerfStatusReporter;
-import android.perftests.utils.StubActivity;
+import android.perftests.utils.PerfTestActivity;
 import android.util.MergedConfiguration;
 import android.view.DisplayCutout;
 import android.view.IWindow;
@@ -57,8 +57,8 @@ public class RelayoutPerfTest extends WindowManagerPerfTestBase {
     public final PerfStatusReporter mPerfStatusReporter = new PerfStatusReporter();
 
     @Rule
-    public final ActivityTestRule<StubActivity> mActivityRule =
-            new ActivityTestRule<>(StubActivity.class);
+    public final ActivityTestRule<PerfTestActivity> mActivityRule =
+            new ActivityTestRule<>(PerfTestActivity.class);
 
     /** This is only a placement to match the input parameters from {@link #getParameters}. */
     @Parameterized.Parameter(0)
@@ -111,11 +111,9 @@ public class RelayoutPerfTest extends WindowManagerPerfTestBase {
 
     private static class RelayoutRunner {
         final Rect mOutFrame = new Rect();
-        final Rect mOutOverscanInsets = new Rect();
         final Rect mOutContentInsets = new Rect();
         final Rect mOutVisibleInsets = new Rect();
         final Rect mOutStableInsets = new Rect();
-        final Rect mOutOutsets = new Rect();
         final Rect mOutBackDropFrame = new Rect();
         final DisplayCutout.ParcelableWrapper mOutDisplayCutout =
                 new DisplayCutout.ParcelableWrapper(DisplayCutout.NO_CUTOUT);
@@ -149,8 +147,8 @@ public class RelayoutPerfTest extends WindowManagerPerfTestBase {
             while (state.keepRunning()) {
                 session.relayout(mWindow, mSeq, mParams, mWidth, mHeight,
                         mViewVisibility.getAsInt(), mFlags, mFrameNumber, mOutFrame,
-                        mOutOverscanInsets, mOutContentInsets, mOutVisibleInsets, mOutStableInsets,
-                        mOutOutsets, mOutBackDropFrame, mOutDisplayCutout, mOutMergedConfiguration,
+                        mOutContentInsets, mOutVisibleInsets, mOutStableInsets,
+                        mOutBackDropFrame, mOutDisplayCutout, mOutMergedConfiguration,
                         mOutSurfaceControl, mOutInsetsState);
             }
         }

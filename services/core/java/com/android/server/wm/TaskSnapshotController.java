@@ -16,6 +16,8 @@
 
 package com.android.server.wm;
 
+import static android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER;
+
 import static com.android.server.wm.TaskSnapshotPersister.DISABLE_FULL_SIZED_BITMAPS;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_SCREENSHOT;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
@@ -140,13 +142,13 @@ class TaskSnapshotController {
     /**
      * Called when the visibility of an app changes outside of the regular app transition flow.
      */
-    void notifyAppVisibilityChanged(AppWindowToken appWindowToken, boolean visible) {
+    void notifyAppVisibilityChanged(ActivityRecord appWindowToken, boolean visible) {
         if (!visible) {
             handleClosingApps(Sets.newArraySet(appWindowToken));
         }
     }
 
-    private void handleClosingApps(ArraySet<AppWindowToken> closingApps) {
+    private void handleClosingApps(ArraySet<ActivityRecord> closingApps) {
         if (shouldDisableSnapshots()) {
             return;
         }
@@ -169,22 +171,30 @@ class TaskSnapshotController {
     }
 
     void snapshotTasks(ArraySet<Task> tasks) {
+        snapshotTasks(mTmpTasks, false /* allowSnapshotHome */);
+    }
+
+    private void snapshotTasks(ArraySet<Task> tasks, boolean allowSnapshotHome) {
         for (int i = tasks.size() - 1; i >= 0; i--) {
             final Task task = tasks.valueAt(i);
-            final int mode = getSnapshotMode(task);
             final TaskSnapshot snapshot;
-            switch (mode) {
-                case SNAPSHOT_MODE_NONE:
-                    continue;
-                case SNAPSHOT_MODE_APP_THEME:
-                    snapshot = drawAppThemeSnapshot(task);
-                    break;
-                case SNAPSHOT_MODE_REAL:
-                    snapshot = snapshotTask(task);
-                    break;
-                default:
-                    snapshot = null;
-                    break;
+            final boolean snapshotHome = allowSnapshotHome && task.isActivityTypeHome();
+            if (snapshotHome) {
+                snapshot = snapshotTask(task);
+            } else {
+                switch (getSnapshotMode(task)) {
+                    case SNAPSHOT_MODE_NONE:
+                        continue;
+                    case SNAPSHOT_MODE_APP_THEME:
+                        snapshot = drawAppThemeSnapshot(task);
+                        break;
+                    case SNAPSHOT_MODE_REAL:
+                        snapshot = snapshotTask(task);
+                        break;
+                    default:
+                        snapshot = null;
+                        break;
+                }
             }
             if (snapshot != null) {
                 final GraphicBuffer buffer = snapshot.getSnapshot();
@@ -194,8 +204,11 @@ class TaskSnapshotController {
                             + buffer.getHeight());
                 } else {
                     mCache.putSnapshot(task, snapshot);
-                    mPersister.persistSnapshot(task.mTaskId, task.mUserId, snapshot);
-                    task.onSnapshotChanged(snapshot);
+                    // Don't persist or notify the change for the temporal snapshot.
+                    if (!snapshotHome) {
+                        mPersister.persistSnapshot(task.mTaskId, task.mUserId, snapshot);
+                        task.onSnapshotChanged(snapshot);
+                    }
                 }
             }
         }
@@ -212,12 +225,19 @@ class TaskSnapshotController {
     }
 
     /**
+     * @see WindowManagerInternal#clearSnapshotCache
+     */
+    public void clearSnapshotCache() {
+        mCache.clearRunningCache();
+    }
+
+    /**
      * Creates a starting surface for {@param token} with {@param snapshot}. DO NOT HOLD THE WINDOW
      * MANAGER LOCK WHEN CALLING THIS METHOD!
      */
-    StartingSurface createStartingSurface(AppWindowToken token,
+    StartingSurface createStartingSurface(ActivityRecord activity,
             TaskSnapshot snapshot) {
-        return TaskSnapshotSurface.create(mService, token, snapshot);
+        return TaskSnapshotSurface.create(mService, activity, snapshot);
     }
 
     /**
@@ -225,29 +245,30 @@ class TaskSnapshotController {
      * we're looking for, but during app transitions, trampoline activities can appear in the
      * children, which should be ignored.
      */
-    @Nullable private AppWindowToken findAppTokenForSnapshot(Task task) {
-        for (int i = task.getChildCount() - 1; i >= 0; --i) {
-            final AppWindowToken appWindowToken = task.getChildAt(i);
-            if (appWindowToken == null || !appWindowToken.isSurfaceShowing()
-                    || appWindowToken.findMainWindow() == null) {
-                continue;
+    @Nullable private ActivityRecord findAppTokenForSnapshot(Task task) {
+        return task.getActivity((r) -> {
+            if (r == null || !r.isSurfaceShowing() || r.findMainWindow() == null) {
+                return false;
             }
-            final boolean hasVisibleChild = appWindowToken.forAllWindows(
+            return r.forAllWindows(
                     // Ensure at least one window for the top app is visible before attempting to
                     // take a screenshot. Visible here means that the WSA surface is shown and has
                     // an alpha greater than 0.
                     ws -> ws.mWinAnimator != null && ws.mWinAnimator.getShown()
                             && ws.mWinAnimator.mLastAlpha > 0f, true  /* traverseTopToBottom */);
-            if (hasVisibleChild) {
-                return appWindowToken;
-            }
-        }
-        return null;
+
+        });
     }
 
     @Nullable
     SurfaceControl.ScreenshotGraphicBuffer createTaskSnapshot(@NonNull Task task,
             float scaleFraction) {
+        return createTaskSnapshot(task, scaleFraction, PixelFormat.RGBA_8888);
+    }
+
+    @Nullable
+    SurfaceControl.ScreenshotGraphicBuffer createTaskSnapshot(@NonNull Task task,
+            float scaleFraction, int pixelFormat) {
         if (task.getSurfaceControl() == null) {
             if (DEBUG_SCREENSHOT) {
                 Slog.w(TAG_WM, "Failed to take screenshot. No surface control for " + task);
@@ -258,7 +279,7 @@ class TaskSnapshotController {
         mTmpRect.offsetTo(0, 0);
         final SurfaceControl.ScreenshotGraphicBuffer screenshotBuffer =
                 SurfaceControl.captureLayers(
-                        task.getSurfaceControl(), mTmpRect, scaleFraction);
+                        task.getSurfaceControl(), mTmpRect, scaleFraction, pixelFormat);
         final GraphicBuffer buffer = screenshotBuffer != null ? screenshotBuffer.getGraphicBuffer()
                 : null;
         if (buffer == null || buffer.getWidth() <= 1 || buffer.getHeight() <= 1) {
@@ -275,16 +296,16 @@ class TaskSnapshotController {
             return null;
         }
 
-        final AppWindowToken appWindowToken = findAppTokenForSnapshot(task);
-        if (appWindowToken == null) {
+        final ActivityRecord activity = findAppTokenForSnapshot(task);
+        if (activity == null) {
             if (DEBUG_SCREENSHOT) {
                 Slog.w(TAG_WM, "Failed to take screenshot. No visible windows for " + task);
             }
             return null;
         }
-        if (appWindowToken.hasCommittedReparentToAnimationLeash()) {
+        if (activity.hasCommittedReparentToAnimationLeash()) {
             if (DEBUG_SCREENSHOT) {
-                Slog.w(TAG_WM, "Failed to take screenshot. App is animating " + appWindowToken);
+                Slog.w(TAG_WM, "Failed to take screenshot. App is animating " + activity);
             }
             return null;
         }
@@ -294,13 +315,19 @@ class TaskSnapshotController {
                 ? mPersister.getReducedScale()
                 : mFullSnapshotScale;
 
-        final WindowState mainWindow = appWindowToken.findMainWindow();
+        final WindowState mainWindow = activity.findMainWindow();
         if (mainWindow == null) {
             Slog.w(TAG_WM, "Failed to take screenshot. No main window for " + task);
             return null;
         }
+        final boolean isWindowTranslucent = mainWindow.getAttrs().format != PixelFormat.OPAQUE;
+        final boolean isShowWallpaper = (mainWindow.getAttrs().flags & FLAG_SHOW_WALLPAPER) != 0;
+        final int pixelFormat = mPersister.use16BitFormat() && activity.fillsParent()
+                && !(isWindowTranslucent && isShowWallpaper)
+                ? PixelFormat.RGB_565
+                : PixelFormat.RGBA_8888;
         final SurfaceControl.ScreenshotGraphicBuffer screenshotBuffer =
-                createTaskSnapshot(task, scaleFraction);
+                createTaskSnapshot(task, scaleFraction, pixelFormat);
 
         if (screenshotBuffer == null) {
             if (DEBUG_SCREENSHOT) {
@@ -308,15 +335,16 @@ class TaskSnapshotController {
             }
             return null;
         }
-        final boolean isWindowTranslucent = mainWindow.getAttrs().format != PixelFormat.OPAQUE;
+        final boolean isTranslucent = PixelFormat.formatHasAlpha(pixelFormat)
+                && (!activity.fillsParent() || isWindowTranslucent);
         return new TaskSnapshot(
                 System.currentTimeMillis() /* id */,
-                appWindowToken.mActivityComponent, screenshotBuffer.getGraphicBuffer(),
+                activity.mActivityComponent, screenshotBuffer.getGraphicBuffer(),
                 screenshotBuffer.getColorSpace(),
-                appWindowToken.getTask().getConfiguration().orientation,
+                activity.getTask().getConfiguration().orientation,
                 getInsets(mainWindow), isLowRamDevice /* reduced */, scaleFraction /* scale */,
                 true /* isRealSnapshot */, task.getWindowingMode(), getSystemUiVisibility(task),
-                !appWindowToken.fillsParent() || isWindowTranslucent);
+                isTranslucent);
     }
 
     private boolean shouldDisableSnapshots() {
@@ -327,7 +355,7 @@ class TaskSnapshotController {
         // XXX(b/72757033): These are insets relative to the window frame, but we're really
         // interested in the insets relative to the task bounds.
         final Rect insets = minRect(state.getContentInsets(), state.getStableInsets());
-        InsetUtils.addInsets(insets, state.mAppToken.getLetterboxInsets());
+        InsetUtils.addInsets(insets, state.mActivityRecord.getLetterboxInsets());
         return insets;
     }
 
@@ -342,11 +370,11 @@ class TaskSnapshotController {
      * Retrieves all closing tasks based on the list of closing apps during an app transition.
      */
     @VisibleForTesting
-    void getClosingTasks(ArraySet<AppWindowToken> closingApps, ArraySet<Task> outClosingTasks) {
+    void getClosingTasks(ArraySet<ActivityRecord> closingApps, ArraySet<Task> outClosingTasks) {
         outClosingTasks.clear();
         for (int i = closingApps.size() - 1; i >= 0; i--) {
-            final AppWindowToken atoken = closingApps.valueAt(i);
-            final Task task = atoken.getTask();
+            final ActivityRecord activity = closingApps.valueAt(i);
+            final Task task = activity.getTask();
 
             // If the task of the app is not visible anymore, it means no other app in that task
             // is opening. Thus, the task is closing.
@@ -358,7 +386,7 @@ class TaskSnapshotController {
 
     @VisibleForTesting
     int getSnapshotMode(Task task) {
-        final AppWindowToken topChild = task.getTopChild();
+        final ActivityRecord topChild = task.getTopMostActivity();
         if (!task.isActivityTypeStandardOrUndefined() && !task.isActivityTypeAssistant()) {
             return SNAPSHOT_MODE_NONE;
         } else if (topChild != null && topChild.shouldUseAppThemeSnapshot()) {
@@ -373,7 +401,7 @@ class TaskSnapshotController {
      * as possible by using the theme's window background.
      */
     private TaskSnapshot drawAppThemeSnapshot(Task task) {
-        final AppWindowToken topChild = task.getTopChild();
+        final ActivityRecord topChild = task.getTopMostActivity();
         if (topChild == null) {
             return null;
         }
@@ -386,7 +414,7 @@ class TaskSnapshotController {
         final LayoutParams attrs = mainWindow.getAttrs();
         final SystemBarBackgroundPainter decorPainter = new SystemBarBackgroundPainter(attrs.flags,
                 attrs.privateFlags, attrs.systemUiVisibility, task.getTaskDescription(),
-                mFullSnapshotScale);
+                mFullSnapshotScale, mainWindow.getClientInsetsState());
         final int width = (int) (task.getBounds().width() * mFullSnapshotScale);
         final int height = (int) (task.getBounds().height() * mFullSnapshotScale);
 
@@ -415,22 +443,26 @@ class TaskSnapshotController {
     }
 
     /**
-     * Called when an {@link AppWindowToken} has been removed.
+     * Called when an {@link ActivityRecord} has been removed.
      */
-    void onAppRemoved(AppWindowToken wtoken) {
-        mCache.onAppRemoved(wtoken);
+    void onAppRemoved(ActivityRecord activity) {
+        mCache.onAppRemoved(activity);
     }
 
     /**
-     * Called when the process of an {@link AppWindowToken} has died.
+     * Called when the process of an {@link ActivityRecord} has died.
      */
-    void onAppDied(AppWindowToken wtoken) {
-        mCache.onAppDied(wtoken);
+    void onAppDied(ActivityRecord activity) {
+        mCache.onAppDied(activity);
     }
 
     void notifyTaskRemovedFromRecents(int taskId, int userId) {
         mCache.onTaskRemoved(taskId);
         mPersister.onTaskRemovedFromRecents(taskId, userId);
+    }
+
+    void removeSnapshotCache(int taskId) {
+        mCache.removeRunningEntry(taskId);
     }
 
     /**
@@ -468,7 +500,9 @@ class TaskSnapshotController {
                             mTmpTasks.add(task);
                         }
                     });
-                    snapshotTasks(mTmpTasks);
+                    // Allow taking snapshot of home when turning screen off to reduce the delay of
+                    // unlocking/waking to home.
+                    snapshotTasks(mTmpTasks, true /* allowSnapshotHome */);
                 }
             } finally {
                 listener.onScreenOff();
@@ -481,9 +515,9 @@ class TaskSnapshotController {
      *         {@param task}.
      */
     private int getSystemUiVisibility(Task task) {
-        final AppWindowToken topFullscreenToken = task.getTopFullscreenAppToken();
-        final WindowState topFullscreenWindow = topFullscreenToken != null
-                ? topFullscreenToken.getTopFullscreenWindow()
+        final ActivityRecord topFullscreenActivity = task.getTopFullscreenActivity();
+        final WindowState topFullscreenWindow = topFullscreenActivity != null
+                ? topFullscreenActivity.getTopFullscreenWindow()
                 : null;
         if (topFullscreenWindow != null) {
             return topFullscreenWindow.getSystemUiVisibility();

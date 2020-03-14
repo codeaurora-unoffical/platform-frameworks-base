@@ -36,13 +36,9 @@ import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
 
 import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
 
-import static com.android.server.wm.ActivityDisplay.POSITION_TOP;
-
 import static org.mockito.Mockito.mock;
 
 import android.content.Context;
-import android.content.res.Configuration;
-import android.testing.DexmakerShareClassLoaderRule;
 import android.util.Log;
 import android.view.Display;
 import android.view.DisplayInfo;
@@ -55,7 +51,6 @@ import com.android.server.AttributeCache;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Rule;
 
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -65,7 +60,7 @@ import java.util.LinkedList;
  *
  * Make sure any requests to WM hold the WM lock if needed b/73966377
  */
-class WindowTestsBase {
+class WindowTestsBase extends SystemServiceTestsBase {
     private static final String TAG = WindowTestsBase.class.getSimpleName();
 
     WindowManagerService mWm;
@@ -91,16 +86,6 @@ class WindowTestsBase {
      * Spied {@link Transaction} class than can be used to verify calls.
      */
     Transaction mTransaction;
-
-    @Rule
-    public final DexmakerShareClassLoaderRule mDexmakerShareClassLoaderRule =
-            new DexmakerShareClassLoaderRule();
-    @Rule
-    public final SystemServicesTestRule mSystemServicesTestRule = new SystemServicesTestRule();
-
-    @WindowTestRunner.MethodWrapperRule
-    public final WindowManagerGlobalLockRule mLockRule =
-            new WindowManagerGlobalLockRule(mSystemServicesTestRule);
 
     @BeforeClass
     public static void setUpOnceBase() {
@@ -188,7 +173,7 @@ class WindowTestsBase {
             }
 
             // Cleaned up everything in Handler.
-            mSystemServicesTestRule.cleanupWindowManagerHandlers();
+            cleanupWindowManagerHandlers();
         } catch (Exception e) {
             Log.e(TAG, "Failed to tear down test", e);
             throw e;
@@ -205,13 +190,6 @@ class WindowTestsBase {
         }
     }
 
-    /**
-     * Waits until the main handler for WM has processed all messages.
-     */
-    void waitUntilHandlersIdle() {
-        mLockRule.waitUntilHandlersIdle();
-    }
-
     private WindowToken createWindowToken(
             DisplayContent dc, int windowingMode, int activityType, int type) {
         synchronized (mWm.mGlobalLock) {
@@ -219,22 +197,18 @@ class WindowTestsBase {
                 return WindowTestUtils.createTestWindowToken(type, dc);
             }
 
-            return createAppWindowToken(dc, windowingMode, activityType);
+            return createActivityRecord(dc, windowingMode, activityType);
         }
     }
 
-    AppWindowToken createAppWindowToken(DisplayContent dc, int windowingMode, int activityType) {
-        return createTestAppWindowToken(dc, windowingMode, activityType);
+    ActivityRecord createActivityRecord(DisplayContent dc, int windowingMode, int activityType) {
+        return createTestActivityRecord(dc, windowingMode, activityType);
     }
 
-    WindowTestUtils.TestAppWindowToken createTestAppWindowToken(DisplayContent dc, int
+    ActivityRecord createTestActivityRecord(DisplayContent dc, int
             windowingMode, int activityType) {
-        final TaskStack stack = createTaskStackOnDisplay(windowingMode, activityType, dc);
-        final Task task = createTaskInStack(stack, 0 /* userId */);
-        final WindowTestUtils.TestAppWindowToken appWindowToken =
-                WindowTestUtils.createTestAppWindowToken(dc);
-        task.addChild(appWindowToken, 0);
-        return appWindowToken;
+        final ActivityStack stack = createTaskStackOnDisplay(windowingMode, activityType, dc);
+        return WindowTestUtils.createTestActivityRecord(stack);
     }
 
     WindowState createWindow(WindowState parent, int type, String name) {
@@ -263,9 +237,10 @@ class WindowTestsBase {
 
     WindowState createAppWindow(Task task, int type, String name) {
         synchronized (mWm.mGlobalLock) {
-            final AppWindowToken token = WindowTestUtils.createTestAppWindowToken(mDisplayContent);
-            task.addChild(token, 0);
-            return createWindow(null, type, token, name);
+            final ActivityRecord activity =
+                    WindowTestUtils.createTestActivityRecord(mDisplayContent);
+            task.addChild(activity, 0);
+            return createWindow(null, type, activity, name);
         }
     }
 
@@ -336,28 +311,25 @@ class WindowTestsBase {
         }
     }
 
-    /** Creates a {@link TaskStack} and adds it to the specified {@link DisplayContent}. */
-    TaskStack createTaskStackOnDisplay(DisplayContent dc) {
+    /** Creates a {@link ActivityStack} and adds it to the specified {@link DisplayContent}. */
+    ActivityStack createTaskStackOnDisplay(DisplayContent dc) {
+        return createTaskStackOnDisplay(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, dc);
+    }
+
+    ActivityStack createTaskStackOnDisplay(int windowingMode, int activityType, DisplayContent dc) {
         synchronized (mWm.mGlobalLock) {
-            return createTaskStackOnDisplay(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, dc);
+            return new ActivityTestsBase.StackBuilder(
+                    dc.mWmService.mAtmService.mRootActivityContainer)
+                    .setDisplay(dc)
+                    .setWindowingMode(windowingMode)
+                    .setActivityType(activityType)
+                    .setCreateActivity(false)
+                    .build();
         }
     }
 
-    TaskStack createTaskStackOnDisplay(int windowingMode, int activityType, DisplayContent dc) {
-        synchronized (mWm.mGlobalLock) {
-            final Configuration overrideConfig = new Configuration();
-            overrideConfig.windowConfiguration.setWindowingMode(windowingMode);
-            overrideConfig.windowConfiguration.setActivityType(activityType);
-            final int stackId = ++sNextStackId;
-            final TaskStack stack = new TaskStack(mWm, stackId, mock(ActivityStack.class));
-            dc.setStackOnDisplay(stackId, true, stack);
-            stack.onRequestedOverrideConfigurationChanged(overrideConfig);
-            return stack;
-        }
-    }
-
-    /** Creates a {@link Task} and adds it to the specified {@link TaskStack}. */
-    Task createTaskInStack(TaskStack stack, int userId) {
+    /** Creates a {@link Task} and adds it to the specified {@link ActivityStack}. */
+    Task createTaskInStack(ActivityStack stack, int userId) {
         return WindowTestUtils.createTaskInStack(mWm, stack, userId);
     }
 
@@ -368,9 +340,8 @@ class WindowTestsBase {
 
     /** Creates a {@link DisplayContent} and adds it to the system. */
     DisplayContent createNewDisplay(DisplayInfo info) {
-        final ActivityDisplay display =
-                TestActivityDisplay.create(mWm.mAtmService.mStackSupervisor, info);
-        mWm.mAtmService.mRootActivityContainer.addChild(display, POSITION_TOP);
+        final DisplayContent display =
+                new TestDisplayContent.Builder(mWm.mAtmService, info).build();
         return display.mDisplayContent;
     }
 
@@ -403,5 +374,10 @@ class WindowTestsBase {
         displayInfo.type = Display.TYPE_VIRTUAL;
         displayInfo.ownerUid = SYSTEM_UID;
         return createNewDisplay(displayInfo);
+    }
+
+    /** Sets the default minimum task size to 1 so that tests can use small task sizes */
+    void removeGlobalMinSizeRestriction() {
+        mWm.mAtmService.mRootActivityContainer.mDefaultMinSizeOfResizeableTaskDp = 1;
     }
 }
