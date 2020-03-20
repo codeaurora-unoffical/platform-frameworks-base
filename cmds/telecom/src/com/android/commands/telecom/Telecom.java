@@ -46,6 +46,10 @@ public final class Telecom extends BaseCommand {
      * @param args The command-line arguments
      */
     public static void main(String[] args) {
+        // Initialize the telephony module.
+        // TODO: Do it in zygote and RuntimeInit. b/148897549
+        ActivityThread.initializeMainlineModules();
+
       (new Telecom()).run(args);
     }
 
@@ -366,12 +370,8 @@ public final class Telecom extends BaseCommand {
     }
 
     private void runGetMaxPhones() throws RemoteException {
-        // This assumes the max number of SIMs is 2, which it currently is
-        if (TelephonyManager.MULTISIM_ALLOWED == mTelephonyManager.isMultiSimSupported()) {
-            System.out.println("2");
-        } else {
-            System.out.println("1");
-        }
+        // how many logical modems can be potentially active simultaneously
+        System.out.println(mTelephonyManager.getSupportedModemCount());
     }
 
     private void runSetEmergencyPhoneAccountPackageFilter() throws RemoteException {

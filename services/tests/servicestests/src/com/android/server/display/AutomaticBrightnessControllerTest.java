@@ -25,7 +25,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.hardware.Sensor;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
@@ -46,14 +45,12 @@ import org.mockito.MockitoAnnotations;
 @SmallTest
 @RunWith(AndroidJUnit4.class)
 public class AutomaticBrightnessControllerTest {
-
-    private static final int BRIGHTNESS_MIN = 1;
-    private static final int BRIGHTNESS_MAX = 255;
+    private static final float BRIGHTNESS_MIN_FLOAT = 0.0f;
+    private static final float BRIGHTNESS_MAX_FLOAT = 1.0f;
     private static final int LIGHT_SENSOR_RATE = 20;
     private static final int INITIAL_LIGHT_SENSOR_RATE = 20;
     private static final int BRIGHTENING_LIGHT_DEBOUNCE_CONFIG = 0;
     private static final int DARKENING_LIGHT_DEBOUNCE_CONFIG = 0;
-    private static final int SHORT_TERM_MODEL_TIMEOUT = 0;
     private static final float DOZE_SCALE_FACTOR = 0.0f;
     private static final boolean RESET_AMBIENT_LUX_AFTER_WARMUP_CONFIG = false;
 
@@ -62,7 +59,6 @@ public class AutomaticBrightnessControllerTest {
     @Mock BrightnessMappingStrategy mBrightnessMappingStrategy;
     @Mock HysteresisLevels mAmbientBrightnessThresholds;
     @Mock HysteresisLevels mScreenBrightnessThresholds;
-    @Mock PackageManager mPackageManager;
     @Mock Handler mNoopHandler;
 
     private static final int LIGHT_SENSOR_WARMUP_TIME = 0;
@@ -82,11 +78,11 @@ public class AutomaticBrightnessControllerTest {
                     }
                 },
                 () -> { }, mContext.getMainLooper(), mSensorManager, lightSensor,
-                mBrightnessMappingStrategy, LIGHT_SENSOR_WARMUP_TIME, BRIGHTNESS_MIN,
-                BRIGHTNESS_MAX, DOZE_SCALE_FACTOR, LIGHT_SENSOR_RATE, INITIAL_LIGHT_SENSOR_RATE,
-                BRIGHTENING_LIGHT_DEBOUNCE_CONFIG, DARKENING_LIGHT_DEBOUNCE_CONFIG,
-                RESET_AMBIENT_LUX_AFTER_WARMUP_CONFIG, mAmbientBrightnessThresholds,
-                mScreenBrightnessThresholds, SHORT_TERM_MODEL_TIMEOUT, mPackageManager);
+                mBrightnessMappingStrategy, LIGHT_SENSOR_WARMUP_TIME, BRIGHTNESS_MIN_FLOAT,
+                BRIGHTNESS_MAX_FLOAT, DOZE_SCALE_FACTOR, LIGHT_SENSOR_RATE,
+                INITIAL_LIGHT_SENSOR_RATE, BRIGHTENING_LIGHT_DEBOUNCE_CONFIG,
+                DARKENING_LIGHT_DEBOUNCE_CONFIG, RESET_AMBIENT_LUX_AFTER_WARMUP_CONFIG,
+                mAmbientBrightnessThresholds, mScreenBrightnessThresholds, mContext);
         controller.setLoggingEnabled(true);
 
         // Configure the brightness controller and grab an instance of the sensor listener,
@@ -111,7 +107,7 @@ public class AutomaticBrightnessControllerTest {
 
         // Set up system to return 5 as a brightness value
         float lux1 = 100.0f;
-        float normalizedBrightness1 = 0.02f;
+        float normalizedBrightness1 = 0.0158f; //float equivalent of 5 out of 255
         when(mAmbientBrightnessThresholds.getBrighteningThreshold(lux1))
                 .thenReturn(lux1);
         when(mAmbientBrightnessThresholds.getDarkeningThreshold(lux1))
@@ -157,7 +153,7 @@ public class AutomaticBrightnessControllerTest {
 
         // Set up system to return 250 as a brightness value
         float lux1 = 100.0f;
-        float normalizedBrightness1 = 0.98f;
+        float normalizedBrightness1 = 0.981f; //float equivalent of 250 out of 255
         when(mAmbientBrightnessThresholds.getBrighteningThreshold(lux1))
                 .thenReturn(lux1);
         when(mAmbientBrightnessThresholds.getDarkeningThreshold(lux1))
@@ -188,5 +184,28 @@ public class AutomaticBrightnessControllerTest {
         // Send new sensor value and verify
         listener.onSensorChanged(TestUtils.createSensorEvent(lightSensor, (int) lux2));
         assertEquals(255, controller.getAutomaticScreenBrightness());
+    }
+
+    @Test
+    public void testUserAddUserDataPoint() throws Exception {
+        Sensor lightSensor = TestUtils.createSensor(Sensor.TYPE_LIGHT, "Light Sensor");
+        AutomaticBrightnessController controller = setupController(lightSensor);
+
+        ArgumentCaptor<SensorEventListener> listenerCaptor =
+                ArgumentCaptor.forClass(SensorEventListener.class);
+        verify(mSensorManager).registerListener(listenerCaptor.capture(), eq(lightSensor),
+                eq(INITIAL_LIGHT_SENSOR_RATE * 1000), any(Handler.class));
+        SensorEventListener listener = listenerCaptor.getValue();
+
+        // Sensor reads 1000 lux,
+        listener.onSensorChanged(TestUtils.createSensorEvent(lightSensor, 1000));
+
+        // User sets brightness to 100
+        controller.configure(true /* enable */, null /* configuration */,
+                100 /* brightness */, true /* userChangedBrightness */, 0 /* adjustment */,
+                false /* userChanged */, DisplayPowerRequest.POLICY_BRIGHT);
+
+        // There should be a user data point added to the mapper.
+        verify(mBrightnessMappingStrategy).addUserDataPoint(1000f, 100);
     }
 }

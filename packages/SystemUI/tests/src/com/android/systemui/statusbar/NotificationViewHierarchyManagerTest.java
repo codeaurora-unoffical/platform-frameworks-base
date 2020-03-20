@@ -38,11 +38,10 @@ import android.widget.LinearLayout;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.systemui.Dependency;
-import com.android.systemui.InitController;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.plugins.statusbar.NotificationSwipeActionHelper;
+import com.android.systemui.statusbar.notification.DynamicChildBindController;
 import com.android.systemui.statusbar.notification.DynamicPrivacyController;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
@@ -50,10 +49,11 @@ import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.notification.row.ExpandableView;
+import com.android.systemui.statusbar.notification.row.NotificationTestHelper;
+import com.android.systemui.statusbar.notification.stack.ForegroundServiceSectionController;
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
-import com.android.systemui.util.Assert;
 
 import com.google.android.collect.Lists;
 
@@ -89,7 +89,7 @@ public class NotificationViewHierarchyManagerTest extends SysuiTestCase {
     public void setUp() {
         MockitoAnnotations.initMocks(this);
         mTestableLooper = TestableLooper.get(this);
-        Assert.sMainLooper = mTestableLooper.getLooper();
+        allowTestableLooperAsMainThread();
         mHandler = Handler.createAsync(mTestableLooper.getLooper());
 
         mDependency.injectTestDependency(NotificationEntryManager.class, mEntryManager);
@@ -105,18 +105,15 @@ public class NotificationViewHierarchyManagerTest extends SysuiTestCase {
                 mock(StatusBarStateControllerImpl.class), mEntryManager,
                 mock(KeyguardBypassController.class),
                 mock(BubbleController.class),
-                mock(DynamicPrivacyController.class));
-        Dependency.get(InitController.class).executePostInitTasks();
+                mock(DynamicPrivacyController.class),
+                mock(ForegroundServiceSectionController.class),
+                mock(DynamicChildBindController.class));
         mViewHierarchyManager.setUpWithPresenter(mPresenter, mListContainer);
     }
 
     private NotificationEntry createEntry() throws Exception {
         ExpandableNotificationRow row = mHelper.createRow();
-        NotificationEntry entry = new NotificationEntryBuilder()
-                .setSbn(row.getEntry().getSbn())
-                .build();
-        entry.setRow(row);
-        return entry;
+        return row.getEntry();
     }
 
     @Test

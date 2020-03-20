@@ -18,7 +18,7 @@ package android.os;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 
 import java.io.FileDescriptor;
 
@@ -182,6 +182,14 @@ public interface IBinder {
     public static final int MAX_IPC_SIZE = 64 * 1024;
 
     /**
+     * Limit that should be placed on IPC sizes, in bytes, to keep them safely under the transaction
+     * buffer limit.
+     */
+    static int getSuggestedMaxIpcSizeBytes() {
+        return MAX_IPC_SIZE;
+    }
+
+    /**
      * Get the canonical name of the interface supported by this binder.
      */
     public @Nullable String getInterfaceDescriptor() throws RemoteException;
@@ -249,6 +257,18 @@ public interface IBinder {
             @NonNull ResultReceiver resultReceiver) throws RemoteException;
 
     /**
+     * Get the binder extension of this binder interface.
+     * This allows one to customize an interface without having to modify the original interface.
+     *
+     * @return null if don't have binder extension
+     * @throws RemoteException
+     * @hide
+     */
+    public default @Nullable IBinder getExtension() throws RemoteException {
+        throw new IllegalStateException("Method is not implemented");
+    }
+
+    /**
      * Perform a generic operation with the object.
      * 
      * @param code The action to perform.  This should
@@ -277,6 +297,13 @@ public interface IBinder {
      */
     public interface DeathRecipient {
         public void binderDied();
+
+        /**
+         * @hide
+         */
+        default void binderDied(IBinder who) {
+            binderDied();
+        }
     }
 
     /**

@@ -16,15 +16,17 @@
 
 package android.accessibilityservice;
 
+import static android.accessibilityservice.util.AccessibilityUtils.getFilteredHtmlText;
+import static android.accessibilityservice.util.AccessibilityUtils.loadSafeAnimatedImage;
 import static android.content.pm.PackageManager.FEATURE_FINGERPRINT;
 
 import android.annotation.IntDef;
 import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.EnabledAfter;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -34,6 +36,7 @@ import android.content.pm.ServiceInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
+import android.graphics.drawable.Drawable;
 import android.hardware.fingerprint.FingerprintManager;
 import android.os.Build;
 import android.os.Parcel;
@@ -86,6 +89,7 @@ import java.util.List;
  * @attr ref android.R.styleable#AccessibilityService_settingsActivity
  * @attr ref android.R.styleable#AccessibilityService_nonInteractiveUiTimeout
  * @attr ref android.R.styleable#AccessibilityService_interactiveUiTimeout
+ * @attr ref android.R.styleable#AccessibilityService_canTakeScreenshot
  * @see AccessibilityService
  * @see android.view.accessibility.AccessibilityEvent
  * @see android.view.accessibility.AccessibilityManager
@@ -135,6 +139,12 @@ public class AccessibilityServiceInfo implements Parcelable {
      * @see android.R.styleable#AccessibilityService_canRequestFingerprintGestures
      */
     public static final int CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES = 0x00000040;
+
+    /**
+     * Capability: This accessibility service can take screenshot.
+     * @see android.R.styleable#AccessibilityService_canTakeScreenshot
+     */
+    public static final int CAPABILITY_CAN_TAKE_SCREENSHOT = 0x00000080;
 
     private static SparseArray<CapabilityInfo> sAvailableCapabilityInfos;
 
@@ -334,6 +344,26 @@ public class AccessibilityServiceInfo implements Parcelable {
      */
     public static final int FLAG_REQUEST_SHORTCUT_WARNING_DIALOG_SPOKEN_FEEDBACK = 0x00000400;
 
+    /**
+     * This flag requests that when {@link #FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is enabled,
+     * double tap and double tap and hold gestures are dispatched to the service rather than being
+     * handled by the framework. If {@link #FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is disabled this
+     * flag has no effect.
+     *
+     * @see #FLAG_REQUEST_TOUCH_EXPLORATION_MODE
+     */
+    public static final int FLAG_SERVICE_HANDLES_DOUBLE_TAP = 0x0000800;
+
+    /**
+     * This flag requests that when when {@link #FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is enabled,
+     * multi-finger gestures are also enabled. As a consequence, two-finger bypass gestures will be
+     * disabled. If {@link #FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is disabled this flag has no
+     * effect.
+     *
+     * @see #FLAG_REQUEST_TOUCH_EXPLORATION_MODE
+     */
+    public static final int FLAG_REQUEST_MULTI_FINGER_GESTURES = 0x0001000;
+
     /** {@hide} */
     public static final int FLAG_FORCE_DIRECT_BOOT_AWARE = 0x00010000;
 
@@ -524,11 +554,6 @@ public class AccessibilityServiceInfo implements Parcelable {
     private int mHtmlDescriptionRes;
 
     /**
-     * Non localized html description of the accessibility service.
-     */
-    private String mNonLocalizedHtmlDescription;
-
-    /**
      * Creates a new instance.
      */
     public AccessibilityServiceInfo() {
@@ -625,6 +650,10 @@ public class AccessibilityServiceInfo implements Parcelable {
                     .AccessibilityService_canRequestFingerprintGestures, false)) {
                 mCapabilities |= CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES;
             }
+            if (asAttributes.getBoolean(com.android.internal.R.styleable
+                    .AccessibilityService_canTakeScreenshot, false)) {
+                mCapabilities |= CAPABILITY_CAN_TAKE_SCREENSHOT;
+            }
             TypedValue peekedValue = asAttributes.peekValue(
                     com.android.internal.R.styleable.AccessibilityService_description);
             if (peekedValue != null) {
@@ -652,10 +681,6 @@ public class AccessibilityServiceInfo implements Parcelable {
                     com.android.internal.R.styleable.AccessibilityService_htmlDescription);
             if (peekedValue != null) {
                 mHtmlDescriptionRes = peekedValue.resourceId;
-                final CharSequence nonLocalizedHtmlDescription = peekedValue.coerceToString();
-                if (nonLocalizedHtmlDescription != null) {
-                    mNonLocalizedHtmlDescription = nonLocalizedHtmlDescription.toString().trim();
-                }
             }
             asAttributes.recycle();
         } catch (NameNotFoundException e) {
@@ -758,15 +783,36 @@ public class AccessibilityServiceInfo implements Parcelable {
     }
 
     /**
-     * The animated image resource id.
-     * <p>
-     *    <strong>Statically set from
-     *    {@link AccessibilityService#SERVICE_META_DATA meta-data}.</strong>
-     * </p>
+     * Gets the animated image resource id.
+     *
      * @return The animated image resource id.
+     *
+     * @hide
      */
     public int getAnimatedImageRes() {
         return mAnimatedImageRes;
+    }
+
+    /**
+     * The animated image drawable.
+     * <p>
+     *    Image can not exceed the screen size.
+     *    <strong>Statically set from
+     *    {@link AccessibilityService#SERVICE_META_DATA meta-data}.</strong>
+     * </p>
+     * @return The animated image drawable, or null if the resource is invalid or the image
+     * exceed the screen size.
+     *
+     * @hide
+     */
+    @Nullable
+    public Drawable loadAnimatedImage(@NonNull Context context)  {
+        if (mAnimatedImageRes == /* invalid */ 0) {
+            return null;
+        }
+
+        return loadSafeAnimatedImage(context, mResolveInfo.serviceInfo.applicationInfo,
+                mAnimatedImageRes);
     }
 
     /**
@@ -794,6 +840,7 @@ public class AccessibilityServiceInfo implements Parcelable {
      * @see #CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS
      * @see #CAPABILITY_CAN_CONTROL_MAGNIFICATION
      * @see #CAPABILITY_CAN_PERFORM_GESTURES
+     * @see #CAPABILITY_CAN_TAKE_SCREENSHOT
      */
     public int getCapabilities() {
         return mCapabilities;
@@ -810,6 +857,7 @@ public class AccessibilityServiceInfo implements Parcelable {
      * @see #CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS
      * @see #CAPABILITY_CAN_CONTROL_MAGNIFICATION
      * @see #CAPABILITY_CAN_PERFORM_GESTURES
+     * @see #CAPABILITY_CAN_TAKE_SCREENSHOT
      *
      * @hide
      */
@@ -876,24 +924,27 @@ public class AccessibilityServiceInfo implements Parcelable {
     }
 
     /**
-     * The localized html description of the accessibility service.
+     * The localized and restricted html description of the accessibility service.
      * <p>
+     *    Filters the <img> tag which do not meet the custom specification and the <a> tag.
      *    <strong>Statically set from
      *    {@link AccessibilityService#SERVICE_META_DATA meta-data}.</strong>
      * </p>
-     * @return The localized html description.
+     * @return The localized and restricted html description.
+     *
+     * @hide
      */
     @Nullable
     public String loadHtmlDescription(@NonNull PackageManager packageManager) {
-        if (mHtmlDescriptionRes == 0) {
-            return mNonLocalizedHtmlDescription;
+        if (mHtmlDescriptionRes == /* invalid */ 0) {
+            return null;
         }
 
         final ServiceInfo serviceInfo = mResolveInfo.serviceInfo;
         final CharSequence htmlDescription = packageManager.getText(serviceInfo.packageName,
                 mHtmlDescriptionRes, serviceInfo.applicationInfo);
         if (htmlDescription != null) {
-            return htmlDescription.toString().trim();
+            return getFilteredHtmlText(htmlDescription.toString().trim());
         }
         return null;
     }
@@ -984,7 +1035,6 @@ public class AccessibilityServiceInfo implements Parcelable {
         parcel.writeInt(mAnimatedImageRes);
         parcel.writeInt(mHtmlDescriptionRes);
         parcel.writeString(mNonLocalizedDescription);
-        parcel.writeString(mNonLocalizedHtmlDescription);
     }
 
     private void initFromParcel(Parcel parcel) {
@@ -1006,7 +1056,6 @@ public class AccessibilityServiceInfo implements Parcelable {
         mAnimatedImageRes = parcel.readInt();
         mHtmlDescriptionRes = parcel.readInt();
         mNonLocalizedDescription = parcel.readString();
-        mNonLocalizedHtmlDescription = parcel.readString();
     }
 
     @Override
@@ -1208,6 +1257,10 @@ public class AccessibilityServiceInfo implements Parcelable {
                 return "FLAG_INCLUDE_NOT_IMPORTANT_VIEWS";
             case FLAG_REQUEST_TOUCH_EXPLORATION_MODE:
                 return "FLAG_REQUEST_TOUCH_EXPLORATION_MODE";
+            case FLAG_SERVICE_HANDLES_DOUBLE_TAP:
+                return "FLAG_SERVICE_HANDLES_DOUBLE_TAP";
+            case FLAG_REQUEST_MULTI_FINGER_GESTURES:
+                return "FLAG_REQUEST_MULTI_FINGER_GESTURES";
             case FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY:
                 return "FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY";
             case FLAG_REPORT_VIEW_IDS:
@@ -1253,6 +1306,8 @@ public class AccessibilityServiceInfo implements Parcelable {
                 return "CAPABILITY_CAN_PERFORM_GESTURES";
             case CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES:
                 return "CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES";
+            case CAPABILITY_CAN_TAKE_SCREENSHOT:
+                return "CAPABILITY_CAN_TAKE_SCREENSHOT";
             default:
                 return "UNKNOWN";
         }
@@ -1314,6 +1369,10 @@ public class AccessibilityServiceInfo implements Parcelable {
                     new CapabilityInfo(CAPABILITY_CAN_PERFORM_GESTURES,
                             R.string.capability_title_canPerformGestures,
                             R.string.capability_desc_canPerformGestures));
+            sAvailableCapabilityInfos.put(CAPABILITY_CAN_TAKE_SCREENSHOT,
+                    new CapabilityInfo(CAPABILITY_CAN_TAKE_SCREENSHOT,
+                            R.string.capability_title_canTakeScreenshot,
+                            R.string.capability_desc_canTakeScreenshot));
             if ((context == null) || fingerprintAvailable(context)) {
                 sAvailableCapabilityInfos.put(CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES,
                         new CapabilityInfo(CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES,

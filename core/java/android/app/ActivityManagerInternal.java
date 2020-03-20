@@ -45,8 +45,19 @@ public abstract class ActivityManagerInternal {
 
     // Access modes for handleIncomingUser.
     public static final int ALLOW_NON_FULL = 0;
+    /**
+     * Allows access to a caller with {@link android.Manifest.permission#INTERACT_ACROSS_USERS}
+     * if in the same profile group.
+     * Otherwise, {@link android.Manifest.permission#INTERACT_ACROSS_USERS_FULL} is required.
+     */
     public static final int ALLOW_NON_FULL_IN_PROFILE = 1;
     public static final int ALLOW_FULL_ONLY = 2;
+    /**
+     * Allows access to a caller with {@link android.Manifest.permission#INTERACT_ACROSS_PROFILES}
+     * or {@link android.Manifest.permission#INTERACT_ACROSS_USERS} if in the same profile group.
+     * Otherwise, {@link android.Manifest.permission#INTERACT_ACROSS_USERS_FULL} is required.
+     */
+    public static final int ALLOW_ALL_PROFILE_PERMISSIONS_IN_PROFILE = 3;
 
     /**
      * Verify that calling app has access to the given provider.
@@ -258,16 +269,19 @@ public abstract class ActivityManagerInternal {
 
     public abstract void tempWhitelistForPendingIntent(int callerPid, int callerUid, int targetUid,
             long duration, String tag);
-    public abstract int broadcastIntentInPackage(String packageName, int uid, int realCallingUid,
-            int realCallingPid, Intent intent, String resolvedType, IIntentReceiver resultTo,
-            int resultCode, String resultData, Bundle resultExtras, String requiredPermission,
-            Bundle bOptions, boolean serialized, boolean sticky, @UserIdInt int userId,
-            boolean allowBackgroundActivityStarts);
+
+    public abstract int broadcastIntentInPackage(String packageName, @Nullable String featureId,
+            int uid, int realCallingUid, int realCallingPid, Intent intent, String resolvedType,
+            IIntentReceiver resultTo, int resultCode, String resultData, Bundle resultExtras,
+            String requiredPermission, Bundle bOptions, boolean serialized, boolean sticky,
+            @UserIdInt int userId, boolean allowBackgroundActivityStarts);
+
     public abstract ComponentName startServiceInPackage(int uid, Intent service,
-            String resolvedType, boolean fgRequired, String callingPackage, @UserIdInt int userId,
+            String resolvedType, boolean fgRequired, String callingPackage,
+            @Nullable String callingFeatureId, @UserIdInt int userId,
             boolean allowBackgroundActivityStarts) throws TransactionTooLargeException;
 
-    public abstract void disconnectActivityFromServices(Object connectionHolder, Object conns);
+    public abstract void disconnectActivityFromServices(Object connectionHolder);
     public abstract void cleanUpServices(@UserIdInt int userId, ComponentName component,
             Intent baseIntent);
     public abstract ActivityInfo getActivityInfoForUser(ActivityInfo aInfo, @UserIdInt int userId);
@@ -277,6 +291,9 @@ public abstract class ActivityManagerInternal {
     /** Returns true if the background activity starts is enabled. */
     public abstract boolean isBackgroundActivityStartsEnabled();
     public abstract void reportCurKeyguardUsageEvent(boolean keyguardShowing);
+
+    /** @see com.android.server.am.ActivityManagerService#monitor */
+    public abstract void monitor();
 
     /** Input dispatch timeout to a window, start the ANR process. */
     public abstract long inputDispatchingTimedOut(int pid, boolean aboveSystem, String reason);
@@ -353,4 +370,20 @@ public abstract class ActivityManagerInternal {
      * Unregisters the specified {@code processObserver}.
      */
     public abstract void unregisterProcessObserver(IProcessObserver processObserver);
+
+    /**
+     * Checks if there is an unfinished instrumentation that targets the given uid.
+     *
+     * @param uid The uid to be checked for
+     *
+     * @return True, if there is an instrumentation whose target application uid matches the given
+     * uid, false otherwise
+     */
+    public abstract boolean isUidCurrentlyInstrumented(int uid);
+
+    /**
+     * Show a debug toast, asking user to file a bugreport.
+     */
+    // TODO: remove this toast after feature development is done
+    public abstract void showWhileInUseDebugToast(int uid, int op, int mode);
 }

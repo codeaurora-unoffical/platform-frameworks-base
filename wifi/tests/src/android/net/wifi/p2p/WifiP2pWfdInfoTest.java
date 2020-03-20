@@ -45,6 +45,7 @@ public class WifiP2pWfdInfoTest {
         // initialize device info flags.
         mSourceInfo.setDeviceType(WifiP2pWfdInfo.DEVICE_TYPE_WFD_SOURCE);
         mSourceInfo.setSessionAvailable(true);
+        mSourceInfo.setContentProtectionSupported(true);
     }
 
     /**
@@ -54,8 +55,8 @@ public class WifiP2pWfdInfoTest {
     public void testSettersGetters() throws Exception {
         WifiP2pWfdInfo info = new WifiP2pWfdInfo();
 
-        info.setWfdEnabled(true);
-        assertTrue(info.isWfdEnabled());
+        info.setEnabled(true);
+        assertTrue(info.isEnabled());
 
         info.setDeviceType(WifiP2pWfdInfo.DEVICE_TYPE_WFD_SOURCE);
         assertEquals(WifiP2pWfdInfo.DEVICE_TYPE_WFD_SOURCE, info.getDeviceType());
@@ -63,13 +64,16 @@ public class WifiP2pWfdInfoTest {
         info.setSessionAvailable(true);
         assertTrue(info.isSessionAvailable());
 
+        info.setContentProtectionSupported(true);
+        assertTrue(info.isContentProtectionSupported());
+
         info.setControlPort(TEST_CTRL_PORT);
         assertEquals(TEST_CTRL_PORT, info.getControlPort());
 
         info.setMaxThroughput(TEST_MAX_TPUT);
         assertEquals(TEST_MAX_TPUT, info.getMaxThroughput());
 
-        assertEquals("0010270f0400", info.getDeviceInfoHex());
+        assertEquals("0110270f0400", info.getDeviceInfoHex());
     }
 
     /**

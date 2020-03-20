@@ -27,6 +27,9 @@ import android.test.suitebuilder.annotation.SmallTest
 import android.testing.AndroidTestingRunner
 import android.testing.TestableLooper
 import com.android.systemui.SysuiTestCase
+import com.android.systemui.dump.DumpManager
+import com.android.systemui.util.concurrency.FakeExecutor
+import com.android.systemui.util.time.FakeSystemClock
 import junit.framework.Assert.assertSame
 import org.junit.Before
 import org.junit.Test
@@ -39,6 +42,7 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
+import java.util.concurrent.Executor
 
 @RunWith(AndroidTestingRunner::class)
 @TestableLooper.RunWithLooper
@@ -73,6 +77,8 @@ class BroadcastDispatcherTest : SysuiTestCase() {
     @Mock
     private lateinit var mockHandler: Handler
 
+    private lateinit var executor: Executor
+
     @Captor
     private lateinit var argumentCaptor: ArgumentCaptor<ReceiverData>
 
@@ -83,11 +89,13 @@ class BroadcastDispatcherTest : SysuiTestCase() {
     fun setUp() {
         MockitoAnnotations.initMocks(this)
         testableLooper = TestableLooper.get(this)
+        executor = FakeExecutor(FakeSystemClock())
 
         broadcastDispatcher = TestBroadcastDispatcher(
                 mockContext,
                 Handler(testableLooper.looper),
                 testableLooper.looper,
+                mock(DumpManager::class.java),
                 mapOf(0 to mockUBRUser0, 1 to mockUBRUser1))
 
         // These should be valid filters
@@ -98,8 +106,9 @@ class BroadcastDispatcherTest : SysuiTestCase() {
 
     @Test
     fun testAddingReceiverToCorrectUBR() {
-        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, mockHandler, user0)
-        broadcastDispatcher.registerReceiver(
+        broadcastDispatcher.registerReceiverWithHandler(broadcastReceiver, intentFilter,
+                mockHandler, user0)
+        broadcastDispatcher.registerReceiverWithHandler(
                 broadcastReceiverOther, intentFilterOther, mockHandler, user1)
 
         testableLooper.processAllMessages()
@@ -115,9 +124,29 @@ class BroadcastDispatcherTest : SysuiTestCase() {
     }
 
     @Test
+    fun testAddingReceiverToCorrectUBR_executor() {
+        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, executor, user0)
+        broadcastDispatcher.registerReceiver(
+                broadcastReceiverOther, intentFilterOther, executor, user1)
+
+        testableLooper.processAllMessages()
+
+        verify(mockUBRUser0).registerReceiver(capture(argumentCaptor))
+
+        assertSame(broadcastReceiver, argumentCaptor.value.receiver)
+        assertSame(intentFilter, argumentCaptor.value.filter)
+
+        verify(mockUBRUser1).registerReceiver(capture(argumentCaptor))
+        assertSame(broadcastReceiverOther, argumentCaptor.value.receiver)
+        assertSame(intentFilterOther, argumentCaptor.value.filter)
+    }
+
+    @Test
     fun testRemovingReceiversRemovesFromAllUBR() {
-        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, mockHandler, user0)
-        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, mockHandler, user1)
+        broadcastDispatcher.registerReceiverWithHandler(broadcastReceiver, intentFilter,
+                mockHandler, user0)
+        broadcastDispatcher.registerReceiverWithHandler(broadcastReceiver, intentFilter,
+                mockHandler, user1)
 
         broadcastDispatcher.unregisterReceiver(broadcastReceiver)
 
@@ -129,8 +158,10 @@ class BroadcastDispatcherTest : SysuiTestCase() {
 
     @Test
     fun testRemoveReceiverFromUser() {
-        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, mockHandler, user0)
-        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, mockHandler, user1)
+        broadcastDispatcher.registerReceiverWithHandler(broadcastReceiver, intentFilter,
+                mockHandler, user0)
+        broadcastDispatcher.registerReceiverWithHandler(broadcastReceiver, intentFilter,
+                mockHandler, user1)
 
         broadcastDispatcher.unregisterReceiverForUser(broadcastReceiver, user0)
 
@@ -143,8 +174,8 @@ class BroadcastDispatcherTest : SysuiTestCase() {
     @Test
     fun testRegisterCurrentAsActualUser() {
         setUserMock(mockContext, user1)
-        broadcastDispatcher.registerReceiver(broadcastReceiver, intentFilter, mockHandler,
-                UserHandle.CURRENT)
+        broadcastDispatcher.registerReceiverWithHandler(broadcastReceiver, intentFilter,
+                mockHandler, UserHandle.CURRENT)
 
         testableLooper.processAllMessages()
 
@@ -207,8 +238,9 @@ class BroadcastDispatcherTest : SysuiTestCase() {
         context: Context,
         mainHandler: Handler,
         bgLooper: Looper,
+        dumpManager: DumpManager,
         var mockUBRMap: Map<Int, UserBroadcastDispatcher>
-    ) : BroadcastDispatcher(context, mainHandler, bgLooper) {
+    ) : BroadcastDispatcher(context, mainHandler, bgLooper, dumpManager) {
         override fun createUBRForUser(userId: Int): UserBroadcastDispatcher {
             return mockUBRMap.getOrDefault(userId, mock(UserBroadcastDispatcher::class.java))
         }

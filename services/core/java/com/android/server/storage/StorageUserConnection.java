@@ -48,6 +48,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -59,7 +60,8 @@ import java.util.concurrent.TimeoutException;
  */
 public final class StorageUserConnection {
     private static final String TAG = "StorageUserConnection";
-    private static final int REMOTE_TIMEOUT_SECONDS = 15;
+
+    public static final int REMOTE_TIMEOUT_SECONDS = 5;
 
     private final Object mLock = new Object();
     private final Context mContext;
@@ -69,7 +71,7 @@ public final class StorageUserConnection {
     @GuardedBy("mLock") private final Map<String, Session> mSessions = new HashMap<>();
 
     public StorageUserConnection(Context context, int userId, StorageSessionController controller) {
-        mContext = Preconditions.checkNotNull(context);
+        mContext = Objects.requireNonNull(context);
         mUserId = Preconditions.checkArgumentNonnegative(userId);
         mSessionController = controller;
     }
@@ -83,10 +85,10 @@ public final class StorageUserConnection {
      */
     public void startSession(String sessionId, ParcelFileDescriptor pfd, String upperPath,
             String lowerPath) throws ExternalStorageServiceException {
-        Preconditions.checkNotNull(sessionId);
-        Preconditions.checkNotNull(pfd);
-        Preconditions.checkNotNull(upperPath);
-        Preconditions.checkNotNull(lowerPath);
+        Objects.requireNonNull(sessionId);
+        Objects.requireNonNull(pfd);
+        Objects.requireNonNull(upperPath);
+        Objects.requireNonNull(lowerPath);
 
         prepareRemote();
         synchronized (mLock) {

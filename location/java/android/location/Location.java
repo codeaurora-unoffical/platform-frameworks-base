@@ -16,10 +16,9 @@
 
 package android.location;
 
-import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcel;
@@ -65,23 +64,18 @@ public class Location implements Parcelable {
     public static final int FORMAT_SECONDS = 2;
 
     /**
-     * Bundle key for a version of the location that has been fed through
-     * LocationFudger. Allows location providers to flag locations as being
-     * safe for use with ACCESS_COARSE_LOCATION permission.
-     *
-     * @hide
-     */
-    public static final String EXTRA_COARSE_LOCATION = "coarseLocation";
-
-    /**
      * Bundle key for a version of the location containing no GPS data.
      * Allows location providers to flag locations as being safe to
      * feed to LocationFudger.
      *
      * @hide
+     * @deprecated As of Android R, this extra is longer in use, since it is not necessary to keep
+     * gps locations separate from other locations for coarsening. Providers that do not need to
+     * support platforms below Android R should not use this constant.
      */
     @TestApi
     @SystemApi
+    @Deprecated
     public static final String EXTRA_NO_GPS_LOCATION = "noGPSLocation";
 
     /**
@@ -1211,23 +1205,6 @@ public class Location implements Parcelable {
             }
         }
         return null;
-    }
-
-    /**
-     * Attaches an extra {@link Location} to this Location. This is useful for location providers
-     * to set the {@link #EXTRA_NO_GPS_LOCATION} extra to provide coarse locations for clients.
-     *
-     * @param key the key associated with the Location extra
-     * @param value the Location to attach
-     * @hide
-     */
-    @TestApi
-    @SystemApi
-    public void setExtraLocation(@Nullable String key, @Nullable Location value) {
-        if (mExtras == null) {
-            mExtras = new Bundle();
-        }
-        mExtras.putParcelable(key, value);
     }
 
     /**

@@ -38,7 +38,6 @@ import android.util.Slog;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.ArrayUtils;
-import com.android.internal.util.Preconditions;
 import com.android.internal.widget.ICheckCredentialProgressCallback;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.internal.widget.LockscreenCredential;
@@ -57,6 +56,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 
 
@@ -228,8 +228,8 @@ public class SyntheticPasswordManager {
          * by {@link #setEscrowData} before calling this.
          */
         public void recreateFromEscrow(byte[] escrowSplit0) {
-            Preconditions.checkNotNull(mEscrowSplit1);
-            Preconditions.checkNotNull(mEncryptedEscrowSplit0);
+            Objects.requireNonNull(mEscrowSplit1);
+            Objects.requireNonNull(mEncryptedEscrowSplit0);
             recreate(escrowSplit0, mEscrowSplit1);
         }
 
@@ -283,6 +283,14 @@ public class SyntheticPasswordManager {
          */
         public byte[] getSyntheticPassword() {
             return mSyntheticPassword;
+        }
+
+        /**
+         * Returns the version of this AuthenticationToken for use with reconstructing
+         * this with a synthetic password version.
+         */
+        public byte getVersion() {
+            return mVersion;
         }
     }
 
@@ -582,8 +590,8 @@ public class SyntheticPasswordManager {
             throw new IllegalStateException("Failed to create new SID for user", e);
         }
         if (response.getResponseCode() != GateKeeperResponse.RESPONSE_OK) {
-            Slog.e(TAG, "Fail to create new SID for user " + userId);
-            return;
+            throw new IllegalStateException("Fail to create new SID for user " + userId
+                    + " response: " + response.getResponseCode());
         }
         saveSyntheticPasswordHandle(response.getPayload(), userId);
     }

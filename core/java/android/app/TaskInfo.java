@@ -16,15 +16,18 @@
 
 package android.app;
 
+import static android.content.pm.ActivityInfo.RESIZE_MODE_UNRESIZEABLE;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.util.Log;
+import android.view.IWindowContainer;
 
 /**
  * Stores information about a particular Task.
@@ -138,6 +141,26 @@ public class TaskInfo {
     @UnsupportedAppUsage
     public final Configuration configuration = new Configuration();
 
+    /**
+     * Used as an opaque identifier for this task.
+     * @hide
+     */
+    @NonNull
+    public IWindowContainer token;
+
+    /**
+     * The PictureInPictureParams for the Task, if set.
+     * @hide
+     */
+    @Nullable
+    public PictureInPictureParams pictureInPictureParams;
+
+    /**
+     * The activity type of the top activity in this task.
+     * @hide
+     */
+    public @WindowConfiguration.ActivityType int topActivityType;
+
     TaskInfo() {
         // Do nothing
     }
@@ -147,17 +170,22 @@ public class TaskInfo {
     }
 
     /**
-     * @param reducedResolution
+     * @param isLowResolution
      * @return
      * @hide
      */
-    public ActivityManager.TaskSnapshot getTaskSnapshot(boolean reducedResolution) {
+    public ActivityManager.TaskSnapshot getTaskSnapshot(boolean isLowResolution) {
         try {
-            return ActivityManager.getService().getTaskSnapshot(taskId, reducedResolution);
+            return ActivityManager.getService().getTaskSnapshot(taskId, isLowResolution);
         } catch (RemoteException e) {
             Log.e(TAG, "Failed to get task snapshot, taskId=" + taskId, e);
             return null;
         }
+    }
+
+    /** @hide */
+    public boolean isResizable() {
+        return resizeMode != RESIZE_MODE_UNRESIZEABLE;
     }
 
     /**
@@ -186,6 +214,11 @@ public class TaskInfo {
         supportsSplitScreenMultiWindow = source.readBoolean();
         resizeMode = source.readInt();
         configuration.readFromParcel(source);
+        token = IWindowContainer.Stub.asInterface(source.readStrongBinder());
+        topActivityType = source.readInt();
+        pictureInPictureParams = source.readInt() != 0
+            ? PictureInPictureParams.CREATOR.createFromParcel(source)
+            : null;
     }
 
     /**
@@ -221,6 +254,14 @@ public class TaskInfo {
         dest.writeBoolean(supportsSplitScreenMultiWindow);
         dest.writeInt(resizeMode);
         configuration.writeToParcel(dest, flags);
+        dest.writeStrongInterface(token);
+        dest.writeInt(topActivityType);
+        if (pictureInPictureParams == null) {
+            dest.writeInt(0);
+        } else {
+            dest.writeInt(1);
+            pictureInPictureParams.writeToParcel(dest, flags);
+        }
     }
 
     @Override
@@ -234,6 +275,9 @@ public class TaskInfo {
                 + " numActivities=" + numActivities
                 + " lastActiveTime=" + lastActiveTime
                 + " supportsSplitScreenMultiWindow=" + supportsSplitScreenMultiWindow
-                + " resizeMode=" + resizeMode;
+                + " resizeMode=" + resizeMode
+                + " token=" + token
+                + " topActivityType=" + topActivityType
+                + " pictureInPictureParams=" + pictureInPictureParams;
     }
 }

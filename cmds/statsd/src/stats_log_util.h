@@ -19,9 +19,9 @@
 #include <android/util/ProtoOutputStream.h>
 #include "FieldValue.h"
 #include "HashableDimensionKey.h"
+#include "atoms_info.h"
 #include "frameworks/base/cmds/statsd/src/statsd_config.pb.h"
 #include "guardrail/StatsdStats.h"
-#include "statslog.h"
 
 namespace android {
 namespace os {
@@ -95,8 +95,15 @@ bool parseProtoOutputStream(util::ProtoOutputStream& protoOutput, T* message) {
 // Returns the truncated timestamp to the nearest 5 minutes if needed.
 int64_t truncateTimestampIfNecessary(int atomId, int64_t timestampNs);
 
+// Checks permission for given pid and uid.
+bool checkPermissionForIds(const char* permission, pid_t pid, uid_t uid);
+
 inline bool isVendorPulledAtom(int atomId) {
     return atomId >= StatsdStats::kVendorPulledAtomStartTag && atomId < StatsdStats::kMaxAtomTag;
+}
+
+inline bool isPulledAtom(int atomId) {
+    return atomId >= StatsdStats::kPullAtomStartTag && atomId < StatsdStats::kVendorAtomStartTag;
 }
 
 }  // namespace statsd

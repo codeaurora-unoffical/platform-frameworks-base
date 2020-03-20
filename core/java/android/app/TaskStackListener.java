@@ -16,8 +16,8 @@
 
 package android.app;
 
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityManager.TaskSnapshot;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.os.Binder;
 import android.os.IBinder;
@@ -54,16 +54,6 @@ public abstract class TaskStackListener extends ITaskStackListener.Stub {
     @Override
     @UnsupportedAppUsage
     public void onPinnedActivityRestartAttempt(boolean clearedTask) throws RemoteException {
-    }
-
-    @Override
-    @UnsupportedAppUsage
-    public void onPinnedStackAnimationStarted() throws RemoteException {
-    }
-
-    @Override
-    @UnsupportedAppUsage
-    public void onPinnedStackAnimationEnded() throws RemoteException {
     }
 
     @Override
@@ -198,5 +188,9 @@ public abstract class TaskStackListener extends ITaskStackListener.Stub {
 
     @Override
     public void onRecentTaskListFrozenChanged(boolean frozen) {
+    }
+
+    @Override
+    public void onTaskFocusChanged(int taskId, boolean focused) {
     }
 }

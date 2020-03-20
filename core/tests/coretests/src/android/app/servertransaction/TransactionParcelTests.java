@@ -37,6 +37,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ProviderInfo;
+import android.content.pm.ProviderInfoList;
 import android.content.pm.ServiceInfo;
 import android.content.res.CompatibilityInfo;
 import android.content.res.Configuration;
@@ -61,6 +62,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -180,31 +182,6 @@ public class TransactionParcelTests {
     }
 
     @Test
-    public void testWindowVisibilityChange() {
-        // Write to parcel
-        WindowVisibilityItem item = WindowVisibilityItem.obtain(true /* showWindow */);
-        writeAndPrepareForReading(item);
-
-        // Read from parcel and assert
-        WindowVisibilityItem result = WindowVisibilityItem.CREATOR.createFromParcel(mParcel);
-
-        assertEquals(item.hashCode(), result.hashCode());
-        assertTrue(item.equals(result));
-
-        // Check different value
-        item = WindowVisibilityItem.obtain(false);
-
-        mParcel = Parcel.obtain();
-        writeAndPrepareForReading(item);
-
-        // Read from parcel and assert
-        result = WindowVisibilityItem.CREATOR.createFromParcel(mParcel);
-
-        assertEquals(item.hashCode(), result.hashCode());
-        assertTrue(item.equals(result));
-    }
-
-    @Test
     public void testDestroy() {
         DestroyActivityItem item = DestroyActivityItem.obtain(true /* finished */,
                 135 /* configChanges */);
@@ -299,8 +276,7 @@ public class TransactionParcelTests {
     @Test
     public void testStop() {
         // Write to parcel
-        StopActivityItem item = StopActivityItem.obtain(true /* showWindow */,
-                14 /* configChanges */);
+        StopActivityItem item = StopActivityItem.obtain(14 /* configChanges */);
         writeAndPrepareForReading(item);
 
         // Read from parcel and assert
@@ -311,14 +287,26 @@ public class TransactionParcelTests {
     }
 
     @Test
+    public void testStart() {
+        // Write to parcel
+        StartActivityItem item = StartActivityItem.obtain();
+        writeAndPrepareForReading(item);
+
+        // Read from parcel and assert
+        StartActivityItem result = StartActivityItem.CREATOR.createFromParcel(mParcel);
+
+        assertEquals(item.hashCode(), result.hashCode());
+        assertEquals(item, result);
+    }
+
+    @Test
     public void testClientTransaction() {
         // Write to parcel
-        WindowVisibilityItem callback1 = WindowVisibilityItem.obtain(true);
+        NewIntentItem callback1 = NewIntentItem.obtain(new ArrayList<>(), true);
         ActivityConfigurationChangeItem callback2 = ActivityConfigurationChangeItem.obtain(
                 config());
 
-        StopActivityItem lifecycleRequest = StopActivityItem.obtain(true /* showWindow */,
-                78 /* configChanges */);
+        StopActivityItem lifecycleRequest = StopActivityItem.obtain(78 /* configChanges */);
 
         IApplicationThread appThread = new StubAppThread();
         Binder activityToken = new Binder();
@@ -340,7 +328,7 @@ public class TransactionParcelTests {
     @Test
     public void testClientTransactionCallbacksOnly() {
         // Write to parcel
-        WindowVisibilityItem callback1 = WindowVisibilityItem.obtain(true);
+        NewIntentItem callback1 = NewIntentItem.obtain(new ArrayList<>(), true);
         ActivityConfigurationChangeItem callback2 = ActivityConfigurationChangeItem.obtain(
                 config());
 
@@ -363,8 +351,7 @@ public class TransactionParcelTests {
     @Test
     public void testClientTransactionLifecycleOnly() {
         // Write to parcel
-        StopActivityItem lifecycleRequest = StopActivityItem.obtain(true /* showWindow */,
-                78 /* configChanges */);
+        StopActivityItem lifecycleRequest = StopActivityItem.obtain(78 /* configChanges */);
 
         IApplicationThread appThread = new StubAppThread();
         Binder activityToken = new Binder();
@@ -411,7 +398,7 @@ public class TransactionParcelTests {
 
         @Override
         public void bindApplication(String s, ApplicationInfo applicationInfo,
-                List<ProviderInfo> list, ComponentName componentName, ProfilerInfo profilerInfo,
+                ProviderInfoList list, ComponentName componentName, ProfilerInfo profilerInfo,
                 Bundle bundle, IInstrumentationWatcher iInstrumentationWatcher,
                 IUiAutomationConnection iUiAutomationConnection, int i, boolean b, boolean b1,
                 boolean b2, boolean b3, Configuration configuration,
@@ -459,10 +446,6 @@ public class TransactionParcelTests {
 
         @Override
         public void scheduleLowMemory() throws RemoteException {
-        }
-
-        @Override
-        public void scheduleSleeping(IBinder iBinder, boolean b) throws RemoteException {
         }
 
         @Override

@@ -16,12 +16,17 @@
 
 package com.android.systemui.shared.recents;
 
+import android.graphics.Bitmap;
+import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.view.MotionEvent;
 
+import com.android.systemui.shared.recents.IPinnedStackAnimationListener;
+
 /**
  * Temporary callbacks into SystemUI.
+ * Next id = 25
  */
 interface ISystemUiProxy {
 
@@ -114,4 +119,25 @@ interface ISystemUiProxy {
      * Sets the shelf height and visibility.
      */
     void setShelfHeight(boolean visible, int shelfHeight) = 20;
+
+    /**
+     * Handle the provided image as if it was a screenshot.
+     */
+    void handleImageAsScreenshot(in Bitmap screenImage, in Rect locationInScreen,
+              in Insets visibleInsets, int taskId) = 21;
+
+    /**
+     * Sets the split-screen divider minimized state
+     */
+    void setSplitScreenMinimized(boolean minimized) = 22;
+
+    /*
+     * Notifies that the swipe-to-home (recents animation) is finished.
+     */
+    void notifySwipeToHomeFinished() = 23;
+
+    /**
+     * Sets listener to get pinned stack animation callbacks.
+     */
+    void setPinnedStackAnimationListener(IPinnedStackAnimationListener listener) = 24;
 }

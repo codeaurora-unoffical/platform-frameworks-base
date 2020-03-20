@@ -16,15 +16,32 @@
 
 package com.android.server.appop;
 
+import static android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA;
 import static android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION;
-import static android.app.AppOpsManager.MAX_PRIORITY_UID_STATE;
-import static android.app.AppOpsManager.MIN_PRIORITY_UID_STATE;
+import static android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
+import static android.app.AppOpsManager.CALL_BACK_ON_CHANGED_LISTENER_WITH_SWITCHED_OP_CHANGE;
+import static android.app.AppOpsManager.FILTER_BY_FEATURE_ID;
+import static android.app.AppOpsManager.FILTER_BY_OP_NAMES;
+import static android.app.AppOpsManager.FILTER_BY_PACKAGE_NAME;
+import static android.app.AppOpsManager.FILTER_BY_UID;
+import static android.app.AppOpsManager.HistoricalOpsRequestFilter;
+import static android.app.AppOpsManager.KEY_BG_STATE_SETTLE_TIME;
+import static android.app.AppOpsManager.KEY_FG_SERVICE_STATE_SETTLE_TIME;
+import static android.app.AppOpsManager.KEY_TOP_STATE_SETTLE_TIME;
+import static android.app.AppOpsManager.MODE_ALLOWED;
+import static android.app.AppOpsManager.MODE_FOREGROUND;
+import static android.app.AppOpsManager.MODE_IGNORED;
+import static android.app.AppOpsManager.NoteOpEvent;
 import static android.app.AppOpsManager.OP_CAMERA;
-import static android.app.AppOpsManager.OP_COARSE_LOCATION;
 import static android.app.AppOpsManager.OP_FLAGS_ALL;
+import static android.app.AppOpsManager.OP_FLAG_SELF;
+import static android.app.AppOpsManager.OP_FLAG_TRUSTED_PROXIED;
 import static android.app.AppOpsManager.OP_NONE;
 import static android.app.AppOpsManager.OP_PLAY_AUDIO;
 import static android.app.AppOpsManager.OP_RECORD_AUDIO;
+import static android.app.AppOpsManager.OpEventProxyInfo;
+import static android.app.AppOpsManager.SAMPLING_STRATEGY_RARELY_USED;
+import static android.app.AppOpsManager.SAMPLING_STRATEGY_UNIFORM;
 import static android.app.AppOpsManager.UID_STATE_BACKGROUND;
 import static android.app.AppOpsManager.UID_STATE_CACHED;
 import static android.app.AppOpsManager.UID_STATE_FOREGROUND;
@@ -32,21 +49,34 @@ import static android.app.AppOpsManager.UID_STATE_FOREGROUND_SERVICE;
 import static android.app.AppOpsManager.UID_STATE_MAX_LAST_NON_RESTRICTED;
 import static android.app.AppOpsManager.UID_STATE_PERSISTENT;
 import static android.app.AppOpsManager.UID_STATE_TOP;
+import static android.app.AppOpsManager.WATCH_FOREGROUND_CHANGES;
 import static android.app.AppOpsManager._NUM_OP;
+import static android.app.AppOpsManager.extractFlagsFromKey;
+import static android.app.AppOpsManager.extractUidStateFromKey;
+import static android.app.AppOpsManager.makeKey;
 import static android.app.AppOpsManager.modeToName;
 import static android.app.AppOpsManager.opToName;
+import static android.app.AppOpsManager.opToPublicName;
 import static android.app.AppOpsManager.resolveFirstUnrestrictedUidState;
+import static android.content.Intent.ACTION_PACKAGE_REMOVED;
+import static android.content.Intent.EXTRA_REPLACING;
 import static android.content.pm.PermissionInfo.PROTECTION_DANGEROUS;
+import static android.content.pm.PermissionInfo.PROTECTION_FLAG_APPOP;
+
+import static com.android.server.appop.AppOpsService.ModeCallback.ALL_OPS;
+
+import static java.lang.Long.max;
 
 import android.Manifest;
+import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
+import android.app.ActivityManagerInternal;
 import android.app.ActivityThread;
 import android.app.AppGlobals;
 import android.app.AppOpsManager;
 import android.app.AppOpsManager.HistoricalOps;
-import android.app.AppOpsManager.HistoricalOpsRequest;
 import android.app.AppOpsManager.Mode;
 import android.app.AppOpsManager.OpEntry;
 import android.app.AppOpsManager.OpFeatureEntry;
@@ -54,6 +84,9 @@ import android.app.AppOpsManager.OpFlags;
 import android.app.AppOpsManagerInternal;
 import android.app.AppOpsManagerInternal.CheckOpsDelegate;
 import android.app.AsyncNotedAppOp;
+import android.app.RuntimeAppOpAccessMessage;
+import android.app.SyncNotedAppOp;
+import android.compat.Compatibility;
 import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -61,10 +94,12 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.PermissionInfo;
 import android.content.pm.UserInfo;
+import android.content.pm.parsing.component.ParsedFeature;
 import android.database.ContentObserver;
 import android.hardware.camera2.CameraDevice.CAMERA_AUDIO_RESTRICTION;
 import android.net.Uri;
@@ -93,8 +128,8 @@ import android.util.ArraySet;
 import android.util.AtomicFile;
 import android.util.KeyValueListParser;
 import android.util.LongSparseArray;
-import android.util.LongSparseLongArray;
 import android.util.Pair;
+import android.util.Pools.SimplePool;
 import android.util.Slog;
 import android.util.SparseArray;
 import android.util.SparseBooleanArray;
@@ -103,15 +138,16 @@ import android.util.TimeUtils;
 import android.util.Xml;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.Immutable;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IAppOpsActiveCallback;
 import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsNotedCallback;
 import com.android.internal.app.IAppOpsService;
+import com.android.internal.app.MessageSamplingConfig;
 import com.android.internal.os.Zygote;
 import com.android.internal.util.ArrayUtils;
-import com.android.internal.util.CollectionUtils;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.util.FastXmlSerializer;
 import com.android.internal.util.Preconditions;
@@ -119,9 +155,15 @@ import com.android.internal.util.XmlUtils;
 import com.android.internal.util.function.pooled.PooledLambda;
 import com.android.server.LocalServices;
 import com.android.server.LockGuard;
+import com.android.server.SystemServerInitThreadPool;
+import com.android.server.SystemServiceManager;
+import com.android.server.pm.PackageList;
+import com.android.server.pm.parsing.pkg.AndroidPackage;
 
 import libcore.util.EmptyArray;
 
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 import org.xmlpull.v1.XmlSerializer;
@@ -131,10 +173,13 @@ import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -144,10 +189,18 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Scanner;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 
 public class AppOpsService extends IAppOpsService.Stub {
     static final String TAG = "AppOps";
     static final boolean DEBUG = false;
+
+    /**
+     * Used for data access validation collection, we wish to only log a specific access once
+     */
+    private final ArraySet<NoteOpTrace> mNoteOpCallerStacktraces = new ArraySet<>();
 
     private static final int NO_VERSION = -1;
     /** Increment by one every time and add the corresponding upgrade logic in
@@ -192,16 +245,30 @@ public class AppOpsService extends IAppOpsService.Stub {
     };
 
     private static final int MAX_UNFORWARED_OPS = 10;
+    private static final int MAX_UNUSED_POOLED_OBJECTS = 3;
 
-    Context mContext;
+    //TODO: remove this when development is done.
+    private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_LOCATION = 1 << 31;
+
+    final Context mContext;
     final AtomicFile mFile;
+    private final @Nullable File mNoteOpCallerStacktracesFile;
     final Handler mHandler;
+
+    /** Pool for {@link OpEventProxyInfoPool} to avoid to constantly reallocate new objects */
+    @GuardedBy("this")
+    private final OpEventProxyInfoPool mOpEventProxyInfoPool = new OpEventProxyInfoPool();
+
+    /** Pool for {@link InProgressStartOpEventPool} to avoid to constantly reallocate new objects */
+    @GuardedBy("this")
+    private final InProgressStartOpEventPool mInProgressStartOpEventPool =
+            new InProgressStartOpEventPool();
 
     private final AppOpsManagerInternalImpl mAppOpsManagerInternal
             = new AppOpsManagerInternalImpl();
 
     /**
-     * Registered callbacks, called from {@link #noteAsyncOp}.
+     * Registered callbacks, called from {@link #collectAsyncNotedOp}.
      *
      * <p>(package name, uid) -> callbacks
      *
@@ -212,7 +279,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             mAsyncOpWatchers = new ArrayMap<>();
 
     /**
-     * Async note-ops collected from {@link #noteAsyncOp} that have not been delivered to a
+     * Async note-ops collected from {@link #collectAsyncNotedOp} that have not been delivered to a
      * callback yet.
      *
      * <p>(package name, uid) -> list&lt;ops&gt;
@@ -222,6 +289,8 @@ public class AppOpsService extends IAppOpsService.Stub {
     @GuardedBy("this")
     private final ArrayMap<Pair<String, Integer>, ArrayList<AsyncNotedAppOp>>
             mUnforwardedAsyncNotedOps = new ArrayMap<>();
+
+    boolean mWriteNoteOpsScheduled;
 
     boolean mWriteScheduled;
     boolean mFastWriteScheduled;
@@ -259,8 +328,81 @@ public class AppOpsService extends IAppOpsService.Stub {
     @GuardedBy("this")
     private CheckOpsDelegate mCheckOpsDelegate;
 
+    /**
+      * Reverse lookup for {@link AppOpsManager#opToSwitch(int)}. Initialized once and never
+      * changed
+      */
+    private final SparseArray<int[]> mSwitchedOps = new SparseArray<>();
+
+    private ActivityManagerInternal mActivityManagerInternal;
+
+    /** Package sampled for message collection in the current session */
     @GuardedBy("this")
-    private SparseArray<List<Integer>> mSwitchOpToOps;
+    private String mSampledPackage = null;
+
+    /** Appop sampled for message collection in the current session */
+    @GuardedBy("this")
+    private int mSampledAppOpCode = OP_NONE;
+
+    /** Maximum distance for appop to be considered for message collection in the current session */
+    @GuardedBy("this")
+    private int mAcceptableLeftDistance = 0;
+
+    /** Number of messages collected for sampled package and appop in the current session */
+    @GuardedBy("this")
+    private float mMessagesCollectedCount;
+
+    /** List of rarely used packages priorities for message collection */
+    @GuardedBy("this")
+    private ArraySet<String> mRarelyUsedPackages = new ArraySet<>();
+
+    /** Sampling strategy used for current session */
+    @GuardedBy("this")
+    @AppOpsManager.SamplingStrategy
+    private int mSamplingStrategy;
+
+    /** Last runtime permission access message collected and ready for reporting */
+    @GuardedBy("this")
+    private RuntimeAppOpAccessMessage mCollectedRuntimePermissionMessage;
+    /**
+     * An unsynchronized pool of {@link OpEventProxyInfo} objects.
+     */
+    private class OpEventProxyInfoPool extends SimplePool<OpEventProxyInfo> {
+        OpEventProxyInfoPool() {
+            super(MAX_UNUSED_POOLED_OBJECTS);
+        }
+
+        OpEventProxyInfo acquire(@IntRange(from = 0) int uid, @Nullable String packageName,
+                @Nullable String featureId) {
+            OpEventProxyInfo recycled = acquire();
+            if (recycled != null) {
+                recycled.reinit(uid, packageName, featureId);
+                return recycled;
+            }
+
+            return new OpEventProxyInfo(uid, packageName, featureId);
+        }
+    }
+
+    /**
+     * An unsynchronized pool of {@link InProgressStartOpEvent} objects.
+     */
+    private class InProgressStartOpEventPool extends SimplePool<InProgressStartOpEvent> {
+        InProgressStartOpEventPool() {
+            super(MAX_UNUSED_POOLED_OBJECTS);
+        }
+
+        InProgressStartOpEvent acquire(long startTime, long elapsedTime, @NonNull IBinder clientId,
+                @NonNull Runnable onDeath, int uidState) throws RemoteException {
+            InProgressStartOpEvent recycled = acquire();
+            if (recycled != null) {
+                recycled.reinit(startTime, elapsedTime, clientId, onDeath, uidState);
+                return recycled;
+            }
+
+            return new InProgressStartOpEvent(startTime, elapsedTime, clientId, onDeath, uidState);
+        }
+    }
 
     /**
      * All times are in milliseconds. These constants are kept synchronized with the system
@@ -269,30 +411,25 @@ public class AppOpsService extends IAppOpsService.Stub {
      */
     @VisibleForTesting
     final class Constants extends ContentObserver {
-        // Key names stored in the settings value.
-        private static final String KEY_TOP_STATE_SETTLE_TIME = "top_state_settle_time";
-        private static final String KEY_FG_SERVICE_STATE_SETTLE_TIME
-                = "fg_service_state_settle_time";
-        private static final String KEY_BG_STATE_SETTLE_TIME = "bg_state_settle_time";
 
         /**
          * How long we want for a drop in uid state from top to settle before applying it.
          * @see Settings.Global#APP_OPS_CONSTANTS
-         * @see #KEY_TOP_STATE_SETTLE_TIME
+         * @see AppOpsManager#KEY_TOP_STATE_SETTLE_TIME
          */
         public long TOP_STATE_SETTLE_TIME;
 
         /**
          * How long we want for a drop in uid state from foreground to settle before applying it.
          * @see Settings.Global#APP_OPS_CONSTANTS
-         * @see #KEY_FG_SERVICE_STATE_SETTLE_TIME
+         * @see AppOpsManager#KEY_FG_SERVICE_STATE_SETTLE_TIME
          */
         public long FG_SERVICE_STATE_SETTLE_TIME;
 
         /**
          * How long we want for a drop in uid state from background to settle before applying it.
          * @see Settings.Global#APP_OPS_CONSTANTS
-         * @see #KEY_BG_STATE_SETTLE_TIME
+         * @see AppOpsManager#KEY_BG_STATE_SETTLE_TIME
          */
         public long BG_STATE_SETTLE_TIME;
 
@@ -330,9 +467,9 @@ public class AppOpsService extends IAppOpsService.Stub {
                     Slog.e(TAG, "Bad app ops settings", e);
                 }
                 TOP_STATE_SETTLE_TIME = mParser.getDurationMillis(
-                        KEY_TOP_STATE_SETTLE_TIME, 30 * 1000L);
+                        KEY_TOP_STATE_SETTLE_TIME, 5 * 1000L);
                 FG_SERVICE_STATE_SETTLE_TIME = mParser.getDurationMillis(
-                        KEY_FG_SERVICE_STATE_SETTLE_TIME, 10 * 1000L);
+                        KEY_FG_SERVICE_STATE_SETTLE_TIME, 5 * 1000L);
                 BG_STATE_SETTLE_TIME = mParser.getDurationMillis(
                         KEY_BG_STATE_SETTLE_TIME, 1 * 1000L);
             }
@@ -357,7 +494,7 @@ public class AppOpsService extends IAppOpsService.Stub {
     final Constants mConstants;
 
     @VisibleForTesting
-    static final class UidState {
+    final class UidState {
         public final int uid;
 
         public int state = UID_STATE_CACHED;
@@ -365,8 +502,8 @@ public class AppOpsService extends IAppOpsService.Stub {
         public long pendingStateCommitTime;
         public int capability;
         public int pendingCapability;
-        // For all features combined
-        public int startNesting;
+        public boolean appWidgetVisible;
+        public boolean pendingAppWidgetVisible;
 
         public ArrayMap<String, Ops> pkgOps;
         public SparseIntArray opModes;
@@ -374,6 +511,8 @@ public class AppOpsService extends IAppOpsService.Stub {
         // true indicates there is an interested observer, false there isn't but it has such an op
         public SparseBooleanArray foregroundOps;
         public boolean hasForegroundWatchers;
+
+        public long lastTimeShowDebugToast;
 
         public UidState(int uid) {
             this.uid = uid;
@@ -392,10 +531,12 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
 
         int evalMode(int op, int mode) {
-            if (mode == AppOpsManager.MODE_FOREGROUND) {
-                if (state <= UID_STATE_TOP) {
-                    // process is in foreground.
-                    return AppOpsManager.MODE_ALLOWED;
+            if (mode == MODE_FOREGROUND) {
+                if (appWidgetVisible) {
+                    return MODE_ALLOWED;
+                } else if (state <= UID_STATE_TOP) {
+                    // process is in TOP.
+                    return MODE_ALLOWED;
                 } else if (state <= AppOpsManager.resolveFirstUnrestrictedUidState(op)) {
                     // process is in foreground, check its capability.
                     switch (op) {
@@ -403,14 +544,57 @@ public class AppOpsService extends IAppOpsService.Stub {
                         case AppOpsManager.OP_COARSE_LOCATION:
                         case AppOpsManager.OP_MONITOR_LOCATION:
                         case AppOpsManager.OP_MONITOR_HIGH_POWER_LOCATION:
-                            return ((capability & PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0)
-                                ? AppOpsManager.MODE_ALLOWED : AppOpsManager.MODE_IGNORED;
+                            if ((capability & PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0) {
+                                return MODE_ALLOWED;
+                            } else if ((capability
+                                    & TEMP_PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0) {
+                                // The FGS has the location capability, but due to FGS BG start
+                                // restriction it lost the capability, use temp location capability
+                                // to mark this case.
+                                maybeShowWhileInUseDebugToast(op, mode);
+                                return MODE_IGNORED;
+                            } else {
+                                return MODE_IGNORED;
+                            }
+                        case OP_CAMERA:
+                            if ((capability & PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0) {
+                                return MODE_ALLOWED;
+                            } else {
+                                maybeShowWhileInUseDebugToast(op, mode);
+                                return MODE_IGNORED;
+                            }
+                        case OP_RECORD_AUDIO:
+                            if ((capability & PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0) {
+                                return MODE_ALLOWED;
+                            } else {
+                                maybeShowWhileInUseDebugToast(op, mode);
+                                return MODE_IGNORED;
+                            }
                         default:
-                            return AppOpsManager.MODE_ALLOWED;
+                            return MODE_ALLOWED;
                     }
                 } else {
                     // process is not in foreground.
-                    return AppOpsManager.MODE_IGNORED;
+                    return MODE_IGNORED;
+                }
+            } else if (mode == MODE_ALLOWED) {
+                switch (op) {
+                    case OP_CAMERA:
+                        if ((capability & PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0) {
+                            return MODE_ALLOWED;
+                        } else {
+                            maybeShowWhileInUseDebugToast(op, mode);
+                            return MODE_IGNORED;
+                        }
+                    case OP_RECORD_AUDIO:
+                        if ((capability & PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0) {
+                            return MODE_ALLOWED;
+                        } else {
+                            maybeShowWhileInUseDebugToast(op, mode);
+                            return MODE_IGNORED;
+                        }
+                    default:
+                        return MODE_ALLOWED;
                 }
             }
             return mode;
@@ -460,12 +644,32 @@ public class AppOpsService extends IAppOpsService.Stub {
             }
             foregroundOps = which;
         }
+
+        // TODO: remove this toast after feature development is done
+        // If the procstate is foreground service and while-in-use permission is denied, show a
+        // toast message to ask user to file a bugreport so we know how many apps are impacted by
+        // the new background started foreground service while-in-use permission restriction.
+        void maybeShowWhileInUseDebugToast(int op, int mode) {
+            if (state != UID_STATE_FOREGROUND_SERVICE) {
+                return;
+            }
+            final long now = System.currentTimeMillis();
+            if (lastTimeShowDebugToast == 0 ||  now - lastTimeShowDebugToast > 3600000) {
+                lastTimeShowDebugToast = now;
+                mHandler.sendMessage(PooledLambda.obtainMessage(
+                        ActivityManagerInternal::showWhileInUseDebugToast,
+                        mActivityManagerInternal, uid, op, mode));
+            }
+        }
     }
 
     final static class Ops extends SparseArray<Op> {
         final String packageName;
         final UidState uidState;
         final boolean isPrivileged;
+
+        /** Lazily populated cache of featureIds of this package */
+        final @NonNull ArraySet<String> knownFeatureIds = new ArraySet<>();
 
         Ops(String _packageName, UidState _uidState, boolean _isPrivileged) {
             packageName = _packageName;
@@ -474,126 +678,485 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
     }
 
-    private static final class FeatureOp {
-        public final @NonNull Op parent;
+    /** A in progress startOp->finishOp event */
+    private static final class InProgressStartOpEvent implements IBinder.DeathRecipient {
+        /** Wall clock time of startOp event (not monotonic) */
+        private long mStartTime;
 
-        public boolean running;
+        /** Elapsed time since boot of startOp event */
+        private long mStartElapsedTime;
 
-        private @Nullable LongSparseLongArray mAccessTimes;
-        private @Nullable LongSparseLongArray mRejectTimes;
-        private @Nullable LongSparseLongArray mDurations;
-        private @Nullable LongSparseLongArray mProxyUids;
-        private @Nullable LongSparseArray<String> mProxyFeatureIds;
-        private @Nullable LongSparseArray<String> mProxyPackageNames;
+        /** Id of the client that started the event */
+        private @NonNull IBinder mClientId;
 
-        public int startNesting;
-        public long startRealtime;
+        /** To call when client dies */
+        private @NonNull Runnable mOnDeath;
 
-        FeatureOp(@NonNull Op parent) {
-            this.parent = parent;
+        /** uidstate used when calling startOp */
+        private @AppOpsManager.UidState int mUidState;
+
+        /** How many times the op was started but not finished yet */
+        int numUnfinishedStarts;
+
+        /**
+         * Create a new {@link InProgressStartOpEvent}.
+         *
+         * @param startTime The time {@link #startOperation} was called
+         * @param startElapsedTime The elapsed time when {@link #startOperation} was called
+         * @param clientId The client id of the caller of {@link #startOperation}
+         * @param onDeath The code to execute on client death
+         * @param uidState The uidstate of the app {@link #startOperation} was called for
+         *
+         * @throws RemoteException If the client is dying
+         */
+        private InProgressStartOpEvent(long startTime, long startElapsedTime,
+                @NonNull IBinder clientId, @NonNull Runnable onDeath, int uidState)
+                throws RemoteException {
+            mStartTime = startTime;
+            mStartElapsedTime = startElapsedTime;
+            mClientId = clientId;
+            mOnDeath = onDeath;
+            mUidState = uidState;
+
+            clientId.linkToDeath(this, 0);
         }
 
-        public void accessed(long time, int proxyUid, @Nullable String proxyPackageName,
-                @Nullable String proxyFeatureId, @AppOpsManager.UidState int uidState,
-                @OpFlags int flags) {
-            final long key = AppOpsManager.makeKey(uidState, flags);
-            if (mAccessTimes == null) {
-                mAccessTimes = new LongSparseLongArray();
-            }
-            mAccessTimes.put(key, time);
-            updateProxyState(key, proxyUid, proxyPackageName, proxyFeatureId);
-            if (mDurations != null) {
-                mDurations.delete(key);
-            }
+        /** Clean up event */
+        public void finish() {
+            mClientId.unlinkToDeath(this, 0);
         }
 
-        public void rejected(long time, int proxyUid, @Nullable String proxyPackageName,
-                @Nullable String proxyFeatureId, @AppOpsManager.UidState int uidState,
-                @OpFlags int flags) {
-            final long key = AppOpsManager.makeKey(uidState, flags);
-            if (mRejectTimes == null) {
-                mRejectTimes = new LongSparseLongArray();
-            }
-            mRejectTimes.put(key, time);
-            updateProxyState(key, proxyUid, proxyPackageName, proxyFeatureId);
-            if (mDurations != null) {
-                mDurations.delete(key);
-            }
+        @Override
+        public void binderDied() {
+            mOnDeath.run();
         }
 
-        public void started(long time, @AppOpsManager.UidState int uidState, @OpFlags int flags) {
-            updateAccessTimeAndDuration(time, -1 /*duration*/, uidState, flags);
-            running = true;
+        /**
+         * Reinit existing object with new state.
+         *
+         * @param startTime The time {@link #startOperation} was called
+         * @param startElapsedTime The elapsed time when {@link #startOperation} was called
+         * @param clientId The client id of the caller of {@link #startOperation}
+         * @param onDeath The code to execute on client death
+         * @param uidState The uidstate of the app {@link #startOperation} was called for
+         *
+         * @throws RemoteException If the client is dying
+         */
+        public void reinit(long startTime, long startElapsedTime, @NonNull IBinder clientId,
+                @NonNull Runnable onDeath, int uidState) throws RemoteException {
+            mStartTime = startTime;
+            mStartElapsedTime = startElapsedTime;
+            mClientId = clientId;
+            mOnDeath = onDeath;
+            mUidState = uidState;
+
+            clientId.linkToDeath(this, 0);
         }
 
-        public void finished(long time, long duration, @AppOpsManager.UidState int uidState,
-                @OpFlags int flags) {
-            updateAccessTimeAndDuration(time, duration, uidState, flags);
-            running = false;
+        /** @return Wall clock time of startOp event */
+        public long getStartTime() {
+            return mStartTime;
         }
 
-        public void running(long time, long duration, @AppOpsManager.UidState int uidState,
-                @OpFlags int flags) {
-            updateAccessTimeAndDuration(time, duration, uidState, flags);
+        /** @return Elapsed time since boot of startOp event */
+        public long getStartElapsedTime() {
+            return mStartElapsedTime;
         }
 
-        public void continuing(long duration, @AppOpsManager.UidState int uidState,
-                @OpFlags int flags) {
-            final long key = AppOpsManager.makeKey(uidState, flags);
-            if (mDurations == null) {
-                mDurations = new LongSparseLongArray();
-            }
-            mDurations.put(key, duration);
+        /** @return Id of the client that started the event */
+        public @NonNull IBinder getClientId() {
+            return mClientId;
         }
 
-        private void updateAccessTimeAndDuration(long time, long duration,
-                @AppOpsManager.UidState int uidState, @OpFlags int flags) {
-            final long key = AppOpsManager.makeKey(uidState, flags);
-            if (mAccessTimes == null) {
-                mAccessTimes = new LongSparseLongArray();
-            }
-            mAccessTimes.put(key, time);
-            if (mDurations == null) {
-                mDurations = new LongSparseLongArray();
-            }
-            mDurations.put(key, duration);
-        }
-
-        private void updateProxyState(long key, int proxyUid,
-                @Nullable String proxyPackageName, @Nullable String featureId) {
-            if (proxyUid == Process.INVALID_UID) {
-                return;
-            }
-
-            if (mProxyUids == null) {
-                mProxyUids = new LongSparseLongArray();
-            }
-            mProxyUids.put(key, proxyUid);
-
-            if (mProxyPackageNames == null) {
-                mProxyPackageNames = new LongSparseArray<>();
-            }
-            mProxyPackageNames.put(key, proxyPackageName);
-
-            if (mProxyFeatureIds == null) {
-                mProxyFeatureIds = new LongSparseArray<>();
-            }
-            mProxyFeatureIds.put(key, featureId);
-        }
-
-        boolean hasAnyTime() {
-            return (mAccessTimes != null && mAccessTimes.size() > 0)
-                    || (mRejectTimes != null && mRejectTimes.size() > 0);
-        }
-
-        @NonNull OpFeatureEntry.Builder createFeatureEntryBuilderLocked() {
-            return new OpFeatureEntry.Builder(running, mAccessTimes, mRejectTimes, mDurations,
-                    mProxyUids, mProxyPackageNames, mProxyFeatureIds);
+        /** @return uidstate used when calling startOp */
+        public int getUidState() {
+            return mUidState;
         }
     }
 
-    final static class Op {
+    private final class FeatureOp {
+        public final @Nullable String featureId;
+        public final @NonNull Op parent;
+
+        /**
+         * Last successful accesses (noteOp + finished startOp) for each uidState/opFlag combination
+         *
+         * <p>Key is {@link AppOpsManager#makeKey}
+         */
+        @GuardedBy("AppOpsService.this")
+        private @Nullable LongSparseArray<NoteOpEvent> mAccessEvents;
+
+        /**
+         * Last rejected accesses for each uidState/opFlag combination
+         *
+         * <p>Key is {@link AppOpsManager#makeKey}
+         */
+        @GuardedBy("AppOpsService.this")
+        private @Nullable LongSparseArray<NoteOpEvent> mRejectEvents;
+
+        /**
+         * Currently in progress startOp events
+         *
+         * <p>Key is clientId
+         */
+        @GuardedBy("AppOpsService.this")
+        private @Nullable ArrayMap<IBinder, InProgressStartOpEvent> mInProgressEvents;
+
+        FeatureOp(@Nullable String featureId, @NonNull Op parent) {
+            this.featureId = featureId;
+            this.parent = parent;
+        }
+
+        /**
+         * Update state when noteOp was rejected or startOp->finishOp event finished
+         *
+         * @param proxyUid The uid of the proxy
+         * @param proxyPackageName The package name of the proxy
+         * @param proxyFeatureId the featureId in the proxies package
+         * @param uidState UID state of the app noteOp/startOp was called for
+         * @param flags OpFlags of the call
+         */
+        public void accessed(int proxyUid, @Nullable String proxyPackageName,
+                @Nullable String proxyFeatureId, @AppOpsManager.UidState int uidState,
+                @OpFlags int flags) {
+            accessed(System.currentTimeMillis(), -1, proxyUid, proxyPackageName,
+                    proxyFeatureId, uidState, flags);
+
+            mHistoricalRegistry.incrementOpAccessedCount(parent.op, parent.uid, parent.packageName,
+                    featureId, uidState, flags);
+        }
+
+        /**
+         * Add an access that was previously collected.
+         *
+         * @param noteTime The time of the event
+         * @param duration The duration of the event
+         * @param proxyUid The uid of the proxy
+         * @param proxyPackageName The package name of the proxy
+         * @param proxyFeatureId the featureId in the proxies package
+         * @param uidState UID state of the app noteOp/startOp was called for
+         * @param flags OpFlags of the call
+         */
+        public void accessed(long noteTime, long duration, int proxyUid,
+                @Nullable String proxyPackageName, @Nullable String proxyFeatureId,
+                @AppOpsManager.UidState int uidState, @OpFlags int flags) {
+            long key = makeKey(uidState, flags);
+
+            if (mAccessEvents == null) {
+                mAccessEvents = new LongSparseArray<>(1);
+            }
+
+            OpEventProxyInfo proxyInfo = null;
+            if (proxyUid != Process.INVALID_UID) {
+                proxyInfo = mOpEventProxyInfoPool.acquire(proxyUid, proxyPackageName,
+                        proxyFeatureId);
+            }
+
+            NoteOpEvent existingEvent = mAccessEvents.get(key);
+            if (existingEvent != null) {
+                existingEvent.reinit(noteTime, duration, proxyInfo, mOpEventProxyInfoPool);
+            } else {
+                mAccessEvents.put(key, new NoteOpEvent(noteTime, duration, proxyInfo));
+            }
+        }
+
+        /**
+         * Update state when noteOp/startOp was rejected.
+         *
+         * @param uidState UID state of the app noteOp is called for
+         * @param flags OpFlags of the call
+         */
+        public void rejected(@AppOpsManager.UidState int uidState, @OpFlags int flags) {
+            rejected(System.currentTimeMillis(), uidState, flags);
+
+            mHistoricalRegistry.incrementOpRejected(parent.op, parent.uid, parent.packageName,
+                    featureId, uidState, flags);
+        }
+
+        /**
+         * Add an rejection that was previously collected
+         *
+         * @param noteTime The time of the event
+         * @param uidState UID state of the app noteOp/startOp was called for
+         * @param flags OpFlags of the call
+         */
+        public void rejected(long noteTime, @AppOpsManager.UidState int uidState,
+                @OpFlags int flags) {
+            long key = makeKey(uidState, flags);
+
+            if (mRejectEvents == null) {
+                mRejectEvents = new LongSparseArray<>(1);
+            }
+
+            // We do not collect proxy information for rejections yet
+            NoteOpEvent existingEvent = mRejectEvents.get(key);
+            if (existingEvent != null) {
+                existingEvent.reinit(noteTime, -1, null, mOpEventProxyInfoPool);
+            } else {
+                mRejectEvents.put(key, new NoteOpEvent(noteTime, -1, null));
+            }
+        }
+
+        /**
+         * Update state when start was called
+         *
+         * @param clientId Id of the startOp caller
+         * @param uidState UID state of the app startOp is called for
+         */
+        public void started(@NonNull IBinder clientId, @AppOpsManager.UidState int uidState)
+                throws RemoteException {
+            started(clientId, uidState, true);
+        }
+
+        private void started(@NonNull IBinder clientId, @AppOpsManager.UidState int uidState,
+                boolean triggerCallbackIfNeeded) throws RemoteException {
+            if (triggerCallbackIfNeeded && !parent.isRunning()) {
+                scheduleOpActiveChangedIfNeededLocked(parent.op, parent.uid,
+                        parent.packageName, true);
+            }
+
+            if (mInProgressEvents == null) {
+                mInProgressEvents = new ArrayMap<>(1);
+            }
+
+            InProgressStartOpEvent event = mInProgressEvents.get(clientId);
+            if (event == null) {
+                event = mInProgressStartOpEventPool.acquire(System.currentTimeMillis(),
+                        SystemClock.elapsedRealtime(), clientId,
+                        PooledLambda.obtainRunnable(AppOpsService::onClientDeath, this, clientId),
+                        uidState);
+                mInProgressEvents.put(clientId, event);
+            } else {
+                if (uidState != event.mUidState) {
+                    onUidStateChanged(uidState);
+                }
+            }
+
+            event.numUnfinishedStarts++;
+
+            // startOp events don't support proxy, hence use flags==SELF
+            mHistoricalRegistry.incrementOpAccessedCount(parent.op, parent.uid, parent.packageName,
+                    featureId, uidState, OP_FLAG_SELF);
+        }
+
+        /**
+         * Update state when finishOp was called
+         *
+         * @param clientId Id of the finishOp caller
+         */
+        public void finished(@NonNull IBinder clientId) {
+            finished(clientId, true);
+        }
+
+        private void finished(@NonNull IBinder clientId, boolean triggerCallbackIfNeeded) {
+            if (mInProgressEvents == null) {
+                Slog.wtf(TAG, "No ops running");
+                return;
+            }
+
+            int indexOfToken = mInProgressEvents.indexOfKey(clientId);
+            if (indexOfToken < 0) {
+                Slog.wtf(TAG, "No op running for the client");
+                return;
+            }
+
+            InProgressStartOpEvent event = mInProgressEvents.valueAt(indexOfToken);
+            event.numUnfinishedStarts--;
+            if (event.numUnfinishedStarts == 0) {
+                event.finish();
+                mInProgressEvents.removeAt(indexOfToken);
+
+                if (mAccessEvents == null) {
+                    mAccessEvents = new LongSparseArray<>(1);
+                }
+
+                // startOp events don't support proxy, hence use flags==SELF
+                NoteOpEvent finishedEvent = new NoteOpEvent(event.getStartTime(),
+                        SystemClock.elapsedRealtime() - event.getStartElapsedTime(), null);
+                mAccessEvents.put(makeKey(event.getUidState(), OP_FLAG_SELF), finishedEvent);
+
+                mHistoricalRegistry.increaseOpAccessDuration(parent.op, parent.uid,
+                        parent.packageName, featureId, event.getUidState(),
+                        AppOpsManager.OP_FLAG_SELF, finishedEvent.getDuration());
+
+                mInProgressStartOpEventPool.release(event);
+
+                if (mInProgressEvents.isEmpty()) {
+                    mInProgressEvents = null;
+
+                    // TODO moltmann: Also callback for single feature activity changes
+                    if (triggerCallbackIfNeeded && !parent.isRunning()) {
+                        scheduleOpActiveChangedIfNeededLocked(parent.op, parent.uid,
+                                parent.packageName, false);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Called in the case the client dies without calling finish first
+         *
+         * @param clientId The client that died
+         */
+        void onClientDeath(@NonNull IBinder clientId) {
+            synchronized (AppOpsService.this) {
+                if (mInProgressEvents == null) {
+                    return;
+                }
+
+                InProgressStartOpEvent deadEvent = mInProgressEvents.get(clientId);
+                if (deadEvent != null) {
+                    deadEvent.numUnfinishedStarts = 1;
+                }
+
+                finished(clientId);
+            }
+        }
+
+        /**
+         * Notify that the state of the uid changed
+         *
+         * @param newState The new state
+         */
+        public void onUidStateChanged(@AppOpsManager.UidState int newState) {
+            if (mInProgressEvents == null) {
+                return;
+            }
+
+            int numInProgressEvents = mInProgressEvents.size();
+            for (int i = 0; i < numInProgressEvents; i++) {
+                InProgressStartOpEvent event = mInProgressEvents.valueAt(i);
+
+                if (event.getUidState() != newState) {
+                    try {
+                        // Remove all but one unfinished start count and then call finished() to
+                        // remove start event object
+                        int numPreviousUnfinishedStarts = event.numUnfinishedStarts;
+                        event.numUnfinishedStarts = 1;
+                        finished(event.getClientId(), false);
+
+                        // Call started() to add a new start event object and then add the
+                        // previously removed unfinished start counts back
+                        started(event.getClientId(), newState, false);
+                        event.numUnfinishedStarts += numPreviousUnfinishedStarts - 1;
+                    } catch (RemoteException e) {
+                        if (DEBUG) Slog.e(TAG, "Cannot switch to new uidState " + newState);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Combine {@code a} and {@code b} and return the result. The result might be {@code a}
+         * or {@code b}. If there is an event for the same key in both the later event is retained.
+         */
+        private @Nullable LongSparseArray<NoteOpEvent> add(@Nullable LongSparseArray<NoteOpEvent> a,
+                @Nullable LongSparseArray<NoteOpEvent> b) {
+            if (a == null) {
+                return b;
+            }
+
+            if (b == null) {
+                return a;
+            }
+
+            int numEventsToAdd = b.size();
+            for (int i = 0; i < numEventsToAdd; i++) {
+                long keyOfEventToAdd = b.keyAt(i);
+                NoteOpEvent bEvent = b.valueAt(i);
+                NoteOpEvent aEvent = a.get(keyOfEventToAdd);
+
+                if (aEvent == null || bEvent.getNoteTime() > aEvent.getNoteTime()) {
+                    a.put(keyOfEventToAdd, bEvent);
+                }
+            }
+
+            return a;
+        }
+
+        /**
+         * Add all data from the {@code featureToAdd} to this op.
+         *
+         * <p>If there is an event for the same key in both the later event is retained.
+         * <p>{@code opToAdd} should not be used after this method is called.
+         *
+         * @param opToAdd The op to add
+         */
+        public void add(@NonNull FeatureOp opToAdd) {
+            if (opToAdd.mInProgressEvents != null) {
+                Slog.w(TAG, "Ignoring " + opToAdd.mInProgressEvents.size() + " running app-ops");
+
+                int numInProgressEvents = opToAdd.mInProgressEvents.size();
+                for (int i = 0; i < numInProgressEvents; i++) {
+                    InProgressStartOpEvent event = opToAdd.mInProgressEvents.valueAt(i);
+
+                    event.finish();
+                    mInProgressStartOpEventPool.release(event);
+                }
+            }
+
+            mAccessEvents = add(mAccessEvents, opToAdd.mAccessEvents);
+            mRejectEvents = add(mRejectEvents, opToAdd.mRejectEvents);
+        }
+
+        public boolean isRunning() {
+            return mInProgressEvents != null;
+        }
+
+        boolean hasAnyTime() {
+            return (mAccessEvents != null && mAccessEvents.size() > 0)
+                    || (mRejectEvents != null && mRejectEvents.size() > 0);
+        }
+
+        /**
+         * Clone a {@link LongSparseArray} and clone all values.
+         */
+        private @Nullable LongSparseArray<NoteOpEvent> deepClone(
+                @Nullable LongSparseArray<NoteOpEvent> original) {
+            if (original == null) {
+                return original;
+            }
+
+            int size = original.size();
+            LongSparseArray<NoteOpEvent> clone = new LongSparseArray<>(size);
+            for (int i = 0; i < size; i++) {
+                clone.put(original.keyAt(i), new NoteOpEvent(original.valueAt(i)));
+            }
+
+            return clone;
+        }
+
+        @NonNull OpFeatureEntry createFeatureEntryLocked() {
+            LongSparseArray<NoteOpEvent> accessEvents = deepClone(mAccessEvents);
+
+            // Add in progress events as access events
+            if (mInProgressEvents != null) {
+                long now = SystemClock.elapsedRealtime();
+                int numInProgressEvents = mInProgressEvents.size();
+
+                if (accessEvents == null) {
+                    accessEvents = new LongSparseArray<>(numInProgressEvents);
+                }
+
+                for (int i = 0; i < numInProgressEvents; i++) {
+                    InProgressStartOpEvent event = mInProgressEvents.valueAt(i);
+
+                    // startOp events don't support proxy
+                    accessEvents.append(makeKey(event.getUidState(), OP_FLAG_SELF),
+                            new NoteOpEvent(event.getStartTime(), now - event.getStartElapsedTime(),
+                                    null));
+                }
+            }
+
+            LongSparseArray<NoteOpEvent> rejectEvents = deepClone(mRejectEvents);
+
+            return new OpFeatureEntry(parent.op, isRunning(), accessEvents, rejectEvents);
+        }
+    }
+
+    final class Op {
         int op;
+        int uid;
         final UidState uidState;
         final @NonNull String packageName;
 
@@ -602,8 +1165,9 @@ public class AppOpsService extends IAppOpsService.Stub {
         /** featureId -> FeatureOp */
         final ArrayMap<String, FeatureOp> mFeatures = new ArrayMap<>(1);
 
-        Op(UidState uidState, String packageName, int op) {
+        Op(UidState uidState, String packageName, int op, int uid) {
             this.op = op;
+            this.uid = uid;
             this.uidState = uidState;
             this.packageName = packageName;
             this.mode = AppOpsManager.opToDefaultMode(op);
@@ -631,7 +1195,7 @@ public class AppOpsService extends IAppOpsService.Stub {
 
             featureOp = mFeatures.get(featureId);
             if (featureOp == null) {
-                featureOp = new FeatureOp(parent);
+                featureOp = new FeatureOp(featureId, parent);
                 mFeatures.put(featureId, featureOp);
             }
 
@@ -641,11 +1205,10 @@ public class AppOpsService extends IAppOpsService.Stub {
         @NonNull OpEntry createEntryLocked() {
             final int numFeatures = mFeatures.size();
 
-            final Pair<String, OpFeatureEntry.Builder>[] featureEntries =
-                    new Pair[numFeatures];
+            final ArrayMap<String, OpFeatureEntry> featureEntries = new ArrayMap<>(numFeatures);
             for (int i = 0; i < numFeatures; i++) {
-                featureEntries[i] = new Pair<>(mFeatures.keyAt(i),
-                        mFeatures.valueAt(i).createFeatureEntryBuilderLocked());
+                featureEntries.put(mFeatures.keyAt(i),
+                        mFeatures.valueAt(i).createFeatureEntryLocked());
             }
 
             return new OpEntry(op, mode, featureEntries);
@@ -654,17 +1217,27 @@ public class AppOpsService extends IAppOpsService.Stub {
         @NonNull OpEntry createSingleFeatureEntryLocked(@Nullable String featureId) {
             final int numFeatures = mFeatures.size();
 
-            final Pair<String, AppOpsManager.OpFeatureEntry.Builder>[] featureEntries =
-                    new Pair[1];
+            final ArrayMap<String, OpFeatureEntry> featureEntries = new ArrayMap<>(1);
             for (int i = 0; i < numFeatures; i++) {
                 if (Objects.equals(mFeatures.keyAt(i), featureId)) {
-                    featureEntries[0] = new Pair<>(mFeatures.keyAt(i),
-                            mFeatures.valueAt(i).createFeatureEntryBuilderLocked());
+                    featureEntries.put(mFeatures.keyAt(i),
+                            mFeatures.valueAt(i).createFeatureEntryLocked());
                     break;
                 }
             }
 
             return new OpEntry(op, mode, featureEntries);
+        }
+
+        boolean isRunning() {
+            final int numFeatures = mFeatures.size();
+            for (int i = 0; i < numFeatures; i++) {
+                if (mFeatures.valueAt(i).isRunning()) {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -676,17 +1249,22 @@ public class AppOpsService extends IAppOpsService.Stub {
     final AudioRestrictionManager mAudioRestrictionManager = new AudioRestrictionManager();
 
     final class ModeCallback implements DeathRecipient {
+        /** If mWatchedOpCode==ALL_OPS notify for ops affected by the switch-op */
+        public static final int ALL_OPS = -2;
+
         final IAppOpsCallback mCallback;
         final int mWatchingUid;
         final int mFlags;
+        final int mWatchedOpCode;
         final int mCallingUid;
         final int mCallingPid;
 
-        ModeCallback(IAppOpsCallback callback, int watchingUid, int flags, int callingUid,
-                int callingPid) {
+        ModeCallback(IAppOpsCallback callback, int watchingUid, int flags, int watchedOp,
+                int callingUid, int callingPid) {
             mCallback = callback;
             mWatchingUid = watchingUid;
             mFlags = flags;
+            mWatchedOpCode = watchedOp;
             mCallingUid = callingUid;
             mCallingPid = callingPid;
             try {
@@ -709,6 +1287,17 @@ public class AppOpsService extends IAppOpsService.Stub {
             UserHandle.formatUid(sb, mWatchingUid);
             sb.append(" flags=0x");
             sb.append(Integer.toHexString(mFlags));
+            switch (mWatchedOpCode) {
+                case OP_NONE:
+                    break;
+                case ALL_OPS:
+                    sb.append(" op=(all)");
+                    break;
+                default:
+                    sb.append(" op=");
+                    sb.append(opToName(mWatchedOpCode));
+                    break;
+            }
             sb.append(" from uid=");
             UserHandle.formatUid(sb, mCallingUid);
             sb.append(" pid=");
@@ -815,81 +1404,170 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
     }
 
-    final ArrayMap<IBinder, ClientState> mClients = new ArrayMap<>();
+    /**
+     * Call {@link FeatureOp#onClientDeath featureOp.onClientDeath(clientId)}.
+     */
+    private static void onClientDeath(@NonNull FeatureOp featureOp, @NonNull IBinder clientId) {
+        featureOp.onClientDeath(clientId);
+    }
 
-    final class ClientState extends Binder implements DeathRecipient {
-        final ArrayList<Pair<Op, String>> mStartedOps = new ArrayList<>();
-        final IBinder mAppToken;
-        final int mPid;
 
-        ClientState(IBinder appToken) {
-            mAppToken = appToken;
-            mPid = Binder.getCallingPid();
-            // Watch only for remote processes dying
-            if (!(appToken instanceof Binder)) {
-                try {
-                    mAppToken.linkToDeath(this, 0);
-                } catch (RemoteException e) {
-                    /* do nothing */
+    /**
+     * Loads the OpsValidation file results into a hashmap {@link #mNoteOpCallerStacktraces}
+     * so that we do not log the same operation twice between instances
+     */
+    private void readNoteOpCallerStackTraces() {
+        try {
+            if (!mNoteOpCallerStacktracesFile.exists()) {
+                mNoteOpCallerStacktracesFile.createNewFile();
+                return;
+            }
+
+            try (Scanner read = new Scanner(mNoteOpCallerStacktracesFile)) {
+                read.useDelimiter("\\},");
+                while (read.hasNext()) {
+                    String jsonOps = read.next();
+                    mNoteOpCallerStacktraces.add(NoteOpTrace.fromJson(jsonOps));
                 }
             }
-        }
-
-        @Override
-        public String toString() {
-            return "ClientState{" +
-                    "mAppToken=" + mAppToken +
-                    ", " + "pid=" + mPid +
-                    '}';
-        }
-
-        @Override
-        public void binderDied() {
-            synchronized (AppOpsService.this) {
-                for (int i=mStartedOps.size()-1; i>=0; i--) {
-                    final Pair<Op, String> startedOp = mStartedOps.get(i);
-                    final Op op = startedOp.first;
-                    final String featureId = startedOp.second;
-
-                    finishOperationLocked(op, featureId, /*finishNested*/ true);
-                    if (op.mFeatures.get(featureId).startNesting <= 0) {
-                        scheduleOpActiveChangedIfNeededLocked(op.op, op.uidState.uid,
-                                op.packageName, false);
-                    }
-                }
-                mClients.remove(mAppToken);
-            }
+        } catch (Exception e) {
+            Slog.e(TAG, "Cannot parse traces noteOps", e);
         }
     }
 
-    public AppOpsService(File storagePath, Handler handler) {
+    public AppOpsService(File storagePath, Handler handler, Context context) {
+        mContext = context;
+
         LockGuard.installLock(this, LockGuard.INDEX_APP_OPS);
         mFile = new AtomicFile(storagePath, "appops");
+        if (AppOpsManager.NOTE_OP_COLLECTION_ENABLED) {
+            mNoteOpCallerStacktracesFile = new File(SystemServiceManager.ensureSystemDir(),
+                    "noteOpStackTraces.json");
+            readNoteOpCallerStackTraces();
+        } else {
+            mNoteOpCallerStacktracesFile = null;
+        }
         mHandler = handler;
         mConstants = new Constants(mHandler);
         readState();
+
+        for (int switchedCode = 0; switchedCode < _NUM_OP; switchedCode++) {
+            int switchCode = AppOpsManager.opToSwitch(switchedCode);
+            mSwitchedOps.put(switchCode,
+                    ArrayUtils.appendInt(mSwitchedOps.get(switchCode), switchedCode));
+        }
     }
 
-    public void publish(Context context) {
-        mContext = context;
+    public void publish() {
         ServiceManager.addService(Context.APP_OPS_SERVICE, asBinder());
         LocalServices.addService(AppOpsManagerInternal.class, mAppOpsManagerInternal);
     }
+
+    /** Handler for work when packages are removed or updated */
+    private BroadcastReceiver mOnPackageUpdatedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            String pkgName = intent.getData().getEncodedSchemeSpecificPart();
+            int uid = intent.getIntExtra(Intent.EXTRA_UID, Process.INVALID_UID);
+
+            if (action.equals(ACTION_PACKAGE_REMOVED) && !intent.hasExtra(EXTRA_REPLACING)) {
+                synchronized (AppOpsService.this) {
+                    UidState uidState = mUidStates.get(uid);
+                    if (uidState == null || uidState.pkgOps == null) {
+                        return;
+                    }
+
+                    Ops removedOps = uidState.pkgOps.remove(pkgName);
+                    if (removedOps != null) {
+                        scheduleFastWriteLocked();
+                    }
+                }
+            } else if (action.equals(Intent.ACTION_PACKAGE_REPLACED)) {
+                AndroidPackage pkg = LocalServices.getService(
+                        PackageManagerInternal.class).getPackage(pkgName);
+                if (pkg == null) {
+                    return;
+                }
+
+                ArrayMap<String, String> dstFeatureIds = new ArrayMap<>();
+                ArraySet<String> featureIds = new ArraySet<>();
+                featureIds.add(null);
+                if (pkg.getFeatures() != null) {
+                    int numFeatures = pkg.getFeatures().size();
+                    for (int featureNum = 0; featureNum < numFeatures; featureNum++) {
+                        ParsedFeature feature = pkg.getFeatures().get(featureNum);
+                        featureIds.add(feature.id);
+
+                        int numInheritFrom = feature.inheritFrom.size();
+                        for (int inheritFromNum = 0; inheritFromNum < numInheritFrom;
+                                inheritFromNum++) {
+                            dstFeatureIds.put(feature.inheritFrom.get(inheritFromNum),
+                                    feature.id);
+                        }
+                    }
+                }
+
+                synchronized (AppOpsService.this) {
+                    UidState uidState = mUidStates.get(uid);
+                    if (uidState == null || uidState.pkgOps == null) {
+                        return;
+                    }
+
+                    Ops ops = uidState.pkgOps.get(pkgName);
+                    if (ops == null) {
+                        return;
+                    }
+
+                    ops.knownFeatureIds.clear();
+                    int numOps = ops.size();
+                    for (int opNum = 0; opNum < numOps; opNum++) {
+                        Op op = ops.valueAt(opNum);
+
+                        int numFeatures = op.mFeatures.size();
+                        for (int featureNum = numFeatures - 1; featureNum >= 0; featureNum--) {
+                            String featureId = op.mFeatures.keyAt(featureNum);
+
+                            if (featureIds.contains(featureId)) {
+                                // feature still exist after upgrade
+                                continue;
+                            }
+
+                            String newFeatureId = dstFeatureIds.get(featureId);
+
+                            FeatureOp newFeatureOp = op.getOrCreateFeature(op, newFeatureId);
+                            newFeatureOp.add(op.mFeatures.valueAt(featureNum));
+                            op.mFeatures.removeAt(featureNum);
+
+                            scheduleFastWriteLocked();
+                        }
+                    }
+                }
+            }
+        }
+    };
 
     public void systemReady() {
         mConstants.startMonitoring(mContext.getContentResolver());
         mHistoricalRegistry.systemReady(mContext.getContentResolver());
 
-        synchronized (this) {
-            boolean changed = false;
-            for (int i = mUidStates.size() - 1; i >= 0; i--) {
-                UidState uidState = mUidStates.valueAt(i);
+        IntentFilter packageUpdateFilter = new IntentFilter();
+        packageUpdateFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        packageUpdateFilter.addAction(Intent.ACTION_PACKAGE_REPLACED);
+        packageUpdateFilter.addDataScheme("package");
 
-                String[] packageNames = getPackagesForUid(uidState.uid);
-                if (ArrayUtils.isEmpty(packageNames)) {
+        mContext.registerReceiver(mOnPackageUpdatedReceiver, packageUpdateFilter);
+
+        synchronized (this) {
+            for (int uidNum = mUidStates.size() - 1; uidNum >= 0; uidNum--) {
+                int uid = mUidStates.keyAt(uidNum);
+                UidState uidState = mUidStates.valueAt(uidNum);
+
+                String[] pkgsInUid = getPackagesForUid(uidState.uid);
+                if (ArrayUtils.isEmpty(pkgsInUid)) {
                     uidState.clear();
-                    mUidStates.removeAt(i);
-                    changed = true;
+                    mUidStates.removeAt(uidNum);
+                    scheduleFastWriteLocked();
                     continue;
                 }
 
@@ -898,30 +1576,23 @@ public class AppOpsService extends IAppOpsService.Stub {
                     continue;
                 }
 
-                Iterator<Ops> it = pkgs.values().iterator();
-                while (it.hasNext()) {
-                    Ops ops = it.next();
-                    int curUid = -1;
-                    try {
-                        curUid = AppGlobals.getPackageManager().getPackageUid(ops.packageName,
-                                PackageManager.MATCH_UNINSTALLED_PACKAGES,
-                                UserHandle.getUserId(ops.uidState.uid));
-                    } catch (RemoteException ignored) {
-                    }
-                    if (curUid != ops.uidState.uid) {
-                        Slog.i(TAG, "Pruning old package " + ops.packageName
-                                + "/" + ops.uidState + ": new uid=" + curUid);
-                        it.remove();
-                        changed = true;
-                    }
-                }
+                int numPkgs = pkgs.size();
+                for (int pkgNum = 0; pkgNum < numPkgs; pkgNum++) {
+                    String pkg = pkgs.keyAt(pkgNum);
 
-                if (uidState.isDefault()) {
-                    mUidStates.removeAt(i);
+                    String action;
+                    if (!ArrayUtils.contains(pkgsInUid, pkg)) {
+                        action = Intent.ACTION_PACKAGE_REMOVED;
+                    } else {
+                        action = Intent.ACTION_PACKAGE_REPLACED;
+                    }
+
+                    SystemServerInitThreadPool.submit(
+                            () -> mOnPackageUpdatedReceiver.onReceive(mContext, new Intent(action)
+                                    .setData(Uri.fromParts("package", pkg, null))
+                                    .putExtra(Intent.EXTRA_UID, uid)),
+                            "Update app-ops uidState in case package " + pkg + " changed");
                 }
-            }
-            if (changed) {
-                scheduleFastWriteLocked();
             }
         }
 
@@ -954,6 +1625,38 @@ public class AppOpsService extends IAppOpsService.Stub {
             }
         }, packageSuspendFilter);
 
+        final IntentFilter packageAddedFilter = new IntentFilter();
+        packageAddedFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        packageAddedFilter.addDataScheme("package");
+        mContext.registerReceiver(new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                final Uri data = intent.getData();
+
+                final String packageName = data.getSchemeSpecificPart();
+                PackageInfo pi = LocalServices.getService(
+                        PackageManagerInternal.class).getPackageInfo(packageName,
+                        PackageManager.GET_PERMISSIONS, Process.myUid(), mContext.getUserId());
+                if (isSamplingTarget(pi)) {
+                    synchronized (this) {
+                        mRarelyUsedPackages.add(packageName);
+                    }
+                }
+            }
+        }, packageAddedFilter);
+
+        List<String> packageNames = getPackageNamesForSampling();
+        synchronized (this) {
+            resamplePackageAndAppOpLocked(packageNames);
+        }
+
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(new Runnable() {
+            @Override
+            public void run() {
+                initializeRarelyUsedPackagesList(new ArraySet<>(packageNames));
+            }
+        });
+
         PackageManagerInternal packageManagerInternal = LocalServices.getService(
                 PackageManagerInternal.class);
         packageManagerInternal.setExternalSourcesPolicy(
@@ -984,11 +1687,13 @@ public class AppOpsService extends IAppOpsService.Stub {
                                 return Zygote.MOUNT_EXTERNAL_NONE;
                             }
                             if (noteOperation(AppOpsManager.OP_READ_EXTERNAL_STORAGE, uid,
-                                    packageName, null) != AppOpsManager.MODE_ALLOWED) {
+                                    packageName, null, true, "External storage policy")
+                                    != AppOpsManager.MODE_ALLOWED) {
                                 return Zygote.MOUNT_EXTERNAL_NONE;
                             }
                             if (noteOperation(AppOpsManager.OP_WRITE_EXTERNAL_STORAGE, uid,
-                                    packageName, null) != AppOpsManager.MODE_ALLOWED) {
+                                    packageName, null, true, "External storage policy")
+                                    != AppOpsManager.MODE_ALLOWED) {
                                 return Zygote.MOUNT_EXTERNAL_READ;
                             }
                             return Zygote.MOUNT_EXTERNAL_WRITE;
@@ -1002,6 +1707,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                         }
                     });
         }
+        mActivityManagerInternal = LocalServices.getService(ActivityManagerInternal.class);
     }
 
     public void packageRemoved(int uid, String packageName) {
@@ -1024,43 +1730,19 @@ public class AppOpsService extends IAppOpsService.Stub {
                 mUidStates.remove(uid);
             }
 
-            // Finish ops other packages started on behalf of the package.
-            final int clientCount = mClients.size();
-            for (int i = 0; i < clientCount; i++) {
-                final ClientState client = mClients.valueAt(i);
-                if (client.mStartedOps == null) {
-                    continue;
-                }
-                final int startedOpCount = client.mStartedOps.size();
-                for (int j = startedOpCount - 1; j >= 0; j--) {
-                    final Pair<Op, String> startedOp = client.mStartedOps.get(j);
-                    final Op op = startedOp.first;
-                    final String featureId = startedOp.second;
-
-                    if (uid == op.uidState.uid && packageName.equals(op.packageName)) {
-                        finishOperationLocked(op, featureId, /*finishNested*/ true);
-                        client.mStartedOps.remove(j);
-                        if (op.mFeatures.get(featureId).startNesting <= 0) {
-                            scheduleOpActiveChangedIfNeededLocked(op.op,
-                                    uid, packageName, false);
-                        }
-                    }
-                }
-            }
-
             if (ops != null) {
                 scheduleFastWriteLocked();
 
-                final int opCount = ops.size();
-                for (int opNum = 0; opNum < opCount; opNum++) {
+                final int numOps = ops.size();
+                for (int opNum = 0; opNum < numOps; opNum++) {
                     final Op op = ops.valueAt(opNum);
 
                     final int numFeatures = op.mFeatures.size();
                     for (int featureNum = 0; featureNum < numFeatures; featureNum++) {
-                        if (op.mFeatures.valueAt(featureNum).running) {
-                            scheduleOpActiveChangedIfNeededLocked(
-                                    op.op, op.uidState.uid, op.packageName, false);
-                            break;
+                        FeatureOp featureOp = op.mFeatures.valueAt(featureNum);
+
+                        while (featureOp.mInProgressEvents != null) {
+                            featureOp.finished(featureOp.mInProgressEvents.keyAt(0));
                         }
                     }
                 }
@@ -1076,6 +1758,19 @@ public class AppOpsService extends IAppOpsService.Stub {
                 mUidStates.remove(uid);
                 scheduleFastWriteLocked();
             }
+        }
+    }
+
+    /**
+     * Update the pending state for the uid
+     *
+     * @param currentTime The current elapsed real time
+     * @param uid The uid that has a pending state
+     */
+    private void updatePendingState(long currentTime, int uid) {
+        synchronized (this) {
+            mLastRealtime = max(currentTime, mLastRealtime);
+            updatePendingStateIfNeededLocked(mUidStates.get(uid));
         }
     }
 
@@ -1110,37 +1805,28 @@ public class AppOpsService extends IAppOpsService.Stub {
                     } else {
                         settleTime = mConstants.BG_STATE_SETTLE_TIME;
                     }
-                    uidState.pendingStateCommitTime = SystemClock.elapsedRealtime() + settleTime;
+                    final long commitTime = SystemClock.elapsedRealtime() + settleTime;
+                    uidState.pendingStateCommitTime = commitTime;
+
+                    mHandler.sendMessageDelayed(
+                            PooledLambda.obtainMessage(AppOpsService::updatePendingState, this,
+                                    commitTime + 1, uid), settleTime + 1);
                 }
-                if (uidState.startNesting != 0) {
-                    // There is some actively running operation...  need to find it
-                    // and appropriately update its state.
-                    final long now = System.currentTimeMillis();
-                    final long nowElapsed = SystemClock.elapsedRealtime();
-                    for (int i = uidState.pkgOps.size() - 1; i >= 0; i--) {
-                        final Ops ops = uidState.pkgOps.valueAt(i);
-                        for (int j = ops.size() - 1; j >= 0; j--) {
-                            final Op op = ops.valueAt(j);
+
+                if (uidState.pkgOps != null) {
+                    int numPkgs = uidState.pkgOps.size();
+                    for (int pkgNum = 0; pkgNum < numPkgs; pkgNum++) {
+                        Ops ops = uidState.pkgOps.valueAt(pkgNum);
+
+                        int numOps = ops.size();
+                        for (int opNum = 0; opNum < numOps; opNum++) {
+                            Op op = ops.valueAt(opNum);
 
                             int numFeatures = op.mFeatures.size();
-                            for (int featureNum = 0; featureNum < numFeatures;
-                                    featureNum++) {
-                                final FeatureOp featureOp = op.mFeatures.valueAt(
-                                        featureNum);
-                                if (featureOp.startNesting > 0) {
-                                    final long duration = SystemClock.elapsedRealtime()
-                                            - featureOp.startRealtime;
-                                    // We don't support proxy long running ops (start/stop)
-                                    mHistoricalRegistry.increaseOpAccessDuration(op.op,
-                                            op.uidState.uid, op.packageName, oldPendingState,
-                                            AppOpsManager.OP_FLAG_SELF, duration);
-                                    // Finish the op in the old state
-                                    featureOp.finished(now, duration, oldPendingState,
-                                            AppOpsManager.OP_FLAG_SELF);
-                                    // Start the op in the new state
-                                    featureOp.startRealtime = nowElapsed;
-                                    featureOp.started(now, newState, AppOpsManager.OP_FLAG_SELF);
-                                }
+                            for (int featureNum = 0; featureNum < numFeatures; featureNum++) {
+                                FeatureOp featureOp = op.mFeatures.valueAt(featureNum);
+
+                                featureOp.onUidStateChanged(newState);
                             }
                         }
                     }
@@ -1160,6 +1846,9 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
         if (doWrite) {
             writeState();
+        }
+        if (AppOpsManager.NOTE_OP_COLLECTION_ENABLED && mWriteNoteOpsScheduled) {
+            writeNoteOps();
         }
     }
 
@@ -1202,7 +1891,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             resOps = new ArrayList<>();
             for (int i = 0; i < opModeCount; i++) {
                 int code = uidState.opModes.keyAt(i);
-                resOps.add(new OpEntry(code, uidState.opModes.get(code), new Pair[0]));
+                resOps.add(new OpEntry(code, uidState.opModes.get(code), Collections.emptyMap()));
             }
         } else {
             for (int j=0; j<ops.length; j++) {
@@ -1211,7 +1900,8 @@ public class AppOpsService extends IAppOpsService.Stub {
                     if (resOps == null) {
                         resOps = new ArrayList<>();
                     }
-                    resOps.add(new OpEntry(code, uidState.opModes.get(code), new Pair[0]));
+                    resOps.add(new OpEntry(code, uidState.opModes.get(code),
+                            Collections.emptyMap()));
                 }
             }
         }
@@ -1219,16 +1909,6 @@ public class AppOpsService extends IAppOpsService.Stub {
     }
 
     private static @NonNull OpEntry getOpEntryForResult(@NonNull Op op, long elapsedNow) {
-        final int numFeatures = op.mFeatures.size();
-
-        for (int i = 0; i < numFeatures; i++) {
-            final FeatureOp featureOp = op.mFeatures.valueAt(i);
-            if (featureOp.running) {
-                featureOp.continuing(elapsedNow - featureOp.startRealtime,
-                        op.uidState.state, AppOpsManager.OP_FLAG_SELF);
-            }
-        }
-
         return op.createEntryLocked();
     }
 
@@ -1273,7 +1953,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             return Collections.emptyList();
         }
         synchronized (this) {
-            Ops pkgOps = getOpsRawLocked(uid, resolvedPackageName, false /* isPrivileged */,
+            Ops pkgOps = getOpsRawLocked(uid, resolvedPackageName, null, false /* isPrivileged */,
                     false /* edit */);
             if (pkgOps == null) {
                 return null;
@@ -1290,19 +1970,57 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
     }
 
+    /**
+     * Verify that historical appop request arguments are valid.
+     */
+    private void ensureHistoricalOpRequestIsValid(int uid, String packageName, String featureId,
+            List<String> opNames, int filter, long beginTimeMillis, long endTimeMillis,
+            int flags) {
+        if ((filter & FILTER_BY_UID) != 0) {
+            Preconditions.checkArgument(uid != Process.INVALID_UID);
+        } else {
+            Preconditions.checkArgument(uid == Process.INVALID_UID);
+        }
+
+        if ((filter & FILTER_BY_PACKAGE_NAME) != 0) {
+            Objects.requireNonNull(packageName);
+        } else {
+            Preconditions.checkArgument(packageName == null);
+        }
+
+        if ((filter & FILTER_BY_FEATURE_ID) == 0) {
+            Preconditions.checkArgument(featureId == null);
+        }
+
+        if ((filter & FILTER_BY_OP_NAMES) != 0) {
+            Objects.requireNonNull(opNames);
+        } else {
+            Preconditions.checkArgument(opNames == null);
+        }
+
+        Preconditions.checkFlagsArgument(filter,
+                FILTER_BY_UID | FILTER_BY_PACKAGE_NAME | FILTER_BY_FEATURE_ID | FILTER_BY_OP_NAMES);
+        Preconditions.checkArgumentNonnegative(beginTimeMillis);
+        Preconditions.checkArgument(endTimeMillis > beginTimeMillis);
+        Preconditions.checkFlagsArgument(flags, OP_FLAGS_ALL);
+    }
+
     @Override
-    public void getHistoricalOps(int uid, @NonNull String packageName,
-            @Nullable List<String> opNames, long beginTimeMillis, long endTimeMillis,
-            @OpFlags int flags, @NonNull RemoteCallback callback) {
-        // Use the builder to validate arguments.
-        new HistoricalOpsRequest.Builder(
-                beginTimeMillis, endTimeMillis)
-                .setUid(uid)
-                .setPackageName(packageName)
-                .setOpNames(opNames)
-                .setFlags(flags)
-                .build();
-        Preconditions.checkNotNull(callback, "callback cannot be null");
+    public void getHistoricalOps(int uid, String packageName, String featureId,
+            List<String> opNames, int filter, long beginTimeMillis, long endTimeMillis,
+            int flags, RemoteCallback callback) {
+        ensureHistoricalOpRequestIsValid(uid, packageName, featureId, opNames, filter,
+                beginTimeMillis, endTimeMillis, flags);
+        Objects.requireNonNull(callback, "callback cannot be null");
+
+        ActivityManagerInternal ami = LocalServices.getService(ActivityManagerInternal.class);
+        boolean isCallerInstrumented = ami.isUidCurrentlyInstrumented(Binder.getCallingUid());
+        boolean isCallerSystem = Binder.getCallingPid() == Process.myPid();
+
+        if (!isCallerSystem && !isCallerInstrumented) {
+            mHandler.post(() -> callback.sendResult(new Bundle()));
+            return;
+        }
 
         mContext.enforcePermission(android.Manifest.permission.GET_APP_OPS_STATS,
                 Binder.getCallingPid(), Binder.getCallingUid(), "getHistoricalOps");
@@ -1311,23 +2029,18 @@ public class AppOpsService extends IAppOpsService.Stub {
                 ? opNames.toArray(new String[opNames.size()]) : null;
 
         // Must not hold the appops lock
-        mHistoricalRegistry.getHistoricalOps(uid, packageName, opNamesArray,
-                beginTimeMillis, endTimeMillis, flags, callback);
+        mHandler.post(PooledLambda.obtainRunnable(HistoricalRegistry::getHistoricalOps,
+                mHistoricalRegistry, uid, packageName, featureId, opNamesArray, filter,
+                beginTimeMillis, endTimeMillis, flags, callback).recycleOnUse());
     }
 
     @Override
-    public void getHistoricalOpsFromDiskRaw(int uid, @NonNull String packageName,
-            @Nullable List<String> opNames, long beginTimeMillis, long endTimeMillis,
-            @OpFlags int flags, @NonNull RemoteCallback callback) {
-        // Use the builder to validate arguments.
-        new HistoricalOpsRequest.Builder(
-                beginTimeMillis, endTimeMillis)
-                .setUid(uid)
-                .setPackageName(packageName)
-                .setOpNames(opNames)
-                .setFlags(flags)
-                .build();
-        Preconditions.checkNotNull(callback, "callback cannot be null");
+    public void getHistoricalOpsFromDiskRaw(int uid, String packageName, String featureId,
+            List<String> opNames, int filter, long beginTimeMillis, long endTimeMillis,
+            int flags, RemoteCallback callback) {
+        ensureHistoricalOpRequestIsValid(uid, packageName, featureId, opNames, filter,
+                beginTimeMillis, endTimeMillis, flags);
+        Objects.requireNonNull(callback, "callback cannot be null");
 
         mContext.enforcePermission(Manifest.permission.MANAGE_APPOPS,
                 Binder.getCallingPid(), Binder.getCallingUid(), "getHistoricalOps");
@@ -1336,8 +2049,9 @@ public class AppOpsService extends IAppOpsService.Stub {
                 ? opNames.toArray(new String[opNames.size()]) : null;
 
         // Must not hold the appops lock
-        mHistoricalRegistry.getHistoricalOpsFromDiskRaw(uid, packageName, opNamesArray,
-                beginTimeMillis, endTimeMillis, flags, callback);
+        mHandler.post(PooledLambda.obtainRunnable(HistoricalRegistry::getHistoricalOpsFromDiskRaw,
+                mHistoricalRegistry, uid, packageName, featureId, opNamesArray,
+                filter, beginTimeMillis, endTimeMillis, flags, callback).recycleOnUse());
     }
 
     @Override
@@ -1373,7 +2087,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         op.removeFeaturesWithNoTime();
 
         if (op.mFeatures.size() == 0) {
-            Ops ops = getOpsRawLocked(uid, packageName, false /* isPrivileged */,
+            Ops ops = getOpsRawLocked(uid, packageName, null, false /* isPrivileged */,
                     false /* edit */);
             if (ops != null) {
                 ops.remove(op.op);
@@ -1414,6 +2128,11 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public void setUidMode(int code, int uid, int mode) {
+        setUidMode(code, uid, mode, null);
+    }
+
+    private void setUidMode(int code, int uid, int mode,
+            @Nullable IAppOpsCallback permissionPolicyCallback) {
         if (DEBUG) {
             Slog.i(TAG, "uid " + uid + " OP_" + opToName(code) + " := " + modeToName(mode)
                     + " by uid " + Binder.getCallingUid());
@@ -1423,7 +2142,9 @@ public class AppOpsService extends IAppOpsService.Stub {
         verifyIncomingOp(code);
         code = AppOpsManager.opToSwitch(code);
 
-        updatePermissionRevokedCompat(uid, code, mode);
+        if (permissionPolicyCallback == null) {
+            updatePermissionRevokedCompat(uid, code, mode);
+        }
 
         synchronized (this) {
             final int defaultMode = AppOpsManager.opToDefaultMode(code);
@@ -1461,6 +2182,19 @@ public class AppOpsService extends IAppOpsService.Stub {
             uidState.evalForegroundOps(mOpModeWatchers);
         }
 
+        notifyOpChangedForAllPkgsInUid(code, uid, false, permissionPolicyCallback);
+        notifyOpChangedSync(code, uid, null, mode);
+    }
+
+    /**
+     * Notify that an op changed for all packages in an uid.
+     *
+     * @param code The op that changed
+     * @param uid The uid the op was changed for
+     * @param onlyForeground Only notify watchers that watch for foreground changes
+     */
+    private void notifyOpChangedForAllPkgsInUid(int code, int uid, boolean onlyForeground,
+            @Nullable IAppOpsCallback callbackToIgnore) {
         String[] uidPackageNames = getPackagesForUid(uid);
         ArrayMap<ModeCallback, ArraySet<String>> callbackSpecs = null;
 
@@ -1470,6 +2204,10 @@ public class AppOpsService extends IAppOpsService.Stub {
                 final int callbackCount = callbacks.size();
                 for (int i = 0; i < callbackCount; i++) {
                     ModeCallback callback = callbacks.valueAt(i);
+                    if (onlyForeground && (callback.mFlags & WATCH_FOREGROUND_CHANGES) == 0) {
+                        continue;
+                    }
+
                     ArraySet<String> changedPackages = new ArraySet<>();
                     Collections.addAll(changedPackages, uidPackageNames);
                     if (callbackSpecs == null) {
@@ -1488,6 +2226,10 @@ public class AppOpsService extends IAppOpsService.Stub {
                     final int callbackCount = callbacks.size();
                     for (int i = 0; i < callbackCount; i++) {
                         ModeCallback callback = callbacks.valueAt(i);
+                        if (onlyForeground && (callback.mFlags & WATCH_FOREGROUND_CHANGES) == 0) {
+                            continue;
+                        }
+
                         ArraySet<String> changedPackages = callbackSpecs.get(callback);
                         if (changedPackages == null) {
                             changedPackages = new ArraySet<>();
@@ -1497,10 +2239,13 @@ public class AppOpsService extends IAppOpsService.Stub {
                     }
                 }
             }
+
+            if (callbackSpecs != null && callbackToIgnore != null) {
+                callbackSpecs.remove(mModeWatchers.get(callbackToIgnore.asBinder()));
+            }
         }
 
         if (callbackSpecs == null) {
-            notifyOpChangedSync(code, uid, null, mode);
             return;
         }
 
@@ -1522,31 +2267,31 @@ public class AppOpsService extends IAppOpsService.Stub {
                 }
             }
         }
-
-        notifyOpChangedSync(code, uid, null, mode);
     }
 
     private void updatePermissionRevokedCompat(int uid, int switchCode, int mode) {
-        PackageManagerInternal packageManagerInternal = LocalServices.getService(
-                PackageManagerInternal.class);
-        if (packageManagerInternal.getUidTargetSdkVersion(uid) >= Build.VERSION_CODES.M) {
+        PackageManager packageManager = mContext.getPackageManager();
+        if (packageManager == null) {
+            // This can only happen during early boot. At this time the permission state and appop
+            // state are in sync
             return;
         }
 
-        PackageManager packageManager = mContext.getPackageManager();
         String[] packageNames = packageManager.getPackagesForUid(uid);
         if (ArrayUtils.isEmpty(packageNames)) {
             return;
         }
         String packageName = packageNames[0];
 
-        List<Integer> ops = getSwitchOpToOps().get(switchCode);
-        int opsSize = CollectionUtils.size(ops);
-        for (int i = 0; i < opsSize; i++) {
-            int code = ops.get(i);
-
+        int[] ops = mSwitchedOps.get(switchCode);
+        for (int code : ops) {
             String permissionName = AppOpsManager.opToPermission(code);
             if (permissionName == null) {
+                continue;
+            }
+
+            if (packageManager.checkPermission(permissionName, packageName)
+                    != PackageManager.PERMISSION_GRANTED) {
                 continue;
             }
 
@@ -1562,24 +2307,48 @@ public class AppOpsService extends IAppOpsService.Stub {
                 continue;
             }
 
+            PackageManagerInternal packageManagerInternal = LocalServices.getService(
+                    PackageManagerInternal.class);
+            boolean supportsRuntimePermissions = packageManagerInternal.getUidTargetSdkVersion(uid)
+                    >= Build.VERSION_CODES.M;
+
             UserHandle user = UserHandle.getUserHandleForUid(uid);
             boolean isRevokedCompat;
             if (permissionInfo.backgroundPermission != null) {
-                boolean isBackgroundRevokedCompat = mode != AppOpsManager.MODE_ALLOWED;
-                long identity = Binder.clearCallingIdentity();
-                try {
-                    packageManager.updatePermissionFlags(permissionInfo.backgroundPermission,
-                            packageName, PackageManager.FLAG_PERMISSION_REVOKED_COMPAT,
-                            isBackgroundRevokedCompat
-                                    ? PackageManager.FLAG_PERMISSION_REVOKED_COMPAT : 0, user);
-                } finally {
-                    Binder.restoreCallingIdentity(identity);
+                if (packageManager.checkPermission(permissionInfo.backgroundPermission, packageName)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    boolean isBackgroundRevokedCompat = mode != AppOpsManager.MODE_ALLOWED;
+
+                    if (isBackgroundRevokedCompat && supportsRuntimePermissions) {
+                        Slog.w(TAG, "setUidMode() called with a mode inconsistent with runtime"
+                                + " permission state, this is discouraged and you should revoke the"
+                                + " runtime permission instead: uid=" + uid + ", switchCode="
+                                + switchCode + ", mode=" + mode + ", permission="
+                                + permissionInfo.backgroundPermission);
+                    }
+
+                    long identity = Binder.clearCallingIdentity();
+                    try {
+                        packageManager.updatePermissionFlags(permissionInfo.backgroundPermission,
+                                packageName, PackageManager.FLAG_PERMISSION_REVOKED_COMPAT,
+                                isBackgroundRevokedCompat
+                                        ? PackageManager.FLAG_PERMISSION_REVOKED_COMPAT : 0, user);
+                    } finally {
+                        Binder.restoreCallingIdentity(identity);
+                    }
                 }
 
                 isRevokedCompat = mode != AppOpsManager.MODE_ALLOWED
                         && mode != AppOpsManager.MODE_FOREGROUND;
             } else {
                 isRevokedCompat = mode != AppOpsManager.MODE_ALLOWED;
+            }
+
+            if (isRevokedCompat && supportsRuntimePermissions) {
+                Slog.w(TAG, "setUidMode() called with a mode inconsistent with runtime"
+                        + " permission state, this is discouraged and you should revoke the"
+                        + " runtime permission instead: uid=" + uid + ", switchCode="
+                        + switchCode + ", mode=" + mode + ", permission=" + permissionName);
             }
 
             long identity = Binder.clearCallingIdentity();
@@ -1590,25 +2359,6 @@ public class AppOpsService extends IAppOpsService.Stub {
             } finally {
                 Binder.restoreCallingIdentity(identity);
             }
-        }
-    }
-
-    @NonNull
-    private SparseArray<List<Integer>> getSwitchOpToOps() {
-        synchronized (this) {
-            if (mSwitchOpToOps == null) {
-                mSwitchOpToOps = new SparseArray<>();
-                for (int op = 0; op < _NUM_OP; op++) {
-                    int switchOp = AppOpsManager.opToSwitch(op);
-                    List<Integer> ops = mSwitchOpToOps.get(switchOp);
-                    if (ops == null) {
-                        ops = new ArrayList<>();
-                        mSwitchOpToOps.put(switchOp, ops);
-                    }
-                    ops.add(op);
-                }
-            }
-            return mSwitchOpToOps;
         }
     }
 
@@ -1630,6 +2380,11 @@ public class AppOpsService extends IAppOpsService.Stub {
      */
     @Override
     public void setMode(int code, int uid, @NonNull String packageName, int mode) {
+        setMode(code, uid, packageName, mode, null);
+    }
+
+    private void setMode(int code, int uid, @NonNull String packageName, int mode,
+            @Nullable IAppOpsCallback permissionPolicyCallback) {
         enforceManageAppOpsModes(Binder.getCallingPid(), Binder.getCallingUid(), uid);
         verifyIncomingOp(code);
         ArraySet<ModeCallback> repCbs = null;
@@ -1637,22 +2392,15 @@ public class AppOpsService extends IAppOpsService.Stub {
 
         boolean isPrivileged;
         try {
-            isPrivileged = verifyAndGetIsPrivileged(uid, packageName);
+            isPrivileged = verifyAndGetIsPrivileged(uid, packageName, null);
         } catch (SecurityException e) {
             Slog.e(TAG, "Cannot setMode", e);
             return;
         }
 
-        // STOPSHIP: Remove this check once we are sure no one is doing it.
-        if (code == OP_COARSE_LOCATION && mode != AppOpsManager.opToDefaultMode(code)) {
-            Slog.wtf(TAG, "Trying to setMode() instead of setUidMode(), " + "code=" + code
-                    + ", uid=" + uid + ", packageName=" + packageName + ", mode=" + mode
-                    + ", callingUid=" + Binder.getCallingUid(), new RuntimeException());
-        }
-
         synchronized (this) {
             UidState uidState = getUidStateLocked(uid, false);
-            Op op = getOpLocked(code, uid, packageName, isPrivileged, true);
+            Op op = getOpLocked(code, uid, packageName, null, isPrivileged, true);
             if (op != null) {
                 if (op.mode != mode) {
                     op.mode = mode;
@@ -1672,6 +2420,9 @@ public class AppOpsService extends IAppOpsService.Stub {
                             repCbs = new ArraySet<>();
                         }
                         repCbs.addAll(cbs);
+                    }
+                    if (repCbs != null && permissionPolicyCallback != null) {
+                        repCbs.remove(mModeWatchers.get(permissionPolicyCallback.asBinder()));
                     }
                     if (mode == AppOpsManager.opToDefaultMode(op.op)) {
                         // If going into the default mode, prune this op
@@ -1704,16 +2455,29 @@ public class AppOpsService extends IAppOpsService.Stub {
         if (uid != UID_ANY && callback.mWatchingUid >= 0 && callback.mWatchingUid != uid) {
             return;
         }
-        // There are features watching for mode changes such as window manager
-        // and location manager which are in our process. The callbacks in these
-        // features may require permissions our remote caller does not have.
-        final long identity = Binder.clearCallingIdentity();
-        try {
-            callback.mCallback.opChanged(code, uid, packageName);
-        } catch (RemoteException e) {
-            /* ignore */
-        } finally {
-            Binder.restoreCallingIdentity(identity);
+
+        // See CALL_BACK_ON_CHANGED_LISTENER_WITH_SWITCHED_OP_CHANGE
+        int[] switchedCodes;
+        if (callback.mWatchedOpCode == ALL_OPS) {
+            switchedCodes = mSwitchedOps.get(code);
+        } else if (callback.mWatchedOpCode == OP_NONE) {
+            switchedCodes = new int[]{code};
+        } else {
+            switchedCodes = new int[]{callback.mWatchedOpCode};
+        }
+
+        for (int switchedCode : switchedCodes) {
+            // There are features watching for mode changes such as window manager
+            // and location manager which are in our process. The callbacks in these
+            // features may require permissions our remote caller does not have.
+            final long identity = Binder.clearCallingIdentity();
+            try {
+                callback.mCallback.opChanged(switchedCode, uid, packageName);
+            } catch (RemoteException e) {
+                /* ignore */
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
         }
     }
 
@@ -1908,17 +2672,32 @@ public class AppOpsService extends IAppOpsService.Stub {
             return;
         }
         synchronized (this) {
-            op = (op != AppOpsManager.OP_NONE) ? AppOpsManager.opToSwitch(op) : op;
+            int switchOp = (op != AppOpsManager.OP_NONE) ? AppOpsManager.opToSwitch(op) : op;
+
+            // See CALL_BACK_ON_CHANGED_LISTENER_WITH_SWITCHED_OP_CHANGE
+            int notifiedOps;
+            if (Compatibility.isChangeEnabled(
+                    CALL_BACK_ON_CHANGED_LISTENER_WITH_SWITCHED_OP_CHANGE)) {
+                if (op == OP_NONE) {
+                    notifiedOps = ALL_OPS;
+                } else {
+                    notifiedOps = op;
+                }
+            } else {
+                notifiedOps = switchOp;
+            }
+
             ModeCallback cb = mModeWatchers.get(callback.asBinder());
             if (cb == null) {
-                cb = new ModeCallback(callback, watchedUid, flags, callingUid, callingPid);
+                cb = new ModeCallback(callback, watchedUid, flags, notifiedOps, callingUid,
+                        callingPid);
                 mModeWatchers.put(callback.asBinder(), cb);
             }
-            if (op != AppOpsManager.OP_NONE) {
-                ArraySet<ModeCallback> cbs = mOpModeWatchers.get(op);
+            if (switchOp != AppOpsManager.OP_NONE) {
+                ArraySet<ModeCallback> cbs = mOpModeWatchers.get(switchOp);
                 if (cbs == null) {
                     cbs = new ArraySet<>();
-                    mOpModeWatchers.put(op, cbs);
+                    mOpModeWatchers.put(switchOp, cbs);
                 }
                 cbs.add(cb);
             }
@@ -1959,18 +2738,6 @@ public class AppOpsService extends IAppOpsService.Stub {
                 }
             }
             evalAllForegroundOpsLocked();
-        }
-    }
-
-    @Override
-    public IBinder getToken(IBinder clientToken) {
-        synchronized (this) {
-            ClientState cs = mClients.get(clientToken);
-            if (cs == null) {
-                cs = new ClientState(clientToken);
-                mClients.put(clientToken, cs);
-            }
-            return cs;
         }
     }
 
@@ -2034,7 +2801,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         boolean isPrivileged;
 
         try {
-            isPrivileged = verifyAndGetIsPrivileged(uid, packageName);
+            isPrivileged = verifyAndGetIsPrivileged(uid, packageName, null);
         } catch (SecurityException e) {
             Slog.e(TAG, "checkOperation", e);
             return AppOpsManager.opToDefaultMode(code);
@@ -2044,7 +2811,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             return AppOpsManager.MODE_IGNORED;
         }
         synchronized (this) {
-            if (isOpRestrictedLocked(uid, code, packageName, isPrivileged)) {
+            if (isOpRestrictedLocked(uid, code, packageName, null, isPrivileged)) {
                 return AppOpsManager.MODE_IGNORED;
             }
             code = AppOpsManager.opToSwitch(code);
@@ -2054,7 +2821,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                 final int rawMode = uidState.opModes.get(code);
                 return raw ? rawMode : uidState.evalMode(code, rawMode);
             }
-            Op op = getOpLocked(code, uid, packageName, false, false);
+            Op op = getOpLocked(code, uid, packageName, null, false, false);
             if (op == null) {
                 return AppOpsManager.opToDefaultMode(code);
             }
@@ -2115,9 +2882,9 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public int checkPackage(int uid, String packageName) {
-        Preconditions.checkNotNull(packageName);
+        Objects.requireNonNull(packageName);
         try {
-            verifyAndGetIsPrivileged(uid, packageName);
+            verifyAndGetIsPrivileged(uid, packageName, null);
 
             return AppOpsManager.MODE_ALLOWED;
         } catch (SecurityException ignored) {
@@ -2128,7 +2895,7 @@ public class AppOpsService extends IAppOpsService.Stub {
     @Override
     public int noteProxyOperation(int code, int proxiedUid, String proxiedPackageName,
             String proxiedFeatureId, int proxyUid, String proxyPackageName,
-            String proxyFeatureId) {
+            String proxyFeatureId, boolean shouldCollectAsyncNotedOp, String message) {
         verifyIncomingUid(proxyUid);
         verifyIncomingOp(code);
 
@@ -2144,7 +2911,8 @@ public class AppOpsService extends IAppOpsService.Stub {
         final int proxyFlags = isProxyTrusted ? AppOpsManager.OP_FLAG_TRUSTED_PROXY
                 : AppOpsManager.OP_FLAG_UNTRUSTED_PROXY;
         final int proxyMode = noteOperationUnchecked(code, proxyUid, resolveProxyPackageName,
-                proxyFeatureId, Process.INVALID_UID, null, null, proxyFlags);
+                proxyFeatureId, Process.INVALID_UID, null, null, proxyFlags,
+                !isProxyTrusted, "proxy " + message);
         if (proxyMode != AppOpsManager.MODE_ALLOWED || Binder.getCallingUid() == proxiedUid) {
             return proxyMode;
         }
@@ -2157,23 +2925,27 @@ public class AppOpsService extends IAppOpsService.Stub {
                 : AppOpsManager.OP_FLAG_UNTRUSTED_PROXIED;
         return noteOperationUnchecked(code, proxiedUid, resolveProxiedPackageName,
                 proxiedFeatureId, proxyUid, resolveProxyPackageName, proxyFeatureId,
-                proxiedFlags);
+                proxiedFlags, shouldCollectAsyncNotedOp, message);
     }
 
     @Override
-    public int noteOperation(int code, int uid, String packageName, String featureId) {
+    public int noteOperation(int code, int uid, String packageName, String featureId,
+            boolean shouldCollectAsyncNotedOp, String message) {
         final CheckOpsDelegate delegate;
         synchronized (this) {
             delegate = mCheckOpsDelegate;
         }
         if (delegate == null) {
-            return noteOperationImpl(code, uid, packageName, featureId);
+            return noteOperationImpl(code, uid, packageName, featureId, shouldCollectAsyncNotedOp,
+                    message);
         }
-        return delegate.noteOperation(code, uid, packageName, featureId,
-                AppOpsService.this::noteOperationImpl);
+        return delegate.noteOperation(code, uid, packageName, featureId, shouldCollectAsyncNotedOp,
+                message, AppOpsService.this::noteOperationImpl);
     }
 
-    private int noteOperationImpl(int code, int uid, String packageName, String featureId) {
+    private int noteOperationImpl(int code, int uid, @Nullable String packageName,
+            @Nullable String featureId, boolean shouldCollectAsyncNotedOp,
+            @Nullable String message) {
         verifyIncomingUid(uid);
         verifyIncomingOp(code);
         String resolvedPackageName = resolvePackageName(uid, packageName);
@@ -2181,24 +2953,25 @@ public class AppOpsService extends IAppOpsService.Stub {
             return AppOpsManager.MODE_IGNORED;
         }
         return noteOperationUnchecked(code, uid, resolvedPackageName, featureId,
-                Process.INVALID_UID, null, null, AppOpsManager.OP_FLAG_SELF);
+                Process.INVALID_UID, null, null, AppOpsManager.OP_FLAG_SELF,
+                shouldCollectAsyncNotedOp, message);
     }
 
-    private int noteOperationUnchecked(int code, int uid, String packageName, String featureId,
-            int proxyUid, String proxyPackageName, @Nullable String proxyFeatureId,
-            @OpFlags int flags) {
-        // TODO moltmann: Verify that feature is declared in package
-
+    private int noteOperationUnchecked(int code, int uid, @NonNull String packageName,
+            @Nullable String featureId, int proxyUid, String proxyPackageName,
+            @Nullable String proxyFeatureId, @OpFlags int flags, boolean shouldCollectAsyncNotedOp,
+            @Nullable String message) {
         boolean isPrivileged;
         try {
-            isPrivileged = verifyAndGetIsPrivileged(uid, packageName);
+            isPrivileged = verifyAndGetIsPrivileged(uid, packageName, featureId);
         } catch (SecurityException e) {
             Slog.e(TAG, "noteOperation", e);
             return AppOpsManager.MODE_ERRORED;
         }
 
         synchronized (this) {
-            final Ops ops = getOpsRawLocked(uid, packageName, isPrivileged, true /* edit */);
+            final Ops ops = getOpsRawLocked(uid, packageName, featureId, isPrivileged,
+                    true /* edit */);
             if (ops == null) {
                 scheduleOpNotedIfNeededLocked(code, uid, packageName,
                         AppOpsManager.MODE_IGNORED);
@@ -2206,23 +2979,18 @@ public class AppOpsService extends IAppOpsService.Stub {
                         + " package " + packageName);
                 return AppOpsManager.MODE_ERRORED;
             }
-            final Op op = getOpLocked(ops, code, true);
+            final Op op = getOpLocked(ops, code, uid, true);
             final FeatureOp featureOp = op.getOrCreateFeature(op, featureId);
-            if (isOpRestrictedLocked(uid, code, packageName, isPrivileged)) {
+            if (isOpRestrictedLocked(uid, code, packageName, featureId, isPrivileged)) {
                 scheduleOpNotedIfNeededLocked(code, uid, packageName,
                         AppOpsManager.MODE_IGNORED);
                 return AppOpsManager.MODE_IGNORED;
             }
             final UidState uidState = ops.uidState;
-            if (featureOp.running) {
-                final OpFeatureEntry entry = getOpLocked(ops, code,
-                        false).createSingleFeatureEntryLocked(featureId).getFeatures().get(
-                        featureId);
-
-                Slog.w(TAG, "Noting op not finished: uid " + uid + " pkg " + packageName
-                        + " code " + code + " time=" + entry.getLastAccessTime(uidState.state,
-                        uidState.state, flags) + " duration=" + entry.getLastDuration(
-                                uidState.state, uidState.state, flags));
+            if (featureOp.isRunning()) {
+                Slog.w(TAG, "Noting op not finished: uid " + uid + " pkg " + packageName + " code "
+                        + code + " startTime of in progress event="
+                        + featureOp.mInProgressEvents.valueAt(0).getStartTime());
             }
 
             final int switchCode = AppOpsManager.opToSwitch(code);
@@ -2234,37 +3002,33 @@ public class AppOpsService extends IAppOpsService.Stub {
                     if (DEBUG) Slog.d(TAG, "noteOperation: uid reject #" + uidMode + " for code "
                             + switchCode + " (" + code + ") uid " + uid + " package "
                             + packageName);
-                    featureOp.rejected(System.currentTimeMillis(), proxyUid, proxyPackageName,
-                            proxyFeatureId, uidState.state, flags);
-                    mHistoricalRegistry.incrementOpRejected(code, uid, packageName,
-                            uidState.state, flags);
+                    featureOp.rejected(uidState.state, flags);
                     scheduleOpNotedIfNeededLocked(code, uid, packageName, uidMode);
                     return uidMode;
                 }
             } else {
-                final Op switchOp = switchCode != code ? getOpLocked(ops, switchCode, true) : op;
+                final Op switchOp = switchCode != code ? getOpLocked(ops, switchCode, uid, true)
+                        : op;
                 final int mode = switchOp.evalMode();
-                if (switchOp.mode != AppOpsManager.MODE_ALLOWED) {
+                if (mode != AppOpsManager.MODE_ALLOWED) {
                     if (DEBUG) Slog.d(TAG, "noteOperation: reject #" + mode + " for code "
                             + switchCode + " (" + code + ") uid " + uid + " package "
                             + packageName);
-                    featureOp.rejected(System.currentTimeMillis(), proxyUid, proxyPackageName,
-                            proxyFeatureId, uidState.state, flags);
-                    mHistoricalRegistry.incrementOpRejected(code, uid, packageName,
-                            uidState.state, flags);
+                    featureOp.rejected(uidState.state, flags);
                     scheduleOpNotedIfNeededLocked(code, uid, packageName, mode);
                     return mode;
                 }
             }
             if (DEBUG) Slog.d(TAG, "noteOperation: allowing code " + code + " uid " + uid
                     + " package " + packageName + (featureId == null ? "" : "." + featureId));
-            featureOp.accessed(System.currentTimeMillis(), proxyUid, proxyPackageName,
-                    proxyFeatureId, uidState.state, flags);
-            // TODO moltmann: Add features to historical app-ops
-            mHistoricalRegistry.incrementOpAccessedCount(op.op, uid, packageName,
-                    uidState.state, flags);
+            featureOp.accessed(proxyUid, proxyPackageName, proxyFeatureId, uidState.state, flags);
             scheduleOpNotedIfNeededLocked(code, uid, packageName,
                     AppOpsManager.MODE_ALLOWED);
+
+            if (shouldCollectAsyncNotedOp) {
+                collectAsyncNotedOp(uid, packageName, code, featureId, message);
+            }
+
             return AppOpsManager.MODE_ALLOWED;
         }
     }
@@ -2330,7 +3094,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         Preconditions.checkArgument(!ArrayUtils.isEmpty(ops), "Ops cannot be null or empty");
         Preconditions.checkArrayElementsInRange(ops, 0, AppOpsManager._NUM_OP - 1,
                 "Invalid op code in: " + Arrays.toString(ops));
-        Preconditions.checkNotNull(callback, "Callback cannot be null");
+        Objects.requireNonNull(callback, "Callback cannot be null");
         synchronized (this) {
             SparseArray<NotedCallback> callbacks = mNotedWatchers.get(callback.asBinder());
             if (callbacks == null) {
@@ -2347,7 +3111,7 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public void stopWatchingNoted(IAppOpsNotedCallback callback) {
-        Preconditions.checkNotNull(callback, "Callback cannot be null");
+        Objects.requireNonNull(callback, "Callback cannot be null");
         synchronized (this) {
             final SparseArray<NotedCallback> notedCallbacks =
                     mNotedWatchers.remove(callback.asBinder());
@@ -2361,21 +3125,20 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
     }
 
-    @Override
-    public void noteAsyncOp(String callingPackageName, int uid, String packageName, int opCode,
-            String featureId, String message) {
-        Preconditions.checkNotNull(message);
-        verifyAndGetIsPrivileged(uid, packageName);
-
-        verifyIncomingUid(uid);
-        verifyIncomingOp(opCode);
+    /**
+     * Collect an {@link AsyncNotedAppOp}.
+     *
+     * @param uid The uid the op was noted for
+     * @param packageName The package the op was noted for
+     * @param opCode The code of the op noted
+     * @param featureId The id of the feature to op was noted for
+     * @param message The message for the op noting
+     */
+    private void collectAsyncNotedOp(int uid, @NonNull String packageName, int opCode,
+            @Nullable String featureId, @NonNull String message) {
+        Objects.requireNonNull(message);
 
         int callingUid = Binder.getCallingUid();
-        long now = System.currentTimeMillis();
-
-        if (callingPackageName != null) {
-            verifyAndGetIsPrivileged(callingUid, callingPackageName);
-        }
 
         long token = Binder.clearCallingIdentity();
         try {
@@ -2384,8 +3147,11 @@ public class AppOpsService extends IAppOpsService.Stub {
 
                 RemoteCallbackList<IAppOpsAsyncNotedCallback> callbacks = mAsyncOpWatchers.get(key);
                 AsyncNotedAppOp asyncNotedOp = new AsyncNotedAppOp(opCode, callingUid,
-                        callingPackageName, featureId, message, now);
+                        featureId, message, System.currentTimeMillis());
                 final boolean[] wasNoteForwarded = {false};
+
+                reportRuntimeAppOpAccessMessageAsyncLocked(uid, packageName, opCode, featureId,
+                        message);
 
                 if (callbacks != null) {
                     callbacks.broadcast((cb) -> {
@@ -2433,13 +3199,13 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public void startWatchingAsyncNoted(String packageName, IAppOpsAsyncNotedCallback callback) {
-        Preconditions.checkNotNull(packageName);
-        Preconditions.checkNotNull(callback);
+        Objects.requireNonNull(packageName);
+        Objects.requireNonNull(callback);
 
         int uid = Binder.getCallingUid();
         Pair<String, Integer> key = getAsyncNotedOpsKey(packageName, uid);
 
-        verifyAndGetIsPrivileged(uid, packageName);
+        verifyAndGetIsPrivileged(uid, packageName, null);
 
         synchronized (this) {
             RemoteCallbackList<IAppOpsAsyncNotedCallback> callbacks = mAsyncOpWatchers.get(key);
@@ -2463,13 +3229,13 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public void stopWatchingAsyncNoted(String packageName, IAppOpsAsyncNotedCallback callback) {
-        Preconditions.checkNotNull(packageName);
-        Preconditions.checkNotNull(callback);
+        Objects.requireNonNull(packageName);
+        Objects.requireNonNull(callback);
 
         int uid = Binder.getCallingUid();
         Pair<String, Integer> key = getAsyncNotedOpsKey(packageName, uid);
 
-        verifyAndGetIsPrivileged(uid, packageName);
+        verifyAndGetIsPrivileged(uid, packageName, null);
 
         synchronized (this) {
             RemoteCallbackList<IAppOpsAsyncNotedCallback> callbacks = mAsyncOpWatchers.get(key);
@@ -2484,11 +3250,11 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public List<AsyncNotedAppOp> extractAsyncOps(String packageName) {
-        Preconditions.checkNotNull(packageName);
+        Objects.requireNonNull(packageName);
 
         int uid = Binder.getCallingUid();
 
-        verifyAndGetIsPrivileged(uid, packageName);
+        verifyAndGetIsPrivileged(uid, packageName, null);
 
         synchronized (this) {
             return mUnforwardedAsyncNotedOps.remove(getAsyncNotedOpsKey(packageName, uid));
@@ -2496,34 +3262,34 @@ public class AppOpsService extends IAppOpsService.Stub {
     }
 
     @Override
-    public int startOperation(IBinder token, int code, int uid, String packageName,
-            String featureId, boolean startIfModeDefault) {
+    public int startOperation(IBinder clientId, int code, int uid, String packageName,
+            String featureId, boolean startIfModeDefault, boolean shouldCollectAsyncNotedOp,
+            String message) {
         verifyIncomingUid(uid);
         verifyIncomingOp(code);
         String resolvedPackageName = resolvePackageName(uid, packageName);
         if (resolvedPackageName == null) {
             return  AppOpsManager.MODE_IGNORED;
         }
-        ClientState client = (ClientState)token;
 
         boolean isPrivileged;
         try {
-            isPrivileged = verifyAndGetIsPrivileged(uid, packageName);
+            isPrivileged = verifyAndGetIsPrivileged(uid, packageName, featureId);
         } catch (SecurityException e) {
             Slog.e(TAG, "startOperation", e);
             return AppOpsManager.MODE_ERRORED;
         }
 
         synchronized (this) {
-            final Ops ops = getOpsRawLocked(uid, resolvedPackageName, isPrivileged,
+            final Ops ops = getOpsRawLocked(uid, resolvedPackageName, featureId, isPrivileged,
                     true /* edit */);
             if (ops == null) {
                 if (DEBUG) Slog.d(TAG, "startOperation: no op for code " + code + " uid " + uid
                         + " package " + resolvedPackageName);
                 return AppOpsManager.MODE_ERRORED;
             }
-            final Op op = getOpLocked(ops, code, true);
-            if (isOpRestrictedLocked(uid, code, resolvedPackageName, isPrivileged)) {
+            final Op op = getOpLocked(ops, code, uid, true);
+            if (isOpRestrictedLocked(uid, code, resolvedPackageName, featureId, isPrivileged)) {
                 return AppOpsManager.MODE_IGNORED;
             }
             final FeatureOp featureOp = op.getOrCreateFeature(op, featureId);
@@ -2539,56 +3305,40 @@ public class AppOpsService extends IAppOpsService.Stub {
                     if (DEBUG) Slog.d(TAG, "noteOperation: uid reject #" + uidMode + " for code "
                             + switchCode + " (" + code + ") uid " + uid + " package "
                             + resolvedPackageName);
-                    // We don't support proxy long running ops (start/stop)
-                    featureOp.rejected(System.currentTimeMillis(), -1 /*proxyUid*/,
-                            null /*proxyPackage*/, null, uidState.state,
-                            AppOpsManager.OP_FLAG_SELF);
-                    mHistoricalRegistry.incrementOpRejected(opCode, uid, packageName,
-                            uidState.state, AppOpsManager.OP_FLAG_SELF);
+                    featureOp.rejected(uidState.state, AppOpsManager.OP_FLAG_SELF);
                     return uidMode;
                 }
             } else {
-                final Op switchOp = switchCode != code ? getOpLocked(ops, switchCode, true) : op;
+                final Op switchOp = switchCode != code ? getOpLocked(ops, switchCode, uid, true)
+                        : op;
                 final int mode = switchOp.evalMode();
                 if (mode != AppOpsManager.MODE_ALLOWED
                         && (!startIfModeDefault || mode != AppOpsManager.MODE_DEFAULT)) {
                     if (DEBUG) Slog.d(TAG, "startOperation: reject #" + mode + " for code "
                             + switchCode + " (" + code + ") uid " + uid + " package "
                             + resolvedPackageName);
-                    // We don't support proxy long running ops (start/stop)
-                    featureOp.rejected(System.currentTimeMillis(), -1 /*proxyUid*/,
-                            null /*proxyPackage*/, null, uidState.state,
-                            AppOpsManager.OP_FLAG_SELF);
-                    mHistoricalRegistry.incrementOpRejected(opCode, uid, packageName,
-                            uidState.state, AppOpsManager.OP_FLAG_SELF);
+                    featureOp.rejected(uidState.state, AppOpsManager.OP_FLAG_SELF);
                     return mode;
                 }
             }
             if (DEBUG) Slog.d(TAG, "startOperation: allowing code " + code + " uid " + uid
                     + " package " + resolvedPackageName);
-            if (featureOp.startNesting == 0) {
-                featureOp.startRealtime = SystemClock.elapsedRealtime();
-                // We don't support proxy long running ops (start/stop)
-                featureOp.started(System.currentTimeMillis(), uidState.state,
-                        AppOpsManager.OP_FLAG_SELF);
-                mHistoricalRegistry.incrementOpAccessedCount(opCode, uid, packageName,
-                        uidState.state, AppOpsManager.OP_FLAG_SELF);
-
-                // TODO moltmann: call back when a feature became inactive
-                if (uidState.startNesting == 0) {
-                    scheduleOpActiveChangedIfNeededLocked(code, uid, packageName, true);
-                }
+            try {
+                featureOp.started(clientId, uidState.state);
+            } catch (RemoteException e) {
+                throw new RuntimeException(e);
             }
-            featureOp.startNesting++;
-            uidState.startNesting++;
-            client.mStartedOps.add(new Pair<>(op, featureId));
+        }
+
+        if (shouldCollectAsyncNotedOp) {
+            collectAsyncNotedOp(uid, packageName, code, featureId, message);
         }
 
         return AppOpsManager.MODE_ALLOWED;
     }
 
     @Override
-    public void finishOperation(IBinder token, int code, int uid, String packageName,
+    public void finishOperation(IBinder clientId, int code, int uid, String packageName,
             String featureId) {
         verifyIncomingUid(uid);
         verifyIncomingOp(code);
@@ -2596,21 +3346,17 @@ public class AppOpsService extends IAppOpsService.Stub {
         if (resolvedPackageName == null) {
             return;
         }
-        if (!(token instanceof ClientState)) {
-            return;
-        }
-        ClientState client = (ClientState) token;
 
         boolean isPrivileged;
         try {
-            isPrivileged = verifyAndGetIsPrivileged(uid, packageName);
+            isPrivileged = verifyAndGetIsPrivileged(uid, packageName, featureId);
         } catch (SecurityException e) {
             Slog.e(TAG, "Cannot finishOperation", e);
             return;
         }
 
         synchronized (this) {
-            Op op = getOpLocked(code, uid, resolvedPackageName, isPrivileged, true);
+            Op op = getOpLocked(code, uid, resolvedPackageName, featureId, isPrivileged, true);
             if (op == null) {
                 return;
             }
@@ -2619,36 +3365,13 @@ public class AppOpsService extends IAppOpsService.Stub {
                 return;
             }
 
-            if (client.mStartedOps.remove(new Pair<>(op, featureId))) {
-                finishOperationLocked(op, featureId, /*finishNested*/ false);
-
-                // TODO moltmann: call back when a feature became inactive
-                if (op.uidState.startNesting <= 0) {
-                    scheduleOpActiveChangedIfNeededLocked(code, uid, packageName, false);
-                }
-
-                return;
+            try {
+                featureOp.finished(clientId);
+            } catch (IllegalStateException e) {
+                Slog.e(TAG, "Operation not started: uid=" + uid + " pkg="
+                        + packageName + " op=" + AppOpsManager.opToName(code), e);
             }
         }
-
-        // We finish ops when packages get removed to guarantee no dangling
-        // started ops. However, some part of the system may asynchronously
-        // finish ops for an already gone package. Hence, finishing an op
-        // for a non existing package is fine and we don't log as a wtf.
-        final long identity = Binder.clearCallingIdentity();
-        try {
-            if (LocalServices.getService(PackageManagerInternal.class).getPackageUid(
-                    resolvedPackageName, 0, UserHandle.getUserId(uid)) < 0) {
-                Slog.i(TAG, "Finishing op=" + AppOpsManager.opToName(code)
-                        + " for non-existing package=" + resolvedPackageName
-                        + " in uid=" + uid);
-                return;
-            }
-        } finally {
-            Binder.restoreCallingIdentity(identity);
-        }
-        Slog.wtf(TAG, "Operation not started: uid=" + uid + " pkg="
-                + packageName + " op=" + AppOpsManager.opToName(code));
     }
 
     private void scheduleOpActiveChangedIfNeededLocked(int code, int uid, String packageName,
@@ -2766,39 +3489,8 @@ public class AppOpsService extends IAppOpsService.Stub {
             return false;
         }
 
-        return permInfo.getProtection() == PROTECTION_DANGEROUS;
-    }
-
-    void finishOperationLocked(@NonNull Op op, @Nullable String featureId, boolean finishNested) {
-        final FeatureOp featureOp = op.mFeatures.get(featureId);
-        final int opCode = featureOp.parent.op;
-        final int uid = featureOp.parent.uidState.uid;
-        if (featureOp.startNesting <= 1 || finishNested) {
-            if (featureOp.startNesting == 1 || finishNested) {
-                // We don't support proxy long running ops (start/stop)
-                final long duration = SystemClock.elapsedRealtime() - featureOp.startRealtime;
-                featureOp.finished(System.currentTimeMillis(), duration, op.uidState.state,
-                        AppOpsManager.OP_FLAG_SELF);
-                mHistoricalRegistry.increaseOpAccessDuration(opCode, uid, op.packageName,
-                        op.uidState.state, AppOpsManager.OP_FLAG_SELF, duration);
-            } else {
-                final OpFeatureEntry entry = op.createSingleFeatureEntryLocked(
-                        featureId).getFeatures().get(featureId);
-                Slog.w(TAG, "Finishing op nesting under-run: uid " + uid + " pkg "
-                        + op.packageName + " code " + opCode + " time="
-                        + entry.getLastAccessTime(OP_FLAGS_ALL)
-                        + " duration=" + entry.getLastDuration(MAX_PRIORITY_UID_STATE,
-                        MIN_PRIORITY_UID_STATE, OP_FLAGS_ALL) + " nesting="
-                        + featureOp.startNesting);
-            }
-            if (featureOp.startNesting >= 1) {
-                op.uidState.startNesting -= featureOp.startNesting;
-            }
-            featureOp.startNesting = 0;
-        } else {
-            featureOp.startNesting--;
-            op.uidState.startNesting--;
-        }
+        return permInfo.getProtection() == PROTECTION_DANGEROUS
+                || (permInfo.getProtectionFlags() & PROTECTION_FLAG_APPOP) != 0;
     }
 
     private void verifyIncomingUid(int uid) {
@@ -2828,6 +3520,18 @@ public class AppOpsService extends IAppOpsService.Stub {
             uidState = new UidState(uid);
             mUidStates.put(uid, uidState);
         } else {
+            updatePendingStateIfNeededLocked(uidState);
+        }
+        return uidState;
+    }
+
+    /**
+     * Check if the pending state should be updated and do so if needed
+     *
+     * @param uidState The uidState that might have a pending state
+     */
+    private void updatePendingStateIfNeededLocked(@NonNull UidState uidState) {
+        if (uidState != null) {
             if (uidState.pendingStateCommitTime != 0) {
                 if (uidState.pendingStateCommitTime < mLastRealtime) {
                     commitUidPendingStateLocked(uidState);
@@ -2839,7 +3543,6 @@ public class AppOpsService extends IAppOpsService.Stub {
                 }
             }
         }
-        return uidState;
     }
 
     private void commitUidPendingStateLocked(UidState uidState) {
@@ -2854,27 +3557,33 @@ public class AppOpsService extends IAppOpsService.Stub {
                 final long firstUnrestrictedUidState = resolveFirstUnrestrictedUidState(code);
                 final boolean resolvedLastFg = uidState.state <= firstUnrestrictedUidState;
                 final boolean resolvedNowFg = uidState.pendingState <= firstUnrestrictedUidState;
-                if (resolvedLastFg == resolvedNowFg) {
+                if (resolvedLastFg == resolvedNowFg
+                        && uidState.capability == uidState.pendingCapability
+                        && uidState.appWidgetVisible == uidState.pendingAppWidgetVisible) {
                     continue;
                 }
-                final ArraySet<ModeCallback> callbacks = mOpModeWatchers.get(code);
-                if (callbacks != null) {
-                    for (int cbi = callbacks.size() - 1; cbi >= 0; cbi--) {
-                        final ModeCallback callback = callbacks.valueAt(cbi);
-                        if ((callback.mFlags & AppOpsManager.WATCH_FOREGROUND_CHANGES) == 0
-                                || !callback.isWatchingUid(uidState.uid)) {
-                            continue;
-                        }
-                        boolean doAllPackages = uidState.opModes != null
-                                && uidState.opModes.indexOfKey(code) >= 0
-                                && uidState.opModes.get(code) == AppOpsManager.MODE_FOREGROUND;
-                        if (uidState.pkgOps != null) {
+
+                if (uidState.opModes != null
+                        && uidState.opModes.indexOfKey(code) >= 0
+                        && uidState.opModes.get(code) == AppOpsManager.MODE_FOREGROUND) {
+                    mHandler.sendMessage(PooledLambda.obtainMessage(
+                            AppOpsService::notifyOpChangedForAllPkgsInUid,
+                            this, code, uidState.uid, true, null));
+                } else {
+                    final ArraySet<ModeCallback> callbacks = mOpModeWatchers.get(code);
+                    if (callbacks != null) {
+                        for (int cbi = callbacks.size() - 1; cbi >= 0; cbi--) {
+                            final ModeCallback callback = callbacks.valueAt(cbi);
+                            if ((callback.mFlags & AppOpsManager.WATCH_FOREGROUND_CHANGES) == 0
+                                    || !callback.isWatchingUid(uidState.uid)) {
+                                continue;
+                            }
                             for (int pkgi = uidState.pkgOps.size() - 1; pkgi >= 0; pkgi--) {
                                 final Op op = uidState.pkgOps.valueAt(pkgi).get(code);
                                 if (op == null) {
                                     continue;
                                 }
-                                if (doAllPackages || op.mode == AppOpsManager.MODE_FOREGROUND) {
+                                if (op.mode == AppOpsManager.MODE_FOREGROUND) {
                                     mHandler.sendMessage(PooledLambda.obtainMessage(
                                             AppOpsService::notifyOpChanged,
                                             this, callback, code, uidState.uid,
@@ -2888,7 +3597,23 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
         uidState.state = uidState.pendingState;
         uidState.capability = uidState.pendingCapability;
+        uidState.appWidgetVisible = uidState.pendingAppWidgetVisible;
         uidState.pendingStateCommitTime = 0;
+    }
+
+    private void updateAppWidgetVisibility(SparseArray<String> uidPackageNames, boolean visible) {
+        synchronized (this) {
+            for (int i = uidPackageNames.size() - 1; i >= 0; i--) {
+                final int uid = uidPackageNames.keyAt(i);
+                final UidState uidState = getUidStateLocked(uid, true);
+                if (uidState != null && (uidState.pendingAppWidgetVisible != visible)) {
+                    uidState.pendingAppWidgetVisible = visible;
+                    if (uidState.pendingAppWidgetVisible != uidState.appWidgetVisible) {
+                        commitUidPendingStateLocked(uidState);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -2896,22 +3621,24 @@ public class AppOpsService extends IAppOpsService.Stub {
      *
      * @param uid The uid the package belongs to
      * @param packageName The package the might belong to the uid
+     * @param featureId The feature in the package or {@code null} if no need to verify
      *
      * @return {@code true} iff the package is privileged
      */
-    private boolean verifyAndGetIsPrivileged(int uid, String packageName) {
+    private boolean verifyAndGetIsPrivileged(int uid, String packageName,
+            @Nullable String featureId) {
         if (uid == Process.ROOT_UID) {
             // For backwards compatibility, don't check package name for root UID.
             return false;
         }
 
-        // Do not check if uid/packageName is already known
+        // Do not check if uid/packageName/featureId is already known
         synchronized (this) {
             UidState uidState = mUidStates.get(uid);
             if (uidState != null && uidState.pkgOps != null) {
                 Ops ops = uidState.pkgOps.get(packageName);
 
-                if (ops != null) {
+                if (ops != null && (featureId == null || ops.knownFeatureIds.contains(featureId))) {
                     return ops.isPrivileged;
                 }
             }
@@ -2921,19 +3648,31 @@ public class AppOpsService extends IAppOpsService.Stub {
         final long ident = Binder.clearCallingIdentity();
         try {
             int pkgUid;
+            AndroidPackage pkg = LocalServices.getService(PackageManagerInternal.class).getPackage(
+                    packageName);
+            boolean isFeatureIdValid = false;
 
-            ApplicationInfo appInfo = LocalServices.getService(PackageManagerInternal.class)
-                    .getApplicationInfo(packageName, PackageManager.MATCH_DIRECT_BOOT_AWARE
-                                    | PackageManager.MATCH_DIRECT_BOOT_UNAWARE
-                                    | PackageManager.MATCH_HIDDEN_UNTIL_INSTALLED_COMPONENTS
-                                    | PackageManager.MATCH_UNINSTALLED_PACKAGES
-                                    | PackageManager.MATCH_INSTANT,
-                            Process.SYSTEM_UID, UserHandle.getUserId(uid));
-            if (appInfo != null) {
-                pkgUid = appInfo.uid;
-                isPrivileged = (appInfo.privateFlags
-                        & ApplicationInfo.PRIVATE_FLAG_PRIVILEGED) != 0;
+            if (pkg != null) {
+                if (featureId == null) {
+                    isFeatureIdValid = true;
+                } else {
+                    if (pkg.getFeatures() != null) {
+                        int numFeatures = pkg.getFeatures().size();
+                        for (int i = 0; i < numFeatures; i++) {
+                            if (pkg.getFeatures().get(i).id.equals(featureId)) {
+                                isFeatureIdValid = true;
+                            }
+                        }
+                    }
+                }
+
+                pkgUid = UserHandle.getUid(
+                        UserHandle.getUserId(uid), UserHandle.getAppId(pkg.getUid()));
+                isPrivileged = pkg.isPrivileged();
             } else {
+                // Allow any feature id for resolvable uids
+                isFeatureIdValid = true;
+
                 pkgUid = resolveUid(packageName);
                 if (pkgUid >= 0) {
                     isPrivileged = false;
@@ -2942,6 +3681,12 @@ public class AppOpsService extends IAppOpsService.Stub {
             if (pkgUid != uid) {
                 throw new SecurityException("Specified package " + packageName + " under uid " + uid
                         + " but it is really " + pkgUid);
+            }
+
+            if (!isFeatureIdValid) {
+                // TODO moltmann: Switch from logging to enforcement
+                Slog.e(TAG, "featureId " + featureId + " not declared in manifest of "
+                        + packageName);
             }
         } finally {
             Binder.restoreCallingIdentity(ident);
@@ -2955,12 +3700,14 @@ public class AppOpsService extends IAppOpsService.Stub {
      *
      * @param uid The uid the package belongs to
      * @param packageName The name of the package
+     * @param featureId The feature in the package
      * @param isPrivileged If the package is privilidged (ignored if {@code edit} is false)
      * @param edit If an ops does not exist, create the ops?
 
      * @return
      */
-    private Ops getOpsRawLocked(int uid, String packageName, boolean isPrivileged, boolean edit) {
+    private Ops getOpsRawLocked(int uid, String packageName, @Nullable String featureId,
+            boolean isPrivileged, boolean edit) {
         UidState uidState = getUidStateLocked(uid, edit);
         if (uidState == null) {
             return null;
@@ -2980,6 +3727,9 @@ public class AppOpsService extends IAppOpsService.Stub {
             }
             ops = new Ops(packageName, uidState, isPrivileged);
             uidState.pkgOps.put(packageName, ops);
+        }
+        if (edit && featureId != null) {
+            ops.knownFeatureIds.add(featureId);
         }
         return ops;
     }
@@ -2991,13 +3741,14 @@ public class AppOpsService extends IAppOpsService.Stub {
      *
      * @param uid The uid the of the package
      * @param packageName The package name for which to get the state for
+     * @param featureId The feature in the package
      * @param edit Iff {@code true} create the {@link Ops} object if not yet created
      * @param isPrivileged Whether the package is privileged or not
      *
      * @return The {@link Ops state} of all ops for the package
      */
     private @Nullable Ops getOpsRawNoVerifyLocked(int uid, @NonNull String packageName,
-            boolean edit, boolean isPrivileged) {
+            @Nullable String featureId, boolean edit, boolean isPrivileged) {
         UidState uidState = getUidStateLocked(uid, edit);
         if (uidState == null) {
             return null;
@@ -3018,6 +3769,11 @@ public class AppOpsService extends IAppOpsService.Stub {
             ops = new Ops(packageName, uidState, isPrivileged);
             uidState.pkgOps.put(packageName, ops);
         }
+
+        if (edit && featureId != null) {
+            ops.knownFeatureIds.add(featureId);
+        }
+
         return ops;
     }
 
@@ -3043,6 +3799,7 @@ public class AppOpsService extends IAppOpsService.Stub {
      * @param code The code of the op
      * @param uid The uid the of the package
      * @param packageName The package name for which to get the state for
+     * @param featureId The feature in the package
      * @param isPrivileged Whether the package is privileged or not (only used if {@code edit
      *                     == true})
      * @param edit Iff {@code true} create the {@link Op} object if not yet created
@@ -3050,21 +3807,21 @@ public class AppOpsService extends IAppOpsService.Stub {
      * @return The {@link Op state} of the op
      */
     private @Nullable Op getOpLocked(int code, int uid, @NonNull String packageName,
-            boolean isPrivileged, boolean edit) {
-        Ops ops = getOpsRawNoVerifyLocked(uid, packageName, edit, isPrivileged);
+            @Nullable String featureId, boolean isPrivileged, boolean edit) {
+        Ops ops = getOpsRawNoVerifyLocked(uid, packageName, featureId, edit, isPrivileged);
         if (ops == null) {
             return null;
         }
-        return getOpLocked(ops, code, edit);
+        return getOpLocked(ops, code, uid, edit);
     }
 
-    private Op getOpLocked(Ops ops, int code, boolean edit) {
+    private Op getOpLocked(Ops ops, int code, int uid, boolean edit) {
         Op op = ops.get(code);
         if (op == null) {
             if (!edit) {
                 return null;
             }
-            op = new Op(ops.uidState, ops.packageName, code);
+            op = new Op(ops.uidState, ops.packageName, code, uid);
             ops.put(code, op);
         }
         if (edit) {
@@ -3082,7 +3839,7 @@ public class AppOpsService extends IAppOpsService.Stub {
     }
 
     private boolean isOpRestrictedLocked(int uid, int code, String packageName,
-            boolean isPrivileged) {
+            @Nullable String featureId, boolean isPrivileged) {
         int userHandle = UserHandle.getUserId(uid);
         final int restrictionSetCount = mOpUserRestrictions.size();
 
@@ -3094,7 +3851,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                 if (AppOpsManager.opAllowSystemBypassRestriction(code)) {
                     // If we are the system, bypass user restrictions for certain codes
                     synchronized (this) {
-                        Ops ops = getOpsRawLocked(uid, packageName, isPrivileged,
+                        Ops ops = getOpsRawLocked(uid, packageName, featureId, isPrivileged,
                                 true /* edit */);
                         if ((ops != null) && ops.isPrivileged) {
                             return false;
@@ -3208,7 +3965,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                     final Op op = ops.get(AppOpsManager.OP_RUN_IN_BACKGROUND);
                     if (op != null && op.mode != AppOpsManager.opToDefaultMode(op.op)) {
                         final Op copy = new Op(op.uidState, op.packageName,
-                            AppOpsManager.OP_RUN_ANY_IN_BACKGROUND);
+                                AppOpsManager.OP_RUN_ANY_IN_BACKGROUND, uidState.uid);
                         copy.mode = op.mode;
                         ops.put(AppOpsManager.OP_RUN_ANY_IN_BACKGROUND, copy);
                         changed = true;
@@ -3251,11 +4008,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             if (tagName.equals("op")) {
                 final int code = Integer.parseInt(parser.getAttributeValue(null, "n"));
                 final int mode = Integer.parseInt(parser.getAttributeValue(null, "m"));
-                UidState uidState = getUidStateLocked(uid, true);
-                if (uidState.opModes == null) {
-                    uidState.opModes = new SparseIntArray();
-                }
-                uidState.opModes.put(code, mode);
+                setUidMode(code, uid, mode);
             } else {
                 Slog.w(TAG, "Unknown element under <uid-ops>: "
                         + parser.getName());
@@ -3336,33 +4089,33 @@ public class AppOpsService extends IAppOpsService.Stub {
         final FeatureOp featureOp = parent.getOrCreateFeature(parent, feature);
 
         final long key = XmlUtils.readLongAttribute(parser, "n");
-
-        final int flags = AppOpsManager.extractFlagsFromKey(key);
-        final int state = AppOpsManager.extractUidStateFromKey(key);
+        final int uidState = extractUidStateFromKey(key);
+        final int opFlags = extractFlagsFromKey(key);
 
         final long accessTime = XmlUtils.readLongAttribute(parser, "t", 0);
         final long rejectTime = XmlUtils.readLongAttribute(parser, "r", 0);
-        final long accessDuration = XmlUtils.readLongAttribute(parser, "d", 0);
+        final long accessDuration = XmlUtils.readLongAttribute(parser, "d", -1);
         final String proxyPkg = XmlUtils.readStringAttribute(parser, "pp");
-        final int proxyUid = XmlUtils.readIntAttribute(parser, "pu", 0);
+        final int proxyUid = XmlUtils.readIntAttribute(parser, "pu", Process.INVALID_UID);
         final String proxyFeatureId = XmlUtils.readStringAttribute(parser, "pc");
 
         if (accessTime > 0) {
-            featureOp.accessed(accessTime, proxyUid, proxyPkg, proxyFeatureId, state, flags);
+            featureOp.accessed(accessTime, accessDuration, proxyUid, proxyPkg, proxyFeatureId,
+                    uidState, opFlags);
         }
         if (rejectTime > 0) {
-            featureOp.rejected(rejectTime, proxyUid, proxyPkg, proxyFeatureId, state, flags);
-        }
-        if (accessDuration > 0) {
-            featureOp.running(accessTime, accessDuration, state, flags);
+            featureOp.rejected(rejectTime, uidState, opFlags);
         }
     }
 
     private void readOp(XmlPullParser parser, @NonNull UidState uidState,
         @NonNull String pkgName, boolean isPrivileged) throws NumberFormatException,
         XmlPullParserException, IOException {
-        Op op = new Op(uidState, pkgName,
-                Integer.parseInt(parser.getAttributeValue(null, "n")));
+        int opCode = Integer.parseInt(parser.getAttributeValue(null, "n"));
+        if (isIgnoredAppOp(opCode)) {
+            return;
+        }
+        Op op = new Op(uidState, pkgName, opCode, uidState.uid);
 
         final int mode = XmlUtils.readIntAttribute(parser, "m",
                 AppOpsManager.opToDefaultMode(op.op));
@@ -3394,6 +4147,16 @@ public class AppOpsService extends IAppOpsService.Stub {
             uidState.pkgOps.put(pkgName, ops);
         }
         ops.put(op.op, op);
+    }
+
+    //TODO(b/149995538): Remove once this has reached all affected devices
+    private static boolean isIgnoredAppOp(int op) {
+        switch (op) {
+            case AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE:
+                return true;
+            default:
+                return false;
+        }
     }
 
     void writeState() {
@@ -3473,7 +4236,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                         out.startTag(null, "uid");
                         out.attribute(null, "n", Integer.toString(pkg.getUid()));
                         synchronized (this) {
-                            Ops ops = getOpsRawLocked(pkg.getUid(), pkg.getPackageName(),
+                            Ops ops = getOpsRawLocked(pkg.getUid(), pkg.getPackageName(), null,
                                     false /* isPrivileged */, false /* edit */);
                             // Should always be present as the list of PackageOps is generated
                             // from Ops.
@@ -3496,33 +4259,37 @@ public class AppOpsService extends IAppOpsService.Stub {
                                 final OpFeatureEntry feature = op.getFeatures().get(
                                         featureId);
 
-                                final LongSparseArray keys = feature.collectKeys();
-                                if (keys == null || keys.size() <= 0) {
-                                    continue;
-                                }
-                                final int keyCount = keys.size();
+                                final ArraySet<Long> keys = feature.collectKeys();
 
+                                final int keyCount = keys.size();
                                 for (int k = 0; k < keyCount; k++) {
-                                    final long key = keys.keyAt(k);
+                                    final long key = keys.valueAt(k);
 
                                     final int uidState = AppOpsManager.extractUidStateFromKey(key);
                                     final int flags = AppOpsManager.extractFlagsFromKey(key);
 
-                                    final long accessTime = feature.getLastAccessTime(
-                                            uidState, uidState, flags);
-                                    final long rejectTime = feature.getLastRejectTime(
-                                            uidState, uidState, flags);
-                                    final long accessDuration = feature.getLastDuration(
-                                            uidState, uidState, flags);
-                                    final String proxyPkg = feature.getProxyPackageName(uidState,
-                                            flags);
-                                    final String proxyFeatureId = feature.getProxyFeatureId(
+                                    final long accessTime = feature.getLastAccessTime(uidState,
                                             uidState, flags);
-                                    final int proxyUid = feature.getProxyUid(uidState, flags);
+                                    final long rejectTime = feature.getLastRejectTime(uidState,
+                                            uidState, flags);
+                                    final long accessDuration = feature.getLastDuration(uidState,
+                                            uidState, flags);
+                                    // Proxy information for rejections is not backed up
+                                    final OpEventProxyInfo proxy = feature.getLastProxyInfo(
+                                            uidState, uidState, flags);
 
                                     if (accessTime <= 0 && rejectTime <= 0 && accessDuration <= 0
-                                            && proxyPkg == null && proxyUid < 0) {
+                                            && proxy == null) {
                                         continue;
+                                    }
+
+                                    String proxyPkg = null;
+                                    String proxyFeatureId = null;
+                                    int proxyUid = Process.INVALID_UID;
+                                    if (proxy != null) {
+                                        proxyPkg = proxy.getPackageName();
+                                        proxyFeatureId = proxy.getFeatureId();
+                                        proxyUid = proxy.getUid();
                                     }
 
                                     out.startTag(null, "st");
@@ -3591,10 +4358,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         Shell(IAppOpsService iface, AppOpsService internal) {
             mInterface = iface;
             mInternal = internal;
-            try {
-                mToken = mInterface.getToken(sBinder);
-            } catch (RemoteException e) {
-            }
+            mToken = AppOpsManager.getClientId();
         }
 
         @Override
@@ -3832,7 +4596,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                     } else if (shell.targetsUid && shell.packageName != null) {
                         try {
                             final int uid = shell.mInternal.mContext.getPackageManager()
-                                    .getPackageUid(shell.packageName, shell.userId);
+                                    .getPackageUidAsUser(shell.packageName, shell.userId);
                             shell.mInterface.setUidMode(shell.op, uid, mode);
                         } catch (PackageManager.NameNotFoundException e) {
                             return -1;
@@ -3889,42 +4653,48 @@ public class AppOpsService extends IAppOpsService.Stub {
                             pw.print(": ");
                             pw.print(AppOpsManager.modeToName(ent.getMode()));
                             if (shell.featureId == null) {
-                                if (ent.getTime() != 0) {
+                                if (ent.getLastAccessTime(OP_FLAGS_ALL) != -1) {
                                     pw.print("; time=");
-                                    TimeUtils.formatDuration(now - ent.getTime(), pw);
+                                    TimeUtils.formatDuration(
+                                            now - ent.getLastAccessTime(OP_FLAGS_ALL), pw);
                                     pw.print(" ago");
                                 }
-                                if (ent.getRejectTime() != 0) {
+                                if (ent.getLastRejectTime(OP_FLAGS_ALL) != -1) {
                                     pw.print("; rejectTime=");
-                                    TimeUtils.formatDuration(now - ent.getRejectTime(), pw);
+                                    TimeUtils.formatDuration(
+                                            now - ent.getLastRejectTime(OP_FLAGS_ALL), pw);
                                     pw.print(" ago");
                                 }
-                                if (ent.getDuration() == -1) {
+                                if (ent.isRunning()) {
                                     pw.print(" (running)");
-                                } else if (ent.getDuration() != 0) {
+                                } else if (ent.getLastDuration(OP_FLAGS_ALL) != -1) {
                                     pw.print("; duration=");
-                                    TimeUtils.formatDuration(ent.getDuration(), pw);
+                                    TimeUtils.formatDuration(ent.getLastDuration(OP_FLAGS_ALL), pw);
                                 }
                             } else {
                                 final OpFeatureEntry featureEnt = ent.getFeatures().get(
                                         shell.featureId);
                                 if (featureEnt != null) {
-                                    if (featureEnt.getTime() != 0) {
+                                    if (featureEnt.getLastAccessTime(OP_FLAGS_ALL) != -1) {
                                         pw.print("; time=");
-                                        TimeUtils.formatDuration(now - featureEnt.getTime(), pw);
+                                        TimeUtils.formatDuration(now - featureEnt.getLastAccessTime(
+                                                OP_FLAGS_ALL), pw);
                                         pw.print(" ago");
                                     }
-                                    if (featureEnt.getRejectTime() != 0) {
+                                    if (featureEnt.getLastRejectTime(OP_FLAGS_ALL) != -1) {
                                         pw.print("; rejectTime=");
-                                        TimeUtils.formatDuration(now - featureEnt.getRejectTime(),
+                                        TimeUtils.formatDuration(
+                                                now - featureEnt.getLastRejectTime(OP_FLAGS_ALL),
                                                 pw);
                                         pw.print(" ago");
                                     }
-                                    if (featureEnt.getDuration() == -1) {
+                                    if (featureEnt.isRunning()) {
                                         pw.print(" (running)");
-                                    } else if (featureEnt.getDuration() != 0) {
+                                    } else if (featureEnt.getLastDuration(OP_FLAGS_ALL)
+                                            != -1) {
                                         pw.print("; duration=");
-                                        TimeUtils.formatDuration(featureEnt.getDuration(), pw);
+                                        TimeUtils.formatDuration(
+                                                featureEnt.getLastDuration(OP_FLAGS_ALL), pw);
                                     }
                                 }
                             }
@@ -4032,7 +4802,8 @@ public class AppOpsService extends IAppOpsService.Stub {
 
                     if (shell.packageName != null) {
                         shell.mInterface.startOperation(shell.mToken, shell.op, shell.packageUid,
-                                shell.packageName, shell.featureId, true);
+                                shell.packageName, shell.featureId, true, true,
+                                "appops start shell command");
                     } else {
                         return -1;
                     }
@@ -4071,16 +4842,22 @@ public class AppOpsService extends IAppOpsService.Stub {
         pw.println("    Limit output to data associated with the given app op mode.");
         pw.println("  --package [PACKAGE]");
         pw.println("    Limit output to data associated with the given package name.");
+        pw.println("  --featureId [featureId]");
+        pw.println("    Limit output to data associated with the given feature id.");
         pw.println("  --watchers");
         pw.println("    Only output the watcher sections.");
-        pw.println("  --history");
-        pw.println("    Output the historical data.");
     }
 
-    private void dumpStatesLocked(@NonNull PrintWriter pw, long nowElapsed, @NonNull Op op,
-            long now, @NonNull SimpleDateFormat sdf, @NonNull Date date, @NonNull String prefix) {
+    private void dumpStatesLocked(@NonNull PrintWriter pw, @Nullable String filterFeatureId,
+            @HistoricalOpsRequestFilter int filter, long nowElapsed, @NonNull Op op, long now,
+            @NonNull SimpleDateFormat sdf, @NonNull Date date, @NonNull String prefix) {
         final int numFeatures = op.mFeatures.size();
         for (int i = 0; i < numFeatures; i++) {
+            if ((filter & FILTER_BY_FEATURE_ID) != 0 && !Objects.equals(op.mFeatures.keyAt(i),
+                    filterFeatureId)) {
+                continue;
+            }
+
             pw.print(prefix + op.mFeatures.keyAt(i) + "=[\n");
             dumpStatesLocked(pw, nowElapsed, op, op.mFeatures.keyAt(i), now, sdf, date,
                     prefix + "  ");
@@ -4095,27 +4872,28 @@ public class AppOpsService extends IAppOpsService.Stub {
         final OpFeatureEntry entry = op.createSingleFeatureEntryLocked(
                 featureId).getFeatures().get(featureId);
 
-        final LongSparseArray keys = entry.collectKeys();
-        if (keys == null || keys.size() <= 0) {
-            return;
-        }
+        final ArraySet<Long> keys = entry.collectKeys();
 
         final int keyCount = keys.size();
         for (int k = 0; k < keyCount; k++) {
-            final long key = keys.keyAt(k);
+            final long key = keys.valueAt(k);
 
             final int uidState = AppOpsManager.extractUidStateFromKey(key);
             final int flags = AppOpsManager.extractFlagsFromKey(key);
 
-            final long accessTime = entry.getLastAccessTime(
-                    uidState, uidState, flags);
-            final long rejectTime = entry.getLastRejectTime(
-                    uidState, uidState, flags);
-            final long accessDuration = entry.getLastDuration(
-                    uidState, uidState, flags);
-            final String proxyPkg = entry.getProxyPackageName(uidState, flags);
-            final String proxyFeatureId = entry.getProxyFeatureId(uidState, flags);
-            final int proxyUid = entry.getProxyUid(uidState, flags);
+            final long accessTime = entry.getLastAccessTime(uidState, uidState, flags);
+            final long rejectTime = entry.getLastRejectTime(uidState, uidState, flags);
+            final long accessDuration = entry.getLastDuration(uidState, uidState, flags);
+            final OpEventProxyInfo proxy = entry.getLastProxyInfo(uidState, uidState, flags);
+
+            String proxyPkg = null;
+            String proxyFeatureId = null;
+            int proxyUid = Process.INVALID_UID;
+            if (proxy != null) {
+                proxyPkg = proxy.getPackageName();
+                proxyFeatureId = proxy.getFeatureId();
+                proxyUid = proxy.getUid();
+            }
 
             if (accessTime > 0) {
                 pw.print(prefix);
@@ -4168,14 +4946,25 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
 
         final FeatureOp featureOp = op.mFeatures.get(featureId);
-        if (featureOp.running) {
+        if (featureOp.isRunning()) {
+            long earliestElapsedTime = Long.MAX_VALUE;
+            long maxNumStarts = 0;
+            int numInProgressEvents = featureOp.mInProgressEvents.size();
+            for (int i = 0; i < numInProgressEvents; i++) {
+                InProgressStartOpEvent event = featureOp.mInProgressEvents.valueAt(i);
+
+                earliestElapsedTime = Math.min(earliestElapsedTime, event.getStartElapsedTime());
+                maxNumStarts = Math.max(maxNumStarts, event.numUnfinishedStarts);
+            }
+
             pw.print(prefix + "Running start at: ");
-            TimeUtils.formatDuration(nowElapsed - featureOp.startRealtime, pw);
+            TimeUtils.formatDuration(nowElapsed - earliestElapsedTime, pw);
             pw.println();
-        }
-        if (featureOp.startNesting != 0) {
-            pw.print(prefix + "startNesting=");
-            pw.println(featureOp.startNesting);
+
+            if (maxNumStarts > 1) {
+                pw.print(prefix + "startNesting=");
+                pw.println(maxNumStarts);
+            }
         }
     }
 
@@ -4185,10 +4974,13 @@ public class AppOpsService extends IAppOpsService.Stub {
 
         int dumpOp = OP_NONE;
         String dumpPackage = null;
+        String dumpFeatureId = null;
         int dumpUid = Process.INVALID_UID;
         int dumpMode = -1;
         boolean dumpWatchers = false;
+        // TODO ntmyren: Remove the dumpHistory and dumpFilter
         boolean dumpHistory = false;
+        @HistoricalOpsRequestFilter int dumpFilter = 0;
 
         if (args != null) {
             for (int i=0; i<args.length; i++) {
@@ -4205,6 +4997,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                         return;
                     }
                     dumpOp = Shell.strOpToOp(args[i], pw);
+                    dumpFilter |= FILTER_BY_OP_NAMES;
                     if (dumpOp < 0) {
                         return;
                     }
@@ -4215,6 +5008,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                         return;
                     }
                     dumpPackage = args[i];
+                    dumpFilter |= FILTER_BY_PACKAGE_NAME;
                     try {
                         dumpUid = AppGlobals.getPackageManager().getPackageUid(dumpPackage,
                                 PackageManager.MATCH_KNOWN_PACKAGES | PackageManager.MATCH_INSTANT,
@@ -4226,6 +5020,15 @@ public class AppOpsService extends IAppOpsService.Stub {
                         return;
                     }
                     dumpUid = UserHandle.getAppId(dumpUid);
+                    dumpFilter |= FILTER_BY_UID;
+                } else if ("--featureId".equals(arg)) {
+                    i++;
+                    if (i >= args.length) {
+                        pw.println("No argument for --featureId option");
+                        return;
+                    }
+                    dumpFeatureId = args[i];
+                    dumpFilter |= FILTER_BY_FEATURE_ID;
                 } else if ("--mode".equals(arg)) {
                     i++;
                     if (i >= args.length) {
@@ -4238,8 +5041,6 @@ public class AppOpsService extends IAppOpsService.Stub {
                     }
                 } else if ("--watchers".equals(arg)) {
                     dumpWatchers = true;
-                } else if ("--history".equals(arg)) {
-                    dumpHistory = true;
                 } else if (arg.length() > 0 && arg.charAt(0) == '-'){
                     pw.println("Unknown option: " + arg);
                     return;
@@ -4262,8 +5063,8 @@ public class AppOpsService extends IAppOpsService.Stub {
             final SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
             final Date date = new Date();
             boolean needSep = false;
-            if (dumpOp < 0 && dumpMode < 0 && dumpPackage == null && mProfileOwners != null
-                    && !dumpWatchers && !dumpHistory) {
+            if (dumpFilter == 0 && dumpMode < 0 && mProfileOwners != null && !dumpWatchers
+                    && !dumpHistory) {
                 pw.println("  Profile owners:");
                 for (int poi = 0; poi < mProfileOwners.size(); poi++) {
                     pw.print("    User #");
@@ -4423,44 +5224,6 @@ public class AppOpsService extends IAppOpsService.Stub {
                     pw.println(cb);
                 }
             }
-            if (mClients.size() > 0 && dumpMode < 0 && !dumpWatchers && !dumpHistory) {
-                needSep = true;
-                boolean printedHeader = false;
-                for (int i=0; i<mClients.size(); i++) {
-                    boolean printedClient = false;
-                    ClientState cs = mClients.valueAt(i);
-                    if (cs.mStartedOps.size() > 0) {
-                        boolean printedStarted = false;
-                        for (int j=0; j<cs.mStartedOps.size(); j++) {
-                            final Pair<Op, String> startedOp = cs.mStartedOps.get(j);
-                            final Op op = startedOp.first;
-                            if (dumpOp >= 0 && op.op != dumpOp) {
-                                continue;
-                            }
-                            if (dumpPackage != null && !dumpPackage.equals(op.packageName)) {
-                                continue;
-                            }
-                            if (!printedHeader) {
-                                pw.println("  Clients:");
-                                printedHeader = true;
-                            }
-                            if (!printedClient) {
-                                pw.print("    "); pw.print(mClients.keyAt(i)); pw.println(":");
-                                pw.print("      "); pw.println(cs);
-                                printedClient = true;
-                            }
-                            if (!printedStarted) {
-                                pw.println("      Started ops:");
-                                printedStarted = true;
-                            }
-                            pw.print("        "); pw.print("uid="); pw.print(op.uidState.uid);
-                            pw.print(" pkg="); pw.print(op.packageName);
-                            pw.print(" featureId="); pw.print(startedOp.second);
-                            pw.print(" op="); pw.println(AppOpsManager.opToName(op.op));
-                        }
-                    }
-                }
-            }
             if (mAudioRestrictionManager.hasActiveRestrictions() && dumpOp < 0
                     && dumpPackage != null && dumpMode < 0 && !dumpWatchers && !dumpWatchers) {
                 needSep = mAudioRestrictionManager.dump(pw) | needSep ;
@@ -4479,7 +5242,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                 if (dumpOp >= 0 || dumpPackage != null || dumpMode >= 0) {
                     boolean hasOp = dumpOp < 0 || (uidState.opModes != null
                             && uidState.opModes.indexOfKey(dumpOp) >= 0);
-                    boolean hasPackage = dumpPackage == null;
+                    boolean hasPackage = dumpPackage == null || dumpUid == mUidStates.keyAt(i);
                     boolean hasMode = dumpMode < 0;
                     if (!hasMode && opModes != null) {
                         for (int opi = 0; !hasMode && opi < opModes.size(); opi++) {
@@ -4535,10 +5298,6 @@ public class AppOpsService extends IAppOpsService.Stub {
                     pw.print("    pendingStateCommitTime=");
                     TimeUtils.formatDuration(uidState.pendingStateCommitTime, nowElapsed, pw);
                     pw.println();
-                }
-                if (uidState.startNesting != 0) {
-                    pw.print("    startNesting=");
-                    pw.println(uidState.startNesting);
                 }
                 if (uidState.foregroundOps != null && (dumpMode < 0
                         || dumpMode == AppOpsManager.MODE_FOREGROUND)) {
@@ -4608,7 +5367,8 @@ public class AppOpsService extends IAppOpsService.Stub {
                             pw.print("="); pw.print(AppOpsManager.modeToName(mode));
                         }
                         pw.println("): ");
-                        dumpStatesLocked(pw, nowElapsed, op, now, sdf, date, "        ");
+                        dumpStatesLocked(pw, dumpFeatureId, dumpFilter, nowElapsed, op, now, sdf,
+                                date, "        ");
                     }
                 }
             }
@@ -4707,15 +5467,16 @@ public class AppOpsService extends IAppOpsService.Stub {
 
         // Must not hold the appops lock
         if (dumpHistory && !dumpWatchers) {
-            mHistoricalRegistry.dump("  ", pw, dumpUid, dumpPackage, dumpOp);
+            mHistoricalRegistry.dump("  ", pw, dumpUid, dumpPackage, dumpFeatureId, dumpOp,
+                    dumpFilter);
         }
     }
 
     @Override
     public void setUserRestrictions(Bundle restrictions, IBinder token, int userHandle) {
         checkSystemUid("setUserRestrictions");
-        Preconditions.checkNotNull(restrictions);
-        Preconditions.checkNotNull(token);
+        Objects.requireNonNull(restrictions);
+        Objects.requireNonNull(token);
         for (int i = 0; i < AppOpsManager._NUM_OP; i++) {
             String restriction = AppOpsManager.opToRestriction(i);
             if (restriction != null) {
@@ -4742,7 +5503,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             }
         }
         verifyIncomingOp(code);
-        Preconditions.checkNotNull(token);
+        Objects.requireNonNull(token);
         setUserRestrictionNoCheck(code, restricted, token, userHandle, exceptionPackages);
     }
 
@@ -4813,17 +5574,18 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
         // TODO moltmann: Allow to check for feature op activeness
         synchronized (AppOpsService.this) {
-            for (int i = mClients.size() - 1; i >= 0; i--) {
-                final ClientState client = mClients.valueAt(i);
-                for (int j = client.mStartedOps.size() - 1; j >= 0; j--) {
-                    final Pair<Op, String> startedOp = client.mStartedOps.get(j);
-                    if (startedOp.first.op == code && startedOp.first.uidState.uid == uid) {
-                        return true;
-                    }
-                }
+            Ops pkgOps = getOpsRawLocked(uid, resolvedPackageName, null, false, false);
+            if (pkgOps == null) {
+                return false;
             }
+
+            Op op = pkgOps.get(code);
+            if (op == null) {
+                return false;
+            }
+
+            return op.isRunning();
         }
-        return false;
     }
 
     @Override
@@ -4865,6 +5627,227 @@ public class AppOpsService extends IAppOpsService.Stub {
                 "clearHistory");
         // Must not hold the appops lock
         mHistoricalRegistry.clearHistory();
+    }
+
+    /**
+     * Report runtime access to AppOp together with message (including stack trace)
+     *
+     * @param packageName The package which reported the op
+     * @param notedAppOp contains code of op and featureId provided by developer
+     * @param message Message describing AppOp access (can be stack trace)
+     *
+     * @return Config for future sampling to reduce amount of reporting
+     */
+    @Override
+    public MessageSamplingConfig reportRuntimeAppOpAccessMessageAndGetConfig(
+            String packageName, SyncNotedAppOp notedAppOp, String message) {
+        int uid = Binder.getCallingUid();
+        Objects.requireNonNull(packageName);
+        synchronized (this) {
+            switchPackageIfRarelyUsedLocked(packageName);
+            if (!packageName.equals(mSampledPackage)) {
+                return new MessageSamplingConfig(OP_NONE, 0,
+                        Instant.now().plus(1, ChronoUnit.HOURS).toEpochMilli());
+            }
+
+            Objects.requireNonNull(notedAppOp);
+            Objects.requireNonNull(message);
+
+            reportRuntimeAppOpAccessMessageInternalLocked(uid, packageName,
+                    AppOpsManager.strOpToOp(notedAppOp.getOp()),
+                    notedAppOp.getFeatureId(), message);
+
+            return new MessageSamplingConfig(mSampledAppOpCode, mAcceptableLeftDistance,
+                    Instant.now().plus(1, ChronoUnit.HOURS).toEpochMilli());
+        }
+    }
+
+    /**
+     * Report runtime access to AppOp together with message (entry point for reporting
+     * asynchronous access)
+     * @param uid Uid of the package which reported the op
+     * @param packageName The package which reported the op
+     * @param opCode Code of AppOp
+     * @param featureId FeautreId of AppOp reported
+     * @param message Message describing AppOp access (can be stack trace)
+     */
+    private void reportRuntimeAppOpAccessMessageAsyncLocked(int uid,
+            @NonNull String packageName, int opCode, @Nullable String featureId,
+            @NonNull String message) {
+        switchPackageIfRarelyUsedLocked(packageName);
+        if (!Objects.equals(mSampledPackage, packageName)) {
+            return;
+        }
+        reportRuntimeAppOpAccessMessageInternalLocked(uid, packageName, opCode, featureId, message);
+    }
+
+    /**
+     * Decides whether reported message is within the range of watched AppOps and picks it for
+     * reporting uniformly at random across all received messages.
+     */
+    private void reportRuntimeAppOpAccessMessageInternalLocked(int uid,
+            @NonNull String packageName, int opCode, @Nullable String featureId,
+            @NonNull String message) {
+        int newLeftDistance = AppOpsManager.leftCircularDistance(opCode,
+                mSampledAppOpCode, _NUM_OP);
+
+        if (mAcceptableLeftDistance < newLeftDistance) {
+            return;
+        }
+
+        if (mAcceptableLeftDistance > newLeftDistance) {
+            mAcceptableLeftDistance = newLeftDistance;
+            mMessagesCollectedCount = 0.0f;
+        }
+
+        mMessagesCollectedCount += 1.0f;
+        if (ThreadLocalRandom.current().nextFloat() <= 1.0f / mMessagesCollectedCount) {
+            mCollectedRuntimePermissionMessage = new RuntimeAppOpAccessMessage(uid, opCode,
+                    packageName, featureId, message, mSamplingStrategy);
+        }
+        return;
+    }
+
+    /** Pulls current AppOps access report and resamples package and app op to watch */
+    @Override
+    public @Nullable RuntimeAppOpAccessMessage collectRuntimeAppOpAccessMessage() {
+        mContext.enforcePermission(android.Manifest.permission.GET_APP_OPS_STATS,
+                Binder.getCallingPid(), Binder.getCallingUid(), null);
+        RuntimeAppOpAccessMessage result;
+        List<String> packageNames = getPackageNamesForSampling();
+        synchronized (this) {
+            result = mCollectedRuntimePermissionMessage;
+            resamplePackageAndAppOpLocked(packageNames);
+        }
+        return result;
+    }
+
+    /**
+     * Checks if package is in the list of rarely used package and starts watching the new package
+     * to collect incoming message.
+     * @param packageName
+     */
+    private void switchPackageIfRarelyUsedLocked(@NonNull String packageName) {
+        if (mRarelyUsedPackages.contains(packageName)) {
+            mRarelyUsedPackages.remove(packageName);
+            if (ThreadLocalRandom.current().nextFloat() < 0.5f) {
+                mSamplingStrategy = SAMPLING_STRATEGY_RARELY_USED;
+                resampleAppOpForPackageLocked(packageName);
+            }
+        }
+    }
+
+    /** Resamples package and appop to watch from the list provided. */
+    private void resamplePackageAndAppOpLocked(@NonNull List<String> packageNames) {
+        if (!packageNames.isEmpty()) {
+            mSamplingStrategy = SAMPLING_STRATEGY_UNIFORM;
+            resampleAppOpForPackageLocked(packageNames.get(
+                    ThreadLocalRandom.current().nextInt(packageNames.size())));
+        }
+    }
+
+    /** Resamples appop for the chosen package and initializes sampling state */
+    private void resampleAppOpForPackageLocked(@NonNull String packageName) {
+        mMessagesCollectedCount = 0.0f;
+        mSampledAppOpCode = ThreadLocalRandom.current().nextInt(_NUM_OP);
+        mAcceptableLeftDistance = _NUM_OP;
+        mSampledPackage = packageName;
+        mCollectedRuntimePermissionMessage = null;
+    }
+
+    /**
+     * Creates list of rarely used packages - packages which were not used over last week or
+     * which declared but did not use permissions over last week.
+     *  */
+    private void initializeRarelyUsedPackagesList(@NonNull ArraySet<String> candidates) {
+        AppOpsManager appOps = mContext.getSystemService(AppOpsManager.class);
+        List<String> runtimeAppOpsList = getRuntimeAppOpsList();
+        AppOpsManager.HistoricalOpsRequest histOpsRequest =
+                new AppOpsManager.HistoricalOpsRequest.Builder(
+                        Instant.now().minus(7, ChronoUnit.DAYS).toEpochMilli(),
+                        Long.MAX_VALUE).setOpNames(runtimeAppOpsList).setFlags(
+                        OP_FLAG_SELF | OP_FLAG_TRUSTED_PROXIED).build();
+        appOps.getHistoricalOps(histOpsRequest, AsyncTask.THREAD_POOL_EXECUTOR,
+                new Consumer<HistoricalOps>() {
+                    @Override
+                    public void accept(HistoricalOps histOps) {
+                        int uidCount = histOps.getUidCount();
+                        for (int uidIdx = 0; uidIdx < uidCount; uidIdx++) {
+                            final AppOpsManager.HistoricalUidOps uidOps = histOps.getUidOpsAt(
+                                    uidIdx);
+                            int pkgCount = uidOps.getPackageCount();
+                            for (int pkgIdx = 0; pkgIdx < pkgCount; pkgIdx++) {
+                                String packageName = uidOps.getPackageOpsAt(
+                                        pkgIdx).getPackageName();
+                                if (!candidates.contains(packageName)) {
+                                    continue;
+                                }
+                                AppOpsManager.HistoricalPackageOps packageOps =
+                                        uidOps.getPackageOpsAt(pkgIdx);
+                                if (packageOps.getOpCount() != 0) {
+                                    candidates.remove(packageName);
+                                }
+                            }
+                        }
+                        synchronized (this) {
+                            mRarelyUsedPackages = candidates;
+                        }
+                    }
+                });
+    }
+
+    /** List of app ops related to runtime permissions */
+    private List<String> getRuntimeAppOpsList() {
+        ArrayList<String> result = new ArrayList();
+        for (int i = 0; i < _NUM_OP; i++) {
+            if (shouldCollectNotes(i)) {
+                result.add(opToPublicName(i));
+            }
+        }
+        return result;
+    }
+
+    /** Returns list of packages to be used for package sampling */
+    private @NonNull List<String> getPackageNamesForSampling() {
+        List<String> packageNames = new ArrayList<>();
+        PackageManagerInternal packageManagerInternal = LocalServices.getService(
+                PackageManagerInternal.class);
+        PackageList packages = packageManagerInternal.getPackageList();
+        for (String packageName : packages.getPackageNames()) {
+            PackageInfo pkg = packageManagerInternal.getPackageInfo(packageName,
+                    PackageManager.GET_PERMISSIONS, Process.myUid(), mContext.getUserId());
+            if (isSamplingTarget(pkg)) {
+                packageNames.add(pkg.packageName);
+            }
+        }
+        return packageNames;
+    }
+
+    /** Checks whether package should be included in sampling pool */
+    private boolean isSamplingTarget(@Nullable PackageInfo pkg) {
+        if (pkg == null) {
+            return false;
+        }
+        if (pkg.applicationInfo.targetSdkVersion <= Build.VERSION_CODES.Q) {
+            return false;
+        }
+
+        String[] requestedPermissions = pkg.requestedPermissions;
+        if (requestedPermissions == null) {
+            return false;
+        }
+        for (String permission : requestedPermissions) {
+            PermissionInfo permissionInfo;
+            try {
+                permissionInfo = mContext.getPackageManager().getPermissionInfo(permission, 0);
+            } catch (PackageManager.NameNotFoundException ignored) {
+                continue;
+            }
+            if (permissionInfo.getProtection() == PROTECTION_DANGEROUS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void removeUidsForUserLocked(int userHandle) {
@@ -5095,6 +6078,162 @@ public class AppOpsService extends IAppOpsService.Stub {
         @Override public void setDeviceAndProfileOwners(SparseIntArray owners) {
             synchronized (AppOpsService.this) {
                 mProfileOwners = owners;
+            }
+        }
+
+        @Override
+        public void updateAppWidgetVisibility(SparseArray<String> uidPackageNames,
+                boolean visible) {
+            AppOpsService.this.updateAppWidgetVisibility(uidPackageNames, visible);
+        }
+
+        @Override
+        public void setUidModeFromPermissionPolicy(int code, int uid, int mode,
+                @Nullable IAppOpsCallback callback) {
+            setUidMode(code, uid, mode, callback);
+        }
+
+        @Override
+        public void setModeFromPermissionPolicy(int code, int uid, @NonNull String packageName,
+                int mode, @Nullable IAppOpsCallback callback) {
+            setMode(code, uid, packageName, mode, callback);
+        }
+    }
+
+
+    /**
+     * Async task for writing note op stack trace, op code, package name and version to file
+     * More specifically, writes all the collected ops from {@link #mNoteOpCallerStacktraces}
+     */
+    private void writeNoteOps() {
+        synchronized (this) {
+            mWriteNoteOpsScheduled = false;
+        }
+        synchronized (mNoteOpCallerStacktracesFile) {
+            try (FileWriter writer = new FileWriter(mNoteOpCallerStacktracesFile)) {
+                int numTraces = mNoteOpCallerStacktraces.size();
+                for (int i = 0; i < numTraces; i++) {
+                    // Writing json formatted string into file
+                    writer.write(mNoteOpCallerStacktraces.valueAt(i).asJson());
+                    // Comma separation, so we can wrap the entire log as a JSON object
+                    // when all results are collected
+                    writer.write(",");
+                }
+            } catch (IOException e) {
+                Slog.w(TAG, "Failed to load opsValidation file for FileWriter", e);
+            }
+        }
+    }
+
+    /**
+     * This class represents a NoteOp Trace object amd contains the necessary fields that will
+     * be written to file to use for permissions data validation in JSON format
+     */
+    @Immutable
+    static class NoteOpTrace {
+        static final String STACKTRACE = "stackTrace";
+        static final String OP = "op";
+        static final String PACKAGENAME = "packageName";
+        static final String VERSION = "version";
+
+        private final @NonNull String mStackTrace;
+        private final int mOp;
+        private final @Nullable String mPackageName;
+        private final long mVersion;
+
+        /**
+         * Initialize a NoteOp object using a JSON object containing the necessary fields
+         *
+         * @param jsonTrace JSON object represented as a string
+         *
+         * @return NoteOpTrace object initialized with JSON fields
+         */
+        static NoteOpTrace fromJson(String jsonTrace) {
+            try {
+                // Re-add closing bracket which acted as a delimiter by the reader
+                JSONObject obj = new JSONObject(jsonTrace.concat("}"));
+                return new NoteOpTrace(obj.getString(STACKTRACE), obj.getInt(OP),
+                        obj.getString(PACKAGENAME), obj.getLong(VERSION));
+            } catch (JSONException e) {
+                // Swallow error, only meant for logging ops, should not affect flow of the code
+                Slog.e(TAG, "Error constructing NoteOpTrace object "
+                        + "JSON trace format incorrect", e);
+                return null;
+            }
+        }
+
+        NoteOpTrace(String stackTrace, int op, String packageName, long version) {
+            mStackTrace = stackTrace;
+            mOp = op;
+            mPackageName = packageName;
+            mVersion = version;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            NoteOpTrace that = (NoteOpTrace) o;
+            return mOp == that.mOp
+                    && mVersion == that.mVersion
+                    && mStackTrace.equals(that.mStackTrace)
+                    && Objects.equals(mPackageName, that.mPackageName);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mStackTrace, mOp, mPackageName, mVersion);
+        }
+
+        /**
+         * The object is formatted as a JSON object and returned as a String
+         *
+         * @return JSON formatted string
+         */
+        public String asJson() {
+            return  "{"
+                    + "\"" + STACKTRACE + "\":\"" + mStackTrace.replace("\n", "\\n")
+                    + '\"' + ",\"" + OP + "\":" + mOp
+                    + ",\"" + PACKAGENAME + "\":\"" + mPackageName + '\"'
+                    + ",\"" + VERSION + "\":" + mVersion
+                    + '}';
+        }
+    }
+
+    /**
+     * Collects noteOps, noteProxyOps and startOps from AppOpsManager and writes it into a file
+     * which will be used for permissions data validation, the given parameters to this method
+     * will be logged in json format
+     *
+     * @param stackTrace stacktrace from the most recent call in AppOpsManager
+     * @param op op code
+     * @param packageName package making call
+     * @param version android version for this call
+     */
+    @Override
+    public void collectNoteOpCallsForValidation(String stackTrace, int op, String packageName,
+            long version) {
+        if (!AppOpsManager.NOTE_OP_COLLECTION_ENABLED) {
+            return;
+        }
+
+        Objects.requireNonNull(stackTrace);
+        Preconditions.checkArgument(op >= 0);
+        Preconditions.checkArgument(op < AppOpsManager._NUM_OP);
+        Objects.requireNonNull(version);
+
+        NoteOpTrace noteOpTrace = new NoteOpTrace(stackTrace, op, packageName, version);
+
+        boolean noteOpSetWasChanged;
+        synchronized (this) {
+            noteOpSetWasChanged = mNoteOpCallerStacktraces.add(noteOpTrace);
+            if (noteOpSetWasChanged && !mWriteNoteOpsScheduled) {
+                mWriteNoteOpsScheduled = true;
+                mHandler.postDelayed(PooledLambda.obtainRunnable((that) -> {
+                    AsyncTask.execute(() -> {
+                        that.writeNoteOps();
+                    });
+                }, this), 2500);
             }
         }
     }

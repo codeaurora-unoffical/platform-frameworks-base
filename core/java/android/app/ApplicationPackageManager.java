@@ -20,9 +20,9 @@ import android.annotation.DrawableRes;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.StringRes;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.UserIdInt;
 import android.annotation.XmlRes;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -84,6 +84,7 @@ import android.os.storage.StorageManager;
 import android.os.storage.VolumeInfo;
 import android.permission.IOnPermissionsChangeListener;
 import android.permission.IPermissionManager;
+import android.permission.PermissionManager;
 import android.provider.Settings;
 import android.system.ErrnoException;
 import android.system.Os;
@@ -98,9 +99,9 @@ import android.util.Log;
 import android.view.Display;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.Immutable;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.os.SomeArgs;
-import com.android.internal.util.Preconditions;
 import com.android.internal.util.UserIcons;
 
 import dalvik.system.VMRuntime;
@@ -132,7 +133,11 @@ public class ApplicationPackageManager extends PackageManager {
     private static final int DEFAULT_EPHEMERAL_COOKIE_MAX_SIZE_BYTES = 16384; // 16KB
 
     // Default flags to use with PackageManager when no flags are given.
-    private final static int sDefaultFlags = PackageManager.GET_SHARED_LIBRARY_FILES;
+    private static final int sDefaultFlags = GET_SHARED_LIBRARY_FILES;
+
+    // Name of the resource which provides background permission button string
+    public static final String APP_PERMISSION_BUTTON_ALLOW_ALWAYS =
+            "app_permission_button_allow_always";
 
     private final Object mLock = new Object();
 
@@ -188,16 +193,15 @@ public class ApplicationPackageManager extends PackageManager {
     @Override
     public PackageInfo getPackageInfoAsUser(String packageName, int flags, int userId)
             throws NameNotFoundException {
-        try {
-            PackageInfo pi = mPM.getPackageInfo(packageName,
-                    updateFlagsForPackage(flags, userId), userId);
-            if (pi != null) {
-                return pi;
-            }
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
+        PackageInfo pi =
+                getPackageInfoAsUserCached(
+                        packageName,
+                        updateFlagsForPackage(flags, userId),
+                        userId);
+        if (pi == null) {
+            throw new NameNotFoundException(packageName);
         }
-        throw new NameNotFoundException(packageName);
+        return pi;
     }
 
     @Override
@@ -407,20 +411,14 @@ public class ApplicationPackageManager extends PackageManager {
     @Override
     public ApplicationInfo getApplicationInfoAsUser(String packageName, int flags, int userId)
             throws NameNotFoundException {
-        try {
-            ApplicationInfo ai = mPM.getApplicationInfo(packageName,
-                    updateFlagsForApplication(flags, userId), userId);
-            if (ai != null) {
-                // This is a temporary hack. Callers must use
-                // createPackageContext(packageName).getApplicationInfo() to
-                // get the right paths.
-                return maybeAdjustApplicationInfo(ai);
-            }
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
+        ApplicationInfo ai = getApplicationInfoAsUserCached(
+                        packageName,
+                        updateFlagsForApplication(flags, userId),
+                        userId);
+        if (ai == null) {
+            throw new NameNotFoundException(packageName);
         }
-
-        throw new NameNotFoundException(packageName);
+        return maybeAdjustApplicationInfo(ai);
     }
 
     private static ApplicationInfo maybeAdjustApplicationInfo(ApplicationInfo info) {
@@ -615,22 +613,74 @@ public class ApplicationPackageManager extends PackageManager {
         return hasSystemFeature(name, 0);
     }
 
+    /**
+     * Identifies a single hasSystemFeature query.
+     */
+    @Immutable
+    private static final class HasSystemFeatureQuery {
+        public final String name;
+        public final int version;
+        public HasSystemFeatureQuery(String n, int v) {
+            name = n;
+            version = v;
+        }
+        @Override
+        public String toString() {
+            return String.format("HasSystemFeatureQuery(name=\"%s\", version=%d)",
+                    name, version);
+        }
+        @Override
+        public boolean equals(Object o) {
+            if (o instanceof HasSystemFeatureQuery) {
+                HasSystemFeatureQuery r = (HasSystemFeatureQuery) o;
+                return Objects.equals(name, r.name) &&  version == r.version;
+            } else {
+                return false;
+            }
+        }
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(name) * 13 + version;
+        }
+    }
+
+    // Make this cache relatively large.  There are many system features and
+    // none are ever invalidated.  MPTS tests suggests that the cache should
+    // hold at least 150 entries.
+    private final static PropertyInvalidatedCache<HasSystemFeatureQuery, Boolean>
+            mHasSystemFeatureCache =
+            new PropertyInvalidatedCache<HasSystemFeatureQuery, Boolean>(
+                256, "cache_key.has_system_feature") {
+                @Override
+                protected Boolean recompute(HasSystemFeatureQuery query) {
+                    try {
+                        return ActivityThread.currentActivityThread().getPackageManager().
+                            hasSystemFeature(query.name, query.version);
+                    } catch (RemoteException e) {
+                        throw e.rethrowFromSystemServer();
+                    }
+                }
+            };
+
     @Override
     public boolean hasSystemFeature(String name, int version) {
-        try {
-            return mPM.hasSystemFeature(name, version);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+        return mHasSystemFeatureCache.query(new HasSystemFeatureQuery(name, version));
+    }
+
+    /** @hide */
+    public void disableHasSystemFeatureCache() {
+        mHasSystemFeatureCache.disableLocal();
+    }
+
+    /** @hide */
+    public static void invalidateHasSystemFeatureCache() {
+        mHasSystemFeatureCache.invalidateCache();
     }
 
     @Override
     public int checkPermission(String permName, String pkgName) {
-        try {
-            return mPermissionManager.checkPermission(permName, pkgName, getUserId());
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+        return PermissionManager
+                .checkPackageNamePermission(permName, pkgName, getUserId());
     }
 
     @Override
@@ -723,6 +773,12 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
+    public void revokeRuntimePermission(String packageName, String permName, UserHandle user,
+            String reason) {
+        // TODO evanseverson: impl
+    }
+
+    @Override
     public int getPermissionFlags(String permName, String packageName, UserHandle user) {
         try {
             return mPermissionManager
@@ -808,6 +864,26 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
+    public CharSequence getBackgroundPermissionOptionLabel() {
+        try {
+
+            String permissionController = getPermissionControllerPackageName();
+            Context context =
+                    mContext.createPackageContext(permissionController, 0);
+
+            int textId = context.getResources().getIdentifier(APP_PERMISSION_BUTTON_ALLOW_ALWAYS,
+                    "string", "com.android.permissioncontroller");
+//                    permissionController); STOPSHIP b/147434671
+            if (textId != 0) {
+                return context.getText(textId);
+            }
+        } catch (NameNotFoundException e) {
+            Log.e(TAG, "Permission controller not found.", e);
+        }
+        return "";
+    }
+
+    @Override
     public int checkSignatures(String pkg1, String pkg2) {
         try {
             return mPM.checkSignatures(pkg1, pkg2);
@@ -827,7 +903,7 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public boolean hasSigningCertificate(
-            String packageName, byte[] certificate, @PackageManager.CertificateInputType int type) {
+            String packageName, byte[] certificate, @CertificateInputType int type) {
         try {
             return mPM.hasSigningCertificate(packageName, certificate, type);
         } catch (RemoteException e) {
@@ -837,7 +913,7 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public boolean hasSigningCertificate(
-            int uid, byte[] certificate, @PackageManager.CertificateInputType int type) {
+            int uid, byte[] certificate, @CertificateInputType int type) {
         try {
             return mPM.hasUidSigningCertificate(uid, certificate, type);
         } catch (RemoteException e) {
@@ -1384,8 +1460,7 @@ public class ApplicationPackageManager extends PackageManager {
             return getActivityIcon(intent.getComponent());
         }
 
-        ResolveInfo info = resolveActivity(
-            intent, PackageManager.MATCH_DEFAULT_ONLY);
+        ResolveInfo info = resolveActivity(intent, MATCH_DEFAULT_ONLY);
         if (info != null) {
             return info.activityInfo.loadIcon(this);
         }
@@ -1420,7 +1495,7 @@ public class ApplicationPackageManager extends PackageManager {
         }
 
         ResolveInfo info = resolveActivity(
-                intent, PackageManager.MATCH_DEFAULT_ONLY);
+                intent, MATCH_DEFAULT_ONLY);
         if (info != null) {
             return info.activityInfo.loadBanner(this);
         }
@@ -1452,8 +1527,7 @@ public class ApplicationPackageManager extends PackageManager {
             return getActivityLogo(intent.getComponent());
         }
 
-        ResolveInfo info = resolveActivity(
-            intent, PackageManager.MATCH_DEFAULT_ONLY);
+        ResolveInfo info = resolveActivity(intent, MATCH_DEFAULT_ONLY);
         if (info != null) {
             return info.activityInfo.loadLogo(this);
         }
@@ -1652,6 +1726,10 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @UnsupportedAppUsage
+    protected ApplicationPackageManager(ContextImpl context, IPackageManager pm) {
+        this(context, pm, ActivityThread.getPermissionManager());
+    }
+
     protected ApplicationPackageManager(ContextImpl context, IPackageManager pm,
             IPermissionManager permissionManager) {
         mContext = context;
@@ -1933,7 +2011,7 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public int installExistingPackage(String packageName) throws NameNotFoundException {
-        return installExistingPackage(packageName, PackageManager.INSTALL_REASON_UNKNOWN);
+        return installExistingPackage(packageName, INSTALL_REASON_UNKNOWN);
     }
 
     @Override
@@ -1945,7 +2023,7 @@ public class ApplicationPackageManager extends PackageManager {
     @Override
     public int installExistingPackageAsUser(String packageName, int userId)
             throws NameNotFoundException {
-        return installExistingPackageAsUser(packageName, PackageManager.INSTALL_REASON_UNKNOWN,
+        return installExistingPackageAsUser(packageName, INSTALL_REASON_UNKNOWN,
                 userId);
     }
 
@@ -2149,7 +2227,7 @@ public class ApplicationPackageManager extends PackageManager {
             } else if (vol.isPrimaryPhysical()) {
                 volumeUuid = StorageManager.UUID_PRIMARY_PHYSICAL;
             } else {
-                volumeUuid = Preconditions.checkNotNull(vol.fsUuid);
+                volumeUuid = Objects.requireNonNull(vol.fsUuid);
             }
 
             return mPM.movePackage(packageName, volumeUuid);
@@ -2259,7 +2337,7 @@ public class ApplicationPackageManager extends PackageManager {
             } else if (vol.isPrimaryPhysical()) {
                 volumeUuid = StorageManager.UUID_PRIMARY_PHYSICAL;
             } else {
-                volumeUuid = Preconditions.checkNotNull(vol.fsUuid);
+                volumeUuid = Objects.requireNonNull(vol.fsUuid);
             }
 
             return mPM.movePrimaryStorage(volumeUuid);
@@ -2320,7 +2398,7 @@ public class ApplicationPackageManager extends PackageManager {
     public void deletePackageAsUser(String packageName, IPackageDeleteObserver observer,
             int flags, int userId) {
         try {
-            mPM.deletePackageAsUser(packageName, PackageManager.VERSION_CODE_HIGHEST,
+            mPM.deletePackageAsUser(packageName, VERSION_CODE_HIGHEST,
                     observer, userId, flags);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
@@ -2567,11 +2645,11 @@ public class ApplicationPackageManager extends PackageManager {
     public void setSyntheticAppDetailsActivityEnabled(String packageName, boolean enabled) {
         try {
             ComponentName componentName = new ComponentName(packageName,
-                    PackageManager.APP_DETAILS_ACTIVITY_CLASS_NAME);
+                    APP_DETAILS_ACTIVITY_CLASS_NAME);
             mPM.setComponentEnabledSetting(componentName, enabled
-                    ? PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
-                    : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                    PackageManager.DONT_KILL_APP, getUserId());
+                    ? COMPONENT_ENABLED_STATE_DEFAULT
+                    : COMPONENT_ENABLED_STATE_DISABLED,
+                    DONT_KILL_APP, getUserId());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2581,10 +2659,10 @@ public class ApplicationPackageManager extends PackageManager {
     public boolean getSyntheticAppDetailsActivityEnabled(String packageName) {
         try {
             ComponentName componentName = new ComponentName(packageName,
-                    PackageManager.APP_DETAILS_ACTIVITY_CLASS_NAME);
+                    APP_DETAILS_ACTIVITY_CLASS_NAME);
             int state = mPM.getComponentEnabledSetting(componentName, getUserId());
-            return state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                    || state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
+            return state == COMPONENT_ENABLED_STATE_ENABLED
+                    || state == COMPONENT_ENABLED_STATE_DEFAULT;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2660,9 +2738,33 @@ public class ApplicationPackageManager extends PackageManager {
 
     /** @hide */
     @Override
+    public void setSystemAppState(String packageName, @SystemAppState int state) {
+        try {
+            switch (state) {
+                case SYSTEM_APP_STATE_HIDDEN_UNTIL_INSTALLED_HIDDEN:
+                    mPM.setSystemAppHiddenUntilInstalled(packageName, true);
+                    break;
+                case SYSTEM_APP_STATE_HIDDEN_UNTIL_INSTALLED_VISIBLE:
+                    mPM.setSystemAppHiddenUntilInstalled(packageName, false);
+                    break;
+                case SYSTEM_APP_STATE_INSTALLED:
+                    mPM.setSystemAppInstallState(packageName, true, getUserId());
+                    break;
+                case SYSTEM_APP_STATE_UNINSTALLED:
+                    mPM.setSystemAppInstallState(packageName, false, getUserId());
+                    break;
+                default:
+            }
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** @hide */
+    @Override
     public KeySet getKeySetByAlias(String packageName, String alias) {
-        Preconditions.checkNotNull(packageName);
-        Preconditions.checkNotNull(alias);
+        Objects.requireNonNull(packageName);
+        Objects.requireNonNull(alias);
         try {
             return mPM.getKeySetByAlias(packageName, alias);
         } catch (RemoteException e) {
@@ -2673,7 +2775,7 @@ public class ApplicationPackageManager extends PackageManager {
     /** @hide */
     @Override
     public KeySet getSigningKeySet(String packageName) {
-        Preconditions.checkNotNull(packageName);
+        Objects.requireNonNull(packageName);
         try {
             return mPM.getSigningKeySet(packageName);
         } catch (RemoteException e) {
@@ -2684,8 +2786,8 @@ public class ApplicationPackageManager extends PackageManager {
     /** @hide */
     @Override
     public boolean isSignedBy(String packageName, KeySet ks) {
-        Preconditions.checkNotNull(packageName);
-        Preconditions.checkNotNull(ks);
+        Objects.requireNonNull(packageName);
+        Objects.requireNonNull(ks);
         try {
             return mPM.isPackageSignedByKeySet(packageName, ks);
         } catch (RemoteException e) {
@@ -2696,8 +2798,8 @@ public class ApplicationPackageManager extends PackageManager {
     /** @hide */
     @Override
     public boolean isSignedByExactly(String packageName, KeySet ks) {
-        Preconditions.checkNotNull(packageName);
-        Preconditions.checkNotNull(ks);
+        Objects.requireNonNull(packageName);
+        Objects.requireNonNull(ks);
         try {
             return mPM.isPackageSignedByKeySetExactly(packageName, ks);
         } catch (RemoteException e) {
@@ -3129,18 +3231,18 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @Override
-    public String getSystemTextClassifierPackageName() {
+    public String getDefaultTextClassifierPackageName() {
         try {
-            return mPM.getSystemTextClassifierPackageName();
+            return mPM.getDefaultTextClassifierPackageName();
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
         }
     }
 
     @Override
-    public String[] getSystemTextClassifierPackages() {
+    public String getSystemTextClassifierPackageName() {
         try {
-            return mPM.getSystemTextClassifierPackages();
+            return mPM.getSystemTextClassifierPackageName();
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
         }
@@ -3230,6 +3332,37 @@ public class ApplicationPackageManager extends PackageManager {
     public void sendDeviceCustomizationReadyBroadcast() {
         try {
             mPM.sendDeviceCustomizationReadyBroadcast();
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    public void setMimeGroup(String mimeGroup, Set<String> mimeTypes) {
+        try {
+            mPM.setMimeGroup(mContext.getPackageName(), mimeGroup,
+                    new ArrayList<String>(mimeTypes));
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @Override
+    public void clearMimeGroup(String mimeGroup) {
+        try {
+            mPM.clearMimeGroup(mContext.getPackageName(), mimeGroup);
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @Override
+    public Set<String> getMimeGroup(String group) {
+        try {
+            List<String> mimeGroup = mPM.getMimeGroup(mContext.getPackageName(), group);
+            if (mimeGroup == null) {
+                return null;
+            }
+            return new ArraySet<>(mimeGroup);
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
         }

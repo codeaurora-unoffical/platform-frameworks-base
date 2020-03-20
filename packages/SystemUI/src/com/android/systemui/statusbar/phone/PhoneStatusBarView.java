@@ -16,20 +16,15 @@
 
 package com.android.systemui.statusbar.phone;
 
-import static android.content.res.Configuration.ORIENTATION_PORTRAIT;
-
 import static com.android.systemui.ScreenDecorations.DisplayCutoutView.boundsFromDirection;
 
 import android.annotation.Nullable;
 import android.content.Context;
 import android.content.res.Configuration;
-import android.graphics.Point;
 import android.graphics.Rect;
-import android.provider.DeviceConfig;
 import android.util.AttributeSet;
 import android.util.EventLog;
 import android.util.Pair;
-import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -37,11 +32,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
-import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
-import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
-import com.android.systemui.DarkReceiverImpl;
 import com.android.systemui.Dependency;
 import com.android.systemui.EventLogTags;
 import com.android.systemui.R;
@@ -61,7 +53,6 @@ public class PhoneStatusBarView extends PanelBar {
     StatusBar mBar;
 
     boolean mIsFullyOpenedPanel = false;
-    private final PhoneStatusBarTransitions mBarTransitions;
     private ScrimController mScrimController;
     private float mMinFraction;
     private Runnable mHideExpandedRunnable = new Runnable() {
@@ -81,24 +72,17 @@ public class PhoneStatusBarView extends PanelBar {
     @Nullable
     private DisplayCutout mDisplayCutout;
 
-    private DarkReceiverImpl mSplitDivider;
-    private View mDividerContainer;
-    private QsSplitPropertyListener mPropertyListener;
     /**
      * Draw this many pixels into the left/right side of the cutout to optimally use the space
      */
     private int mCutoutSideNudge = 0;
     private boolean mHeadsUpVisible;
 
+    private int mRoundedCornerPadding = 0;
+
     public PhoneStatusBarView(Context context, AttributeSet attrs) {
         super(context, attrs);
-
-        mBarTransitions = new PhoneStatusBarTransitions(this);
         mCommandQueue = Dependency.get(CommandQueue.class);
-    }
-
-    public BarTransitions getBarTransitions() {
-        return mBarTransitions;
     }
 
     public void setBar(StatusBar bar) {
@@ -111,14 +95,9 @@ public class PhoneStatusBarView extends PanelBar {
 
     @Override
     public void onFinishInflate() {
-        mBarTransitions.init();
         mBattery = findViewById(R.id.battery);
         mCutoutSpace = findViewById(R.id.cutout_space_view);
         mCenterIconSpace = findViewById(R.id.centered_icon_area);
-        mSplitDivider = findViewById(R.id.divider);
-        mDividerContainer = findViewById(R.id.divider_container);
-        maybeShowDivider(true);
-        mPropertyListener = new QsSplitPropertyListener(mDividerContainer);
 
         updateResources();
     }
@@ -128,14 +107,8 @@ public class PhoneStatusBarView extends PanelBar {
         super.onAttachedToWindow();
         // Always have Battery meters in the status bar observe the dark/light modes.
         Dependency.get(DarkIconDispatcher.class).addDarkReceiver(mBattery);
-        Dependency.get(DarkIconDispatcher.class).addDarkReceiver(mSplitDivider);
-        maybeShowDivider(true);
         if (updateOrientationAndCutout(getResources().getConfiguration().orientation)) {
             updateLayoutForCutout();
-        }
-        if (mPropertyListener != null) {
-            DeviceConfig.addOnPropertiesChangedListener(DeviceConfig.NAMESPACE_SYSTEMUI,
-                    mContext.getMainExecutor(), mPropertyListener);
         }
     }
 
@@ -143,11 +116,7 @@ public class PhoneStatusBarView extends PanelBar {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         Dependency.get(DarkIconDispatcher.class).removeDarkReceiver(mBattery);
-        Dependency.get(DarkIconDispatcher.class).removeDarkReceiver(mSplitDivider);
         mDisplayCutout = null;
-        if (mPropertyListener != null) {
-            DeviceConfig.removeOnPropertiesChangedListener(mPropertyListener);
-        }
     }
 
     @Override
@@ -216,7 +185,6 @@ public class PhoneStatusBarView extends PanelBar {
     public void onPanelPeeked() {
         super.onPanelPeeked();
         mBar.makeExpandedVisible(false);
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     @Override
@@ -225,7 +193,6 @@ public class PhoneStatusBarView extends PanelBar {
         // Close the status bar in the next frame so we can show the end of the animation.
         post(mHideExpandedRunnable);
         mIsFullyOpenedPanel = false;
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     public void removePendingHideExpandedRunnables() {
@@ -236,10 +203,9 @@ public class PhoneStatusBarView extends PanelBar {
     public void onPanelFullyOpened() {
         super.onPanelFullyOpened();
         if (!mIsFullyOpenedPanel) {
-            mPanel.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+            mPanel.getView().sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
         }
         mIsFullyOpenedPanel = true;
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     @Override
@@ -263,28 +229,24 @@ public class PhoneStatusBarView extends PanelBar {
         mBar.onTrackingStarted();
         mScrimController.onTrackingStarted();
         removePendingHideExpandedRunnables();
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     @Override
     public void onClosingFinished() {
         super.onClosingFinished();
         mBar.onClosingFinished();
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     @Override
     public void onTrackingStopped(boolean expand) {
         super.onTrackingStopped(expand);
         mBar.onTrackingStopped(expand);
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     @Override
     public void onExpandingFinished() {
         super.onExpandingFinished();
         mScrimController.onExpandingFinished();
-        maybeShowDivider(!mBar.mPanelExpanded);
     }
 
     @Override
@@ -321,16 +283,25 @@ public class PhoneStatusBarView extends PanelBar {
     public void updateResources() {
         mCutoutSideNudge = getResources().getDimensionPixelSize(
                 R.dimen.display_cutout_margin_consumption);
+        mRoundedCornerPadding = getResources().getDimensionPixelSize(
+                R.dimen.rounded_corner_content_padding);
 
+        updateStatusBarHeight();
+    }
+
+    private void updateStatusBarHeight() {
+        final int waterfallTopInset =
+                mDisplayCutout == null ? 0 : mDisplayCutout.getWaterfallInsets().top;
         ViewGroup.LayoutParams layoutParams = getLayoutParams();
-        layoutParams.height = getResources().getDimensionPixelSize(
-                R.dimen.status_bar_height);
+        layoutParams.height =
+                getResources().getDimensionPixelSize(R.dimen.status_bar_height) - waterfallTopInset;
         setLayoutParams(layoutParams);
     }
 
     private void updateLayoutForCutout() {
-        Pair<Integer, Integer> cornerCutoutMargins = cornerCutoutMargins(mDisplayCutout,
-                getDisplay());
+        updateStatusBarHeight();
+        Pair<Integer, Integer> cornerCutoutMargins =
+                StatusBarWindowView.cornerCutoutMargins(mDisplayCutout, getDisplay());
         updateCutoutLocation(cornerCutoutMargins);
         updateSafeInsets(cornerCutoutMargins);
     }
@@ -341,8 +312,7 @@ public class PhoneStatusBarView extends PanelBar {
             return;
         }
 
-        if (mDisplayCutout == null || mDisplayCutout.isEmpty()
-                    || mLastOrientation != ORIENTATION_PORTRAIT || cornerCutoutMargins != null) {
+        if (mDisplayCutout == null || mDisplayCutout.isEmpty() || cornerCutoutMargins != null) {
             mCenterIconSpace.setVisibility(View.VISIBLE);
             mCutoutSpace.setVisibility(View.GONE);
             return;
@@ -365,47 +335,11 @@ public class PhoneStatusBarView extends PanelBar {
         // Depending on our rotation, we may have to work around a cutout in the middle of the view,
         // or letterboxing from the right or left sides.
 
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
-        if (mDisplayCutout == null || mDisplayCutout.isEmpty()
-                || mLastOrientation != ORIENTATION_PORTRAIT || cornerCutoutMargins == null) {
-            lp.leftMargin = 0;
-            lp.rightMargin = 0;
-            return;
-        }
+        Pair<Integer, Integer> padding =
+                StatusBarWindowView.paddingNeededForCutoutAndRoundedCorner(
+                        mDisplayCutout, cornerCutoutMargins, mRoundedCornerPadding);
 
-        lp.leftMargin = Math.max(lp.leftMargin, cornerCutoutMargins.first);
-        lp.rightMargin = Math.max(lp.rightMargin, cornerCutoutMargins.second);
-
-        // If we're already inset enough (e.g. on the status bar side), we can have 0 margin
-        WindowInsets insets = getRootWindowInsets();
-        int leftInset = insets.getSystemWindowInsetLeft();
-        int rightInset = insets.getSystemWindowInsetRight();
-        if (lp.leftMargin <= leftInset) {
-            lp.leftMargin = 0;
-        }
-        if (lp.rightMargin <= rightInset) {
-            lp.rightMargin = 0;
-        }
-    }
-
-    public static Pair<Integer, Integer> cornerCutoutMargins(DisplayCutout cutout,
-            Display display) {
-        if (cutout == null) {
-            return null;
-        }
-        Point size = new Point();
-        display.getRealSize(size);
-
-        Rect bounds = new Rect();
-        boundsFromDirection(cutout, Gravity.TOP, bounds);
-
-        if (bounds.left <= 0) {
-            return new Pair<>(bounds.right, 0);
-        }
-        if (bounds.right >= size.x) {
-            return new Pair<>(0, size.x - bounds.left);
-        }
-        return null;
+        setPadding(padding.first, getPaddingTop(), padding.second, getPaddingBottom());
     }
 
     public void setHeadsUpVisible(boolean headsUpVisible) {
@@ -416,31 +350,5 @@ public class PhoneStatusBarView extends PanelBar {
     @Override
     protected boolean shouldPanelBeVisible() {
         return mHeadsUpVisible || super.shouldPanelBeVisible();
-    }
-
-    void maybeShowDivider(boolean showDivider) {
-        int state =
-                showDivider && NotificationPanelView.isQsSplitEnabled() ? View.VISIBLE : View.GONE;
-        mDividerContainer.setVisibility(state);
-    }
-
-    private static class QsSplitPropertyListener implements
-            DeviceConfig.OnPropertiesChangedListener {
-        private final View mDivider;
-
-        QsSplitPropertyListener(View divider) {
-            mDivider = divider;
-        }
-
-        @Override
-        public void onPropertiesChanged(DeviceConfig.Properties properties) {
-            if (properties.getNamespace().equals(DeviceConfig.NAMESPACE_SYSTEMUI)
-                    && properties.getKeyset().contains(
-                    SystemUiDeviceConfigFlags.QS_SPLIT_ENABLED)) {
-                boolean splitEnabled = properties.getBoolean(
-                        SystemUiDeviceConfigFlags.QS_SPLIT_ENABLED, false);
-                mDivider.setVisibility(splitEnabled ? VISIBLE : GONE);
-            }
-        }
     }
 }

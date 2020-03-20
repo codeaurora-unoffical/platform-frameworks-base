@@ -27,6 +27,7 @@ import android.graphics.Rect;
 import android.os.Handler;
 import android.os.RemoteException;
 import android.util.Log;
+import android.view.SurfaceControl;
 import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
 
@@ -72,6 +73,8 @@ public class WindowManagerWrapper {
     public static final int WINDOWING_MODE_UNDEFINED = WindowConfiguration.WINDOWING_MODE_UNDEFINED;
     public static final int WINDOWING_MODE_FULLSCREEN =
             WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
+    public static final int WINDOWING_MODE_MULTI_WINDOW =
+            WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
     public static final int WINDOWING_MODE_PINNED = WindowConfiguration.WINDOWING_MODE_PINNED;
     public static final int WINDOWING_MODE_SPLIT_SCREEN_PRIMARY =
             WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
@@ -188,18 +191,6 @@ public class WindowManagerWrapper {
     }
 
     /**
-     * Registers a docked stack listener with the system.
-     */
-    public void registerDockedStackListener(DockedStackListenerCompat listener) {
-        try {
-            WindowManagerGlobal.getWindowManagerService().registerDockedStackListener(
-                    listener.mListener);
-        } catch (RemoteException e) {
-            Log.w(TAG, "Failed to register docked stack listener");
-        }
-    }
-
-    /**
      * Adds a pinned stack listener, which will receive updates from the window manager service
      * along with any other pinned stack listeners that were added via this method.
      */
@@ -214,5 +205,24 @@ public class WindowManagerWrapper {
      */
     public void removePinnedStackListener(PinnedStackListener listener) {
         mPinnedStackListenerForwarder.removeListener(listener);
+    }
+
+    /**
+     * Mirrors a specified display. The SurfaceControl returned is the root of the mirrored
+     * hierarchy.
+     *
+     * @param displayId The id of the display to mirror
+     * @return The SurfaceControl for the root of the mirrored hierarchy.
+     */
+    public SurfaceControl mirrorDisplay(final int displayId) {
+        try {
+            SurfaceControl outSurfaceControl = new SurfaceControl();
+            WindowManagerGlobal.getWindowManagerService().mirrorDisplay(displayId,
+                    outSurfaceControl);
+            return outSurfaceControl;
+        } catch (RemoteException e) {
+            Log.e(TAG, "Unable to reach window manager", e);
+        }
+        return null;
     }
 }

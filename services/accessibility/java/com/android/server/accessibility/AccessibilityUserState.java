@@ -100,10 +100,11 @@ class AccessibilityUserState {
     private boolean mIsAutoclickEnabled;
     private boolean mIsDisplayMagnificationEnabled;
     private boolean mIsFilterKeyEventsEnabled;
-    private boolean mIsNavBarMagnificationEnabled;
     private boolean mIsPerformGesturesEnabled;
     private boolean mIsTextHighContrastEnabled;
     private boolean mIsTouchExplorationEnabled;
+    private boolean mServiceHandlesDoubleTap;
+    private boolean mRequestMultiFingerGestures;
     private int mUserInteractiveUiTimeout;
     private int mUserNonInteractiveUiTimeout;
     private int mNonInteractiveUiTimeout = 0;
@@ -152,8 +153,9 @@ class AccessibilityUserState {
         mAccessibilityShortcutKeyTargets.clear();
         mAccessibilityButtonTargets.clear();
         mIsTouchExplorationEnabled = false;
+        mServiceHandlesDoubleTap = false;
+        mRequestMultiFingerGestures = false;
         mIsDisplayMagnificationEnabled = false;
-        mIsNavBarMagnificationEnabled = false;
         mIsAutoclickEnabled = false;
         mUserNonInteractiveUiTimeout = 0;
         mUserInteractiveUiTimeout = 0;
@@ -353,6 +355,8 @@ class AccessibilityUserState {
         // Touch exploration relies on enabled accessibility.
         if (a11yEnabled && mIsTouchExplorationEnabled) {
             clientState |= AccessibilityManager.STATE_FLAG_TOUCH_EXPLORATION_ENABLED;
+            clientState |= AccessibilityManager.STATE_FLAG_DISPATCH_DOUBLE_TAP;
+            clientState |= AccessibilityManager.STATE_FLAG_REQUEST_MULTI_FINGER_GESTURES;
         }
         if (mIsTextHighContrastEnabled) {
             clientState |= AccessibilityManager.STATE_FLAG_HIGH_TEXT_CONTRAST_ENABLED;
@@ -433,10 +437,12 @@ class AccessibilityUserState {
         pw.println();
         pw.append("     attributes:{id=").append(String.valueOf(mUserId));
         pw.append(", touchExplorationEnabled=").append(String.valueOf(mIsTouchExplorationEnabled));
+        pw.append(", serviceHandlesDoubleTap=")
+                .append(String.valueOf(mServiceHandlesDoubleTap));
+        pw.append(", requestMultiFingerGestures=")
+                .append(String.valueOf(mRequestMultiFingerGestures));
         pw.append(", displayMagnificationEnabled=").append(String.valueOf(
                 mIsDisplayMagnificationEnabled));
-        pw.append(", navBarMagnificationEnabled=").append(String.valueOf(
-                mIsNavBarMagnificationEnabled));
         pw.append(", autoclickEnabled=").append(String.valueOf(mIsAutoclickEnabled));
         pw.append(", nonInteractiveUiTimeout=").append(String.valueOf(mNonInteractiveUiTimeout));
         pw.append(", interactiveUiTimeout=").append(String.valueOf(mInteractiveUiTimeout));
@@ -553,8 +559,12 @@ class AccessibilityUserState {
         mLastSentClientState = state;
     }
 
-    public boolean isShortcutKeyMagnificationEnabledLocked() {
-        return mAccessibilityShortcutKeyTargets.contains(MAGNIFICATION_CONTROLLER_NAME);
+    /**
+     * Returns true if navibar magnification or shortcut key magnification is enabled.
+     */
+    public boolean isShortcutMagnificationEnabledLocked() {
+        return mAccessibilityShortcutKeyTargets.contains(MAGNIFICATION_CONTROLLER_NAME)
+                || mAccessibilityButtonTargets.contains(MAGNIFICATION_CONTROLLER_NAME);
     }
 
     /**
@@ -675,6 +685,22 @@ class AccessibilityUserState {
         mIsTouchExplorationEnabled = enabled;
     }
 
+    public boolean isServiceHandlesDoubleTapEnabledLocked() {
+        return mServiceHandlesDoubleTap;
+    }
+
+    public void setServiceHandlesDoubleTapLocked(boolean enabled) {
+        mServiceHandlesDoubleTap = enabled;
+    }
+
+    public boolean isMultiFingerGesturesEnabledLocked() {
+        return mRequestMultiFingerGestures;
+    }
+
+    public void setMultiFingerGesturesLocked(boolean enabled) {
+        mRequestMultiFingerGestures = enabled;
+    }
+
     public int getUserInteractiveUiTimeoutLocked() {
         return mUserInteractiveUiTimeout;
     }
@@ -690,28 +716,4 @@ class AccessibilityUserState {
     public void setUserNonInteractiveUiTimeoutLocked(int timeout) {
         mUserNonInteractiveUiTimeout = timeout;
     }
-
-    // TODO(a11y shortcut): These functions aren't necessary, after the new Settings shortcut Ui
-    //  is merged.
-    boolean isNavBarMagnificationEnabledLocked() {
-        return mIsNavBarMagnificationEnabled;
-    }
-
-    void setNavBarMagnificationEnabledLocked(boolean enabled) {
-        mIsNavBarMagnificationEnabled = enabled;
-    }
-
-    boolean isNavBarMagnificationAssignedToAccessibilityButtonLocked() {
-        return mAccessibilityButtonTargets.contains(MAGNIFICATION_CONTROLLER_NAME);
-    }
-
-    ComponentName getServiceAssignedToAccessibilityButtonLocked() {
-        final String targetName = mAccessibilityButtonTargets.isEmpty() ? null
-                : mAccessibilityButtonTargets.valueAt(0);
-        if (targetName == null) {
-            return null;
-        }
-        return ComponentName.unflattenFromString(targetName);
-    }
-    // TODO(a11y shortcut): End
 }

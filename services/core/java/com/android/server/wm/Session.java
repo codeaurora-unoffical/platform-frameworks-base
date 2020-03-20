@@ -31,6 +31,7 @@ import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
 
 import android.annotation.Nullable;
 import android.content.ClipData;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.os.Binder;
@@ -189,7 +190,8 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
             Rect outFrame, Rect outContentInsets, Rect outVisibleInsets,
             Rect outStableInsets, Rect outBackdropFrame,
             DisplayCutout.ParcelableWrapper cutout, MergedConfiguration mergedConfiguration,
-            SurfaceControl outSurfaceControl, InsetsState outInsetsState) {
+            SurfaceControl outSurfaceControl, InsetsState outInsetsState,
+            Point outSurfaceSize, SurfaceControl outBLASTSurfaceControl) {
         if (false) Slog.d(TAG_WM, ">>>>>> ENTERED relayout from "
                 + Binder.getCallingPid());
         Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, mRelayoutTag);
@@ -197,7 +199,8 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
                 requestedWidth, requestedHeight, viewFlags, flags, frameNumber,
                 outFrame, outContentInsets, outVisibleInsets,
                 outStableInsets, outBackdropFrame, cutout,
-                mergedConfiguration, outSurfaceControl, outInsetsState);
+                mergedConfiguration, outSurfaceControl, outInsetsState, outSurfaceSize,
+                outBLASTSurfaceControl);
         Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
         if (false) Slog.d(TAG_WM, "<<<<<< EXITING relayout to "
                 + Binder.getCallingPid());
@@ -235,16 +238,12 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
 
     @Override
     public void setInTouchMode(boolean mode) {
-        synchronized (mService.mGlobalLock) {
-            mService.mInTouchMode = mode;
-        }
+        mService.setInTouchMode(mode);
     }
 
     @Override
     public boolean getInTouchMode() {
-        synchronized (mService.mGlobalLock) {
-            return mService.mInTouchMode;
-        }
+        return mService.getInTouchMode();
     }
 
     @Override
@@ -448,10 +447,10 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
     }
 
     @Override
-    public void updateTapExcludeRegion(IWindow window, int regionId, Region region) {
+    public void updateTapExcludeRegion(IWindow window, Region region) {
         final long identity = Binder.clearCallingIdentity();
         try {
-            mService.updateTapExcludeRegion(window, regionId, region);
+            mService.updateTapExcludeRegion(window, region);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -463,7 +462,7 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
             final WindowState windowState = mService.windowForClientLocked(this, window,
                     false /* throwOnError */);
             if (windowState != null) {
-                windowState.setClientInsetsState(state);
+                windowState.updateRequestedInsetsState(state);
                 windowState.getDisplayContent().getInsetsPolicy().onInsetsModified(
                         windowState, state);
             }
@@ -623,7 +622,7 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
 
     @Override
     public void grantInputChannel(int displayId, SurfaceControl surface,
-            IWindow window, IBinder hostInputToken, InputChannel outInputChannel) {
+            IWindow window, IBinder hostInputToken, int flags, InputChannel outInputChannel) {
         if (hostInputToken == null && !mCanAddInternalSystemWindow) {
             // Callers without INTERNAL_SYSTEM_WINDOW permission cannot grant input channel to
             // embedded windows without providing a host window input token
@@ -632,8 +631,19 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
 
         final long identity = Binder.clearCallingIdentity();
         try {
-            mService.grantInputChannel(mUid, mPid, displayId, surface, window,
-                    hostInputToken, outInputChannel);
+            mService.grantInputChannel(mUid, mPid, displayId, surface, window, hostInputToken,
+                    flags, outInputChannel);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    @Override
+    public void updateInputChannel(IBinder channelToken, int displayId, SurfaceControl surface,
+            int flags) {
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            mService.updateInputChannel(channelToken, displayId, surface, flags);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }

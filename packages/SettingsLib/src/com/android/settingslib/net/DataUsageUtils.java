@@ -38,15 +38,15 @@ public class DataUsageUtils {
         final SubscriptionManager subscriptionManager = context.getSystemService(
                 SubscriptionManager.class);
         final NetworkTemplate mobileAll = NetworkTemplate.buildTemplateMobileAll(
-                telephonyManager.getSubscriberId(subId));
+                telephonyManager.getSubscriberId());
 
-        if (!subscriptionManager.isActiveSubId(subId)) {
+        if (!subscriptionManager.isActiveSubscriptionId(subId)) {
             Log.i(TAG, "Subscription is not active: " + subId);
             return mobileAll;
         }
 
         final String[] mergedSubscriberIds = telephonyManager.createForSubscriptionId(subId)
-                .getMergedSubscriberIdsFromGroup();
+                .getMergedImsisFromGroup();
 
         if (ArrayUtils.isEmpty(mergedSubscriberIds)) {
             Log.i(TAG, "mergedSubscriberIds is null.");

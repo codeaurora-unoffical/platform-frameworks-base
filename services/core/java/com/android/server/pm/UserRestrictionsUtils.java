@@ -26,6 +26,7 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageManagerInternal;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Process;
@@ -42,6 +43,7 @@ import android.util.Slog;
 import android.util.SparseArray;
 
 import com.android.internal.util.Preconditions;
+import com.android.server.LocalServices;
 
 import com.google.android.collect.Sets;
 
@@ -51,6 +53,7 @@ import org.xmlpull.v1.XmlSerializer;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -198,20 +201,35 @@ public class UserRestrictionsUtils {
     );
 
     /**
-     * Special user restrictions that are applied globally when set by the profile owner of a
-     * managed profile that was created during the device provisioning flow.
+     * Special user restrictions that profile owner of an organization-owned managed profile can
+     * set on the parent profile instance to apply them globally.
      */
     private static final Set<String> PROFILE_OWNER_ORGANIZATION_OWNED_GLOBAL_RESTRICTIONS =
             Sets.newArraySet(
                     UserManager.DISALLOW_CONFIG_DATE_TIME,
-                    UserManager.DISALLOW_CAMERA
-    );
-
-    /**
-     * User restrictions that default to {@code true} for device owners.
-     */
-    private static final Set<String> DEFAULT_ENABLED_FOR_DEVICE_OWNERS = Sets.newArraySet(
-            UserManager.DISALLOW_ADD_MANAGED_PROFILE
+                    UserManager.DISALLOW_CAMERA,
+                    UserManager.DISALLOW_ADD_USER,
+                    UserManager.DISALLOW_BLUETOOTH,
+                    UserManager.DISALLOW_BLUETOOTH_SHARING,
+                    UserManager.DISALLOW_CONFIG_BLUETOOTH,
+                    UserManager.DISALLOW_CONFIG_CELL_BROADCASTS,
+                    UserManager.DISALLOW_CONFIG_LOCATION,
+                    UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS,
+                    UserManager.DISALLOW_CONFIG_PRIVATE_DNS,
+                    UserManager.DISALLOW_CONFIG_TETHERING,
+                    UserManager.DISALLOW_CONFIG_WIFI,
+                    UserManager.DISALLOW_CONTENT_CAPTURE,
+                    UserManager.DISALLOW_CONTENT_SUGGESTIONS,
+                    UserManager.DISALLOW_DATA_ROAMING,
+                    UserManager.DISALLOW_DEBUGGING_FEATURES,
+                    UserManager.DISALLOW_SAFE_BOOT,
+                    UserManager.DISALLOW_SHARE_LOCATION,
+                    UserManager.DISALLOW_SMS,
+                    UserManager.DISALLOW_USB_FILE_TRANSFER,
+                    UserManager.DISALLOW_AIRPLANE_MODE,
+                    UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
+                    UserManager.DISALLOW_OUTGOING_CALLS,
+                    UserManager.DISALLOW_UNMUTE_MICROPHONE
     );
 
     /**
@@ -364,7 +382,7 @@ public class UserRestrictionsUtils {
     }
 
     public static void merge(@NonNull Bundle dest, @Nullable Bundle in) {
-        Preconditions.checkNotNull(dest);
+        Objects.requireNonNull(dest);
         Preconditions.checkArgument(dest != in);
         if (in == null) {
             return;
@@ -411,11 +429,10 @@ public class UserRestrictionsUtils {
     }
 
     /**
-     * Returns the user restrictions that default to {@code true} for device owners.
-     * These user restrictions are local, though. ie only for the device owner's user id.
+     * @return true if a restriction is settable by profile owner of an organization owned device.
      */
-    public static @NonNull Set<String> getDefaultEnabledForDeviceOwner() {
-        return DEFAULT_ENABLED_FOR_DEVICE_OWNERS;
+    public static boolean canProfileOwnerOfOrganizationOwnedDeviceChange(String restriction) {
+        return PROFILE_OWNER_ORGANIZATION_OWNED_GLOBAL_RESTRICTIONS.contains(restriction);
     }
 
     /**
@@ -570,6 +587,9 @@ public class UserRestrictionsUtils {
                             android.provider.Settings.Global.putStringForUser(cr,
                                     android.provider.Settings.Global.ADB_ENABLED, "0",
                                     userId);
+                            android.provider.Settings.Global.putStringForUser(cr,
+                                    android.provider.Settings.Global.ADB_WIFI_ENABLED, "0",
+                                    userId);
                         }
                     }
                     break;
@@ -661,6 +681,15 @@ public class UserRestrictionsUtils {
                                 Global.LOCATION_GLOBAL_KILL_SWITCH, "0");
                     }
                     break;
+                case UserManager.DISALLOW_APPS_CONTROL:
+                    // Intentional fall-through
+                case UserManager.DISALLOW_UNINSTALL_APPS:
+                    final PackageManagerInternal pmi = LocalServices.getService(
+                            PackageManagerInternal.class);
+                    pmi.removeAllNonSystemPackageSuspensions(userId);
+                    pmi.removeAllDistractingPackageRestrictions(userId);
+                    pmi.flushPackageRestrictions(userId);
+                    break;
             }
         } finally {
             Binder.restoreCallingIdentity(id);
@@ -669,7 +698,7 @@ public class UserRestrictionsUtils {
 
     public static boolean isSettingRestrictedForUser(Context context, @NonNull String setting,
             int userId, String value, int callingUid) {
-        Preconditions.checkNotNull(setting);
+        Objects.requireNonNull(setting);
         final UserManager mUserManager = context.getSystemService(UserManager.class);
         String restriction;
         boolean checkAllUser = false;
@@ -706,6 +735,7 @@ public class UserRestrictionsUtils {
                 break;
 
             case android.provider.Settings.Global.ADB_ENABLED:
+            case android.provider.Settings.Global.ADB_WIFI_ENABLED:
                 if ("0".equals(value)) {
                     return false;
                 }
@@ -768,6 +798,7 @@ public class UserRestrictionsUtils {
                 break;
 
             case android.provider.Settings.System.SCREEN_BRIGHTNESS:
+            case android.provider.Settings.System.SCREEN_BRIGHTNESS_FLOAT:
             case android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE:
                 if (callingUid == Process.SYSTEM_UID) {
                     return false;

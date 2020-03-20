@@ -16,7 +16,7 @@
 #pragma once
 
 #include "config/ConfigKey.h"
-#include "statslog.h"
+#include "atoms_info.h"
 
 #include <gtest/gtest_prod.h>
 #include <log/log_time.h>
@@ -164,8 +164,11 @@ public:
     // Maximum number of pushed atoms statsd stats will track above kMaxPushedAtomId.
     static const int kMaxNonPlatformPushedAtoms = 100;
 
-    // Max platform atom tag number.
-    static const int32_t kMaxPlatformAtomTag = 100000;
+    // Atom id that is the start of the pulled atoms.
+    static const int kPullAtomStartTag = 10000;
+
+    // Atom id that is the start of vendor atoms.
+    static const int kVendorAtomStartTag = 100000;
 
     // Vendor pulled atom start id.
     static const int32_t kVendorPulledAtomStartTag = 150000;
@@ -180,6 +183,8 @@ public:
     static const int32_t kMaxAtomTag = 200000;
 
     static const int64_t kInt64Max = 0x7fffffffffffffffLL;
+
+    static const int32_t kMaxLoggedBucketDropEvents = 10;
 
     /**
      * Report a new config has been received and report the static stats about the config.

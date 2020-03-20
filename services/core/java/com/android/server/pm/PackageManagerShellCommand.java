@@ -16,6 +16,7 @@
 
 package com.android.server.pm;
 
+import static android.content.pm.PackageInstaller.LOCATION_DATA_APP;
 import static android.content.pm.PackageManager.INTENT_FILTER_DOMAIN_VERIFICATION_STATUS_ALWAYS;
 import static android.content.pm.PackageManager.INTENT_FILTER_DOMAIN_VERIFICATION_STATUS_ALWAYS_ASK;
 import static android.content.pm.PackageManager.INTENT_FILTER_DOMAIN_VERIFICATION_STATUS_ASK;
@@ -81,11 +82,13 @@ import android.os.Process;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.ServiceSpecificException;
 import android.os.ShellCommand;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.incremental.V4Signature;
 import android.os.storage.StorageManager;
 import android.permission.IPermissionManager;
 import android.system.ErrnoException;
@@ -94,6 +97,7 @@ import android.text.TextUtils;
 import android.text.format.DateUtils;
 import android.util.ArraySet;
 import android.util.PrintWriterPrinter;
+import android.util.Slog;
 import android.util.SparseArray;
 
 import com.android.internal.content.PackageHelper;
@@ -114,7 +118,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -134,6 +140,7 @@ class PackageManagerShellCommand extends ShellCommand {
     /** Path where ART profiles snapshots are dumped for the shell user */
     private final static String ART_PROFILE_SNAPSHOT_DEBUG_LOCATION = "/data/misc/profman/";
     private static final int DEFAULT_WAIT_MS = 60 * 1000;
+    private static final String TAG = "PackageManagerShellCommand";
 
     final IPackageManager mInterface;
     final IPermissionManager mPermissionManager;
@@ -158,7 +165,7 @@ class PackageManagerShellCommand extends ShellCommand {
 
         final PrintWriter pw = getOutPrintWriter();
         try {
-            switch(cmd) {
+            switch (cmd) {
                 case "path":
                     return runPath();
                 case "dump":
@@ -175,6 +182,10 @@ class PackageManagerShellCommand extends ShellCommand {
                     return runQueryIntentReceivers();
                 case "install":
                     return runInstall();
+                case "install-streaming":
+                    return runStreamingInstall();
+                case "install-incremental":
+                    return runIncrementalInstall();
                 case "install-abandon":
                 case "install-destroy":
                     return runInstallAbandon();
@@ -284,6 +295,8 @@ class PackageManagerShellCommand extends ShellCommand {
                     return runRollbackApp();
                 case "get-moduleinfo":
                     return runGetModuleInfo();
+                case "log-visibility":
+                    return runLogVisibility();
                 default: {
                     String nextArg = getNextArg();
                     if (nextArg == null) {
@@ -344,6 +357,36 @@ class PackageManagerShellCommand extends ShellCommand {
             }
         } catch (RemoteException e) {
             pw.println("Failure [" + e.getClass().getName() + " - " + e.getMessage() + "]");
+            return -1;
+        }
+        return 1;
+    }
+
+    private int runLogVisibility() {
+        final PrintWriter pw = getOutPrintWriter();
+        boolean enable = true;
+
+        String opt;
+        while ((opt = getNextOption()) != null) {
+            switch (opt) {
+                case "--disable":
+                    enable = false;
+                    break;
+                case "--enable":
+                    enable = true;
+                    break;
+                default:
+                    pw.println("Error: Unknown option: " + opt);
+                    return -1;
+            }
+        }
+
+        String packageName = getNextArg();
+        if (packageName != null) {
+            LocalServices.getService(PackageManagerInternal.class)
+                    .setVisibilityLogging(packageName, enable);
+        } else {
+            getErrPrintWriter().println("Error: no package specified");
             return -1;
         }
         return 1;
@@ -469,6 +512,7 @@ class PackageManagerShellCommand extends ShellCommand {
                 }
             }
         }
+
         params.sessionParams.setSize(sessionSize);
     }
     /**
@@ -1152,45 +1196,75 @@ class PackageManagerShellCommand extends ShellCommand {
         return 0;
     }
 
-    private int runInstall() throws RemoteException {
-        final PrintWriter pw = getOutPrintWriter();
+    private int runStreamingInstall() throws RemoteException {
         final InstallParams params = makeInstallParams();
-
-        ArrayList<String> inPaths = getRemainingArgs();
-        if (inPaths.isEmpty()) {
-            inPaths.add(STDIN_PATH);
+        if (params.sessionParams.dataLoaderParams == null) {
+            params.sessionParams.setDataLoaderParams(
+                    PackageManagerShellCommandDataLoader.getStreamingDataLoaderParams(this));
         }
+        return doRunInstall(params);
+    }
 
-        final boolean hasSplits = inPaths.size() > 1;
-
-        if (STDIN_PATH.equals(inPaths.get(0))) {
-            if (hasSplits) {
-                pw.println("Error: can't specify SPLIT(s) along with STDIN");
-                return 1;
-            }
-            if (params.sessionParams.sizeBytes == -1) {
-                pw.println("Error: must either specify a package size or an APK file");
-                return 1;
-            }
+    private int runIncrementalInstall() throws RemoteException {
+        final InstallParams params = makeInstallParams();
+        if (params.sessionParams.dataLoaderParams == null) {
+            params.sessionParams.setDataLoaderParams(
+                    PackageManagerShellCommandDataLoader.getIncrementalDataLoaderParams(this));
         }
+        return doRunInstall(params);
+    }
 
+    private int runInstall() throws RemoteException {
+        return doRunInstall(makeInstallParams());
+    }
+
+    private int doRunInstall(final InstallParams params) throws RemoteException {
+        final PrintWriter pw = getOutPrintWriter();
+
+        final boolean isStreaming = params.sessionParams.dataLoaderParams != null;
         final boolean isApex =
                 (params.sessionParams.installFlags & PackageManager.INSTALL_APEX) != 0;
+
+        ArrayList<String> args = getRemainingArgs();
+
+        final boolean fromStdIn = args.isEmpty() || STDIN_PATH.equals(args.get(0));
+        final boolean hasSplits = args.size() > 1;
+
+        if (fromStdIn && params.sessionParams.sizeBytes == -1) {
+            pw.println("Error: must either specify a package size or an APK file");
+            return 1;
+        }
+
         if (isApex && hasSplits) {
             pw.println("Error: can't specify SPLIT(s) for APEX");
             return 1;
         }
 
-        setParamsSize(params, inPaths);
+        if (!isStreaming) {
+            if (fromStdIn && hasSplits) {
+                pw.println("Error: can't specify SPLIT(s) along with STDIN");
+                return 1;
+            }
+
+            if (args.isEmpty()) {
+                args.add(STDIN_PATH);
+            } else {
+                setParamsSize(params, args);
+            }
+        }
+
         final int sessionId = doCreateSession(params.sessionParams,
                 params.installerPackageName, params.userId);
         boolean abandonSession = true;
         try {
-            for (String inPath : inPaths) {
-                String splitName = hasSplits ? (new File(inPath)).getName()
-                        : "base." + (isApex ? "apex" : "apk");
-                if (doWriteSplit(sessionId, inPath, params.sessionParams.sizeBytes, splitName,
-                        false /*logSuccess*/) != PackageInstaller.STATUS_SUCCESS) {
+            if (isStreaming) {
+                if (doAddFiles(sessionId, args, params.sessionParams.sizeBytes, isApex)
+                        != PackageInstaller.STATUS_SUCCESS) {
+                    return 1;
+                }
+            } else {
+                if (doWriteSplits(sessionId, args, params.sessionParams.sizeBytes, isApex)
+                        != PackageInstaller.STATUS_SUCCESS) {
                     return 1;
                 }
             }
@@ -1200,7 +1274,7 @@ class PackageManagerShellCommand extends ShellCommand {
             }
             abandonSession = false;
 
-            if (!params.sessionParams.isStaged || !params.waitForStagedSessionReady) {
+            if (!params.sessionParams.isStaged || !params.mWaitForStagedSessionReady) {
                 pw.println("Success");
                 return 0;
             }
@@ -1238,7 +1312,7 @@ class PackageManagerShellCommand extends ShellCommand {
                         + si.getStagedSessionErrorMessage() + "]");
                 return 1;
             }
-            pw.println("Success");
+            pw.println("Success. Reboot device to apply staged session");
             return 0;
         } finally {
             if (abandonSession) {
@@ -2490,7 +2564,7 @@ class PackageManagerShellCommand extends ShellCommand {
         }
 
         name = arg;
-        UserInfo info;
+        UserInfo info = null;
         IUserManager um = IUserManager.Stub.asInterface(
                 ServiceManager.getService(Context.USER_SERVICE));
         IAccountManager accm = IAccountManager.Stub.asInterface(
@@ -2498,17 +2572,22 @@ class PackageManagerShellCommand extends ShellCommand {
         if (userType == null) {
             userType = UserInfo.getDefaultUserType(flags);
         }
-        if (UserManager.isUserTypeRestricted(userType)) {
-            // In non-split user mode, userId can only be SYSTEM
-            int parentUserId = userId >= 0 ? userId : UserHandle.USER_SYSTEM;
-            info = um.createRestrictedProfile(name, parentUserId);
-            accm.addSharedAccountsFromParentUser(parentUserId, userId,
-                    (Process.myUid() == Process.ROOT_UID) ? "root" : "com.android.shell");
-        } else if (userId < 0) {
-            info = preCreateOnly ?
-                    um.preCreateUser(userType) : um.createUser(name, userType, flags);
-        } else {
-            info = um.createProfileForUser(name, userType, flags, userId, null);
+        try {
+            if (UserManager.isUserTypeRestricted(userType)) {
+                // In non-split user mode, userId can only be SYSTEM
+                int parentUserId = userId >= 0 ? userId : UserHandle.USER_SYSTEM;
+                info = um.createRestrictedProfileWithThrow(name, parentUserId);
+                accm.addSharedAccountsFromParentUser(parentUserId, userId,
+                        (Process.myUid() == Process.ROOT_UID) ? "root" : "com.android.shell");
+            } else if (userId < 0) {
+                info = preCreateOnly ?
+                        um.preCreateUserWithThrow(userType) :
+                        um.createUserWithThrow(name, userType, flags);
+            } else {
+                info = um.createProfileForUserWithThrow(name, userType, flags, userId, null);
+            }
+        } catch (ServiceSpecificException e) {
+            getErrPrintWriter().println("Error: " + e);
         }
 
         if (info != null) {
@@ -2583,7 +2662,7 @@ class PackageManagerShellCommand extends ShellCommand {
         SessionParams sessionParams;
         String installerPackageName;
         int userId = UserHandle.USER_ALL;
-        boolean waitForStagedSessionReady = false;
+        boolean mWaitForStagedSessionReady = true;
         long timeoutMs = DEFAULT_WAIT_MS;
     }
 
@@ -2697,6 +2776,9 @@ class PackageManagerShellCommand extends ShellCommand {
                 case "--staged":
                     sessionParams.setStaged();
                     break;
+                case "--force-queryable":
+                    sessionParams.setForceQueryable();
+                    break;
                 case "--enable-rollback":
                     if (params.installerPackageName == null) {
                         // com.android.shell has the TEST_MANAGE_ROLLBACKS
@@ -2711,12 +2793,18 @@ class PackageManagerShellCommand extends ShellCommand {
                     sessionParams.installFlags |= PackageManager.INSTALL_ENABLE_ROLLBACK;
                     break;
                 case "--wait":
-                    params.waitForStagedSessionReady = true;
+                    params.mWaitForStagedSessionReady = true;
                     try {
                         params.timeoutMs = Long.parseLong(peekNextArg());
                         getNextArg();
                     } catch (NumberFormatException ignore) {
                     }
+                    break;
+                case "--no-wait":
+                    params.mWaitForStagedSessionReady = false;
+                    break;
+                case "--skip-verification":
+                    sessionParams.installFlags |= PackageManager.INSTALL_DISABLE_VERIFICATION;
                     break;
                 default:
                     throw new IllegalArgumentException("Unknown option " + opt);
@@ -2927,11 +3015,144 @@ class PackageManagerShellCommand extends ShellCommand {
         return sessionId;
     }
 
+    private int doAddFiles(int sessionId, ArrayList<String> args, long sessionSizeBytes,
+            boolean isApex) throws RemoteException {
+        PackageInstaller.Session session = new PackageInstaller.Session(
+                mInterface.getPackageInstaller().openSession(sessionId));
+        try {
+            // 1. Single file from stdin.
+            if (args.isEmpty() || STDIN_PATH.equals(args.get(0))) {
+                final String name = "base." + (isApex ? "apex" : "apk");
+                final String metadata = "-" + name;
+                session.addFile(LOCATION_DATA_APP, name, sessionSizeBytes,
+                        metadata.getBytes(StandardCharsets.UTF_8), null);
+                return 0;
+            }
+
+            for (String arg : args) {
+                final int delimLocation = arg.indexOf(':');
+
+                if (delimLocation != -1) {
+                    // 2. File with specified size read from stdin.
+                    if (processArgForStdin(arg, session) != 0) {
+                        return 1;
+                    }
+                } else {
+                    // 3. Local file.
+                    processArgForLocalFile(arg, session);
+                }
+            }
+            return 0;
+        } finally {
+            IoUtils.closeQuietly(session);
+        }
+    }
+
+    private int processArgForStdin(String arg, PackageInstaller.Session session) {
+        final String[] fileDesc = arg.split(":");
+        String name, metadata;
+        long sizeBytes;
+        byte[] signature = null;
+
+        try {
+            if (fileDesc.length < 2) {
+                getErrPrintWriter().println("Must specify file name and size");
+                return 1;
+            }
+            name = fileDesc[0];
+            sizeBytes = Long.parseUnsignedLong(fileDesc[1]);
+            metadata = name;
+
+            if (fileDesc.length > 2 && !TextUtils.isEmpty(fileDesc[2])) {
+                metadata = fileDesc[2];
+            }
+            if (fileDesc.length > 3) {
+                signature = Base64.getDecoder().decode(fileDesc[3]);
+            }
+        } catch (IllegalArgumentException e) {
+            getErrPrintWriter().println(
+                    "Unable to parse file parameters: " + arg + ", reason: " + e);
+            return 1;
+        }
+
+        if (TextUtils.isEmpty(name)) {
+            getErrPrintWriter().println("Empty file name in: " + arg);
+            return 1;
+        }
+
+        if (signature != null) {
+            // Streaming/adb mode.
+            metadata = "+" + metadata;
+            try {
+                if (V4Signature.readFrom(signature) == null) {
+                    getErrPrintWriter().println("V4 signature is invalid in: " + arg);
+                    return 1;
+                }
+            } catch (Exception e) {
+                getErrPrintWriter().println(
+                        "V4 signature is invalid: " + e + " in " + arg);
+                return 1;
+            }
+        } else {
+            // Single-shot read from stdin.
+            metadata = "-" + metadata;
+        }
+
+        session.addFile(LOCATION_DATA_APP, name, sizeBytes,
+                metadata.getBytes(StandardCharsets.UTF_8), signature);
+        return 0;
+    }
+
+    private void processArgForLocalFile(String arg, PackageInstaller.Session session) {
+        final String inPath = arg;
+
+        final File file = new File(inPath);
+        final String name = file.getName();
+        final long size = file.length();
+        final byte[] metadata = inPath.getBytes(StandardCharsets.UTF_8);
+
+        byte[] v4signatureBytes = null;
+        // Try to load the v4 signature file for the APK; it might not exist.
+        final String v4SignaturePath = inPath + V4Signature.EXT;
+        final ParcelFileDescriptor pfd = openFileForSystem(v4SignaturePath, "r");
+        if (pfd != null) {
+            try {
+                final V4Signature v4signature = V4Signature.readFrom(pfd);
+                v4signatureBytes = v4signature.toByteArray();
+            } catch (IOException ex) {
+                Slog.e(TAG, "V4 signature file exists but failed to be parsed.", ex);
+            } finally {
+                IoUtils.closeQuietly(pfd);
+            }
+        }
+
+        session.addFile(LOCATION_DATA_APP, name, size, metadata, v4signatureBytes);
+    }
+
+    private int doWriteSplits(int sessionId, ArrayList<String> splitPaths, long sessionSizeBytes,
+            boolean isApex) throws RemoteException {
+        final boolean multipleSplits = splitPaths.size() > 1;
+        for (String splitPath : splitPaths) {
+            String splitName = multipleSplits ? new File(splitPath).getName()
+                    : "base." + (isApex ? "apex" : "apk");
+
+            if (doWriteSplit(sessionId, splitPath, sessionSizeBytes, splitName,
+                    false /*logSuccess*/) != PackageInstaller.STATUS_SUCCESS) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
     private int doWriteSplit(int sessionId, String inPath, long sizeBytes, String splitName,
             boolean logSuccess) throws RemoteException {
         PackageInstaller.Session session = null;
         try {
+            session = new PackageInstaller.Session(
+                    mInterface.getPackageInstaller().openSession(sessionId));
+
             final PrintWriter pw = getOutPrintWriter();
+
             final ParcelFileDescriptor fd;
             if (STDIN_PATH.equals(inPath)) {
                 fd = ParcelFileDescriptor.dup(getInFileDescriptor());
@@ -2953,8 +3174,6 @@ class PackageManagerShellCommand extends ShellCommand {
                 return 1;
             }
 
-            session = new PackageInstaller.Session(
-                    mInterface.getPackageInstaller().openSession(sessionId));
             session.write(splitName, 0, sizeBytes, fd);
 
             if (logSuccess) {
@@ -3000,7 +3219,6 @@ class PackageManagerShellCommand extends ShellCommand {
         try {
             session = new PackageInstaller.Session(
                     mInterface.getPackageInstaller().openSession(sessionId));
-
             for (String splitName : splitNames) {
                 session.removeSplit(splitName);
             }
@@ -3528,6 +3746,11 @@ class PackageManagerShellCommand extends ShellCommand {
         pw.println("    By default, without any argument only installed modules are shown.");
         pw.println("      --all: show all module info");
         pw.println("      --installed: show only installed modules");
+        pw.println("");
+        pw.println("  log-visibility [--enable|--disable] <PACKAGE>");
+        pw.println("    Turns on debug logging when visibility is blocked for the given package.");
+        pw.println("      --enable: turn on debug logging (default)");
+        pw.println("      --disable: turn off debug logging");
         pw.println("");
         Intent.printIntentArgsHelp(pw , "");
     }

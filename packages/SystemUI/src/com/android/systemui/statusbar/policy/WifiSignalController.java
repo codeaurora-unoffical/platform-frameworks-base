@@ -54,7 +54,8 @@ public class WifiSignalController extends
         mWifiTracker.setListening(true);
         mHasMobileData = hasMobileData;
         if (wifiManager != null) {
-            wifiManager.registerTrafficStateCallback(new WifiTrafficStateCallback());
+            wifiManager.registerTrafficStateCallback(context.getMainExecutor(),
+                    new WifiTrafficStateCallback());
         }
         // WiFi only has one state.
         mCurrentState.iconGroup = mLastState.iconGroup = new IconGroup(
@@ -85,16 +86,18 @@ public class WifiSignalController extends
         boolean visibleWhenEnabled = mContext.getResources().getBoolean(
                 R.bool.config_showWifiIndicatorWhenEnabled);
         boolean wifiVisible = mCurrentState.enabled
-                && (mCurrentState.connected || !mHasMobileData || visibleWhenEnabled);
-        String wifiDesc = wifiVisible ? mCurrentState.ssid : null;
+                && ((mCurrentState.connected && mCurrentState.inetCondition == 1)
+                    || !mHasMobileData || visibleWhenEnabled);
+        String wifiDesc = mCurrentState.connected ? mCurrentState.ssid : null;
         boolean ssidPresent = wifiVisible && mCurrentState.ssid != null;
-        String contentDescription = getStringIfExists(getContentDescription());
+        String contentDescription = getTextIfExists(getContentDescription()).toString();
         if (mCurrentState.inetCondition == 0) {
             contentDescription += ("," + mContext.getString(R.string.data_connection_no_internet));
         }
         IconState statusIcon = new IconState(wifiVisible, getCurrentIconId(), contentDescription);
-        IconState qsIcon = new IconState(mCurrentState.connected, getQsCurrentIconId(),
-                contentDescription);
+        IconState qsIcon = new IconState(mCurrentState.connected,
+                mWifiTracker.isCaptivePortal ? R.drawable.ic_qs_wifi_disconnected
+                        : getQsCurrentIconId(), contentDescription);
         callback.setWifiIndicators(mCurrentState.enabled, statusIcon, qsIcon,
                 ssidPresent && mCurrentState.activityIn, ssidPresent && mCurrentState.activityOut,
                 wifiDesc, mCurrentState.isTransient, mCurrentState.statusLabel);

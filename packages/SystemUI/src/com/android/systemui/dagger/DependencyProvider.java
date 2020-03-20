@@ -20,26 +20,25 @@ import static com.android.systemui.Dependency.TIME_TICK_HANDLER_NAME;
 
 import android.app.INotificationManager;
 import android.content.Context;
-import android.content.pm.IPackageManager;
+import android.content.SharedPreferences;
 import android.hardware.display.AmbientDisplayConfiguration;
 import android.hardware.display.NightDisplayListener;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.os.Looper;
-import android.os.Process;
 import android.os.ServiceManager;
 import android.util.DisplayMetrics;
+import android.view.Choreographer;
 import android.view.IWindowManager;
 import android.view.LayoutInflater;
+import android.view.WindowManager;
 
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.util.NotificationMessagingUtil;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.keyguard.ViewMediatorCallback;
-import com.android.systemui.broadcast.BroadcastDispatcher;
-import com.android.systemui.dagger.qualifiers.BgHandler;
-import com.android.systemui.dagger.qualifiers.BgLooper;
-import com.android.systemui.dagger.qualifiers.MainHandler;
-import com.android.systemui.dagger.qualifiers.MainLooper;
+import com.android.systemui.Prefs;
+import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.doze.AlwaysOnDisplayPolicy;
 import com.android.systemui.keyguard.KeyguardViewMediator;
 import com.android.systemui.plugins.PluginInitializerImpl;
@@ -49,13 +48,10 @@ import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.DevicePolicyManagerWrapper;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.NavigationBarController;
-import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.phone.AutoHideController;
 import com.android.systemui.statusbar.phone.ConfigurationControllerImpl;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.DataSaverController;
-import com.android.systemui.statusbar.policy.DeviceProvisionedController;
-import com.android.systemui.statusbar.policy.DeviceProvisionedControllerImpl;
 import com.android.systemui.statusbar.policy.NetworkController;
 import com.android.systemui.util.leak.LeakDetector;
 
@@ -85,38 +81,16 @@ public class DependencyProvider {
         return new Handler(thread.getLooper());
     }
 
-    @Singleton
+    /** */
     @Provides
-    @BgLooper
-    public Looper provideBgLooper() {
-        HandlerThread thread = new HandlerThread("SysUiBg",
-                Process.THREAD_PRIORITY_BACKGROUND);
-        thread.start();
-        return thread.getLooper();
-    }
-
-    /** Main Looper */
-    @Provides
-    @MainLooper
-    public Looper provideMainLooper() {
-        return Looper.getMainLooper();
-    }
-
-    @Provides
-    @BgHandler
-    public Handler provideBgHandler(@BgLooper Looper bgLooper) {
-        return new Handler(bgLooper);
-    }
-
-    @Provides
-    @MainHandler
-    public Handler provideMainHandler(@MainLooper Looper mainLooper) {
-        return new Handler(mainLooper);
+    @Main
+    public SharedPreferences provideSharePreferences(Context context) {
+        return Prefs.get(context);
     }
 
     /** */
     @Provides
-    public AmbientDisplayConfiguration provideAmbientDispalyConfiguration(Context context) {
+    public AmbientDisplayConfiguration provideAmbientDisplayConfiguration(Context context) {
         return new AmbientDisplayConfiguration(context);
     }
 
@@ -134,10 +108,10 @@ public class DependencyProvider {
 
     @Singleton
     @Provides
-    // Single instance of DisplayMetrics, gets updated by StatusBar, but can be used
-    // anywhere it is needed.
-    public DisplayMetrics provideDisplayMetrics() {
-        return new DisplayMetrics();
+    public DisplayMetrics provideDisplayMetrics(Context context, WindowManager windowManager) {
+        DisplayMetrics displayMetrics = new DisplayMetrics();
+        context.getDisplay().getMetrics(displayMetrics);
+        return displayMetrics;
     }
 
     /** */
@@ -146,13 +120,6 @@ public class DependencyProvider {
     public INotificationManager provideINotificationManager() {
         return INotificationManager.Stub.asInterface(
                 ServiceManager.getService(Context.NOTIFICATION_SERVICE));
-    }
-
-    /** */
-    @Singleton
-    @Provides
-    public IPackageManager provideIPackageManager() {
-        return IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
     }
 
     /** */
@@ -178,7 +145,7 @@ public class DependencyProvider {
     @Singleton
     @Provides
     public NightDisplayListener provideNightDisplayListener(Context context,
-            @BgHandler Handler bgHandler) {
+            @Background Handler bgHandler) {
         return new NightDisplayListener(context, bgHandler);
     }
 
@@ -191,7 +158,7 @@ public class DependencyProvider {
     @Singleton
     @Provides
     public NavigationBarController provideNavigationBarController(Context context,
-            @MainHandler Handler mainHandler, CommandQueue commandQueue) {
+            @Main Handler mainHandler, CommandQueue commandQueue) {
         return new NavigationBarController(context, mainHandler, commandQueue);
     }
 
@@ -201,14 +168,12 @@ public class DependencyProvider {
         return new ConfigurationControllerImpl(context);
     }
 
+    /** */
     @Singleton
     @Provides
     public AutoHideController provideAutoHideController(Context context,
-            @MainHandler Handler mainHandler,
-            NotificationRemoteInputManager notificationRemoteInputManager,
-            IWindowManager iWindowManager) {
-        return new AutoHideController(context, mainHandler, notificationRemoteInputManager,
-                iWindowManager);
+            @Main Handler mainHandler, IWindowManager iWindowManager) {
+        return new AutoHideController(context, mainHandler, iWindowManager);
     }
 
     @Singleton
@@ -223,13 +188,6 @@ public class DependencyProvider {
         return DevicePolicyManagerWrapper.getInstance();
     }
 
-    @Singleton
-    @Provides
-    public DeviceProvisionedController provideDeviceProvisionedController(Context context,
-            @MainHandler Handler mainHandler, BroadcastDispatcher broadcastDispatcher) {
-        return new DeviceProvisionedControllerImpl(context, mainHandler, broadcastDispatcher);
-    }
-
     /** */
     @Provides
     public LockPatternUtils provideLockPatternUtils(Context context) {
@@ -242,9 +200,22 @@ public class DependencyProvider {
         return new AlwaysOnDisplayPolicy(context);
     }
 
+    /***/
+    @Provides
+    public NotificationMessagingUtil provideNotificationMessagingUtil(Context context) {
+        return new NotificationMessagingUtil(context);
+    }
+
     /** */
     @Provides
     public ViewMediatorCallback providesViewMediatorCallback(KeyguardViewMediator viewMediator) {
         return viewMediator.getViewMediatorCallback();
+    }
+
+    /** */
+    @Singleton
+    @Provides
+    public Choreographer providesChoreographer() {
+        return Choreographer.getInstance();
     }
 }

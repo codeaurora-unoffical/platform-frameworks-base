@@ -16,7 +16,6 @@ package com.android.systemui.qs.tileimpl;
 
 import android.content.Context;
 import android.os.Build;
-import android.provider.Settings;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
 
@@ -33,16 +32,15 @@ import com.android.systemui.qs.tiles.BluetoothTile;
 import com.android.systemui.qs.tiles.CastTile;
 import com.android.systemui.qs.tiles.CellularTile;
 import com.android.systemui.qs.tiles.ColorInversionTile;
-import com.android.systemui.qs.tiles.ControlsTile;
 import com.android.systemui.qs.tiles.DataSaverTile;
 import com.android.systemui.qs.tiles.DndTile;
 import com.android.systemui.qs.tiles.FlashlightTile;
 import com.android.systemui.qs.tiles.HotspotTile;
-import com.android.systemui.qs.tiles.IntentTile;
 import com.android.systemui.qs.tiles.LocationTile;
 import com.android.systemui.qs.tiles.NfcTile;
 import com.android.systemui.qs.tiles.NightDisplayTile;
 import com.android.systemui.qs.tiles.RotationLockTile;
+import com.android.systemui.qs.tiles.ScreenRecordTile;
 import com.android.systemui.qs.tiles.UiModeNightTile;
 import com.android.systemui.qs.tiles.UserTile;
 import com.android.systemui.qs.tiles.WifiTile;
@@ -60,7 +58,6 @@ public class QSFactoryImpl implements QSFactory {
 
     private final Provider<WifiTile> mWifiTileProvider;
     private final Provider<BluetoothTile> mBluetoothTileProvider;
-    private final Provider<ControlsTile> mControlsTileProvider;
     private final Provider<CellularTile> mCellularTileProvider;
     private final Provider<DndTile> mDndTileProvider;
     private final Provider<ColorInversionTile> mColorInversionTileProvider;
@@ -78,13 +75,13 @@ public class QSFactoryImpl implements QSFactory {
     private final Provider<NfcTile> mNfcTileProvider;
     private final Provider<GarbageMonitor.MemoryTile> mMemoryTileProvider;
     private final Provider<UiModeNightTile> mUiModeNightTileProvider;
+    private final Provider<ScreenRecordTile> mScreenRecordTileProvider;
 
     private QSTileHost mHost;
 
     @Inject
     public QSFactoryImpl(Provider<WifiTile> wifiTileProvider,
             Provider<BluetoothTile> bluetoothTileProvider,
-            Provider<ControlsTile> controlsTileProvider,
             Provider<CellularTile> cellularTileProvider,
             Provider<DndTile> dndTileProvider,
             Provider<ColorInversionTile> colorInversionTileProvider,
@@ -101,10 +98,10 @@ public class QSFactoryImpl implements QSFactory {
             Provider<NightDisplayTile> nightDisplayTileProvider,
             Provider<NfcTile> nfcTileProvider,
             Provider<GarbageMonitor.MemoryTile> memoryTileProvider,
-            Provider<UiModeNightTile> uiModeNightTileProvider) {
+            Provider<UiModeNightTile> uiModeNightTileProvider,
+            Provider<ScreenRecordTile> screenRecordTileProvider) {
         mWifiTileProvider = wifiTileProvider;
         mBluetoothTileProvider = bluetoothTileProvider;
-        mControlsTileProvider = controlsTileProvider;
         mCellularTileProvider = cellularTileProvider;
         mDndTileProvider = dndTileProvider;
         mColorInversionTileProvider = colorInversionTileProvider;
@@ -122,6 +119,7 @@ public class QSFactoryImpl implements QSFactory {
         mNfcTileProvider = nfcTileProvider;
         mMemoryTileProvider = memoryTileProvider;
         mUiModeNightTileProvider = uiModeNightTileProvider;
+        mScreenRecordTileProvider = screenRecordTileProvider;
     }
 
     public void setHost(QSTileHost host) {
@@ -143,11 +141,6 @@ public class QSFactoryImpl implements QSFactory {
                 return mWifiTileProvider.get();
             case "bt":
                 return mBluetoothTileProvider.get();
-            case "controls":
-                if (Settings.System.getInt(mHost.getContext().getContentResolver(),
-                        "npv_plugin_flag", 0) == 3) {
-                    return mControlsTileProvider.get();
-                } else return null;
             case "cell":
                 return mCellularTileProvider.get();
             case "dnd":
@@ -180,11 +173,14 @@ public class QSFactoryImpl implements QSFactory {
                 return mNfcTileProvider.get();
             case "dark":
                 return mUiModeNightTileProvider.get();
+            case "screenrecord":
+                return mScreenRecordTileProvider.get();
         }
 
-        // Intent tiles.
-        if (tileSpec.startsWith(IntentTile.PREFIX)) return IntentTile.create(mHost, tileSpec);
-        if (tileSpec.startsWith(CustomTile.PREFIX)) return CustomTile.create(mHost, tileSpec);
+        // Custom tiles
+        if (tileSpec.startsWith(CustomTile.PREFIX)) {
+            return CustomTile.create(mHost, tileSpec, mHost.getUserContext());
+        }
 
         // Debug tiles.
         if (Build.IS_DEBUGGABLE) {

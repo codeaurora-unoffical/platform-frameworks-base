@@ -44,13 +44,8 @@ cc_library_host_shared {
 
 cc_defaults {
     name: "statsd_defaults",
-    aidl: {
-        include_dirs: ["frameworks/base/core/java"],
-    },
 
     srcs: [
-        ":statsd_aidl",
-        ":ICarStatsService.aidl",
         "src/active_config_list.proto",
         "src/anomaly/AlarmMonitor.cpp",
         "src/anomaly/AlarmTracker.cpp",
@@ -65,20 +60,13 @@ cc_defaults {
         "src/config/ConfigKey.cpp",
         "src/config/ConfigListener.cpp",
         "src/config/ConfigManager.cpp",
-        "src/external/CarStatsPuller.cpp",
-        "src/external/GpuStatsPuller.cpp",
+        "src/experiment_ids.proto",
         "src/external/Perfetto.cpp",
-        "src/external/PowerStatsPuller.cpp",
         "src/external/PullResultReceiver.cpp",
         "src/external/puller_util.cpp",
-        "src/external/ResourceHealthManagerPuller.cpp",
         "src/external/StatsCallbackPuller.cpp",
-        "src/external/StatsCallbackPullerDeprecated.cpp",
-        "src/external/StatsCompanionServicePuller.cpp",
         "src/external/StatsPuller.cpp",
         "src/external/StatsPullerManager.cpp",
-        "src/external/SubsystemSleepStatePuller.cpp",
-        "src/external/SurfaceflingerStatsPuller.cpp",
         "src/external/TrainInfoPuller.cpp",
         "src/FieldValue.cpp",
         "src/guardrail/StatsdStats.cpp",
@@ -117,41 +105,72 @@ cc_defaults {
         "src/uid_data.proto",
     ],
 
-    cflags: [
-        // "-DNEW_ENCODING_SCHEME",
-    ],
-
     local_include_dirs: [
         "src",
     ],
 
     static_libs: [
-        "libhealthhalutils",
-        "libplatformprotos",
-    ],
-
-    shared_libs: [
-        "android.frameworks.stats@1.0",
-        "android.hardware.health@2.0",
-        "android.hardware.power.stats@1.0",
-        "android.hardware.power@1.0",
-        "android.hardware.power@1.1",
         "libbase",
-        "libbinder",
         "libcutils",
-        "libgraphicsenv",
-        "libhidlbase",
-        "libincident",
-        "liblog",
         "libprotoutil",
-        "libservices",
         "libstatslog",
-        "libstatssocket",
+        "libstatsmetadata",
         "libsysutils",
-        "libtimestats_proto",
         "libutils",
     ],
+    shared_libs: [
+        "libbinder_ndk",
+        "libincident",
+        "liblog",
+        "statsd-aidl-ndk_platform",
+    ],
 }
+
+// ================
+// libstatsmetadata
+// ================
+
+genrule {
+    name: "atoms_info.h",
+    tools: ["stats-log-api-gen"],
+    cmd: "$(location stats-log-api-gen) --atomsInfoHeader $(genDir)/atoms_info.h",
+    out: [
+        "atoms_info.h",
+    ],
+}
+
+genrule {
+    name: "atoms_info.cpp",
+    tools: ["stats-log-api-gen"],
+    cmd: "$(location stats-log-api-gen) --atomsInfoCpp $(genDir)/atoms_info.cpp",
+    out: [
+        "atoms_info.cpp",
+    ],
+}
+
+cc_library_static {
+    name: "libstatsmetadata",
+    host_supported: true,
+    generated_sources: [
+        "atoms_info.cpp",
+    ],
+    generated_headers: [
+        "atoms_info.h",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+    export_generated_headers: [
+        "atoms_info.h",
+    ],
+    apex_available: [
+        //TODO(b/149782403): Remove this once statsd no longer links against libstatsmetadata
+        "com.android.os.statsd",
+        "test_com.android.os.statsd",
+    ],
+}
+
 
 // =========
 // statsd
@@ -191,11 +210,15 @@ cc_binary {
         type: "lite",
     },
 
-    shared_libs: ["libgtest_prod"],
+    shared_libs: [
+        "libgtest_prod",
+        "libstatssocket",
+    ],
 
-    vintf_fragments: ["android.frameworks.stats@1.0-service.xml"],
-
-    init_rc: ["statsd.rc"],
+    apex_available: [
+        "com.android.os.statsd",
+        "test_com.android.os.statsd",
+    ],
 }
 
 // ==============
@@ -247,12 +270,9 @@ cc_test {
         "tests/e2e/PartialBucket_e2e_test.cpp",
         "tests/e2e/ValueMetric_pull_e2e_test.cpp",
         "tests/e2e/WakelockDuration_e2e_test.cpp",
-        "tests/external/GpuStatsPuller_test.cpp",
-        "tests/external/IncidentReportArgs_test.cpp",
         "tests/external/puller_util_test.cpp",
         "tests/external/StatsCallbackPuller_test.cpp",
         "tests/external/StatsPuller_test.cpp",
-        "tests/external/SurfaceflingerStatsPuller_test.cpp",
         "tests/FieldValue_test.cpp",
         "tests/guardrail/StatsdStats_test.cpp",
         "tests/indexed_priority_queue_test.cpp",
@@ -280,6 +300,7 @@ cc_test {
     static_libs: [
         "libgmock",
         "libplatformprotos",
+        "libstatssocket_private",
     ],
 
     proto: {
@@ -289,7 +310,6 @@ cc_test {
 
     shared_libs: [
         "libprotobuf-cpp-lite",
-        "libstatssocket"
     ],
 
 }
@@ -298,60 +318,60 @@ cc_test {
 // statsd micro benchmark
 //#############################
 
-cc_benchmark {
-    name: "statsd_benchmark",
-    defaults: ["statsd_defaults"],
-
-    srcs: [
-        // atom_field_options.proto needs field_options.proto, but that is
-        // not included in libprotobuf-cpp-lite, so compile it here.
-        ":libprotobuf-internal-protos",
-
-        "benchmark/duration_metric_benchmark.cpp",
-        "benchmark/filter_value_benchmark.cpp",
-        "benchmark/get_dimensions_for_condition_benchmark.cpp",
-        "benchmark/hello_world_benchmark.cpp",
-        "benchmark/log_event_benchmark.cpp",
-        "benchmark/main.cpp",
-        "benchmark/metric_util.cpp",
-        "benchmark/stats_write_benchmark.cpp",
-        "src/atom_field_options.proto",
-        "src/atoms.proto",
-        "src/stats_log.proto",
-    ],
-
-    proto: {
-        type: "lite",
-        include_dirs: ["external/protobuf/src"],
-    },
-
-    cflags: [
-        "-Wall",
-        "-Werror",
-        "-Wno-unused-parameter",
-        "-Wno-unused-variable",
-        "-Wno-unused-function",
-
-        // Bug: http://b/29823425 Disable -Wvarargs for Clang update to r271374
-        "-Wno-varargs",
-    ],
-
-    static_libs: [
-        "libplatformprotos",
-    ],
-
-    shared_libs: [
-        "libgtest_prod",
-        "libprotobuf-cpp-lite",
-        "libstatslog",
-        "libstatssocket",
-    ],
-}
+//cc_benchmark {
+//    name: "statsd_benchmark",
+//    defaults: ["statsd_defaults"],
+//
+//    srcs: [
+//        // atom_field_options.proto needs field_options.proto, but that is
+//        // not included in libprotobuf-cpp-lite, so compile it here.
+//        ":libprotobuf-internal-protos",
+//
+//        "benchmark/duration_metric_benchmark.cpp",
+//        "benchmark/filter_value_benchmark.cpp",
+//        "benchmark/get_dimensions_for_condition_benchmark.cpp",
+//        "benchmark/hello_world_benchmark.cpp",
+//        "benchmark/log_event_benchmark.cpp",
+//        "benchmark/main.cpp",
+//        "benchmark/metric_util.cpp",
+//        "benchmark/stats_write_benchmark.cpp",
+//        "src/atom_field_options.proto",
+//        "src/atoms.proto",
+//        "src/stats_log.proto",
+//    ],
+//
+//    proto: {
+//        type: "lite",
+//        include_dirs: ["external/protobuf/src"],
+//    },
+//
+//    cflags: [
+//        "-Wall",
+//        "-Werror",
+//        "-Wno-unused-parameter",
+//        "-Wno-unused-variable",
+//        "-Wno-unused-function",
+//
+//        // Bug: http://b/29823425 Disable -Wvarargs for Clang update to r271374
+//        "-Wno-varargs",
+//    ],
+//
+//    static_libs: [
+//        "libplatformprotos",
+//    ],
+//
+//    shared_libs: [
+//        "libgtest_prod",
+//        "libprotobuf-cpp-lite",
+//        "libstatslog",
+//        "libstatssocket",
+//    ],
+//}
 
 // ====  java proto device library (for test only)  ==============================
 java_library {
     name: "statsdprotolite",
-    sdk_version: "core_platform",
+    sdk_version: "core_current",
     proto: {
         type: "lite",
         include_dirs: ["external/protobuf/src"],

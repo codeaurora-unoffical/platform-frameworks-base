@@ -16,26 +16,28 @@
 
 package com.android.systemui.statusbar.notification.collection
 
-import android.app.NotificationManager.IMPORTANCE_DEFAULT
 import android.app.NotificationManager.IMPORTANCE_HIGH
-import android.app.NotificationManager.IMPORTANCE_LOW
 import android.app.NotificationManager.IMPORTANCE_MIN
 import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
-import com.android.internal.annotations.VisibleForTesting
 import com.android.systemui.statusbar.NotificationMediaManager
+import com.android.systemui.statusbar.notification.NotificationEntryManagerLogger
 import com.android.systemui.statusbar.notification.NotificationFilter
 import com.android.systemui.statusbar.notification.NotificationSectionsFeatureManager
-import com.android.systemui.statusbar.notification.logging.NotifEvent
-import com.android.systemui.statusbar.notification.logging.NotifLog
+import com.android.systemui.statusbar.notification.collection.provider.HighPriorityProvider
 import com.android.systemui.statusbar.notification.people.PeopleNotificationIdentifier
+import com.android.systemui.statusbar.notification.people.PeopleNotificationIdentifier.Companion.TYPE_IMPORTANT_PERSON
+import com.android.systemui.statusbar.notification.people.PeopleNotificationIdentifier.Companion.TYPE_NON_PERSON
+import com.android.systemui.statusbar.notification.people.PeopleNotificationIdentifier.Companion.TYPE_PERSON
 import com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_ALERTING
+import com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_HEADS_UP
 import com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_PEOPLE
 import com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_SILENT
 import com.android.systemui.statusbar.phone.NotificationGroupManager
 import com.android.systemui.statusbar.policy.HeadsUpManager
 import dagger.Lazy
+import java.util.Comparator
 import java.util.Objects
 import javax.inject.Inject
 
@@ -55,9 +57,10 @@ open class NotificationRankingManager @Inject constructor(
     private val groupManager: NotificationGroupManager,
     private val headsUpManager: HeadsUpManager,
     private val notifFilter: NotificationFilter,
-    private val notifLog: NotifLog,
+    private val logger: NotificationEntryManagerLogger,
     sectionsFeatureManager: NotificationSectionsFeatureManager,
-    private val peopleNotificationIdentifier: PeopleNotificationIdentifier
+    private val peopleNotificationIdentifier: PeopleNotificationIdentifier,
+    private val highPriorityProvider: HighPriorityProvider
 ) {
 
     var rankingMap: RankingMap? = null
@@ -72,8 +75,14 @@ open class NotificationRankingManager @Inject constructor(
         val aRank = a.ranking.rank
         val bRank = b.ranking.rank
 
-        val aIsPeople = a.isPeopleNotification()
-        val bIsPeople = b.isPeopleNotification()
+        val aPersonType = a.getPeopleNotificationType()
+        val bPersonType = b.getPeopleNotificationType()
+
+        val aIsPeople = aPersonType == TYPE_PERSON
+        val bIsPeople = bPersonType == TYPE_PERSON
+
+        val aIsImportantPeople = aPersonType == TYPE_IMPORTANT_PERSON
+        val bIsImportantPeople = bPersonType == TYPE_IMPORTANT_PERSON
 
         val aMedia = isImportantMedia(a)
         val bMedia = isImportantMedia(b)
@@ -84,17 +93,22 @@ open class NotificationRankingManager @Inject constructor(
         val aHeadsUp = a.isRowHeadsUp
         val bHeadsUp = b.isRowHeadsUp
 
+        val aIsHighPriority = a.isHighPriority()
+        val bIsHighPriority = b.isHighPriority()
+
         when {
-            usePeopleFiltering && aIsPeople != bIsPeople -> if (aIsPeople) -1 else 1
             aHeadsUp != bHeadsUp -> if (aHeadsUp) -1 else 1
             // Provide consistent ranking with headsUpManager
             aHeadsUp -> headsUpManager.compare(a, b)
+            usePeopleFiltering && aIsPeople != bIsPeople -> if (aIsPeople) -1 else 1
+            usePeopleFiltering && aIsImportantPeople != bIsImportantPeople ->
+                if (aIsImportantPeople) -1 else 1
             // Upsort current media notification.
             aMedia != bMedia -> if (aMedia) -1 else 1
             // Upsort PRIORITY_MAX system notifications
             aSystemMax != bSystemMax -> if (aSystemMax) -1 else 1
-            a.isHighPriority != b.isHighPriority ->
-                -1 * a.isHighPriority.compareTo(b.isHighPriority)
+            aIsHighPriority != bIsHighPriority ->
+                -1 * aIsHighPriority.compareTo(bIsHighPriority)
             aRank != bRank -> aRank - bRank
             else -> nb.notification.`when`.compareTo(na.notification.`when`)
         }
@@ -103,44 +117,6 @@ open class NotificationRankingManager @Inject constructor(
     private fun isImportantMedia(entry: NotificationEntry): Boolean {
         val importance = entry.ranking.importance
         return entry.key == mediaManager.mediaNotificationKey && importance > IMPORTANCE_MIN
-    }
-
-    @VisibleForTesting
-    protected fun isHighPriority(entry: NotificationEntry): Boolean {
-        if (entry.importance >= IMPORTANCE_DEFAULT ||
-                hasHighPriorityCharacteristics(entry)) {
-            return true
-        }
-
-        if (groupManager.isSummaryOfGroup(entry.sbn)) {
-            val logicalChildren = groupManager.getLogicalChildren(entry.sbn)
-            for (child in logicalChildren) {
-                if (isHighPriority(child)) {
-                    return true
-                }
-            }
-        }
-
-        return false
-    }
-
-    private fun hasHighPriorityCharacteristics(entry: NotificationEntry): Boolean {
-        val c = entry.channel
-        val n = entry.sbn.notification
-
-        if ((n.isForegroundService && entry.ranking.importance >= IMPORTANCE_LOW) ||
-                n.hasMediaSession() ||
-                entry.isPeopleNotification()) {
-            // Users who have long pressed and demoted to silent should not see the notification
-            // in the top section
-            if (c != null && c.hasUserSetImportance()) {
-                return false
-            }
-
-            return true
-        }
-
-        return false
     }
 
     fun updateRanking(
@@ -170,7 +146,7 @@ open class NotificationRankingManager @Inject constructor(
         entries: Sequence<NotificationEntry>,
         reason: String
     ): Sequence<NotificationEntry> {
-        notifLog.log(NotifEvent.FILTER_AND_SORT, reason)
+        logger.logFilterAndSort(reason)
 
         return entries.filter { !notifFilter.shouldFilterOut(it) }
                 .sortedWith(rankingComparator)
@@ -193,9 +169,11 @@ open class NotificationRankingManager @Inject constructor(
         isMedia: Boolean,
         isSystemMax: Boolean
     ) {
-        if (usePeopleFiltering && entry.isPeopleNotification()) {
+        if (usePeopleFiltering && isHeadsUp) {
+            entry.bucket = BUCKET_HEADS_UP
+        } else if (usePeopleFiltering && entry.getPeopleNotificationType() != TYPE_NON_PERSON) {
             entry.bucket = BUCKET_PEOPLE
-        } else if (isHeadsUp || isMedia || isSystemMax || entry.isHighPriority) {
+        } else if (isHeadsUp || isMedia || isSystemMax || entry.isHighPriority()) {
             entry.bucket = BUCKET_ALERTING
         } else {
             entry.bucket = BUCKET_SILENT
@@ -212,23 +190,25 @@ open class NotificationRankingManager @Inject constructor(
                     }
                     entry.ranking = newRanking
 
-                    val oldSbn = entry.sbn.cloneLight()
                     val newOverrideGroupKey = newRanking.overrideGroupKey
-                    if (!Objects.equals(oldSbn.overrideGroupKey, newOverrideGroupKey)) {
+                    if (!Objects.equals(entry.sbn.overrideGroupKey, newOverrideGroupKey)) {
+                        val oldGroupKey = entry.sbn.groupKey
+                        val oldIsGroup = entry.sbn.isGroup
+                        val oldIsGroupSummary = entry.sbn.notification.isGroupSummary
                         entry.sbn.overrideGroupKey = newOverrideGroupKey
-                        // TODO: notify group manager here?
-                        groupManager.onEntryUpdated(entry, oldSbn)
+                        groupManager.onEntryUpdated(entry, oldGroupKey, oldIsGroup,
+                                oldIsGroupSummary)
                     }
-                    entry.setIsHighPriority(isHighPriority(entry))
                 }
             }
         }
     }
 
-    private fun NotificationEntry.isPeopleNotification() =
-            sbn.isPeopleNotification()
-    private fun StatusBarNotification.isPeopleNotification() =
-            peopleNotificationIdentifier.isPeopleNotification(this)
+    private fun NotificationEntry.getPeopleNotificationType() =
+            peopleNotificationIdentifier.getPeopleNotificationType(sbn, ranking)
+
+    private fun NotificationEntry.isHighPriority() =
+            highPriorityProvider.isHighPriority(this)
 }
 
 // Convenience functions

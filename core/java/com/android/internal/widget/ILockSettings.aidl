@@ -57,6 +57,8 @@ interface ILockSettings {
     void registerStrongAuthTracker(in IStrongAuthTracker tracker);
     void unregisterStrongAuthTracker(in IStrongAuthTracker tracker);
     void requireStrongAuth(int strongAuthReason, int userId);
+    void reportSuccessfulBiometricUnlock(boolean isStrongBiometric, int userId);
+    void scheduleNonStrongBiometricIdleTimeout(int userId);
     void systemReady();
     void userPresent(int userId);
     int getStrongAuthForUser(int userId);
@@ -88,4 +90,7 @@ interface ILockSettings {
             in byte[] recoveryKeyBlob,
             in List<WrappedApplicationKey> applicationKeys);
     void closeSession(in String sessionId);
+    boolean hasSecureLockScreen();
+    boolean tryUnlockWithCachedUnifiedChallenge(int userId);
+    void removeCachedUnifiedChallenge(int userId);
 }

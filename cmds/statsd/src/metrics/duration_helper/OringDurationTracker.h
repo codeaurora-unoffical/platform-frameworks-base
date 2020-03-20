@@ -19,7 +19,6 @@
 
 #include "DurationTracker.h"
 
-#include <set>
 namespace android {
 namespace os {
 namespace statsd {
@@ -36,8 +35,6 @@ public:
                          const std::vector<sp<DurationAnomalyTracker>>& anomalyTrackers);
 
     OringDurationTracker(const OringDurationTracker& tracker) = default;
-
-    unique_ptr<DurationTracker> clone(const int64_t eventTime) override;
 
     void noteStart(const HashableDimensionKey& key, bool condition, const int64_t eventTime,
                    const ConditionKey& conditionKey) override;

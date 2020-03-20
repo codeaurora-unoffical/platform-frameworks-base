@@ -30,10 +30,14 @@ import android.provider.DeviceConfig.OnPropertiesChangedListener;
 import android.provider.DeviceConfig.Properties;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.util.ArraySet;
 import android.util.KeyValueListParser;
 import android.util.Slog;
 
 import java.io.PrintWriter;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Settings constants that can modify the activity manager's behavior.
@@ -54,6 +58,8 @@ final class ActivityManagerConstants extends ContentObserver {
     private static final String KEY_CONTENT_PROVIDER_RETAIN_TIME = "content_provider_retain_time";
     private static final String KEY_GC_TIMEOUT = "gc_timeout";
     private static final String KEY_GC_MIN_INTERVAL = "gc_min_interval";
+    private static final String KEY_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS =
+            "force_bg_check_on_restricted";
     private static final String KEY_FULL_PSS_MIN_INTERVAL = "full_pss_min_interval";
     private static final String KEY_FULL_PSS_LOWERED_INTERVAL = "full_pss_lowered_interval";
     private static final String KEY_POWER_CHECK_INTERVAL = "power_check_interval";
@@ -65,6 +71,10 @@ final class ActivityManagerConstants extends ContentObserver {
             = "service_usage_interaction_time";
     private static final String KEY_USAGE_STATS_INTERACTION_INTERVAL
             = "usage_stats_interaction_interval";
+    private static final String KEY_IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES =
+            "imperceptible_kill_exempt_packages";
+    private static final String KEY_IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES =
+            "imperceptible_kill_exempt_proc_states";
     static final String KEY_SERVICE_RESTART_DURATION = "service_restart_duration";
     static final String KEY_SERVICE_RESET_RUN_DURATION = "service_reset_run_duration";
     static final String KEY_SERVICE_RESTART_DURATION_FACTOR = "service_restart_duration_factor";
@@ -88,6 +98,7 @@ final class ActivityManagerConstants extends ContentObserver {
     private static final long DEFAULT_GC_TIMEOUT = 5*1000;
     private static final long DEFAULT_GC_MIN_INTERVAL = 60*1000;
     private static final long DEFAULT_FULL_PSS_MIN_INTERVAL = 20*60*1000;
+    private static final boolean DEFAULT_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS = true;
     private static final long DEFAULT_FULL_PSS_LOWERED_INTERVAL = 5*60*1000;
     private static final long DEFAULT_POWER_CHECK_INTERVAL = (DEBUG_POWER_QUICK ? 1 : 5) * 60*1000;
     private static final int DEFAULT_POWER_CHECK_MAX_CPU_1 = 25;
@@ -123,6 +134,12 @@ final class ActivityManagerConstants extends ContentObserver {
     private static final String KEY_DEFAULT_BACKGROUND_ACTIVITY_STARTS_ENABLED =
             "default_background_activity_starts_enabled";
 
+    /**
+     * Default value for mFlagBackgroundFgsStartRestrictionEnabled if not explicitly set in
+     * Settings.Global.
+     */
+    private static final String KEY_DEFAULT_BACKGROUND_FGS_STARTS_RESTRICTION_ENABLED =
+            "default_background_fgs_starts_restriction_enabled";
 
     // Maximum number of cached processes we will allow.
     public int MAX_CACHED_PROCESSES = DEFAULT_MAX_CACHED_PROCESSES;
@@ -162,6 +179,14 @@ final class ActivityManagerConstants extends ContentObserver {
 
     // The minimum amount of time between successive GC requests for a process.
     long GC_MIN_INTERVAL = DEFAULT_GC_MIN_INTERVAL;
+
+    /**
+     * Whether or not Background Check should be forced on any apps in the
+     * {@link android.app.usage.UsageStatsManager#STANDBY_BUCKET_RESTRICTED} bucket,
+     * regardless of target SDK version.
+     */
+    boolean FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS =
+            DEFAULT_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS;
 
     // The minimum amount of time between successive PSS requests for a process.
     long FULL_PSS_MIN_INTERVAL = DEFAULT_FULL_PSS_MIN_INTERVAL;
@@ -254,6 +279,16 @@ final class ActivityManagerConstants extends ContentObserver {
     // If not set explicitly the default is controlled by DeviceConfig.
     volatile boolean mFlagBackgroundActivityStartsEnabled;
 
+    // Indicates whether foreground service starts logging is enabled.
+    // Controlled by Settings.Global.FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED
+    volatile boolean mFlagForegroundServiceStartsLoggingEnabled;
+
+    // Indicates whether the foreground service background start restriction is enabled.
+    // When the restriction is enabled, foreground service started from background will not have
+    // while-in-use permissions like location, camera and microphone. (The foreground service can be
+    // started, the restriction is on while-in-use permissions.)
+    volatile boolean mFlagBackgroundFgsStartRestrictionEnabled = true;
+
     private final ActivityManagerService mService;
     private ContentResolver mResolver;
     private final KeyValueListParser mParser = new KeyValueListParser(',');
@@ -269,18 +304,32 @@ final class ActivityManagerConstants extends ContentObserver {
     // we have no limit on the number of service, visible, foreground, or other such
     // processes and the number of those processes does not count against the cached
     // process limit.
-    public int CUR_MAX_CACHED_PROCESSES;
+    public int CUR_MAX_CACHED_PROCESSES = DEFAULT_MAX_CACHED_PROCESSES;
 
     // The maximum number of empty app processes we will let sit around.
-    public int CUR_MAX_EMPTY_PROCESSES;
+    public int CUR_MAX_EMPTY_PROCESSES = computeEmptyProcessLimit(CUR_MAX_CACHED_PROCESSES);
 
     // The number of empty apps at which we don't consider it necessary to do
     // memory trimming.
-    public int CUR_TRIM_EMPTY_PROCESSES;
+    public int CUR_TRIM_EMPTY_PROCESSES = computeEmptyProcessLimit(MAX_CACHED_PROCESSES) / 2;
 
     // The number of cached at which we don't consider it necessary to do
     // memory trimming.
-    public int CUR_TRIM_CACHED_PROCESSES;
+    public int CUR_TRIM_CACHED_PROCESSES =
+            (MAX_CACHED_PROCESSES - computeEmptyProcessLimit(MAX_CACHED_PROCESSES)) / 3;
+
+    /**
+     * Packages that can't be killed even if it's requested to be killed on imperceptible.
+     */
+    public ArraySet<String> IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES = new ArraySet<String>();
+
+    /**
+     * Proc State that can't be killed even if it's requested to be killed on imperceptible.
+     */
+    public ArraySet<Integer> IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES = new ArraySet<Integer>();
+
+    private List<String> mDefaultImperceptibleKillExemptPackages;
+    private List<Integer> mDefaultImperceptibleKillExemptProcStates;
 
     @SuppressWarnings("unused")
     private static final int OOMADJ_UPDATE_POLICY_SLOW = 0;
@@ -311,6 +360,10 @@ final class ActivityManagerConstants extends ContentObserver {
     private static final Uri ACTIVITY_STARTS_LOGGING_ENABLED_URI = Settings.Global.getUriFor(
                 Settings.Global.ACTIVITY_STARTS_LOGGING_ENABLED);
 
+    private static final Uri FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED_URI =
+                Settings.Global.getUriFor(
+                        Settings.Global.FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED);
+
     private static final Uri ENABLE_AUTOMATIC_SYSTEM_SERVER_HEAP_DUMPS_URI =
             Settings.Global.getUriFor(Settings.Global.ENABLE_AUTOMATIC_SYSTEM_SERVER_HEAP_DUMPS);
 
@@ -329,8 +382,18 @@ final class ActivityManagerConstants extends ContentObserver {
                             case KEY_DEFAULT_BACKGROUND_ACTIVITY_STARTS_ENABLED:
                                 updateBackgroundActivityStarts();
                                 break;
+                            case KEY_DEFAULT_BACKGROUND_FGS_STARTS_RESTRICTION_ENABLED:
+                                updateBackgroundFgsStartsRestriction();
+                                break;
                             case KEY_OOMADJ_UPDATE_POLICY:
                                 updateOomAdjUpdatePolicy();
+                                break;
+                            case KEY_IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES:
+                            case KEY_IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES:
+                                updateImperceptibleKillExemptions();
+                                break;
+                            case KEY_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS:
+                                updateForceRestrictedBackgroundCheck();
                                 break;
                             default:
                                 break;
@@ -350,12 +413,23 @@ final class ActivityManagerConstants extends ContentObserver {
                 MIN_AUTOMATIC_HEAP_DUMP_PSS_THRESHOLD_BYTES,
                 context.getResources().getInteger(
                         com.android.internal.R.integer.config_debugSystemServerPssThresholdBytes));
+        mDefaultImperceptibleKillExemptPackages = Arrays.asList(
+                context.getResources().getStringArray(
+                com.android.internal.R.array.config_defaultImperceptibleKillingExemptionPkgs));
+        mDefaultImperceptibleKillExemptProcStates = Arrays.stream(
+                context.getResources().getIntArray(
+                com.android.internal.R.array.config_defaultImperceptibleKillingExemptionProcStates))
+                .boxed().collect(Collectors.toList());
+        IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES.addAll(mDefaultImperceptibleKillExemptPackages);
+        IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES.addAll(mDefaultImperceptibleKillExemptProcStates);
     }
 
     public void start(ContentResolver resolver) {
         mResolver = resolver;
         mResolver.registerContentObserver(ACTIVITY_MANAGER_CONSTANTS_URI, false, this);
         mResolver.registerContentObserver(ACTIVITY_STARTS_LOGGING_ENABLED_URI, false, this);
+        mResolver.registerContentObserver(FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED_URI,
+                false, this);
         if (mSystemServerAutomaticHeapDumpEnabled) {
             mResolver.registerContentObserver(ENABLE_AUTOMATIC_SYSTEM_SERVER_HEAP_DUMPS_URI,
                     false, this);
@@ -367,10 +441,15 @@ final class ActivityManagerConstants extends ContentObserver {
         DeviceConfig.addOnPropertiesChangedListener(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
                 ActivityThread.currentApplication().getMainExecutor(),
                 mOnDeviceConfigChangedListener);
-        updateMaxCachedProcesses();
+        loadDeviceConfigConstants();
+        // The following read from Settings.
         updateActivityStartsLoggingEnabled();
-        updateBackgroundActivityStarts();
-        updateOomAdjUpdatePolicy();
+        updateForegroundServiceStartsLoggingEnabled();
+    }
+
+    private void loadDeviceConfigConstants() {
+        mOnDeviceConfigChangedListener.onPropertiesChanged(
+                DeviceConfig.getProperties(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER));
     }
 
     public void setOverrideMaxCachedProcesses(int value) {
@@ -393,6 +472,8 @@ final class ActivityManagerConstants extends ContentObserver {
             updateConstants();
         } else if (ACTIVITY_STARTS_LOGGING_ENABLED_URI.equals(uri)) {
             updateActivityStartsLoggingEnabled();
+        } else if (FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED_URI.equals(uri)) {
+            updateForegroundServiceStartsLoggingEnabled();
         } else if (ENABLE_AUTOMATIC_SYSTEM_SERVER_HEAP_DUMPS_URI.equals(uri)) {
             updateEnableAutomaticSystemServerHeapDumps();
         }
@@ -472,8 +553,6 @@ final class ActivityManagerConstants extends ContentObserver {
 
             // For new flags that are intended for server-side experiments, please use the new
             // DeviceConfig package.
-
-            updateMaxCachedProcesses();
         }
     }
 
@@ -489,12 +568,53 @@ final class ActivityManagerConstants extends ContentObserver {
                 /*defaultValue*/ false);
     }
 
+    private void updateForegroundServiceStartsLoggingEnabled() {
+        mFlagForegroundServiceStartsLoggingEnabled = Settings.Global.getInt(mResolver,
+                Settings.Global.FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED, 1) == 1;
+    }
+    private void updateBackgroundFgsStartsRestriction() {
+        mFlagBackgroundFgsStartRestrictionEnabled = DeviceConfig.getBoolean(
+                DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
+                KEY_DEFAULT_BACKGROUND_FGS_STARTS_RESTRICTION_ENABLED,
+                /*defaultValue*/ true);
+    }
+
     private void updateOomAdjUpdatePolicy() {
         OOMADJ_UPDATE_QUICK = DeviceConfig.getInt(
                 DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
                 KEY_OOMADJ_UPDATE_POLICY,
                 /* defaultValue */ DEFAULT_OOMADJ_UPDATE_POLICY)
                 == OOMADJ_UPDATE_POLICY_QUICK;
+    }
+
+    private void updateForceRestrictedBackgroundCheck() {
+        FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS = DeviceConfig.getBoolean(
+                DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
+                KEY_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS,
+                DEFAULT_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS);
+    }
+
+    private void updateImperceptibleKillExemptions() {
+        IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES.clear();
+        IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES.addAll(mDefaultImperceptibleKillExemptPackages);
+        String val = DeviceConfig.getString(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
+                KEY_IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES, null);
+        if (!TextUtils.isEmpty(val)) {
+            IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES.addAll(Arrays.asList(val.split(",")));
+        }
+
+        IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES.clear();
+        IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES.addAll(mDefaultImperceptibleKillExemptProcStates);
+        val = DeviceConfig.getString(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
+                KEY_IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES, null);
+        if (!TextUtils.isEmpty(val)) {
+            Arrays.asList(val.split(",")).stream().forEach((v) -> {
+                try {
+                    IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES.add(Integer.parseInt(v));
+                } catch (NumberFormatException e) {
+                }
+            });
+        }
     }
 
     private void updateEnableAutomaticSystemServerHeapDumps() {
@@ -561,6 +681,8 @@ final class ActivityManagerConstants extends ContentObserver {
         pw.println(GC_TIMEOUT);
         pw.print("  "); pw.print(KEY_GC_MIN_INTERVAL); pw.print("=");
         pw.println(GC_MIN_INTERVAL);
+        pw.print("  "); pw.print(KEY_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS); pw.print("=");
+        pw.println(FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS);
         pw.print("  "); pw.print(KEY_FULL_PSS_MIN_INTERVAL); pw.print("=");
         pw.println(FULL_PSS_MIN_INTERVAL);
         pw.print("  "); pw.print(KEY_FULL_PSS_LOWERED_INTERVAL); pw.print("=");
@@ -603,6 +725,10 @@ final class ActivityManagerConstants extends ContentObserver {
         pw.println(MEMORY_INFO_THROTTLE_TIME);
         pw.print("  "); pw.print(KEY_TOP_TO_FGS_GRACE_DURATION); pw.print("=");
         pw.println(TOP_TO_FGS_GRACE_DURATION);
+        pw.print("  "); pw.print(KEY_IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES); pw.print("=");
+        pw.println(Arrays.toString(IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES.toArray()));
+        pw.print("  "); pw.print(KEY_IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES); pw.print("=");
+        pw.println(Arrays.toString(IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES.toArray()));
 
         pw.println();
         if (mOverrideMaxCachedProcesses >= 0) {

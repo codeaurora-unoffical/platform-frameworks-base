@@ -15,11 +15,15 @@
  */
 package com.android.systemui.bubbles;
 
+import android.app.Notification;
 import android.content.Context;
+import android.content.pm.LauncherApps;
+import android.content.pm.ShortcutInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.Icon;
 
 import com.android.launcher3.icons.BaseIconFactory;
 import com.android.launcher3.icons.BitmapInfo;
@@ -42,19 +46,43 @@ public class BubbleIconFactory extends BaseIconFactory {
         return mContext.getResources().getDimensionPixelSize(
                 com.android.launcher3.icons.R.dimen.profile_badge_size);
     }
+    /**
+     * Returns the drawable that the developer has provided to display in the bubble.
+     */
+    Drawable getBubbleDrawable(Context context, ShortcutInfo shortcutInfo,
+            Notification.BubbleMetadata metadata) {
+        if (shortcutInfo != null) {
+            LauncherApps launcherApps =
+                    (LauncherApps) context.getSystemService(Context.LAUNCHER_APPS_SERVICE);
+            int density = context.getResources().getConfiguration().densityDpi;
+            return launcherApps.getShortcutIconDrawable(shortcutInfo, density);
+        } else {
+            Icon ic = metadata.getBubbleIcon();
+            if (ic != null) {
+                return ic.loadDrawable(context);
+            }
+            return null;
+        }
+    }
 
-    BitmapInfo getBadgedBitmap(Bubble b) {
+    /**
+     * Returns a {@link BitmapInfo} for the app-badge that is shown on top of each bubble. This
+     * will include the workprofile indicator on the badge if appropriate.
+     */
+    BitmapInfo getBadgeBitmap(Drawable userBadgedAppIcon) {
         Bitmap userBadgedBitmap = createIconBitmap(
-                b.getUserBadgedAppIcon(), 1f, getBadgeSize());
+                userBadgedAppIcon, 1f, getBadgeSize());
 
         Canvas c = new Canvas();
         ShadowGenerator shadowGenerator = new ShadowGenerator(getBadgeSize());
         c.setBitmap(userBadgedBitmap);
         shadowGenerator.recreateIcon(Bitmap.createBitmap(userBadgedBitmap), c);
-        BitmapInfo bitmapInfo = createIconBitmap(userBadgedBitmap);
-        return bitmapInfo;
+        return createIconBitmap(userBadgedBitmap);
     }
 
+    /**
+     * Returns a {@link BitmapInfo} for the entire bubble icon including the badge.
+     */
     BitmapInfo getBubbleBitmap(Drawable bubble, BitmapInfo badge) {
         BitmapInfo bubbleIconInfo = createBadgedIconBitmap(bubble,
                 null /* user */,
@@ -64,5 +92,4 @@ public class BubbleIconFactory extends BaseIconFactory {
                 new BitmapDrawable(mContext.getResources(), badge.icon));
         return bubbleIconInfo;
     }
-
 }

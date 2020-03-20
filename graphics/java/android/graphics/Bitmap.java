@@ -21,8 +21,8 @@ import android.annotation.ColorInt;
 import android.annotation.ColorLong;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.WorkerThread;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.ResourcesImpl;
 import android.hardware.HardwareBuffer;
 import android.os.Build;
@@ -2132,7 +2132,7 @@ public final class Bitmap implements Parcelable {
     public void writeToParcel(Parcel p, int flags) {
         checkRecycled("Can't parcel a recycled bitmap");
         noteHardwareBitmapSlowCall();
-        if (!nativeWriteToParcel(mNativePtr, isMutable(), mDensity, p)) {
+        if (!nativeWriteToParcel(mNativePtr, mDensity, p)) {
             throw new RuntimeException("native writeToParcel failed");
         }
     }
@@ -2240,7 +2240,20 @@ public final class Bitmap implements Parcelable {
      */
     @UnsupportedAppUsage
     public GraphicBuffer createGraphicBufferHandle() {
-        return nativeCreateGraphicBufferHandle(mNativePtr);
+        return GraphicBuffer.createFromHardwareBuffer(getHardwareBuffer());
+    }
+
+    /**
+     * @return {@link HardwareBuffer} which is internally used by hardware bitmap
+     *
+     * Note: the HardwareBuffer does *not* have an associated {@link ColorSpace}.
+     * To render this object the same as its rendered with this Bitmap, you
+     * should also call {@link getColorSpace}.
+     *
+     * @hide
+     */
+    public HardwareBuffer getHardwareBuffer() {
+        return nativeGetHardwareBuffer(mNativePtr);
     }
 
     //////////// native methods
@@ -2285,7 +2298,6 @@ public final class Bitmap implements Parcelable {
     private static native Bitmap nativeCreateFromParcel(Parcel p);
     // returns true on success
     private static native boolean nativeWriteToParcel(long nativeBitmap,
-                                                      boolean isMutable,
                                                       int density,
                                                       Parcel p);
     // returns a new bitmap built from the native bitmap's alpha, and the paint
@@ -2308,7 +2320,7 @@ public final class Bitmap implements Parcelable {
     private static native Bitmap nativeCopyPreserveInternalConfig(long nativeBitmap);
     private static native Bitmap nativeWrapHardwareBufferBitmap(HardwareBuffer buffer,
                                                                 long nativeColorSpace);
-    private static native GraphicBuffer nativeCreateGraphicBufferHandle(long nativeBitmap);
+    private static native HardwareBuffer nativeGetHardwareBuffer(long nativeBitmap);
     private static native ColorSpace nativeComputeColorSpace(long nativePtr);
     private static native void nativeSetColorSpace(long nativePtr, long nativeColorSpace);
     private static native boolean nativeIsSRGB(long nativePtr);

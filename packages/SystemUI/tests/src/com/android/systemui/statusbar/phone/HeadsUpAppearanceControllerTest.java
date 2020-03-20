@@ -23,7 +23,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.testing.AndroidTestingRunner;
-import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 import android.view.View;
 import android.widget.TextView;
@@ -35,9 +34,9 @@ import com.android.systemui.plugins.DarkIconDispatcher;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.HeadsUpStatusBarView;
-import com.android.systemui.statusbar.NotificationTestHelper;
 import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.notification.row.NotificationTestHelper;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 
@@ -53,7 +52,8 @@ public class HeadsUpAppearanceControllerTest extends SysuiTestCase {
 
     private final NotificationStackScrollLayout mStackScroller =
             mock(NotificationStackScrollLayout.class);
-    private final NotificationPanelView mPanelView = mock(NotificationPanelView.class);
+    private final NotificationPanelViewController mPanelView =
+            mock(NotificationPanelViewController.class);
     private final DarkIconDispatcher mDarkIconDispatcher = mock(DarkIconDispatcher.class);
     private HeadsUpAppearanceController mHeadsUpAppearanceController;
     private ExpandableNotificationRow mFirst;
@@ -68,7 +68,7 @@ public class HeadsUpAppearanceControllerTest extends SysuiTestCase {
 
     @Before
     public void setUp() throws Exception {
-        com.android.systemui.util.Assert.sMainLooper = TestableLooper.get(this).getLooper();
+        allowTestableLooperAsMainThread();
         NotificationTestHelper testHelper = new NotificationTestHelper(getContext(), mDependency);
         mFirst = testHelper.createRow();
         mDependency.injectTestDependency(DarkIconDispatcher.class, mDarkIconDispatcher);

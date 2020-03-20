@@ -27,6 +27,7 @@ import static android.view.WindowInsetsController.APPEARANCE_LOW_PROFILE_BARS;
 import static android.view.WindowInsetsController.APPEARANCE_OPAQUE_NAVIGATION_BARS;
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_3BUTTON;
 
+import static com.android.internal.config.sysui.SystemUiDeviceConfigFlags.NAV_BAR_HANDLE_FORCE_OPAQUE;
 import static com.android.systemui.recents.OverviewProxyService.OverviewProxyListener;
 import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_A11Y_BUTTON_CLICKABLE;
 import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_A11Y_BUTTON_LONG_CLICKABLE;
@@ -64,6 +65,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.provider.DeviceConfig;
 import android.provider.Settings;
 import android.telecom.TelecomManager;
 import android.text.TextUtils;
@@ -93,7 +95,7 @@ import com.android.systemui.R;
 import com.android.systemui.assist.AssistHandleViewController;
 import com.android.systemui.assist.AssistManager;
 import com.android.systemui.broadcast.BroadcastDispatcher;
-import com.android.systemui.dagger.qualifiers.MainHandler;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.fragments.FragmentHostManager;
 import com.android.systemui.fragments.FragmentHostManager.FragmentListener;
 import com.android.systemui.model.SysUiState;
@@ -103,8 +105,10 @@ import com.android.systemui.recents.Recents;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.stackdivider.Divider;
+import com.android.systemui.statusbar.AutoHideUiElement;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.CommandQueue.Callbacks;
+import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.StatusBarState;
 import com.android.systemui.statusbar.notification.stack.StackStateAnimator;
 import com.android.systemui.statusbar.phone.ContextualButton.ContextButtonListener;
@@ -157,7 +161,6 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
     private int mNavigationIconHints = 0;
     private @TransitionMode int mNavigationBarMode;
     private AccessibilityManager mAccessibilityManager;
-    private MagnificationContentObserver mMagnificationObserver;
     private ContentResolver mContentResolver;
     private boolean mAssistantAvailable;
 
@@ -165,6 +168,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
     private int mDisabledFlags2;
     private final Lazy<StatusBar> mStatusBarLazy;
     private final ShadeController mShadeController;
+    private final NotificationRemoteInputManager mNotificationRemoteInputManager;
     private Recents mRecents;
     private StatusBar mStatusBar;
     private final Divider mDivider;
@@ -175,6 +179,8 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
 
     private Locale mLocale;
     private int mLayoutDirection;
+
+    private boolean mForceNavBarHandleOpaque;
 
     /** @see android.view.WindowInsetsController#setSystemBarsAppearance(int) */
     private @Appearance int mAppearance;
@@ -198,6 +204,28 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
     private AssistHandleViewController mAssistHandlerViewController;
 
     private final Handler mHandler;
+
+    private final AutoHideUiElement mAutoHideUiElement = new AutoHideUiElement() {
+        @Override
+        public void synchronizeState() {
+            checkNavBarModes();
+        }
+
+        @Override
+        public boolean shouldHideOnTouch() {
+            return !mNotificationRemoteInputManager.getController().isRemoteInputActive();
+        }
+
+        @Override
+        public boolean isVisible() {
+            return isTransientShown();
+        }
+
+        @Override
+        public void hide() {
+            clearTransient();
+        }
+    };
 
     private final OverviewProxyListener mOverviewProxyListener = new OverviewProxyListener() {
         @Override
@@ -228,14 +256,17 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         @Override
         public void onNavBarButtonAlphaChanged(float alpha, boolean animate) {
             ButtonDispatcher buttonDispatcher = null;
+            boolean forceVisible = false;
             if (QuickStepContract.isSwipeUpMode(mNavBarMode)) {
                 buttonDispatcher = mNavigationBarView.getBackButton();
             } else if (QuickStepContract.isGesturalMode(mNavBarMode)) {
+                forceVisible = mForceNavBarHandleOpaque;
                 buttonDispatcher = mNavigationBarView.getHomeHandle();
             }
             if (buttonDispatcher != null) {
-                buttonDispatcher.setVisibility(alpha > 0 ? View.VISIBLE : View.INVISIBLE);
-                buttonDispatcher.setAlpha(alpha, animate);
+                buttonDispatcher.setVisibility(
+                        (forceVisible || alpha > 0) ? View.VISIBLE : View.INVISIBLE);
+                buttonDispatcher.setAlpha(forceVisible ? 1f : alpha, animate);
             }
         }
     };
@@ -263,6 +294,17 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         }
     };
 
+    private final DeviceConfig.OnPropertiesChangedListener mOnPropertiesChangedListener =
+            new DeviceConfig.OnPropertiesChangedListener() {
+        @Override
+        public void onPropertiesChanged(DeviceConfig.Properties properties) {
+            if (properties.getKeyset().contains(NAV_BAR_HANDLE_FORCE_OPAQUE)) {
+                mForceNavBarHandleOpaque = properties.getBoolean(
+                        NAV_BAR_HANDLE_FORCE_OPAQUE, /* defaultValue = */ true);
+            }
+        }
+    };
+
     @Inject
     public NavigationBarFragment(AccessibilityManagerWrapper accessibilityManagerWrapper,
             DeviceProvisionedController deviceProvisionedController, MetricsLogger metricsLogger,
@@ -274,7 +316,8 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
             CommandQueue commandQueue, Divider divider,
             Optional<Recents> recentsOptional, Lazy<StatusBar> statusBarLazy,
             ShadeController shadeController,
-            @MainHandler Handler mainHandler) {
+            NotificationRemoteInputManager notificationRemoteInputManager,
+            @Main Handler mainHandler) {
         mAccessibilityManagerWrapper = accessibilityManagerWrapper;
         mDeviceProvisionedController = deviceProvisionedController;
         mStatusBarStateController = statusBarStateController;
@@ -283,6 +326,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         mSysUiFlagsContainer = sysUiFlagsContainer;
         mStatusBarLazy = statusBarLazy;
         mShadeController = shadeController;
+        mNotificationRemoteInputManager = notificationRemoteInputManager;
         mAssistantAvailable = mAssistManager.getAssistInfoForUser(UserHandle.USER_CURRENT) != null;
         mOverviewProxyService = overviewProxyService;
         mNavigationModeController = navigationModeController;
@@ -303,11 +347,6 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         mWindowManager = getContext().getSystemService(WindowManager.class);
         mAccessibilityManager = getContext().getSystemService(AccessibilityManager.class);
         mContentResolver = getContext().getContentResolver();
-        mMagnificationObserver = new MagnificationContentObserver(
-                getContext().getMainThreadHandler());
-        mContentResolver.registerContentObserver(Settings.Secure.getUriFor(
-                Settings.Secure.ACCESSIBILITY_DISPLAY_MAGNIFICATION_NAVBAR_ENABLED), false,
-                mMagnificationObserver, UserHandle.USER_ALL);
         mContentResolver.registerContentObserver(
                 Settings.Secure.getUriFor(Settings.Secure.ASSISTANT),
                 false /* notifyForDescendants */, mAssistContentObserver, UserHandle.USER_ALL);
@@ -322,6 +361,13 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
 
         // Respect the latest disabled-flags.
         mCommandQueue.recomputeDisableFlags(mDisplayId, false);
+
+        mForceNavBarHandleOpaque = DeviceConfig.getBoolean(
+                DeviceConfig.NAMESPACE_SYSTEMUI,
+                NAV_BAR_HANDLE_FORCE_OPAQUE,
+                /* defaultValue = */ true);
+        DeviceConfig.addOnPropertiesChangedListener(
+                DeviceConfig.NAMESPACE_SYSTEMUI, mHandler::post, mOnPropertiesChangedListener);
     }
 
     @Override
@@ -329,8 +375,9 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         super.onDestroy();
         mNavigationModeController.removeListener(this);
         mAccessibilityManagerWrapper.removeCallback(mAccessibilityListener);
-        mContentResolver.unregisterContentObserver(mMagnificationObserver);
         mContentResolver.unregisterContentObserver(mAssistContentObserver);
+
+        DeviceConfig.removeOnPropertiesChangedListener(mOnPropertiesChangedListener);
     }
 
     @Override
@@ -350,7 +397,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
             mIsOnDefaultDisplay = mDisplayId == Display.DEFAULT_DISPLAY;
         }
 
-        mNavigationBarView.setComponents(mStatusBarLazy.get().getPanel(), mAssistManager);
+        mNavigationBarView.setComponents(mStatusBarLazy.get().getPanelController());
         mNavigationBarView.setDisabledFlags(mDisabledFlags1);
         mNavigationBarView.setOnVerticalChangedListener(this::onVerticalChanged);
         mNavigationBarView.setOnTouchListener(this::onNavigationTouch);
@@ -366,8 +413,8 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_USER_SWITCHED);
-        mBroadcastDispatcher.registerReceiver(mBroadcastReceiver, filter, Handler.getMain(),
-                UserHandle.ALL);
+        mBroadcastDispatcher.registerReceiverWithHandler(mBroadcastReceiver, filter,
+                Handler.getMain(), UserHandle.ALL);
         notifyNavigationBarScreenOn();
 
         mOverviewProxyService.addCallback(mOverviewProxyListener);
@@ -594,7 +641,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         clearTransient();
     }
 
-    void clearTransient() {
+    private void clearTransient() {
         if (mTransientShown) {
             mTransientShown = false;
             handleTransientChanged();
@@ -936,6 +983,8 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
     private boolean onAccessibilityLongClick(View v) {
         Intent intent = new Intent(AccessibilityManager.ACTION_CHOOSE_ACCESSIBILITY_BUTTON);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        intent.putExtra(AccessibilityManager.EXTRA_SHORTCUT_TYPE,
+                AccessibilityManager.ACCESSIBILITY_BUTTON);
         v.getContext().startActivityAsUser(intent, UserHandle.CURRENT);
         return true;
     }
@@ -969,28 +1018,18 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
      * @param outFeedbackEnabled if non-null, sets it to true if accessibility feedback is enabled.
      */
     public int getA11yButtonState(@Nullable boolean[] outFeedbackEnabled) {
-        int requestingServices = 0;
-        try {
-            if (Settings.Secure.getIntForUser(mContentResolver,
-                    Settings.Secure.ACCESSIBILITY_DISPLAY_MAGNIFICATION_NAVBAR_ENABLED,
-                    UserHandle.USER_CURRENT) == 1) {
-                requestingServices++;
-            }
-        } catch (Settings.SettingNotFoundException e) {
-        }
-
         boolean feedbackEnabled = false;
         // AccessibilityManagerService resolves services for the current user since the local
         // AccessibilityManager is created from a Context with the INTERACT_ACROSS_USERS permission
         final List<AccessibilityServiceInfo> services =
                 mAccessibilityManager.getEnabledAccessibilityServiceList(
                         AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
+        final List<String> a11yButtonTargets =
+                mAccessibilityManager.getAccessibilityShortcutTargets(
+                        AccessibilityManager.ACCESSIBILITY_BUTTON);
+        final int requestingServices = a11yButtonTargets.size();
         for (int i = services.size() - 1; i >= 0; --i) {
             AccessibilityServiceInfo info = services.get(i);
-            if ((info.flags & AccessibilityServiceInfo.FLAG_REQUEST_ACCESSIBILITY_BUTTON) != 0) {
-                requestingServices++;
-            }
-
             if (info.feedbackType != 0 && info.feedbackType !=
                     AccessibilityServiceInfo.FEEDBACK_GENERIC) {
                 feedbackEnabled = true;
@@ -1035,11 +1074,16 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
 
     /** Sets {@link AutoHideController} to the navigation bar. */
     public void setAutoHideController(AutoHideController autoHideController) {
+        if (mAutoHideController != null) {
+            mAutoHideController.removeAutoHideUiElement(mAutoHideUiElement);
+        }
         mAutoHideController = autoHideController;
-        mAutoHideController.setNavigationBar(this);
+        if (mAutoHideController != null) {
+            mAutoHideController.addAutoHideUiElement(mAutoHideUiElement);
+        }
     }
 
-    boolean isTransientShown() {
+    private boolean isTransientShown() {
         return mTransientShown;
     }
 
@@ -1113,18 +1157,6 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
 
     private final AccessibilityServicesStateChangeListener mAccessibilityListener =
             this::updateAccessibilityServicesState;
-
-    private class MagnificationContentObserver extends ContentObserver {
-
-        public MagnificationContentObserver(Handler handler) {
-            super(handler);
-        }
-
-        @Override
-        public void onChange(boolean selfChange) {
-            NavigationBarFragment.this.updateAccessibilityServicesState(mAccessibilityManager);
-        }
-    }
 
     private final Consumer<Integer> mRotationWatcher = rotation -> {
         if (mNavigationBarView != null

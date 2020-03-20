@@ -16,7 +16,12 @@
 
 package com.android.settingslib.testutils.shadow;
 
+import static android.bluetooth.BluetoothAdapter.ACTIVE_DEVICE_ALL;
+import static android.bluetooth.BluetoothAdapter.ACTIVE_DEVICE_AUDIO;
+import static android.bluetooth.BluetoothAdapter.ACTIVE_DEVICE_PHONE_CALL;
+
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 
@@ -29,6 +34,7 @@ import java.util.List;
 public class ShadowBluetoothAdapter extends org.robolectric.shadows.ShadowBluetoothAdapter {
 
     private List<Integer> mSupportedProfiles;
+    private List<BluetoothDevice> mMostRecentlyConnectedDevices;
     private BluetoothProfile.ServiceListener mServiceListener;
 
     @Implementation
@@ -49,5 +55,36 @@ public class ShadowBluetoothAdapter extends org.robolectric.shadows.ShadowBlueto
 
     public void setSupportedProfiles(List<Integer> supportedProfiles) {
         mSupportedProfiles = supportedProfiles;
+    }
+
+    @Implementation
+    protected List<BluetoothDevice> getMostRecentlyConnectedDevices() {
+        return mMostRecentlyConnectedDevices;
+    }
+
+    public void setMostRecentlyConnectedDevices(List<BluetoothDevice> list) {
+        mMostRecentlyConnectedDevices = list;
+    }
+
+    @Implementation
+    protected boolean removeActiveDevice(@BluetoothAdapter.ActiveDeviceUse int profiles) {
+        if (profiles != ACTIVE_DEVICE_AUDIO && profiles != ACTIVE_DEVICE_PHONE_CALL
+                && profiles != ACTIVE_DEVICE_ALL) {
+            return false;
+        }
+        return true;
+    }
+
+    @Implementation
+    protected boolean setActiveDevice(BluetoothDevice device,
+            @BluetoothAdapter.ActiveDeviceUse int profiles) {
+        if (device == null) {
+            return false;
+        }
+        if (profiles != ACTIVE_DEVICE_AUDIO && profiles != ACTIVE_DEVICE_PHONE_CALL
+                && profiles != ACTIVE_DEVICE_ALL) {
+            return false;
+        }
+        return true;
     }
 }

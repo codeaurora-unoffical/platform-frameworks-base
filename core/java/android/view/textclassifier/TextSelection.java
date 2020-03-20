@@ -36,6 +36,7 @@ import com.android.internal.util.Preconditions;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Information about where text selection should be.
@@ -165,7 +166,7 @@ public final class TextSelection implements Parcelable {
         public Builder setEntityType(
                 @NonNull @EntityType String type,
                 @FloatRange(from = 0.0, to = 1.0) float confidenceScore) {
-            Preconditions.checkNotNull(type);
+            Objects.requireNonNull(type);
             mEntityConfidence.put(type, confidenceScore);
             return this;
         }
@@ -215,6 +216,7 @@ public final class TextSelection implements Parcelable {
         @Nullable private String mCallingPackageName;
         @UserIdInt
         private int mUserId = UserHandle.USER_NULL;
+        private boolean mUseDefaultTextClassifier;
 
         private Request(
                 CharSequence text,
@@ -312,6 +314,26 @@ public final class TextSelection implements Parcelable {
         @UserIdInt
         public int getUserId() {
             return mUserId;
+        }
+
+        /**
+         * Sets whether to use the default text classifier to handle this request.
+         * This will be ignored if it is not the system text classifier to handle this request.
+         *
+         * @hide
+         */
+        void setUseDefaultTextClassifier(boolean useDefaultTextClassifier) {
+            mUseDefaultTextClassifier = useDefaultTextClassifier;
+        }
+
+        /**
+         * Returns whether to use the default text classifier to handle this request. This
+         * will be ignored if it is not the system text classifier to handle this request.
+         *
+         * @hide
+         */
+        public boolean getUseDefaultTextClassifier() {
+            return mUseDefaultTextClassifier;
         }
 
         /**
@@ -419,6 +441,7 @@ public final class TextSelection implements Parcelable {
             dest.writeString(mCallingPackageName);
             dest.writeInt(mUserId);
             dest.writeBundle(mExtras);
+            dest.writeBoolean(mUseDefaultTextClassifier);
         }
 
         private static Request readFromParcel(Parcel in) {
@@ -429,11 +452,13 @@ public final class TextSelection implements Parcelable {
             final String callingPackageName = in.readString();
             final int userId = in.readInt();
             final Bundle extras = in.readBundle();
+            final boolean systemTextClassifierType = in.readBoolean();
 
             final Request request = new Request(text, startIndex, endIndex, defaultLocales,
                     /* darkLaunchAllowed= */ false, extras);
             request.setCallingPackageName(callingPackageName);
             request.setUserId(userId);
+            request.setUseDefaultTextClassifier(systemTextClassifierType);
             return request;
         }
 

@@ -51,6 +51,7 @@ import androidx.annotation.NonNull;
 import com.android.internal.util.FunctionalUtils.ThrowingRunnable;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.internal.widget.LockSettingsInternal;
+import com.android.server.PersistentDataBlockManagerInternal;
 import com.android.server.net.NetworkPolicyManagerInternal;
 
 import java.io.File;
@@ -65,7 +66,6 @@ public class DevicePolicyManagerServiceTestable extends DevicePolicyManagerServi
      * Overrides {@link #Owners} for dependency injection.
      */
     public static class OwnersTestable extends Owners {
-        public static final String LEGACY_FILE = "legacy.xml";
 
         public OwnersTestable(MockSystemServices services) {
             super(services.userManager, services.userManagerInternal,
@@ -223,6 +223,11 @@ public class DevicePolicyManagerServiceTestable extends DevicePolicyManagerServi
         }
 
         @Override
+        PersistentDataBlockManagerInternal getPersistentDataBlockManagerInternal() {
+            return services.persistentDataBlockManagerInternal;
+        }
+
+        @Override
         Looper getMyLooper() {
             return Looper.getMainLooper();
         }
@@ -359,6 +364,12 @@ public class DevicePolicyManagerServiceTestable extends DevicePolicyManagerServi
         @Override
         PendingIntent pendingIntentGetActivityAsUser(Context context, int requestCode,
                 Intent intent, int flags, Bundle options, UserHandle user) {
+            return null;
+        }
+
+        @Override
+        PendingIntent pendingIntentGetBroadcast(Context context, int requestCode,
+                Intent intent, int flags) {
             return null;
         }
 

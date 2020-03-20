@@ -23,7 +23,19 @@ import android.view.WindowInsets.Type.InsetsType;
  * Generalization of an object that can control insets state.
  */
 interface InsetsControlTarget {
-    void notifyInsetsControlChanged();
+
+    /**
+     * Notifies the control target that the insets control has changed.
+     */
+    default void notifyInsetsControlChanged() {
+    };
+
+    /**
+     * @return {@link WindowState} of this target, if any.
+     */
+    default WindowState getWindow() {
+        return null;
+    }
 
     /**
      * Instructs the control target to show inset sources.

@@ -16,9 +16,6 @@
 
 package android.companion;
 
-
-import static com.android.internal.util.Preconditions.checkNotNull;
-
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
@@ -42,6 +39,7 @@ import android.util.Log;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 
 /**
@@ -150,8 +148,8 @@ public final class CompanionDeviceManager {
         if (!checkFeaturePresent()) {
             return;
         }
-        checkNotNull(request, "Request cannot be null");
-        checkNotNull(callback, "Callback cannot be null");
+        Objects.requireNonNull(request, "Request cannot be null");
+        Objects.requireNonNull(callback, "Callback cannot be null");
         try {
             mService.associate(
                     request,
@@ -271,18 +269,18 @@ public final class CompanionDeviceManager {
     @SystemApi
     @TestApi
     @RequiresPermission(android.Manifest.permission.MANAGE_COMPANION_DEVICES)
-    public boolean isDeviceAssociated(
+    public boolean isDeviceAssociatedForWifiConnection(
             @NonNull String packageName,
             @NonNull MacAddress macAddress,
             @NonNull UserHandle user) {
         if (!checkFeaturePresent()) {
             return false;
         }
-        checkNotNull(packageName, "package name cannot be null");
-        checkNotNull(macAddress, "mac address cannot be null");
-        checkNotNull(user, "user cannot be null");
+        Objects.requireNonNull(packageName, "package name cannot be null");
+        Objects.requireNonNull(macAddress, "mac address cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
         try {
-            return mService.isDeviceAssociated(
+            return mService.isDeviceAssociatedForWifiConnection(
                     packageName, macAddress.toString(), user.getIdentifier());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();

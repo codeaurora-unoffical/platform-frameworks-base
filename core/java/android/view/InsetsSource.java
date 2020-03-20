@@ -16,6 +16,9 @@
 
 package android.view;
 
+import static android.view.InsetsState.ITYPE_IME;
+
+import android.annotation.Nullable;
 import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Parcel;
@@ -23,6 +26,7 @@ import android.os.Parcelable;
 import android.view.InsetsState.InternalInsetsType;
 
 import java.io.PrintWriter;
+import java.util.Objects;
 
 /**
  * Represents the state of a single window generating insets for clients.
@@ -34,6 +38,7 @@ public class InsetsSource implements Parcelable {
 
     /** Frame of the source in screen coordinate space */
     private final Rect mFrame;
+    private @Nullable Rect mVisibleFrame;
     private boolean mVisible;
 
     private final Rect mTmpFrame = new Rect();
@@ -41,16 +46,28 @@ public class InsetsSource implements Parcelable {
     public InsetsSource(@InternalInsetsType int type) {
         mType = type;
         mFrame = new Rect();
+        mVisible = InsetsState.getDefaultVisibility(type);
     }
 
     public InsetsSource(InsetsSource other) {
         mType = other.mType;
         mFrame = new Rect(other.mFrame);
         mVisible = other.mVisible;
+        mVisibleFrame = other.mVisibleFrame != null
+                ? new Rect(other.mVisibleFrame)
+                : null;
+    }
+
+    public void setFrame(int left, int top, int right, int bottom) {
+        mFrame.set(left, top, right, bottom);
     }
 
     public void setFrame(Rect frame) {
         mFrame.set(frame);
+    }
+
+    public void setVisibleFrame(@Nullable Rect visibleFrame) {
+        mVisibleFrame = visibleFrame != null ? new Rect(visibleFrame) : visibleFrame;
     }
 
     public void setVisible(boolean visible) {
@@ -63,6 +80,10 @@ public class InsetsSource implements Parcelable {
 
     public Rect getFrame() {
         return mFrame;
+    }
+
+    public @Nullable Rect getVisibleFrame() {
+        return mVisibleFrame;
     }
 
     public boolean isVisible() {
@@ -78,11 +99,29 @@ public class InsetsSource implements Parcelable {
      *         source.
      */
     public Insets calculateInsets(Rect relativeFrame, boolean ignoreVisibility) {
+        return calculateInsets(relativeFrame, mFrame, ignoreVisibility);
+    }
+
+    /**
+     * Like {@link #calculateInsets(Rect, boolean)}, but will return visible insets.
+     */
+    public Insets calculateVisibleInsets(Rect relativeFrame) {
+        return calculateInsets(relativeFrame, mVisibleFrame != null ? mVisibleFrame : mFrame,
+                false /* ignoreVisibility */);
+    }
+
+    private Insets calculateInsets(Rect relativeFrame, Rect frame, boolean ignoreVisibility) {
         if (!ignoreVisibility && !mVisible) {
             return Insets.NONE;
         }
-        if (!mTmpFrame.setIntersect(mFrame, relativeFrame)) {
+        if (!mTmpFrame.setIntersect(frame, relativeFrame)) {
             return Insets.NONE;
+        }
+
+        // TODO: Currently, non-floating IME always intersects at bottom due to issues with cutout.
+        // However, we should let the policy decide from the server.
+        if (getType() == ITYPE_IME) {
+            return Insets.of(0, 0, 0, mTmpFrame.height());
         }
 
         // Intersecting at top/bottom
@@ -109,6 +148,9 @@ public class InsetsSource implements Parcelable {
         pw.print(prefix);
         pw.print("InsetsSource type="); pw.print(InsetsState.typeToString(mType));
         pw.print(" frame="); pw.print(mFrame.toShortString());
+        if (mVisibleFrame != null) {
+            pw.print(" visibleFrmae="); pw.print(mVisibleFrame.toShortString());
+        }
         pw.print(" visible="); pw.print(mVisible);
         pw.println();
     }
@@ -122,6 +164,7 @@ public class InsetsSource implements Parcelable {
 
         if (mType != that.mType) return false;
         if (mVisible != that.mVisible) return false;
+        if (!Objects.equals(mVisibleFrame, that.mVisibleFrame)) return false;
         return mFrame.equals(that.mFrame);
     }
 
@@ -129,6 +172,7 @@ public class InsetsSource implements Parcelable {
     public int hashCode() {
         int result = mType;
         result = 31 * result + mFrame.hashCode();
+        result = 31 * result + (mVisibleFrame != null ? mVisibleFrame.hashCode() : 0);
         result = 31 * result + (mVisible ? 1 : 0);
         return result;
     }
@@ -136,6 +180,7 @@ public class InsetsSource implements Parcelable {
     public InsetsSource(Parcel in) {
         mType = in.readInt();
         mFrame = in.readParcelable(null /* loader */);
+        mVisibleFrame = in.readParcelable(null /* loader */);
         mVisible = in.readBoolean();
     }
 
@@ -148,7 +193,17 @@ public class InsetsSource implements Parcelable {
     public void writeToParcel(Parcel dest, int flags) {
         dest.writeInt(mType);
         dest.writeParcelable(mFrame, 0 /* flags*/);
+        dest.writeParcelable(mVisibleFrame, 0 /* flags */);
         dest.writeBoolean(mVisible);
+    }
+
+    @Override
+    public String toString() {
+        return "InsetsSource: {"
+                + "mType=" + InsetsState.typeToString(mType)
+                + ", mFrame=" + mFrame.toShortString()
+                + ", mVisible=" + mVisible
+                + "}";
     }
 
     public static final @android.annotation.NonNull Creator<InsetsSource> CREATOR = new Creator<InsetsSource>() {

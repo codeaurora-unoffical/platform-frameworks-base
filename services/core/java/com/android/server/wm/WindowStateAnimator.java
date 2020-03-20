@@ -272,7 +272,8 @@ class WindowStateAnimator {
 
         mWin.checkPolicyVisibilityChange();
         final DisplayContent displayContent = mWin.getDisplayContent();
-        if (mAttrType == LayoutParams.TYPE_STATUS_BAR && mWin.isVisibleByPolicy()) {
+        if ((mAttrType == LayoutParams.TYPE_STATUS_BAR
+                || mAttrType == LayoutParams.TYPE_NOTIFICATION_SHADE) && mWin.isVisibleByPolicy()) {
             // Upon completion of a not-visible to visible status bar animation a relayout is
             // required.
             displayContent.setLayoutNeeded();
@@ -872,6 +873,14 @@ class WindowStateAnimator {
             clipRect = mTmpClipRect;
         }
 
+        if (mSurfaceResized && (mAttrType == TYPE_BASE_APPLICATION) &&
+            (task != null) && (task.getMainWindowSizeChangeTransaction() != null)) {
+            mSurfaceController.deferTransactionUntil(mWin.getDeferTransactionBarrier(),
+                    mWin.getFrameNumber());
+            SurfaceControl.mergeToGlobalTransaction(task.getMainWindowSizeChangeTransaction());
+            task.setMainWindowSizeChangeTransaction(null);
+        }
+
         float surfaceWidth = mSurfaceController.getWidth();
         float surfaceHeight = mSurfaceController.getHeight();
 
@@ -888,21 +897,15 @@ class WindowStateAnimator {
 
             int posX = 0;
             int posY = 0;
-            task.getTaskStack().getDimBounds(mTmpStackBounds);
+            task.getStack().getDimBounds(mTmpStackBounds);
 
             boolean allowStretching = false;
-            task.getTaskStack().getFinalAnimationSourceHintBounds(mTmpSourceBounds);
+            task.getStack().getFinalAnimationSourceHintBounds(mTmpSourceBounds);
             // If we don't have source bounds, we can attempt to use the content insets
-            // in the following scenario:
-            //    1. We have content insets.
-            //    2. We are not transitioning to full screen
-            // We have to be careful to check "lastAnimatingBoundsWasToFullscreen" rather than
-            // the mBoundsAnimating state, as we may have already left it and only be here
-            // because of the force-scale until resize state.
+            // if we have content insets.
             if (mTmpSourceBounds.isEmpty() && (mWin.mLastRelayoutContentInsets.width() > 0
-                    || mWin.mLastRelayoutContentInsets.height() > 0)
-                        && !task.getTaskStack().lastAnimatingBoundsWasToFullscreen()) {
-                mTmpSourceBounds.set(task.getTaskStack().mPreAnimationBounds);
+                    || mWin.mLastRelayoutContentInsets.height() > 0)) {
+                mTmpSourceBounds.set(task.getStack().mPreAnimationBounds);
                 mTmpSourceBounds.inset(mWin.mLastRelayoutContentInsets);
                 allowStretching = true;
             }
@@ -916,7 +919,7 @@ class WindowStateAnimator {
             if (!mTmpSourceBounds.isEmpty()) {
                 // Get the final target stack bounds, if we are not animating, this is just the
                 // current stack bounds
-                task.getTaskStack().getFinalAnimationBounds(mTmpAnimatingBounds);
+                task.getStack().getFinalAnimationBounds(mTmpAnimatingBounds);
 
                 // Calculate the current progress and interpolate the difference between the target
                 // and source bounds
@@ -1009,10 +1012,10 @@ class WindowStateAnimator {
                         // the WS position is reset (so the stack position is shown) at the same
                         // time that the buffer size changes.
                         setOffsetPositionForStackResize(false);
-                        mSurfaceController.deferTransactionUntil(mSurfaceController.mSurfaceControl,
+                        mSurfaceController.deferTransactionUntil(mWin.getDeferTransactionBarrier(),
                                 mWin.getFrameNumber());
                     } else {
-                        final ActivityStack stack = mWin.getStack();
+                        final ActivityStack stack = mWin.getRootTask();
                         mTmpPos.x = 0;
                         mTmpPos.y = 0;
                         if (stack != null) {
@@ -1040,7 +1043,7 @@ class WindowStateAnimator {
         // comes in at the new size (normally position and crop are unfrozen).
         // deferTransactionUntil accomplishes this for us.
         if (wasForceScaled && !mForceScaleUntilResize) {
-            mSurfaceController.deferTransactionUntil(mSurfaceController.mSurfaceControl,
+            mSurfaceController.deferTransactionUntil(mWin.getDeferTransactionBarrier(),
                     mWin.getFrameNumber());
             mSurfaceController.forceScaleableInTransaction(false);
         }
@@ -1398,7 +1401,7 @@ class WindowStateAnimator {
             mWin.getDisplayContent().adjustForImeIfNeeded();
         }
 
-        return mWin.isAnimating(TRANSITION | PARENTS);
+        return mWin.isAnimating(PARENTS);
     }
 
     void dumpDebug(ProtoOutputStream proto, long fieldId) {
@@ -1495,7 +1498,7 @@ class WindowStateAnimator {
      */
     boolean isForceScaled() {
         final Task task = mWin.getTask();
-        if (task != null && task.getTaskStack().isForceScaled()) {
+        if (task != null && task.getStack().isForceScaled()) {
             return true;
         }
         return mForceScaleUntilResize;
@@ -1516,5 +1519,12 @@ class WindowStateAnimator {
 
     void setOffsetPositionForStackResize(boolean offsetPositionForStackResize) {
         mOffsetPositionForStackResize = offsetPositionForStackResize;
+    }
+
+    SurfaceControl getDeferTransactionBarrier() {
+        if (!hasSurface()) {
+            return null;
+        }
+        return mSurfaceController.getDeferTransactionBarrier();
     }
 }

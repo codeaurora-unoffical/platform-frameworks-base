@@ -17,14 +17,17 @@
 package android.view;
 
 import static android.os.Build.VERSION_CODES.JELLY_BEAN_MR1;
+import static android.view.WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE;
+import static android.view.WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP;
 
 import android.animation.LayoutTransition;
 import android.annotation.CallSuper;
 import android.annotation.IdRes;
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.TestApi;
 import android.annotation.UiThread;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
@@ -51,7 +54,8 @@ import android.util.Pools;
 import android.util.Pools.SynchronizedPool;
 import android.util.SparseArray;
 import android.util.SparseBooleanArray;
-import android.view.WindowInsetsAnimationListener.InsetsAnimation;
+import android.view.WindowInsetsAnimation.Bounds;
+import android.view.WindowInsetsAnimation.Callback.DispatchMode;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -606,6 +610,13 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
     int mChildUnhandledKeyListeners = 0;
 
     /**
+     * Current dispatch mode of animation events
+     *
+     * @see WindowInsetsAnimation.Callback#getDispatchMode()
+     */
+    private @DispatchMode int mInsetsAnimationDispatchMode = DISPATCH_MODE_CONTINUE_ON_SUBTREE;
+
+    /**
      * Empty ActionMode used as a sentinel in recursive entries to startActionModeForChild.
      *
      * @see #startActionModeForChild(View, android.view.ActionMode.Callback)
@@ -680,7 +691,7 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
 
     private void initViewGroup() {
         // ViewGroup doesn't draw by default
-        if (!debugDraw()) {
+        if (!isShowingLayoutBounds()) {
             setFlags(WILL_NOT_DRAW, DRAW_MASK);
         }
         mGroupFlags |= FLAG_CLIP_CHILDREN;
@@ -1514,6 +1525,19 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
         }
     }
 
+    /**
+     * @hide
+     */
+    @Override
+    public void makeFrameworkOptionalFitsSystemWindows() {
+        super.makeFrameworkOptionalFitsSystemWindows();
+        final int count = mChildrenCount;
+        final View[] children = mChildren;
+        for (int i = 0; i < count; i++) {
+            children[i].makeFrameworkOptionalFitsSystemWindows();
+        }
+    }
+
     @Override
     public void dispatchDisplayHint(int hint) {
         super.dispatchDisplayHint(hint);
@@ -1858,6 +1882,7 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
     }
 
     @Override
+    @Deprecated
     public void dispatchWindowSystemUiVisiblityChanged(int visible) {
         super.dispatchWindowSystemUiVisiblityChanged(visible);
 
@@ -1870,6 +1895,7 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
     }
 
     @Override
+    @Deprecated
     public void dispatchSystemUiVisibilityChanged(int visible) {
         super.dispatchSystemUiVisibilityChanged(visible);
 
@@ -3666,6 +3692,31 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
             }
             childrenForAccessibility.clear();
         }
+        info.setAvailableExtraData(Collections.singletonList(
+                AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @param info The info to which to add the extra data. Never {@code null}.
+     * @param extraDataKey A key specifying the type of extra data to add to the info. The
+     *                     extra data should be added to the {@link Bundle} returned by
+     *                     the info's {@link AccessibilityNodeInfo#getExtras} method. Never
+     *                     {@code null}.
+     * @param arguments A {@link Bundle} holding any arguments relevant for this request. May be
+     *                  {@code null} if the service provided no arguments.
+     *
+     */
+    @Override
+    public void addExtraDataToAccessibilityNodeInfo(@NonNull AccessibilityNodeInfo info,
+            @NonNull String extraDataKey, @Nullable Bundle arguments) {
+        if (extraDataKey.equals(AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY)) {
+            final AccessibilityNodeInfo.ExtraRenderingInfo extraRenderingInfo =
+                    AccessibilityNodeInfo.ExtraRenderingInfo.obtain();
+            extraRenderingInfo.setLayoutParams(getLayoutParams().width, getLayoutParams().height);
+            info.setExtraRenderingInfo(extraRenderingInfo);
+        }
     }
 
     @Override
@@ -4155,7 +4206,7 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
         }
         if (usingRenderNodeProperties) canvas.insertInorderBarrier();
 
-        if (debugDraw()) {
+        if (isShowingLayoutBounds()) {
             onDebugDraw(canvas);
         }
 
@@ -7169,6 +7220,9 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
     @Override
     public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
         insets = super.dispatchApplyWindowInsets(insets);
+        if (insets.isConsumed()) {
+            return insets;
+        }
         if (View.sBrokenInsetsDispatch) {
             return brokenDispatchApplyWindowInsets(insets);
         } else {
@@ -7177,13 +7231,11 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
     }
 
     private WindowInsets brokenDispatchApplyWindowInsets(WindowInsets insets) {
-        if (!insets.isConsumed()) {
-            final int count = getChildCount();
-            for (int i = 0; i < count; i++) {
-                insets = getChildAt(i).dispatchApplyWindowInsets(insets);
-                if (insets.isConsumed()) {
-                    break;
-                }
+        final int count = getChildCount();
+        for (int i = 0; i < count; i++) {
+            insets = getChildAt(i).dispatchApplyWindowInsets(insets);
+            if (insets.isConsumed()) {
+                break;
             }
         }
         return insets;
@@ -7198,30 +7250,78 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
     }
 
     @Override
-    void dispatchWindowInsetsAnimationStarted(InsetsAnimation animation) {
-        super.dispatchWindowInsetsAnimationStarted(animation);
+    public void setWindowInsetsAnimationCallback(
+            @Nullable WindowInsetsAnimation.Callback callback) {
+        super.setWindowInsetsAnimationCallback(callback);
+        mInsetsAnimationDispatchMode = callback != null
+                ? callback.getDispatchMode()
+                : DISPATCH_MODE_CONTINUE_ON_SUBTREE;
+    }
+
+    @Override
+    public void dispatchWindowInsetsAnimationPrepare(
+            @NonNull WindowInsetsAnimation animation) {
+        super.dispatchWindowInsetsAnimationPrepare(animation);
+
+        // If we are root-level content view that fits insets, set dispatch mode to stop to imitate
+        // consume behavior.
+        boolean isOptionalFitSystemWindows = (mViewFlags & OPTIONAL_FITS_SYSTEM_WINDOWS) != 0
+                || isFrameworkOptionalFitsSystemWindows();
+        if (isOptionalFitSystemWindows && mAttachInfo != null
+                && getListenerInfo().mWindowInsetsAnimationCallback == null
+                && mAttachInfo.mContentOnApplyWindowInsetsListener != null) {
+            mInsetsAnimationDispatchMode = DISPATCH_MODE_STOP;
+            return;
+        }
+
+        if (mInsetsAnimationDispatchMode == DISPATCH_MODE_STOP) {
+            return;
+        }
         final int count = getChildCount();
         for (int i = 0; i < count; i++) {
-            getChildAt(i).dispatchWindowInsetsAnimationStarted(animation);
+            getChildAt(i).dispatchWindowInsetsAnimationPrepare(animation);
         }
     }
 
     @Override
-    WindowInsets dispatchWindowInsetsAnimationProgress(WindowInsets insets) {
-        insets = super.dispatchWindowInsetsAnimationProgress(insets);
+    @NonNull
+    public Bounds dispatchWindowInsetsAnimationStart(
+            @NonNull WindowInsetsAnimation animation, @NonNull Bounds bounds) {
+        bounds = super.dispatchWindowInsetsAnimationStart(animation, bounds);
+        if (mInsetsAnimationDispatchMode == DISPATCH_MODE_STOP) {
+            return bounds;
+        }
         final int count = getChildCount();
         for (int i = 0; i < count; i++) {
-            getChildAt(i).dispatchWindowInsetsAnimationProgress(insets);
+            getChildAt(i).dispatchWindowInsetsAnimationStart(animation, bounds);
+        }
+        return bounds;
+    }
+
+    @Override
+    @NonNull
+    public WindowInsets dispatchWindowInsetsAnimationProgress(@NonNull WindowInsets insets,
+            @NonNull List<WindowInsetsAnimation> runningAnimations) {
+        insets = super.dispatchWindowInsetsAnimationProgress(insets, runningAnimations);
+        if (mInsetsAnimationDispatchMode == DISPATCH_MODE_STOP) {
+            return insets;
+        }
+        final int count = getChildCount();
+        for (int i = 0; i < count; i++) {
+            getChildAt(i).dispatchWindowInsetsAnimationProgress(insets, runningAnimations);
         }
         return insets;
     }
 
     @Override
-    void dispatchWindowInsetsAnimationFinished(InsetsAnimation animation) {
-        super.dispatchWindowInsetsAnimationFinished(animation);
+    public void dispatchWindowInsetsAnimationEnd(@NonNull WindowInsetsAnimation animation) {
+        super.dispatchWindowInsetsAnimationEnd(animation);
+        if (mInsetsAnimationDispatchMode == DISPATCH_MODE_STOP) {
+            return;
+        }
         final int count = getChildCount();
         for (int i = 0; i < count; i++) {
-            getChildAt(i).dispatchWindowInsetsAnimationFinished(animation);
+            getChildAt(i).dispatchWindowInsetsAnimationEnd(animation);
         }
     }
 
@@ -8927,6 +9027,32 @@ public abstract class ViewGroup extends View implements ViewParent, ViewManager 
         for (int i = 0; i < n; i++) {
             encoder.addPropertyKey("meta:__child__" + i);
             getChildAt(i).encode(encoder);
+        }
+    }
+
+    /** @hide */
+    @Override
+    public final void onDescendantUnbufferedRequested() {
+        // First look at the focused child for focused events
+        int focusedChildNonPointerSource = InputDevice.SOURCE_CLASS_NONE;
+        if (mFocused != null) {
+            focusedChildNonPointerSource = mFocused.mUnbufferedInputSource
+                    & (~InputDevice.SOURCE_CLASS_POINTER);
+        }
+        mUnbufferedInputSource = focusedChildNonPointerSource;
+
+        // Request unbuffered dispatch for pointer events for this view if any child requested
+        // unbuffered dispatch for pointer events. This is because we can't expect that the pointer
+        // source would dispatch to the focused view.
+        for (int i = 0; i < mChildrenCount; i++) {
+            final View child = mChildren[i];
+            if ((child.mUnbufferedInputSource & InputDevice.SOURCE_CLASS_POINTER) != 0) {
+                mUnbufferedInputSource |= InputDevice.SOURCE_CLASS_POINTER;
+                break;
+            }
+        }
+        if (mParent != null) {
+            mParent.onDescendantUnbufferedRequested();
         }
     }
 }

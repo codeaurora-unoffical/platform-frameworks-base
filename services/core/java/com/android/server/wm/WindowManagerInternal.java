@@ -19,6 +19,7 @@ package com.android.server.wm;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.ClipData;
+import android.content.Context;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.hardware.display.DisplayManagerInternal;
@@ -117,6 +118,11 @@ public abstract class WindowManagerInternal {
          * @param transit transition type indicating what kind of transition got cancelled
          */
         public void onAppTransitionCancelledLocked(int transit) {}
+
+        /**
+         * Called when an app transition is timed out.
+         */
+        public void onAppTransitionTimeoutLocked() {}
 
         /**
          * Called when an app transition gets started
@@ -494,6 +500,11 @@ public abstract class WindowManagerInternal {
     public abstract int getTopFocusedDisplayId();
 
     /**
+     * @return The UI context of top focused display.
+     */
+    public abstract Context getTopFocusedDisplayUiContext();
+
+    /**
      * Checks if this display is configured and allowed to show system decorations.
      */
     public abstract boolean shouldShowSystemDecorOnDisplay(int displayId);
@@ -516,9 +527,9 @@ public abstract class WindowManagerInternal {
     /**
      * Hide IME using imeTargetWindow when requested.
      *
-     * @param displayId on which IME is shown
+     * @param imeTargetWindowToken token of the (IME target) window on which IME should be hidden.
      */
-    public abstract void hideIme(int displayId);
+    public abstract void hideIme(IBinder imeTargetWindowToken);
 
     /**
      * Tell window manager about a package that should not be running with high refresh rate
@@ -556,4 +567,14 @@ public abstract class WindowManagerInternal {
      */
     public abstract void setAccessibilityIdToSurfaceMetadata(
             IBinder windowToken, int accessibilityWindowId);
+
+    /**
+     * Transfers input focus from a given input token to that of the IME window.
+     *
+     * @param sourceInputToken The source token.
+     * @param displayId The display hosting the IME window.
+     * @return Whether transfer was successful.
+     */
+    public abstract boolean transferTouchFocusToImeWindow(@NonNull IBinder sourceInputToken,
+            int displayId);
 }

@@ -28,6 +28,8 @@ import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Slog;
 import android.view.DisplayInfo;
+import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.view.animation.Animation;
 
 import java.util.function.Consumer;
@@ -122,10 +124,35 @@ class WallpaperWindowToken extends WindowToken {
             mDisplayContent.setLayoutNeeded();
         }
 
-        final DisplayInfo displayInfo = mDisplayContent.getDisplayInfo();
+        final WallpaperController wallpaperController = mDisplayContent.mWallpaperController;
+
+        if (visible) {
+            final WindowState wallpaperTarget = wallpaperController.getWallpaperTarget();
+            final RecentsAnimationController recentsAnimationController =
+                    mWmService.getRecentsAnimationController();
+            if (wallpaperTarget != null
+                    && recentsAnimationController != null
+                    && recentsAnimationController.isAnimatingTask(wallpaperTarget.getTask())) {
+                // If the Recents animation is running, and the wallpaper target is the animating
+                // task we want the wallpaper to be rotated in the same orientation as the
+                // RecentsAnimation's target (e.g the launcher)
+                recentsAnimationController.linkFixedRotationTransformIfNeeded(this);
+            } else if (wallpaperTarget != null
+                    && wallpaperTarget.mToken.hasFixedRotationTransform()) {
+                // If the wallpaper target has a fixed rotation, we want the wallpaper to follow its
+                // rotation
+                linkFixedRotationTransform(wallpaperTarget.mToken);
+            }
+        }
+
+        DisplayInfo displayInfo = getFixedRotationTransformDisplayInfo();
+        if (displayInfo == null) {
+            displayInfo = mDisplayContent.getDisplayInfo();
+        }
+
         final int dw = displayInfo.logicalWidth;
         final int dh = displayInfo.logicalHeight;
-        final WallpaperController wallpaperController = mDisplayContent.mWallpaperController;
+
         for (int wallpaperNdx = mChildren.size() - 1; wallpaperNdx >= 0; wallpaperNdx--) {
             final WindowState wallpaper = mChildren.get(wallpaperNdx);
 
@@ -139,6 +166,23 @@ class WallpaperWindowToken extends WindowToken {
             if (DEBUG_LAYERS || DEBUG_WALLPAPER_LIGHT) Slog.v(TAG, "adjustWallpaper win "
                     + wallpaper);
         }
+    }
+
+    @Override
+    void adjustWindowParams(WindowState win, WindowManager.LayoutParams attrs) {
+        if (attrs.height == ViewGroup.LayoutParams.MATCH_PARENT
+                || attrs.width == ViewGroup.LayoutParams.MATCH_PARENT) {
+            return;
+        }
+
+        final DisplayInfo displayInfo = win.getDisplayInfo();
+
+        final float layoutScale = Math.max(
+                (float) displayInfo.logicalHeight / (float) attrs.height,
+                (float) displayInfo.logicalWidth / (float) attrs.width);
+        attrs.height = (int) (attrs.height * layoutScale);
+        attrs.width = (int) (attrs.width * layoutScale);
+        attrs.flags |= WindowManager.LayoutParams.FLAG_SCALED;
     }
 
     boolean hasVisibleNotDrawnWallpaper() {

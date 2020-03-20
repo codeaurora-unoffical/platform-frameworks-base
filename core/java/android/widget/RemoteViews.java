@@ -22,7 +22,6 @@ import android.annotation.IntDef;
 import android.annotation.LayoutRes;
 import android.annotation.NonNull;
 import android.annotation.StyleRes;
-import android.annotation.UnsupportedAppUsage;
 import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.ActivityThread;
@@ -30,6 +29,7 @@ import android.app.Application;
 import android.app.PendingIntent;
 import android.app.RemoteInput;
 import android.appwidget.AppWidgetHostView;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
@@ -565,7 +565,8 @@ public class RemoteViews implements Parcelable, Filter {
     }
 
     private static void visitIconUri(Icon icon, @NonNull Consumer<Uri> visitor) {
-        if (icon != null && icon.getType() == Icon.TYPE_URI) {
+        if (icon != null && (icon.getType() == Icon.TYPE_URI
+                || icon.getType() == Icon.TYPE_URI_ADAPTIVE_BITMAP)) {
             visitor.accept(icon.getUri());
         }
     }
@@ -3473,18 +3474,10 @@ public class RemoteViews implements Parcelable, Filter {
         return applyAsync(context, parent, executor, listener, null);
     }
 
-    private CancellationSignal startTaskOnExecutor(AsyncApplyTask task, Executor executor) {
-        CancellationSignal cancelSignal = new CancellationSignal();
-        cancelSignal.setOnCancelListener(task);
-
-        task.executeOnExecutor(executor == null ? AsyncTask.THREAD_POOL_EXECUTOR : executor);
-        return cancelSignal;
-    }
-
     /** @hide */
     public CancellationSignal applyAsync(Context context, ViewGroup parent,
             Executor executor, OnViewAppliedListener listener, OnClickHandler handler) {
-        return startTaskOnExecutor(getAsyncApplyTask(context, parent, listener, handler), executor);
+        return getAsyncApplyTask(context, parent, listener, handler).startTaskOnExecutor(executor);
     }
 
     private AsyncApplyTask getAsyncApplyTask(Context context, ViewGroup parent,
@@ -3495,6 +3488,7 @@ public class RemoteViews implements Parcelable, Filter {
 
     private class AsyncApplyTask extends AsyncTask<Void, Void, ViewTree>
             implements CancellationSignal.OnCancelListener {
+        final CancellationSignal mCancelSignal = new CancellationSignal();
         final RemoteViews mRV;
         final ViewGroup mParent;
         final Context mContext;
@@ -3545,6 +3539,7 @@ public class RemoteViews implements Parcelable, Filter {
 
         @Override
         protected void onPostExecute(ViewTree viewTree) {
+            mCancelSignal.setOnCancelListener(null);
             if (mError == null) {
                 if (mListener != null) {
                     mListener.onViewInflated(viewTree.mRoot);
@@ -3581,6 +3576,12 @@ public class RemoteViews implements Parcelable, Filter {
         @Override
         public void onCancel() {
             cancel(true);
+        }
+
+        private CancellationSignal startTaskOnExecutor(Executor executor) {
+            mCancelSignal.setOnCancelListener(this);
+            executeOnExecutor(executor == null ? AsyncTask.THREAD_POOL_EXECUTOR : executor);
+            return mCancelSignal;
         }
     }
 
@@ -3646,8 +3647,8 @@ public class RemoteViews implements Parcelable, Filter {
             }
         }
 
-        return startTaskOnExecutor(new AsyncApplyTask(rvToApply, (ViewGroup) v.getParent(),
-                context, listener, handler, v), executor);
+        return new AsyncApplyTask(rvToApply, (ViewGroup) v.getParent(),
+                context, listener, handler, v).startTaskOnExecutor(executor);
     }
 
     private void performApply(View v, ViewGroup parent, OnClickHandler handler) {

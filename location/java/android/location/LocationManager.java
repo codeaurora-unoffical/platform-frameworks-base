@@ -22,6 +22,8 @@ import static android.Manifest.permission.LOCATION_HARDWARE;
 import static android.Manifest.permission.WRITE_SECURE_SETTINGS;
 import static android.app.AlarmManager.ELAPSED_REALTIME;
 
+import static com.android.internal.util.function.pooled.PooledLambda.obtainRunnable;
+
 import android.Manifest;
 import android.annotation.CallbackExecutor;
 import android.annotation.NonNull;
@@ -31,9 +33,13 @@ import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
+import android.app.PropertyInvalidatedCache;
+import android.compat.Compatibility;
+import android.compat.annotation.ChangeId;
+import android.compat.annotation.EnabledAfter;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Binder;
@@ -50,11 +56,11 @@ import android.os.SystemClock;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.ArrayMap;
-import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.location.ProviderProperties;
 import com.android.internal.util.Preconditions;
+import com.android.internal.util.function.pooled.PooledRunnable;
 
 import java.util.Collections;
 import java.util.List;
@@ -74,12 +80,57 @@ import java.util.function.Consumer;
  * still return location results, but the exact location will be obfuscated to a coarse level of
  * accuracy.
  */
-@SuppressWarnings({"deprecation", "DeprecatedIsStillUsed"})
+@SuppressWarnings({"deprecation"})
 @SystemService(Context.LOCATION_SERVICE)
 @RequiresFeature(PackageManager.FEATURE_LOCATION)
 public class LocationManager {
 
-    private static final String TAG = "LocationManager";
+    @GuardedBy("mLock")
+    private PropertyInvalidatedCache<Integer, Boolean> mLocationEnabledCache =
+            new PropertyInvalidatedCache<Integer, Boolean>(
+                4,
+                CACHE_KEY_LOCATION_ENABLED_PROPERTY) {
+                @Override
+                protected Boolean recompute(Integer userHandle) {
+                    try {
+                        return mService.isLocationEnabledForUser(userHandle);
+                    } catch (RemoteException e) {
+                        throw e.rethrowFromSystemServer();
+                    }
+                }
+            };
+
+    private final Object mLock = new Object();
+
+    /**
+     * For apps targeting Android K and above, supplied {@link PendingIntent}s must be targeted to a
+     * specific package.
+     *
+     * @hide
+     */
+    @ChangeId
+    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.JELLY_BEAN)
+    private static final long TARGETED_PENDING_INTENT = 148963590L;
+
+    /**
+     * For apps targeting Android K and above, incomplete locations may not be passed to
+     * {@link #setTestProviderLocation}.
+     *
+     * @hide
+     */
+    @ChangeId
+    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.JELLY_BEAN)
+    private static final long INCOMPLETE_LOCATION = 148964793L;
+
+    /**
+     * For apps targeting Android S and above, all {@link GpsStatus} API usage must be replaced with
+     * {@link GnssStatus} APIs.
+     *
+     * @hide
+     */
+    @ChangeId
+    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.R)
+    private static final long GPS_STATUS_USAGE = 144027538L;
 
     /**
      * Name of the network location provider.
@@ -219,7 +270,7 @@ public class LocationManager {
      * @hide
      */
     public static final String HIGH_POWER_REQUEST_CHANGE_ACTION =
-        "android.location.HIGH_POWER_REQUEST_CHANGE";
+            "android.location.HIGH_POWER_REQUEST_CHANGE";
 
     /**
      * Broadcast intent action for Settings app to inject a footer at the bottom of location
@@ -278,6 +329,8 @@ public class LocationManager {
             new GnssMeasurementsListenerManager();
     private final GnssNavigationMessageListenerManager mGnssNavigationMessageListenerTransport =
             new GnssNavigationMessageListenerManager();
+    private final GnssAntennaInfoListenerManager mGnssAntennaInfoListenerManager =
+            new GnssAntennaInfoListenerManager();
 
     /**
      * @hide
@@ -427,6 +480,13 @@ public class LocationManager {
      */
     @SystemApi
     public boolean isLocationEnabledForUser(@NonNull UserHandle userHandle) {
+        synchronized (mLock) {
+            if (mLocationEnabledCache != null) {
+                return mLocationEnabledCache.query(userHandle.getIdentifier());
+            }
+        }
+
+        // fallback if cache is disabled
         try {
             return mService.isLocationEnabledForUser(userHandle.getIdentifier());
         } catch (RemoteException e) {
@@ -446,13 +506,11 @@ public class LocationManager {
     @TestApi
     @RequiresPermission(WRITE_SECURE_SETTINGS)
     public void setLocationEnabledForUser(boolean enabled, @NonNull UserHandle userHandle) {
-        Settings.Secure.putIntForUser(
-                mContext.getContentResolver(),
-                Settings.Secure.LOCATION_MODE,
-                enabled
-                        ? Settings.Secure.LOCATION_MODE_ON
-                        : Settings.Secure.LOCATION_MODE_OFF,
-                userHandle.getIdentifier());
+        try {
+            mService.setLocationEnabledForUser(enabled, userHandle.getIdentifier());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     /**
@@ -771,7 +829,6 @@ public class LocationManager {
     public void requestSingleUpdate(@NonNull String provider,
             @NonNull PendingIntent pendingIntent) {
         Preconditions.checkArgument(provider != null, "invalid null provider");
-        checkPendingIntent(pendingIntent);
 
         LocationRequest request = LocationRequest.createFromDeprecatedProvider(
                 provider, 0, 0, true);
@@ -800,7 +857,6 @@ public class LocationManager {
     public void requestSingleUpdate(@NonNull Criteria criteria,
             @NonNull PendingIntent pendingIntent) {
         Preconditions.checkArgument(criteria != null, "invalid null criteria");
-        checkPendingIntent(pendingIntent);
 
         LocationRequest request = LocationRequest.createFromDeprecatedCriteria(
                 criteria, 0, 0, true);
@@ -1021,7 +1077,6 @@ public class LocationManager {
     public void requestLocationUpdates(@NonNull String provider, long minTimeMs, float minDistanceM,
             @NonNull PendingIntent pendingIntent) {
         Preconditions.checkArgument(provider != null, "invalid null provider");
-        checkPendingIntent(pendingIntent);
 
         LocationRequest request = LocationRequest.createFromDeprecatedProvider(
                 provider, minTimeMs, minDistanceM, false);
@@ -1048,7 +1103,6 @@ public class LocationManager {
     public void requestLocationUpdates(long minTimeMs, float minDistanceM,
             @NonNull Criteria criteria, @NonNull PendingIntent pendingIntent) {
         Preconditions.checkArgument(criteria != null, "invalid null criteria");
-        checkPendingIntent(pendingIntent);
 
         LocationRequest request = LocationRequest.createFromDeprecatedCriteria(
                 criteria, minTimeMs, minDistanceM, false);
@@ -1164,9 +1218,9 @@ public class LocationManager {
             @NonNull PendingIntent pendingIntent) {
         Preconditions.checkArgument(locationRequest != null, "invalid null location request");
         Preconditions.checkArgument(pendingIntent != null, "invalid null pending intent");
-        if (mContext.getApplicationInfo().targetSdkVersion > Build.VERSION_CODES.JELLY_BEAN) {
+        if (Compatibility.isChangeEnabled(TARGETED_PENDING_INTENT)) {
             Preconditions.checkArgument(pendingIntent.isTargetedToPackage(),
-                    "pending intent must be targeted to package");
+                    "pending intent must be targeted to a package");
         }
 
         try {
@@ -1189,7 +1243,7 @@ public class LocationManager {
      * the first fix.
      *
      * @param location newly available {@link Location} object
-     * @return true if the location was successfully injected, false otherwise
+     * @return true if the location was injected, false otherwise
      *
      * @throws IllegalArgumentException if location is null
      * @throws SecurityException if permissions are not present
@@ -1198,18 +1252,13 @@ public class LocationManager {
      */
     @RequiresPermission(allOf = {LOCATION_HARDWARE, ACCESS_FINE_LOCATION})
     public boolean injectLocation(@NonNull Location location) {
-        if (location == null) {
-            IllegalArgumentException e = new IllegalArgumentException("invalid null location");
-            if (mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R) {
-                throw e;
-            } else {
-                Log.w(TAG, e);
-                return false;
-            }
-        }
+        Preconditions.checkArgument(location != null, "invalid null location");
+        Preconditions.checkArgument(location.isComplete(),
+                "incomplete location object, missing timestamp or accuracy?");
 
         try {
-            return mService.injectLocation(location);
+            mService.injectLocation(location);
+            return true;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1487,15 +1536,11 @@ public class LocationManager {
         Preconditions.checkArgument(provider != null, "invalid null provider");
         Preconditions.checkArgument(location != null, "invalid null location");
 
-        if (!location.isComplete()) {
-            IllegalArgumentException e = new IllegalArgumentException(
-                    "Incomplete location object, missing timestamp or accuracy? " + location);
-            if (mContext.getApplicationInfo().targetSdkVersion <= Build.VERSION_CODES.JELLY_BEAN) {
-                Log.w(TAG, e);
-                location.makeComplete();
-            } else {
-                throw e;
-            }
+        if (Compatibility.isChangeEnabled(INCOMPLETE_LOCATION)) {
+            Preconditions.checkArgument(location.isComplete(),
+                    "incomplete location object, missing timestamp or accuracy?");
+        } else {
+            location.makeComplete();
         }
 
         try {
@@ -1629,7 +1674,11 @@ public class LocationManager {
     @RequiresPermission(anyOf = {ACCESS_COARSE_LOCATION, ACCESS_FINE_LOCATION})
     public void addProximityAlert(double latitude, double longitude, float radius, long expiration,
             @NonNull PendingIntent intent) {
-        checkPendingIntent(intent);
+        Preconditions.checkArgument(intent != null, "invalid null pending intent");
+        if (Compatibility.isChangeEnabled(TARGETED_PENDING_INTENT)) {
+            Preconditions.checkArgument(intent.isTargetedToPackage(),
+                    "pending intent must be targeted to a package");
+        }
         if (expiration < 0) expiration = Long.MAX_VALUE;
 
         Geofence fence = Geofence.createCircle(latitude, longitude, radius);
@@ -1659,7 +1708,11 @@ public class LocationManager {
      * permission is not present
      */
     public void removeProximityAlert(@NonNull PendingIntent intent) {
-        checkPendingIntent(intent);
+        Preconditions.checkArgument(intent != null, "invalid null pending intent");
+        if (Compatibility.isChangeEnabled(TARGETED_PENDING_INTENT)) {
+            Preconditions.checkArgument(intent.isTargetedToPackage(),
+                    "pending intent must be targeted to a package");
+        }
 
         try {
             mService.removeGeofence(null, intent, mContext.getPackageName());
@@ -1709,8 +1762,13 @@ public class LocationManager {
             @NonNull LocationRequest request,
             @NonNull Geofence fence,
             @NonNull PendingIntent intent) {
-        checkPendingIntent(intent);
+        Preconditions.checkArgument(request != null, "invalid null location request");
         Preconditions.checkArgument(fence != null, "invalid null geofence");
+        Preconditions.checkArgument(intent != null, "invalid null pending intent");
+        if (Compatibility.isChangeEnabled(TARGETED_PENDING_INTENT)) {
+            Preconditions.checkArgument(intent.isTargetedToPackage(),
+                    "pending intent must be targeted to a package");
+        }
 
         try {
             mService.requestGeofence(request, fence, intent, mContext.getPackageName(),
@@ -1737,8 +1795,12 @@ public class LocationManager {
      * @hide
      */
     public void removeGeofence(@NonNull Geofence fence, @NonNull PendingIntent intent) {
-        checkPendingIntent(intent);
         Preconditions.checkArgument(fence != null, "invalid null geofence");
+        Preconditions.checkArgument(intent != null, "invalid null pending intent");
+        if (Compatibility.isChangeEnabled(TARGETED_PENDING_INTENT)) {
+            Preconditions.checkArgument(intent.isTargetedToPackage(),
+                    "pending intent must be targeted to a package");
+        }
 
         try {
             mService.removeGeofence(fence, intent, mContext.getPackageName());
@@ -1759,7 +1821,11 @@ public class LocationManager {
      * @hide
      */
     public void removeAllGeofences(@NonNull PendingIntent intent) {
-        checkPendingIntent(intent);
+        Preconditions.checkArgument(intent != null, "invalid null pending intent");
+        if (Compatibility.isChangeEnabled(TARGETED_PENDING_INTENT)) {
+            Preconditions.checkArgument(intent.isTargetedToPackage(),
+                    "pending intent must be targeted to a package");
+        }
 
         try {
             mService.removeGeofence(null, intent, mContext.getPackageName());
@@ -1772,13 +1838,7 @@ public class LocationManager {
 
     /**
      * Returns the supported capabilities of the GNSS chipset.
-     *
-     * @throws SecurityException if the ACCESS_FINE_LOCATION permission is not present.
-     *
-     * @hide
      */
-    @SystemApi
-    @RequiresPermission(ACCESS_FINE_LOCATION)
     public @NonNull GnssCapabilities getGnssCapabilities() {
         try {
             long gnssCapabilities = mService.getGnssCapabilities(mContext.getPackageName());
@@ -1833,14 +1893,15 @@ public class LocationManager {
      * @param status object containing GPS status details, or null.
      * @return status object containing updated GPS status.
      *
-     * @deprecated GpsStatus APIs are deprecated, use {@link GnssStatus} APIs instead.
+     * @deprecated GpsStatus APIs are deprecated, use {@link GnssStatus} APIs instead. No longer
+     * supported in apps targeting S and above.
      */
     @Deprecated
     @RequiresPermission(ACCESS_FINE_LOCATION)
     public @Nullable GpsStatus getGpsStatus(@Nullable GpsStatus status) {
-        if (mContext.getApplicationInfo().targetSdkVersion > Build.VERSION_CODES.R) {
+        if (Compatibility.isChangeEnabled(GPS_STATUS_USAGE)) {
             throw new UnsupportedOperationException(
-                    "GpsStatus APIs not supported in S and above, use GnssStatus APIs instead");
+                    "GpsStatus APIs not supported, please use GnssStatus APIs instead");
         }
 
         GnssStatus gnssStatus = mGnssStatusListenerManager.getGnssStatus();
@@ -1863,17 +1924,14 @@ public class LocationManager {
      * @throws SecurityException if the ACCESS_FINE_LOCATION permission is not present
      *
      * @deprecated use {@link #registerGnssStatusCallback(GnssStatus.Callback)} instead. No longer
-     * supported in apps targeting R and above.
+     * supported in apps targeting S and above.
      */
     @Deprecated
     @RequiresPermission(ACCESS_FINE_LOCATION)
     public boolean addGpsStatusListener(GpsStatus.Listener listener) {
-        UnsupportedOperationException ex = new UnsupportedOperationException(
-                "GpsStatus APIs not supported in S and above, use GnssStatus APIs instead");
-        if (mContext.getApplicationInfo().targetSdkVersion > Build.VERSION_CODES.R) {
-            throw ex;
-        } else {
-            Log.w(TAG, ex);
+        if (Compatibility.isChangeEnabled(GPS_STATUS_USAGE)) {
+            throw new UnsupportedOperationException(
+                    "GpsStatus APIs not supported, please use GnssStatus APIs instead");
         }
 
         try {
@@ -1889,16 +1947,13 @@ public class LocationManager {
      * @param listener GPS status listener object to remove
      *
      * @deprecated use {@link #unregisterGnssStatusCallback(GnssStatus.Callback)} instead. No longer
-     * supported in apps targeting R and above.
+     * supported in apps targeting S and above.
      */
     @Deprecated
     public void removeGpsStatusListener(GpsStatus.Listener listener) {
-        UnsupportedOperationException ex = new UnsupportedOperationException(
-                "GpsStatus APIs not supported in S and above, use GnssStatus APIs instead");
-        if (mContext.getApplicationInfo().targetSdkVersion > Build.VERSION_CODES.R) {
-            throw ex;
-        } else {
-            Log.w(TAG, ex);
+        if (Compatibility.isChangeEnabled(GPS_STATUS_USAGE)) {
+            throw new UnsupportedOperationException(
+                    "GpsStatus APIs not supported, please use GnssStatus APIs instead");
         }
 
         try {
@@ -2162,6 +2217,35 @@ public class LocationManager {
     }
 
     /**
+     * Registers a GNSS Measurement callback.
+     *
+     * @param request  extra parameters to pass to GNSS measurement provider. For example, if {@link
+     *                 GnssRequest#isFullTracking()} is true, GNSS chipset switches off duty
+     *                 cycling.
+     * @param executor the executor that the callback runs on.
+     * @param callback a {@link GnssMeasurementsEvent.Callback} object to register.
+     * @return {@code true} if the callback was added successfully, {@code false} otherwise.
+     * @throws IllegalArgumentException if request is null
+     * @throws IllegalArgumentException if executor is null
+     * @throws IllegalArgumentException if callback is null
+     * @throws SecurityException        if the ACCESS_FINE_LOCATION permission is not present
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(allOf = {ACCESS_FINE_LOCATION, LOCATION_HARDWARE})
+    public boolean registerGnssMeasurementsCallback(
+            @NonNull GnssRequest request,
+            @NonNull @CallbackExecutor Executor executor,
+            @NonNull GnssMeasurementsEvent.Callback callback) {
+        Preconditions.checkArgument(request != null, "invalid null request");
+        try {
+            return mGnssMeasurementsListenerManager.addListener(request, callback, executor);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Injects GNSS measurement corrections into the GNSS chipset.
      *
      * @param measurementCorrections a {@link GnssMeasurementCorrections} object with the GNSS
@@ -2193,6 +2277,42 @@ public class LocationManager {
             @NonNull GnssMeasurementsEvent.Callback callback) {
         try {
             mGnssMeasurementsListenerManager.removeListener(callback);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Registers a Gnss Antenna Info listener. Only expect results if
+     * {@link GnssCapabilities#hasGnssAntennaInfo()} shows that antenna info is supported.
+     *
+     * @param executor the executor that the listener runs on.
+     * @param listener a {@link GnssAntennaInfo.Listener} object to register.
+     * @return {@code true} if the listener was added successfully, {@code false} otherwise.
+     *
+     * @throws IllegalArgumentException if executor is null
+     * @throws IllegalArgumentException if listener is null
+     * @throws SecurityException if the ACCESS_FINE_LOCATION permission is not present
+     */
+    @RequiresPermission(ACCESS_FINE_LOCATION)
+    public boolean registerAntennaInfoListener(
+            @NonNull @CallbackExecutor Executor executor,
+            @NonNull GnssAntennaInfo.Listener listener) {
+        try {
+            return mGnssAntennaInfoListenerManager.addListener(listener, executor);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Unregisters a GNSS Antenna Info listener.
+     *
+     * @param listener a {@link GnssAntennaInfo.Listener} object to remove.
+     */
+    public void unregisterAntennaInfoListener(@NonNull GnssAntennaInfo.Listener listener) {
+        try {
+            mGnssAntennaInfoListenerManager.removeListener(listener);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2397,34 +2517,6 @@ public class LocationManager {
         }
     }
 
-    /**
-     * Used by NetInitiatedActivity to report user response
-     * for network initiated GPS fix requests.
-     *
-     * @hide
-     */
-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
-    public boolean sendNiResponse(int notifId, int userResponse) {
-        try {
-            return mService.sendNiResponse(notifId, userResponse);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-    }
-
-    private void checkPendingIntent(PendingIntent pendingIntent) {
-        Preconditions.checkArgument(pendingIntent != null, "invalid null pending intent");
-        if (!pendingIntent.isTargetedToPackage()) {
-            IllegalArgumentException e = new IllegalArgumentException(
-                    "invalid pending intent - must be targeted to package");
-            if (mContext.getApplicationInfo().targetSdkVersion > Build.VERSION_CODES.JELLY_BEAN) {
-                throw e;
-            } else {
-                Log.w(TAG, e);
-            }
-        }
-    }
-
     private static class GetCurrentLocationTransport extends ILocationListener.Stub implements
             AlarmManager.OnAlarmListener {
 
@@ -2470,22 +2562,28 @@ public class LocationManager {
             mRemoteCancellationSignal = remoteCancellationSignal;
         }
 
-        public synchronized void cancel() {
-            mExecutor = null;
-            mConsumer = null;
+        public void cancel() {
+            ICancellationSignal cancellationSignal;
+            synchronized (this) {
+                mExecutor = null;
+                mConsumer = null;
 
-            if (mAlarmManager != null) {
-                mAlarmManager.cancel(this);
-                mAlarmManager = null;
+                if (mAlarmManager != null) {
+                    mAlarmManager.cancel(this);
+                    mAlarmManager = null;
+                }
+
+                // ensure only one cancel event will go through
+                cancellationSignal = mRemoteCancellationSignal;
+                mRemoteCancellationSignal = null;
             }
 
-            if (mRemoteCancellationSignal != null) {
+            if (cancellationSignal != null) {
                 try {
-                    mRemoteCancellationSignal.cancel();
+                    cancellationSignal.cancel();
                 } catch (RemoteException e) {
                     // ignore
                 }
-                mRemoteCancellationSignal = null;
             }
         }
 
@@ -2533,18 +2631,28 @@ public class LocationManager {
                 return;
             }
 
-            mExecutor.execute(() -> {
-                Consumer<Location> consumer;
-                synchronized (GetCurrentLocationTransport.this) {
-                    if (mConsumer == null) {
-                        return;
-                    }
-                    consumer = mConsumer;
-                    cancel();
-                }
+            PooledRunnable runnable =
+                    obtainRunnable(GetCurrentLocationTransport::acceptResult, this, location)
+                            .recycleOnUse();
+            try {
+                mExecutor.execute(runnable);
+            } catch (RejectedExecutionException e) {
+                runnable.recycle();
+                throw e;
+            }
+        }
 
-                consumer.accept(location);
-            });
+        private void acceptResult(Location location) {
+            Consumer<Location> consumer;
+            synchronized (this) {
+                if (mConsumer == null) {
+                    return;
+                }
+                consumer = mConsumer;
+                cancel();
+            }
+
+            consumer.accept(location);
         }
     }
 
@@ -2578,27 +2686,33 @@ public class LocationManager {
                 return;
             }
 
+            PooledRunnable runnable =
+                    obtainRunnable(LocationListenerTransport::acceptLocation, this, currentExecutor,
+                            location).recycleOnUse();
             try {
-                currentExecutor.execute(() -> {
-                    try {
-                        if (currentExecutor != mExecutor) {
-                            return;
-                        }
-
-                        // we may be under the binder identity if a direct executor is used
-                        long identity = Binder.clearCallingIdentity();
-                        try {
-                            mListener.onLocationChanged(location);
-                        } finally {
-                            Binder.restoreCallingIdentity(identity);
-                        }
-                    } finally {
-                        locationCallbackFinished();
-                    }
-                });
+                currentExecutor.execute(runnable);
             } catch (RejectedExecutionException e) {
+                runnable.recycle();
                 locationCallbackFinished();
                 throw e;
+            }
+        }
+
+        private void acceptLocation(Executor currentExecutor, Location location) {
+            try {
+                if (currentExecutor != mExecutor) {
+                    return;
+                }
+
+                // we may be under the binder identity if a direct executor is used
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    mListener.onLocationChanged(location);
+                } finally {
+                    Binder.restoreCallingIdentity(identity);
+                }
+            } finally {
+                locationCallbackFinished();
             }
         }
 
@@ -2609,25 +2723,13 @@ public class LocationManager {
                 return;
             }
 
+            PooledRunnable runnable =
+                    obtainRunnable(LocationListenerTransport::acceptProviderChange, this,
+                            currentExecutor, provider, true).recycleOnUse();
             try {
-                currentExecutor.execute(() -> {
-                    try {
-                        if (currentExecutor != mExecutor) {
-                            return;
-                        }
-
-                        // we may be under the binder identity if a direct executor is used
-                        long identity = Binder.clearCallingIdentity();
-                        try {
-                            mListener.onProviderEnabled(provider);
-                        } finally {
-                            Binder.restoreCallingIdentity(identity);
-                        }
-                    } finally {
-                        locationCallbackFinished();
-                    }
-                });
+                currentExecutor.execute(runnable);
             } catch (RejectedExecutionException e) {
+                runnable.recycle();
                 locationCallbackFinished();
                 throw e;
             }
@@ -2640,27 +2742,38 @@ public class LocationManager {
                 return;
             }
 
+            PooledRunnable runnable =
+                    obtainRunnable(LocationListenerTransport::acceptProviderChange, this,
+                            currentExecutor, provider, false).recycleOnUse();
             try {
-                currentExecutor.execute(() -> {
-                    try {
-                        if (currentExecutor != mExecutor) {
-                            return;
-                        }
-
-                        // we may be under the binder identity if a direct executor is used
-                        long identity = Binder.clearCallingIdentity();
-                        try {
-                            mListener.onProviderDisabled(provider);
-                        } finally {
-                            Binder.restoreCallingIdentity(identity);
-                        }
-                    } finally {
-                        locationCallbackFinished();
-                    }
-                });
+                currentExecutor.execute(runnable);
             } catch (RejectedExecutionException e) {
+                runnable.recycle();
                 locationCallbackFinished();
                 throw e;
+            }
+        }
+
+        private void acceptProviderChange(Executor currentExecutor, String provider,
+                boolean enabled) {
+            try {
+                if (currentExecutor != mExecutor) {
+                    return;
+                }
+
+                // we may be under the binder identity if a direct executor is used
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    if (enabled) {
+                        mListener.onProviderEnabled(provider);
+                    } else {
+                        mListener.onProviderDisabled(provider);
+                    }
+                } finally {
+                    Binder.restoreCallingIdentity(identity);
+                }
+            } finally {
+                locationCallbackFinished();
             }
         }
 
@@ -2733,8 +2846,7 @@ public class LocationManager {
     }
 
     private class GnssStatusListenerManager extends
-            AbstractListenerManager<GnssStatus.Callback> {
-
+            AbstractListenerManager<Void, GnssStatus.Callback> {
         @Nullable
         private IGnssStatusListener mListenerTransport;
 
@@ -2752,19 +2864,19 @@ public class LocationManager {
 
         public boolean addListener(@NonNull GpsStatus.Listener listener, @NonNull Executor executor)
                 throws RemoteException {
-            return addInternal(listener, executor);
+            return addInternal(null, listener, executor);
         }
 
         public boolean addListener(@NonNull OnNmeaMessageListener listener,
                 @NonNull Handler handler)
                 throws RemoteException {
-            return addInternal(listener, handler);
+            return addInternal(null, listener, handler);
         }
 
         public boolean addListener(@NonNull OnNmeaMessageListener listener,
                 @NonNull Executor executor)
                 throws RemoteException {
-            return addInternal(listener, executor);
+            return addInternal(null, listener, executor);
         }
 
         @Override
@@ -2803,7 +2915,7 @@ public class LocationManager {
         }
 
         @Override
-        protected boolean registerService() throws RemoteException {
+        protected boolean registerService(Void ignored) throws RemoteException {
             Preconditions.checkState(mListenerTransport == null);
 
             GnssStatusListener transport = new GnssStatusListener();
@@ -2863,17 +2975,17 @@ public class LocationManager {
     }
 
     private class GnssMeasurementsListenerManager extends
-            AbstractListenerManager<GnssMeasurementsEvent.Callback> {
+            AbstractListenerManager<GnssRequest, GnssMeasurementsEvent.Callback> {
 
         @Nullable
         private IGnssMeasurementsListener mListenerTransport;
 
         @Override
-        protected boolean registerService() throws RemoteException {
+        protected boolean registerService(GnssRequest request) throws RemoteException {
             Preconditions.checkState(mListenerTransport == null);
 
             GnssMeasurementsListener transport = new GnssMeasurementsListener();
-            if (mService.addGnssMeasurementsListener(transport, mContext.getPackageName(),
+            if (mService.addGnssMeasurementsListener(request, transport, mContext.getPackageName(),
                     mContext.getFeatureId(), "gnss measurement callback")) {
                 mListenerTransport = transport;
                 return true;
@@ -2890,6 +3002,18 @@ public class LocationManager {
             mListenerTransport = null;
         }
 
+        @Override
+        @Nullable
+        protected GnssRequest merge(@NonNull GnssRequest[] requests) {
+            Preconditions.checkArgument(requests.length > 0);
+            for (GnssRequest request : requests) {
+                if (request.isFullTracking()) {
+                    return request;
+                }
+            }
+            return requests[0];
+        }
+
         private class GnssMeasurementsListener extends IGnssMeasurementsListener.Stub {
             @Override
             public void onGnssMeasurementsReceived(final GnssMeasurementsEvent event) {
@@ -2904,13 +3028,13 @@ public class LocationManager {
     }
 
     private class GnssNavigationMessageListenerManager extends
-            AbstractListenerManager<GnssNavigationMessage.Callback> {
+            AbstractListenerManager<Void, GnssNavigationMessage.Callback> {
 
         @Nullable
         private IGnssNavigationMessageListener mListenerTransport;
 
         @Override
-        protected boolean registerService() throws RemoteException {
+        protected boolean registerService(Void ignored) throws RemoteException {
             Preconditions.checkState(mListenerTransport == null);
 
             GnssNavigationMessageListener transport = new GnssNavigationMessageListener();
@@ -2944,19 +3068,56 @@ public class LocationManager {
         }
     }
 
+    private class GnssAntennaInfoListenerManager extends
+            AbstractListenerManager<Void, GnssAntennaInfo.Listener> {
+
+        @Nullable
+        private IGnssAntennaInfoListener mListenerTransport;
+
+        @Override
+        protected boolean registerService(Void ignored) throws RemoteException {
+            Preconditions.checkState(mListenerTransport == null);
+
+            GnssAntennaInfoListener transport = new GnssAntennaInfoListener();
+            if (mService.addGnssAntennaInfoListener(transport, mContext.getPackageName(),
+                    mContext.getFeatureId(), "gnss antenna info callback")) {
+                mListenerTransport = transport;
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        @Override
+        protected void unregisterService() throws RemoteException {
+            Preconditions.checkState(mListenerTransport != null);
+
+            mService.removeGnssAntennaInfoListener(mListenerTransport);
+            mListenerTransport = null;
+        }
+
+        private class GnssAntennaInfoListener extends IGnssAntennaInfoListener.Stub {
+            @Override
+            public void onGnssAntennaInfoReceived(final List<GnssAntennaInfo> gnssAntennaInfos) {
+                execute((callback) -> callback.onGnssAntennaInfoReceived(gnssAntennaInfos));
+            }
+        }
+
+    }
+
     private class BatchedLocationCallbackManager extends
-            AbstractListenerManager<BatchedLocationCallback> {
+            AbstractListenerManager<Void, BatchedLocationCallback> {
 
         @Nullable
         private IBatchedLocationCallback mListenerTransport;
 
         @Override
-        protected boolean registerService() throws RemoteException {
+        protected boolean registerService(Void ignored) throws RemoteException {
             Preconditions.checkState(mListenerTransport == null);
 
             BatchedLocationCallback transport = new BatchedLocationCallback();
             if (mService.addGnssBatchingCallback(transport, mContext.getPackageName(),
-                     mContext.getFeatureId(), "batched location callback")) {
+                    mContext.getFeatureId(), "batched location callback")) {
                 mListenerTransport = transport;
                 return true;
             } else {
@@ -2977,6 +3138,29 @@ public class LocationManager {
             public void onLocationBatch(List<Location> locations) {
                 execute((listener) -> listener.onLocationBatch(locations));
             }
+
+        }
+    }
+
+    /**
+     * @hide
+     */
+    public static final String CACHE_KEY_LOCATION_ENABLED_PROPERTY =
+            "cache_key.location_enabled";
+
+    /**
+     * @hide
+     */
+    public static void invalidateLocalLocationEnabledCaches() {
+        PropertyInvalidatedCache.invalidateCache(CACHE_KEY_LOCATION_ENABLED_PROPERTY);
+    }
+
+    /**
+     * @hide
+     */
+    public void disableLocalLocationEnabledCaches() {
+        synchronized (mLock) {
+            mLocationEnabledCache = null;
         }
     }
 }

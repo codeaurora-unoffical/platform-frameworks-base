@@ -24,6 +24,7 @@ import static com.android.internal.widget.LockPatternUtils.CREDENTIAL_TYPE_PATTE
 import android.app.ActivityManager;
 import android.app.admin.PasswordMetrics;
 import android.os.ShellCommand;
+import android.text.TextUtils;
 
 import com.android.internal.widget.LockPatternUtils;
 import com.android.internal.widget.LockPatternUtils.RequestThrottledException;
@@ -43,6 +44,7 @@ class LockSettingsShellCommand extends ShellCommand {
     private static final String COMMAND_SET_DISABLED = "set-disabled";
     private static final String COMMAND_VERIFY = "verify";
     private static final String COMMAND_GET_DISABLED = "get-disabled";
+    private static final String COMMAND_REMOVE_CACHE = "remove-cache";
     private static final String COMMAND_HELP = "help";
 
     private int mCurrentUserId;
@@ -75,6 +77,15 @@ class LockSettingsShellCommand extends ShellCommand {
                         return -1;
                 }
             }
+            switch (cmd) {
+                // Commands that do not require authentication go here.
+                case COMMAND_REMOVE_CACHE:
+                    runRemoveCache();
+                    return 0;
+                case COMMAND_HELP:
+                    onHelp();
+                    return 0;
+            }
             if (!checkCredential()) {
                 return -1;
             }
@@ -103,9 +114,6 @@ class LockSettingsShellCommand extends ShellCommand {
                     break;
                 case COMMAND_GET_DISABLED:
                     runGetDisabled();
-                    break;
-                case COMMAND_HELP:
-                    onHelp();
                     break;
                 default:
                     getErrPrintWriter().println("Unknown command: " + cmd);
@@ -162,6 +170,9 @@ class LockSettingsShellCommand extends ShellCommand {
             pw.println("  verify [--old <CREDENTIAL>] [--user USER_ID]");
             pw.println("    Verifies the lock credentials.");
             pw.println("");
+            pw.println("  remove-cache [--user USER_ID]");
+            pw.println("    Removes cached unified challenge for the managed profile.");
+            pw.println("");
         }
     }
 
@@ -195,6 +206,9 @@ class LockSettingsShellCommand extends ShellCommand {
     }
 
     private LockscreenCredential getOldCredential() {
+        if (TextUtils.isEmpty(mOld)) {
+            return LockscreenCredential.createNone();
+        }
         if (mLockPatternUtils.isLockPasswordEnabled(mCurrentUserId)) {
             final int quality = mLockPatternUtils.getKeyguardStoredPasswordQuality(mCurrentUserId);
             if (LockPatternUtils.isQualityAlphabeticPassword(quality)) {
@@ -202,12 +216,15 @@ class LockSettingsShellCommand extends ShellCommand {
             } else {
                 return LockscreenCredential.createPin(mOld);
             }
-        } else if (mLockPatternUtils.isLockPatternEnabled(mCurrentUserId)) {
+        }
+        if (mLockPatternUtils.isLockPatternEnabled(mCurrentUserId)) {
             return LockscreenCredential.createPattern(LockPatternUtils.byteArrayToPattern(
                     mOld.getBytes()));
-        } else {
-            return LockscreenCredential.createNone();
         }
+        // User supplied some old credential but the device has neither password nor pattern,
+        // so just return a password credential (and let it be rejected during LSS verification)
+        return LockscreenCredential.createPassword(mOld);
+
     }
 
     private boolean runSetPattern() {
@@ -314,5 +331,10 @@ class LockSettingsShellCommand extends ShellCommand {
             }
             return true;
         }
+    }
+
+    private void runRemoveCache() {
+        mLockPatternUtils.removeCachedUnifiedChallenge(mCurrentUserId);
+        getOutPrintWriter().println("Password cached removed for user " + mCurrentUserId);
     }
 }

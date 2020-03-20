@@ -48,7 +48,6 @@ import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.SurfaceControl;
-import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
 import android.view.inputmethod.InputMethodManager;
 
@@ -131,6 +130,7 @@ public class TaskEmbedder {
     private TaskStackListener mTaskStackListener;
     private Listener mListener;
     private boolean mOpened; // Protected by mGuard.
+    private DisplayMetrics mTmpDisplayMetrics;
 
     private final CloseGuard mGuard = CloseGuard.get();
 
@@ -423,7 +423,7 @@ public class TaskEmbedder {
             return;
         }
         reportLocation(mHost.getScreenToTaskMatrix(), mHost.getPositionInWindow());
-        applyTapExcludeRegion(mHost.getWindow(), hashCode(), mHost.getTapExcludeRegion());
+        applyTapExcludeRegion(mHost.getWindow(), mHost.getTapExcludeRegion());
     }
 
     /**
@@ -458,13 +458,12 @@ public class TaskEmbedder {
      * {@link #updateLocationAndTapExcludeRegion()}. This method
      * is provided as an optimization when managing multiple TaskSurfaces within a view.
      *
-     * @see IWindowSession#updateTapExcludeRegion(IWindow, int, Region)
+     * @see IWindowSession#updateTapExcludeRegion(IWindow, Region)
      */
-    private void applyTapExcludeRegion(IWindow window, int regionId,
-            @Nullable Region tapExcludeRegion) {
+    private void applyTapExcludeRegion(IWindow window, @Nullable Region tapExcludeRegion) {
         try {
             IWindowSession session = WindowManagerGlobal.getWindowSession();
-            session.updateTapExcludeRegion(window, regionId, tapExcludeRegion);
+            session.updateTapExcludeRegion(window, tapExcludeRegion);
         } catch (RemoteException e) {
             e.rethrowAsRuntimeException();
         }
@@ -486,7 +485,7 @@ public class TaskEmbedder {
             Log.w(TAG, "clearTapExcludeRegion: not attached to window!");
             return;
         }
-        applyTapExcludeRegion(mHost.getWindow(), hashCode(), null);
+        applyTapExcludeRegion(mHost.getWindow(), null);
     }
 
     /**
@@ -595,10 +594,11 @@ public class TaskEmbedder {
 
     /** Get density of the hosting display. */
     private int getBaseDisplayDensity() {
-        final WindowManager wm = mContext.getSystemService(WindowManager.class);
-        final DisplayMetrics metrics = new DisplayMetrics();
-        wm.getDefaultDisplay().getMetrics(metrics);
-        return metrics.densityDpi;
+        if (mTmpDisplayMetrics == null) {
+            mTmpDisplayMetrics = new DisplayMetrics();
+        }
+        mContext.getDisplayNoVerify().getRealMetrics(mTmpDisplayMetrics);
+        return mTmpDisplayMetrics.densityDpi;
     }
 
     /**

@@ -39,10 +39,10 @@ import android.view.IWindowSessionCallback;
 import android.view.InsetsSourceControl;
 import android.view.InsetsState;
 import android.view.SurfaceControl;
+import android.view.SurfaceControlViewHost;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
-import android.view.WindowlessViewRoot;
 import android.view.WindowlessWindowManager;
 
 import com.android.internal.os.IResultReceiver;
@@ -61,14 +61,14 @@ public class SystemWindows {
     private static final String TAG = "SystemWindows";
 
     private final SparseArray<PerDisplay> mPerDisplay = new SparseArray<>();
-    final HashMap<View, WindowlessViewRoot> mViewRoots = new HashMap<>();
+    final HashMap<View, SurfaceControlViewHost> mViewRoots = new HashMap<>();
     Context mContext;
     IWindowSession mSession;
-    DisplayWindowController mDisplayController;
+    DisplayController mDisplayController;
     IWindowManager mWmService;
 
-    private final DisplayWindowController.DisplayWindowListener mDisplayListener =
-            new DisplayWindowController.DisplayWindowListener() {
+    private final DisplayController.OnDisplaysChangedListener mDisplayListener =
+            new DisplayController.OnDisplaysChangedListener() {
                 @Override
                 public void onDisplayAdded(int displayId) { }
 
@@ -86,7 +86,7 @@ public class SystemWindows {
             };
 
     @Inject
-    public SystemWindows(Context context, DisplayWindowController displayController,
+    public SystemWindows(Context context, DisplayController displayController,
             IWindowManager wmService) {
         mContext = context;
         mWmService = wmService;
@@ -121,7 +121,7 @@ public class SystemWindows {
      * @param view
      */
     public void removeView(View view) {
-        WindowlessViewRoot root = mViewRoots.remove(view);
+        SurfaceControlViewHost root = mViewRoots.remove(view);
         root.die();
     }
 
@@ -129,7 +129,7 @@ public class SystemWindows {
      * Updates the layout params of a view.
      */
     public void updateViewLayout(@NonNull View view, ViewGroup.LayoutParams params) {
-        WindowlessViewRoot root = mViewRoots.get(view);
+        SurfaceControlViewHost root = mViewRoots.get(view);
         if (root == null || !(params instanceof WindowManager.LayoutParams)) {
             return;
         }
@@ -162,6 +162,23 @@ public class SystemWindows {
         return pd.getWindow(windowType);
     }
 
+    /**
+     * Gets the SurfaceControl associated with a root view. This is the same surface that backs the
+     * ViewRootImpl.
+     */
+    public SurfaceControl getViewSurface(View rootView) {
+        for (int i = 0; i < mPerDisplay.size(); ++i) {
+            for (int iWm = 0; iWm < mPerDisplay.valueAt(i).mWwms.size(); ++iWm) {
+                SurfaceControl out =
+                        mPerDisplay.valueAt(i).mWwms.get(iWm).getSurfaceControlForWindow(rootView);
+                if (out != null) {
+                    return out;
+                }
+            }
+        }
+        return null;
+    }
+
     private class PerDisplay {
         final int mDisplayId;
         private final SparseArray<SysUiWindowManager> mWwms = new SparseArray<>();
@@ -177,7 +194,7 @@ public class SystemWindows {
                 return;
             }
             final Display display = mDisplayController.getDisplay(mDisplayId);
-            WindowlessViewRoot viewRoot = new WindowlessViewRoot(mContext, display, wwm);
+            SurfaceControlViewHost viewRoot = new SurfaceControlViewHost(mContext, display, wwm);
             attrs.flags |= FLAG_HARDWARE_ACCELERATED;
             viewRoot.addView(view, attrs);
             mViewRoots.put(view, viewRoot);
@@ -238,11 +255,13 @@ public class SystemWindows {
                 long frameNumber, Rect outFrame, Rect outOverscanInsets, Rect outContentInsets,
                 Rect outVisibleInsets, Rect outStableInsets,
                 DisplayCutout.ParcelableWrapper cutout, MergedConfiguration mergedConfiguration,
-                SurfaceControl outSurfaceControl, InsetsState outInsetsState) {
+                SurfaceControl outSurfaceControl, InsetsState outInsetsState,
+                Point outSurfaceSize, SurfaceControl outBLASTSurfaceControl) {
             int res = super.relayout(window, seq, attrs, requestedWidth, requestedHeight,
                     viewVisibility, flags, frameNumber, outFrame, outOverscanInsets,
                     outContentInsets, outVisibleInsets, outStableInsets,
-                    cutout, mergedConfiguration, outSurfaceControl, outInsetsState);
+                    cutout, mergedConfiguration, outSurfaceControl, outInsetsState,
+                    outSurfaceSize, outBLASTSurfaceControl);
             if (res != 0) {
                 return res;
             }
@@ -253,6 +272,10 @@ public class SystemWindows {
 
         void updateConfiguration(Configuration configuration) {
             setConfiguration(configuration);
+        }
+
+        SurfaceControl getSurfaceControlForWindow(View rootView) {
+            return getSurfaceControl(rootView);
         }
     }
 

@@ -17,8 +17,10 @@
 package android.accessibilityservice;
 
 import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 
 import android.content.ComponentName;
 import android.content.Context;
@@ -46,8 +48,12 @@ import java.util.List;
 @SmallTest
 @RunWith(AndroidJUnit4.class)
 public class AccessibilityShortcutInfoTest {
+    private static final String SETTINGS_ACTIVITY_NAME =
+            "com.example.shortcut.target.SettingsActivity";
+
     private Context mTargetContext;
     private PackageManager mPackageManager;
+    private ComponentName mComponentName;
     private AccessibilityShortcutInfo mShortcutInfo;
 
     @Before
@@ -55,25 +61,9 @@ public class AccessibilityShortcutInfoTest {
         mTargetContext = InstrumentationRegistry.getInstrumentation()
                 .getTargetContext();
         mPackageManager = mTargetContext.getPackageManager();
-
-        final ComponentName testShortcutName = new ComponentName(mTargetContext,
-                AccessibilityTestActivity.class);
-        final AccessibilityManager accessibilityManager = (AccessibilityManager) mTargetContext
-                .getSystemService(Context.ACCESSIBILITY_SERVICE);
-        final List<AccessibilityShortcutInfo> infoList = accessibilityManager
-                .getInstalledAccessibilityShortcutListAsUser(
-                        mTargetContext, mTargetContext.getUserId());
-        for (AccessibilityShortcutInfo info : infoList) {
-            final ActivityInfo activityInfo = info.getActivityInfo();
-            final ComponentName name = new ComponentName(
-                    activityInfo.packageName, activityInfo.name);
-            if (name.equals(testShortcutName)) {
-                mShortcutInfo = info;
-                break;
-            }
-        }
-
-        assertNotNull("Can't find " + testShortcutName, mShortcutInfo);
+        mComponentName = new ComponentName(mTargetContext, AccessibilityTestActivity.class);
+        mShortcutInfo = getAccessibilityShortcutInfo(mComponentName);
+        assertNotNull("Can't find " + mComponentName, mShortcutInfo);
     }
 
     @Test
@@ -94,5 +84,67 @@ public class AccessibilityShortcutInfoTest {
         assertNotNull("Can't find summary string", summary);
         assertThat("Summary is not correct",
                 mShortcutInfo.loadSummary(mPackageManager), is(summary));
+    }
+
+    @Test
+    public void testAnimatedImageRes() {
+        assertThat("Animated image resource id is not correct",
+                mShortcutInfo.getAnimatedImageRes(), is(R.drawable.bitmap_drawable));
+    }
+
+    @Test
+    public void testLoadAnimatedImage() {
+        assertNotNull("Can't find animated image",
+                mShortcutInfo.loadAnimatedImage(mTargetContext));
+    }
+
+    @Test
+    public void testHtmlDescription() {
+        final String htmlDescription = mTargetContext.getResources()
+                .getString(R.string.accessibility_shortcut_html_description);
+
+        assertNotNull("Can't find html description string", htmlDescription);
+        assertThat("Html description is not correct",
+                mShortcutInfo.loadHtmlDescription(mPackageManager), is(htmlDescription));
+    }
+
+    @Test
+    public void testSettingsActivity() {
+        assertThat("Settings Activity is not correct",
+                mShortcutInfo.getSettingsActivityName(), is(SETTINGS_ACTIVITY_NAME));
+    }
+
+    @Test
+    public void testEquals() {
+        assertTrue(mShortcutInfo.equals(mShortcutInfo));
+        assertFalse(mShortcutInfo.equals(null));
+        assertFalse(mShortcutInfo.equals(new Object()));
+
+        final AccessibilityShortcutInfo sameCopy = getAccessibilityShortcutInfo(
+                mComponentName);
+        assertTrue(mShortcutInfo != sameCopy);
+        assertTrue(mShortcutInfo.hashCode() == sameCopy.hashCode());
+        assertTrue(mShortcutInfo.getComponentName().equals(sameCopy.getComponentName()));
+        assertTrue(mShortcutInfo.equals(sameCopy));
+    }
+
+    @Test
+    public void testToString() {
+        assertNotNull(mShortcutInfo.toString());
+    }
+
+    private AccessibilityShortcutInfo getAccessibilityShortcutInfo(ComponentName componentName) {
+        final AccessibilityManager accessibilityManager = (AccessibilityManager) mTargetContext
+                .getSystemService(Context.ACCESSIBILITY_SERVICE);
+        final List<AccessibilityShortcutInfo> infoList = accessibilityManager
+                .getInstalledAccessibilityShortcutListAsUser(
+                        mTargetContext, mTargetContext.getUserId());
+        for (AccessibilityShortcutInfo info : infoList) {
+            final ActivityInfo activityInfo = info.getActivityInfo();
+            if (componentName.equals(activityInfo.getComponentName())) {
+                return info;
+            }
+        }
+        return null;
     }
 }

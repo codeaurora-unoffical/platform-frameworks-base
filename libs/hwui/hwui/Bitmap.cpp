@@ -32,13 +32,12 @@
 
 #ifndef _WIN32
 #include <binder/IServiceManager.h>
-#include <private/gui/ComposerService.h>
 #endif
 #include <ui/PixelFormat.h>
 
 #include <SkCanvas.h>
 #include <SkImagePriv.h>
-
+#include <SkWebpEncoder.h>
 #include <SkHighContrastFilter.h>
 #include <limits>
 
@@ -151,9 +150,7 @@ sk_sp<Bitmap> Bitmap::createFrom(AHardwareBuffer* hardwareBuffer, sk_sp<SkColorS
     AHardwareBuffer_Desc bufferDesc;
     AHardwareBuffer_describe(hardwareBuffer, &bufferDesc);
     SkImageInfo info = uirenderer::BufferDescriptionToImageInfo(bufferDesc, colorSpace);
-
-    const size_t rowBytes = info.bytesPerPixel() * bufferDesc.stride;
-    return sk_sp<Bitmap>(new Bitmap(hardwareBuffer, info, rowBytes, palette));
+    return createFrom(hardwareBuffer, info, bufferDesc, palette);
 }
 
 sk_sp<Bitmap> Bitmap::createFrom(AHardwareBuffer* hardwareBuffer, SkColorType colorType,
@@ -163,8 +160,14 @@ sk_sp<Bitmap> Bitmap::createFrom(AHardwareBuffer* hardwareBuffer, SkColorType co
     AHardwareBuffer_describe(hardwareBuffer, &bufferDesc);
     SkImageInfo info = SkImageInfo::Make(bufferDesc.width, bufferDesc.height,
                                          colorType, alphaType, colorSpace);
+    return createFrom(hardwareBuffer, info, bufferDesc, palette);
+}
 
-    const size_t rowBytes = info.bytesPerPixel() * bufferDesc.stride;
+sk_sp<Bitmap> Bitmap::createFrom(AHardwareBuffer* hardwareBuffer, const SkImageInfo& info,
+                                 const AHardwareBuffer_Desc& bufferDesc, BitmapPalette palette) {
+    // If the stride is 0 we have to use the width as an approximation (eg, compressed buffer)
+    const auto bufferStride = bufferDesc.stride > 0 ? bufferDesc.stride : bufferDesc.width;
+    const size_t rowBytes = info.bytesPerPixel() * bufferStride;
     return sk_sp<Bitmap>(new Bitmap(hardwareBuffer, info, rowBytes, palette));
 }
 #endif
@@ -469,4 +472,43 @@ BitmapPalette Bitmap::computePalette(const SkImageInfo& info, const void* addr, 
     return BitmapPalette::Unknown;
 }
 
+bool Bitmap::compress(JavaCompressFormat format, int32_t quality, SkWStream* stream) {
+    SkBitmap skbitmap;
+    getSkBitmap(&skbitmap);
+    return compress(skbitmap, format, quality, stream);
+}
+
+bool Bitmap::compress(const SkBitmap& bitmap, JavaCompressFormat format,
+                      int32_t quality, SkWStream* stream) {
+    if (bitmap.colorType() == kAlpha_8_SkColorType) {
+        // None of the JavaCompressFormats have a sensible way to compress an
+        // ALPHA_8 Bitmap. SkPngEncoder will compress one, but it uses a non-
+        // standard format that most decoders do not understand, so this is
+        // likely not useful.
+        return false;
+    }
+
+    SkEncodedImageFormat fm;
+    switch (format) {
+        case JavaCompressFormat::Jpeg:
+            fm = SkEncodedImageFormat::kJPEG;
+            break;
+        case JavaCompressFormat::Png:
+            fm = SkEncodedImageFormat::kPNG;
+            break;
+        case JavaCompressFormat::Webp:
+            fm = SkEncodedImageFormat::kWEBP;
+            break;
+        case JavaCompressFormat::WebpLossy:
+        case JavaCompressFormat::WebpLossless: {
+            SkWebpEncoder::Options options;
+            options.fQuality = quality;
+            options.fCompression = format == JavaCompressFormat::WebpLossy ?
+                    SkWebpEncoder::Compression::kLossy : SkWebpEncoder::Compression::kLossless;
+            return SkWebpEncoder::Encode(stream, bitmap.pixmap(), options);
+        }
+    }
+
+    return SkEncodeImage(stream, bitmap, fm, quality);
+}
 }  // namespace android

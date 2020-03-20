@@ -19,6 +19,8 @@ package com.android.systemui.statusbar.notification.stack;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_ALERTING;
+import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_HEADS_UP;
+import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_PEOPLE;
 import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_SILENT;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -44,8 +46,11 @@ import com.android.systemui.ActivityStarterDelegate;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.StatusBarState;
-import com.android.systemui.statusbar.notification.people.PeopleHubSectionFooterViewAdapter;
+import com.android.systemui.statusbar.notification.NotificationSectionsFeatureManager;
+import com.android.systemui.statusbar.notification.people.PeopleHubViewAdapter;
+import com.android.systemui.statusbar.notification.row.ActivatableNotificationViewController;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
+import com.android.systemui.statusbar.notification.row.dagger.NotificationRowComponent;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 
 import org.junit.Before;
@@ -58,7 +63,7 @@ import org.mockito.junit.MockitoRule;
 
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
-@TestableLooper.RunWithLooper
+@TestableLooper.RunWithLooper(setAsMainLooper = true)
 public class NotificationSectionsManagerTest extends SysuiTestCase {
 
     @Rule public final MockitoRule mockitoRule = MockitoJUnit.rule();
@@ -67,37 +72,44 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     @Mock private ActivityStarterDelegate mActivityStarterDelegate;
     @Mock private StatusBarStateController mStatusBarStateController;
     @Mock private ConfigurationController mConfigurationController;
-    @Mock private PeopleHubSectionFooterViewAdapter mPeopleHubAdapter;
+    @Mock private PeopleHubViewAdapter mPeopleHubAdapter;
+    @Mock private NotificationSectionsFeatureManager mSectionsFeatureManager;
+    @Mock private NotificationRowComponent mNotificationRowComponent;
+    @Mock private ActivatableNotificationViewController mActivatableNotificationViewController;
 
     private NotificationSectionsManager mSectionsManager;
 
     @Before
     public void setUp() {
+        when(mSectionsFeatureManager.getNumberOfBuckets()).thenReturn(2);
+        when(mNotificationRowComponent.getActivatableNotificationViewController()).thenReturn(
+                mActivatableNotificationViewController
+        );
         mSectionsManager =
                 new NotificationSectionsManager(
-                        mNssl,
                         mActivityStarterDelegate,
                         mStatusBarStateController,
                         mConfigurationController,
                         mPeopleHubAdapter,
-                        2);
+                        mSectionsFeatureManager
+                );
         // Required in order for the header inflation to work properly
         when(mNssl.generateLayoutParams(any(AttributeSet.class)))
                 .thenReturn(new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
-        mSectionsManager.initialize(LayoutInflater.from(mContext));
+        mSectionsManager.initialize(mNssl, LayoutInflater.from(mContext));
         when(mNssl.indexOfChild(any(View.class))).thenReturn(-1);
         when(mStatusBarStateController.getState()).thenReturn(StatusBarState.SHADE);
     }
 
     @Test(expected =  IllegalStateException.class)
     public void testDuplicateInitializeThrows() {
-        mSectionsManager.initialize(LayoutInflater.from(mContext));
+        mSectionsManager.initialize(mNssl, LayoutInflater.from(mContext));
     }
 
     @Test
     public void testInsertHeader() {
         // GIVEN a stack with HI and LO rows but no section headers
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.HIPRI, ChildType.LOPRI);
+        setStackState(ChildType.ALERTING, ChildType.ALERTING, ChildType.ALERTING, ChildType.GENTLE);
 
         // WHEN we update the section headers
         mSectionsManager.updateSectionBoundaries();
@@ -109,11 +121,15 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     @Test
     public void testRemoveHeader() {
         // GIVEN a stack that originally had a header between the HI and LO sections
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.LOPRI);
+        setStackState(ChildType.ALERTING, ChildType.ALERTING, ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // WHEN the last LO row is replaced with a HI row
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.HEADER, ChildType.HIPRI);
+        setStackState(
+                ChildType.ALERTING,
+                ChildType.ALERTING,
+                ChildType.GENTLE_HEADER,
+                ChildType.ALERTING);
         clearInvocations(mNssl);
         mSectionsManager.updateSectionBoundaries();
 
@@ -124,7 +140,7 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     @Test
     public void testDoNothingIfHeaderAlreadyRemoved() {
         // GIVEN a stack with only HI rows
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.HIPRI);
+        setStackState(ChildType.ALERTING, ChildType.ALERTING, ChildType.ALERTING);
 
         // WHEN we update the sections headers
         mSectionsManager.updateSectionBoundaries();
@@ -137,19 +153,19 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     public void testMoveHeaderForward() {
         // GIVEN a stack that originally had a header between the HI and LO sections
         setStackState(
-                ChildType.HIPRI,
-                ChildType.HIPRI,
-                ChildType.HIPRI,
-                ChildType.LOPRI);
+                ChildType.ALERTING,
+                ChildType.ALERTING,
+                ChildType.ALERTING,
+                ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // WHEN the LO section moves forward
         setStackState(
-                ChildType.HIPRI,
-                ChildType.HIPRI,
-                ChildType.LOPRI,
-                ChildType.HEADER,
-                ChildType.LOPRI);
+                ChildType.ALERTING,
+                ChildType.ALERTING,
+                ChildType.GENTLE,
+                ChildType.GENTLE_HEADER,
+                ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // THEN the LO section header is also moved forward
@@ -160,19 +176,19 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     public void testMoveHeaderBackward() {
         // GIVEN a stack that originally had a header between the HI and LO sections
         setStackState(
-                ChildType.HIPRI,
-                ChildType.LOPRI,
-                ChildType.LOPRI,
-                ChildType.LOPRI);
+                ChildType.ALERTING,
+                ChildType.GENTLE,
+                ChildType.GENTLE,
+                ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // WHEN the LO section moves backward
         setStackState(
-                ChildType.HIPRI,
-                ChildType.HEADER,
-                ChildType.HIPRI,
-                ChildType.HIPRI,
-                ChildType.LOPRI);
+                ChildType.ALERTING,
+                ChildType.GENTLE_HEADER,
+                ChildType.ALERTING,
+                ChildType.ALERTING,
+                ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // THEN the LO section header is also moved backward (with appropriate index shifting)
@@ -183,14 +199,14 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     public void testHeaderRemovedFromTransientParent() {
         // GIVEN a stack where the header is animating away
         setStackState(
-                ChildType.HIPRI,
-                ChildType.LOPRI,
-                ChildType.LOPRI,
-                ChildType.LOPRI);
+                ChildType.ALERTING,
+                ChildType.GENTLE,
+                ChildType.GENTLE,
+                ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
         setStackState(
-                ChildType.HIPRI,
-                ChildType.HEADER);
+                ChildType.ALERTING,
+                ChildType.GENTLE_HEADER);
         mSectionsManager.updateSectionBoundaries();
         clearInvocations(mNssl);
 
@@ -199,8 +215,8 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
 
         // WHEN the LO section reappears
         setStackState(
-                ChildType.HIPRI,
-                ChildType.LOPRI);
+                ChildType.ALERTING,
+                ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // THEN the header is first removed from the transient parent before being added to the
@@ -213,7 +229,7 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     public void testHeaderNotShownOnLockscreen() {
         // GIVEN a stack of HI and LO notifs on the lockscreen
         when(mStatusBarStateController.getState()).thenReturn(StatusBarState.KEYGUARD);
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.HIPRI, ChildType.LOPRI);
+        setStackState(ChildType.ALERTING, ChildType.ALERTING, ChildType.ALERTING, ChildType.GENTLE);
 
         // WHEN we update the section headers
         mSectionsManager.updateSectionBoundaries();
@@ -226,7 +242,7 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     public void testHeaderShownWhenEnterLockscreen() {
         // GIVEN a stack of HI and LO notifs on the lockscreen
         when(mStatusBarStateController.getState()).thenReturn(StatusBarState.KEYGUARD);
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.HIPRI, ChildType.LOPRI);
+        setStackState(ChildType.ALERTING, ChildType.ALERTING, ChildType.ALERTING, ChildType.GENTLE);
         mSectionsManager.updateSectionBoundaries();
 
         // WHEN we unlock
@@ -240,39 +256,122 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
     @Test
     public void testHeaderHiddenWhenEnterLockscreen() {
         // GIVEN a stack of HI and LO notifs on the shade
-        when(mStatusBarStateController.getState()).thenReturn(StatusBarState.SHADE_LOCKED);
-        setStackState(ChildType.HIPRI, ChildType.HIPRI, ChildType.HIPRI, ChildType.LOPRI);
-        mSectionsManager.updateSectionBoundaries();
+        setStackState(ChildType.ALERTING, ChildType.GENTLE_HEADER, ChildType.GENTLE);
 
         // WHEN we go back to the keyguard
         when(mStatusBarStateController.getState()).thenReturn(StatusBarState.KEYGUARD);
         mSectionsManager.updateSectionBoundaries();
 
         // Then the section header is removed
-        verify(mNssl).removeView(eq(mSectionsManager.getGentleHeaderView()));
+        verify(mNssl).removeView(mSectionsManager.getGentleHeaderView());
     }
 
-    private enum ChildType { HEADER, HIPRI, LOPRI }
+    @Test
+    public void testPeopleFiltering_addHeadersFromShowingOnlyGentle() {
+        enablePeopleFiltering();
+
+        setStackState(
+                ChildType.GENTLE_HEADER,
+                ChildType.PERSON,
+                ChildType.ALERTING,
+                ChildType.GENTLE);
+        mSectionsManager.updateSectionBoundaries();
+
+        verify(mNssl).changeViewPosition(mSectionsManager.getGentleHeaderView(), 2);
+        verify(mNssl).addView(mSectionsManager.getAlertingHeaderView(), 1);
+        verify(mNssl).addView(mSectionsManager.getPeopleHeaderView(), 0);
+    }
+
+    @Test
+    public void testPeopleFiltering_addAllHeaders() {
+        enablePeopleFiltering();
+
+        setStackState(
+                ChildType.PERSON,
+                ChildType.ALERTING,
+                ChildType.GENTLE);
+        mSectionsManager.updateSectionBoundaries();
+
+        verify(mNssl).addView(mSectionsManager.getGentleHeaderView(), 2);
+        verify(mNssl).addView(mSectionsManager.getAlertingHeaderView(), 1);
+        verify(mNssl).addView(mSectionsManager.getPeopleHeaderView(), 0);
+    }
+
+    @Test
+    public void testPeopleFiltering_moveAllHeaders() {
+        enablePeopleFiltering();
+
+        setStackState(
+                ChildType.PEOPLE_HEADER,
+                ChildType.ALERTING_HEADER,
+                ChildType.GENTLE_HEADER,
+                ChildType.PERSON,
+                ChildType.ALERTING,
+                ChildType.GENTLE);
+        mSectionsManager.updateSectionBoundaries();
+
+        verify(mNssl).changeViewPosition(mSectionsManager.getGentleHeaderView(), 4);
+        verify(mNssl).changeViewPosition(mSectionsManager.getAlertingHeaderView(), 2);
+        verify(mNssl).changeViewPosition(mSectionsManager.getPeopleHeaderView(), 0);
+    }
+
+    @Test
+    public void testPeopleFiltering_keepPeopleHeaderWhenSectionEmpty() {
+        mSectionsManager.setPeopleHubVisible(true);
+        enablePeopleFiltering();
+
+        setStackState(
+                ChildType.PEOPLE_HEADER,
+                ChildType.ALERTING_HEADER,
+                ChildType.ALERTING,
+                ChildType.GENTLE_HEADER,
+                ChildType.GENTLE
+        );
+        mSectionsManager.updateSectionBoundaries();
+
+        verify(mNssl, never()).removeView(mSectionsManager.getPeopleHeaderView());
+        verify(mNssl).changeViewPosition(mSectionsManager.getPeopleHeaderView(), 0);
+    }
+
+    private void enablePeopleFiltering() {
+        when(mSectionsFeatureManager.isFilteringEnabled()).thenReturn(true);
+        when(mSectionsFeatureManager.getNumberOfBuckets()).thenReturn(4);
+    }
+
+    private enum ChildType {
+        PEOPLE_HEADER, ALERTING_HEADER, GENTLE_HEADER, HEADS_UP, PERSON, ALERTING, GENTLE, OTHER
+    }
 
     private void setStackState(ChildType... children) {
         when(mNssl.getChildCount()).thenReturn(children.length);
         for (int i = 0; i < children.length; i++) {
             View child;
             switch (children[i]) {
-                case HEADER:
+                case PEOPLE_HEADER:
+                    child = mSectionsManager.getPeopleHeaderView();
+                    break;
+                case ALERTING_HEADER:
+                    child = mSectionsManager.getAlertingHeaderView();
+                    break;
+                case GENTLE_HEADER:
                     child = mSectionsManager.getGentleHeaderView();
                     break;
-                case HIPRI:
-                case LOPRI:
-                    ExpandableNotificationRow notifRow = mock(ExpandableNotificationRow.class,
-                            RETURNS_DEEP_STUBS);
-                    when(notifRow.getVisibility()).thenReturn(View.VISIBLE);
-                    when(notifRow.getEntry().isHighPriority())
-                            .thenReturn(children[i] == ChildType.HIPRI);
-                    when(notifRow.getEntry().getBucket()).thenReturn(
-                            children[i] == ChildType.HIPRI ? BUCKET_ALERTING : BUCKET_SILENT);
-                    when(notifRow.getParent()).thenReturn(mNssl);
-                    child = notifRow;
+                case HEADS_UP:
+                    child = mockNotification(BUCKET_HEADS_UP);
+                    break;
+                case PERSON:
+                    child = mockNotification(BUCKET_PEOPLE);
+                    break;
+                case ALERTING:
+                    child = mockNotification(BUCKET_ALERTING);
+                    break;
+                case GENTLE:
+                    child = mockNotification(BUCKET_SILENT);
+                    break;
+                case OTHER:
+                    child = mock(View.class);
+                    when(child.getVisibility()).thenReturn(View.VISIBLE);
+                    when(child.getParent()).thenReturn(mNssl);
                     break;
                 default:
                     throw new RuntimeException("Unknown ChildType: " + children[i]);
@@ -280,5 +379,14 @@ public class NotificationSectionsManagerTest extends SysuiTestCase {
             when(mNssl.getChildAt(i)).thenReturn(child);
             when(mNssl.indexOfChild(child)).thenReturn(i);
         }
+    }
+
+    private View mockNotification(int bucket) {
+        ExpandableNotificationRow notifRow = mock(ExpandableNotificationRow.class,
+                RETURNS_DEEP_STUBS);
+        when(notifRow.getVisibility()).thenReturn(View.VISIBLE);
+        when(notifRow.getEntry().getBucket()).thenReturn(bucket);
+        when(notifRow.getParent()).thenReturn(mNssl);
+        return notifRow;
     }
 }

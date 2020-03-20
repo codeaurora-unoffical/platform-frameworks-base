@@ -26,7 +26,6 @@ import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.UserIdInt;
 import android.app.ActivityThread;
 import android.app.AppOpsManager;
@@ -36,6 +35,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.SearchManager;
 import android.app.WallpaperManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.ContentValues;
@@ -53,7 +53,9 @@ import android.location.LocationManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkScoreManager;
 import android.net.Uri;
+import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiManager;
+import android.net.wifi.p2p.WifiP2pManager;
 import android.os.BatteryManager;
 import android.os.Binder;
 import android.os.Build.VERSION_CODES;
@@ -63,12 +65,12 @@ import android.os.IBinder;
 import android.os.LocaleList;
 import android.os.PowerManager.AutoPowerSaveModeTriggers;
 import android.os.Process;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.os.ResultReceiver;
 import android.os.ServiceManager;
 import android.os.UserHandle;
 import android.speech.tts.TextToSpeech;
-import android.telephony.SubscriptionManager;
 import android.text.TextUtils;
 import android.util.AndroidException;
 import android.util.ArrayMap;
@@ -96,6 +98,7 @@ import java.util.Set;
  * The Settings provider contains global system-level device preferences.
  */
 public final class Settings {
+    private static final boolean DEFAULT_OVERRIDEABLE_BY_RESTORE = false;
 
     // Intent actions for Settings
 
@@ -219,7 +222,9 @@ public final class Settings {
      * @hide
      */
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
-    public static final String ACTION_TETHER_PROVISIONING =
+    @SystemApi
+    @TestApi
+    public static final String ACTION_TETHER_PROVISIONING_UI =
             "android.settings.TETHER_PROVISIONING_UI";
 
     /**
@@ -251,6 +256,9 @@ public final class Settings {
 
     /** @hide */
     public static final String EXTRA_NETWORK_TEMPLATE = "network_template";
+
+    /** @hide */
+    public static final String KEY_CONFIG_SET_RETURN = "config_set_return";
 
     /**
      * An int extra specifying a subscription ID.
@@ -385,6 +393,21 @@ public final class Settings {
             "android.settings.MANAGE_UNKNOWN_APP_SOURCES";
 
     /**
+     * Activity Action: Show settings to allow configuration of cross-profile access for apps
+     *
+     * Input: Optionally, the Intent's data URI can specify the application package name to
+     * directly invoke the management GUI specific to the package name. For example
+     * "package:com.my.app".
+     * <p>
+     * Output: Nothing.
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_MANAGE_CROSS_PROFILE_ACCESS =
+            "android.settings.MANAGE_CROSS_PROFILE_ACCESS";
+
+    /**
      * Activity Action: Show the "Open by Default" page in a particular application's details page.
      * <p>
      * In some cases, a matching Activity may not exist, so ensure you safeguard against this.
@@ -491,26 +514,121 @@ public final class Settings {
             "android.settings.WIFI_IP_SETTINGS";
 
     /**
-     * Activity Action: Show setting page to process an Easy Connect (Wi-Fi DPP) QR code and start
+     * Activity Action: Show setting page to process a Wi-Fi Easy Connect (aka DPP) URI and start
      * configuration. This intent should be used when you want to use this device to take on the
-     * configurator role for an IoT/other device. When provided with a valid DPP URI string Settings
-     * will open a wifi selection screen for the user to indicate which network they would like
-     * to configure the device specified in the DPP URI string for and carry them through the rest
-     * of the flow for provisioning the device.
+     * configurator role for an IoT/other device. When provided with a valid DPP URI
+     * string, Settings will open a Wi-Fi selection screen for the user to indicate which network
+     * they would like to configure the device specified in the DPP URI string and
+     * carry them through the rest of the flow for provisioning the device.
      * <p>
-     * In some cases, a matching Activity may not exist, so ensure you safeguard
-     * against this by checking WifiManager.isEasyConnectSupported();
+     * In some cases, a matching Activity may not exist, so ensure to safeguard against this by
+     * checking {@link WifiManager#isEasyConnectSupported()}.
      * <p>
      * Input: The Intent's data URI specifies bootstrapping information for authenticating and
-     * provisioning the peer, with the "DPP" scheme.
+     * provisioning the peer, and uses a "DPP" scheme. The URI should be attached to the intent
+     * using {@link Intent#setData(Uri)}. The calling app can obtain a DPP URI in any
+     * way, e.g. by scanning a QR code or other out-of-band methods. The calling app may also
+     * attach the {@link #EXTRA_EASY_CONNECT_BAND_LIST} extra to provide information
+     * about the bands supported by the enrollee device.
      * <p>
-     * Output: After {@code startActivityForResult}, the callback {@code onActivityResult} will have
-     *         resultCode {@link android.app.Activity#RESULT_OK} if Wi-Fi Easy Connect configuration
-     *         success and the user clicks 'Done' button.
+     * Output: After calling {@link android.app.Activity#startActivityForResult}, the callback
+     * {@code onActivityResult} will have resultCode {@link android.app.Activity#RESULT_OK} if
+     * the Wi-Fi Easy Connect configuration succeeded and the user tapped the 'Done' button, or
+     * {@link android.app.Activity#RESULT_CANCELED} if the operation failed and user tapped the
+     * 'Cancel' button. In case the operation has failed, a status code from
+     * {@link android.net.wifi.EasyConnectStatusCallback} {@code EASY_CONNECT_EVENT_FAILURE_*} will
+     * be returned as an Extra {@link #EXTRA_EASY_CONNECT_ERROR_CODE}. Easy Connect R2
+     * Enrollees report additional details about the error they encountered, which will be
+     * provided in the {@link #EXTRA_EASY_CONNECT_ATTEMPTED_SSID},
+     * {@link #EXTRA_EASY_CONNECT_CHANNEL_LIST}, and {@link #EXTRA_EASY_CONNECT_BAND_LIST}.
      */
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_PROCESS_WIFI_EASY_CONNECT_URI =
             "android.settings.PROCESS_WIFI_EASY_CONNECT_URI";
+
+    /**
+     * Activity Extra: The Easy Connect operation error code
+     * <p>
+     * An extra returned on the result intent received when using the
+     * {@link #ACTION_PROCESS_WIFI_EASY_CONNECT_URI} intent to launch the Easy Connect Operation.
+     * This extra contains the integer error code of the operation - one of
+     * {@link android.net.wifi.EasyConnectStatusCallback} {@code EASY_CONNECT_EVENT_FAILURE_*}. If
+     * there is no error, i.e. if the operation returns {@link android.app.Activity#RESULT_OK},
+     * then this extra is not attached to the result intent.
+     * <p>
+     * Use the {@link Intent#hasExtra(String)} to determine whether the extra is attached and
+     * {@link Intent#getIntExtra(String, int)} to obtain the error code data.
+     */
+    public static final String EXTRA_EASY_CONNECT_ERROR_CODE =
+            "android.provider.extra.EASY_CONNECT_ERROR_CODE";
+
+    /**
+     * Activity Extra: The SSID that the Enrollee tried to connect to.
+     * <p>
+     * An extra returned on the result intent received when using the {@link
+     * #ACTION_PROCESS_WIFI_EASY_CONNECT_URI} intent to launch the Easy Connect Operation. This
+     * extra contains the SSID of the Access Point that the remote Enrollee tried to connect to.
+     * This value is populated only by remote R2 devices, and only for the following error codes:
+     * {@link android.net.wifi.EasyConnectStatusCallback#EASY_CONNECT_EVENT_FAILURE_CANNOT_FIND_NETWORK}
+     * {@link android.net.wifi.EasyConnectStatusCallback#EASY_CONNECT_EVENT_FAILURE_ENROLLEE_AUTHENTICATION}.
+     * Therefore, always check if this extra is available using {@link Intent#hasExtra(String)}. If
+     * there is no error, i.e. if the operation returns {@link android.app.Activity#RESULT_OK}, then
+     * this extra is not attached to the result intent.
+     * <p>
+     * Use the {@link Intent#getStringExtra(String)} to obtain the SSID.
+     */
+    public static final String EXTRA_EASY_CONNECT_ATTEMPTED_SSID =
+            "android.provider.extra.EASY_CONNECT_ATTEMPTED_SSID";
+
+    /**
+     * Activity Extra: The Channel List that the Enrollee used to scan a network.
+     * <p>
+     * An extra returned on the result intent received when using the {@link
+     * #ACTION_PROCESS_WIFI_EASY_CONNECT_URI} intent to launch the Easy Connect Operation. This
+     * extra contains the channel list that the Enrollee scanned for a network. This value is
+     * populated only by remote R2 devices, and only for the following error code: {@link
+     * android.net.wifi.EasyConnectStatusCallback#EASY_CONNECT_EVENT_FAILURE_CANNOT_FIND_NETWORK}.
+     * Therefore, always check if this extra is available using {@link Intent#hasExtra(String)}. If
+     * there is no error, i.e. if the operation returns {@link android.app.Activity#RESULT_OK}, then
+     * this extra is not attached to the result intent. The list is JSON formatted, as an array
+     * (Wi-Fi global operating classes) of arrays (Wi-Fi channels).
+     * <p>
+     * Use the {@link Intent#getStringExtra(String)} to obtain the list.
+     */
+    public static final String EXTRA_EASY_CONNECT_CHANNEL_LIST =
+            "android.provider.extra.EASY_CONNECT_CHANNEL_LIST";
+
+    /**
+     * Activity Extra: The Band List that the Enrollee supports.
+     * <p>
+     * This extra contains the bands the Enrollee supports, expressed as the Global Operating
+     * Class, see Table E-4 in IEEE Std 802.11-2016 Global operating classes. It is used both as
+     * input, to configure the Easy Connect operation and as output of the operation.
+     * <p>
+     * As input: an optional extra to be attached to the
+     * {@link #ACTION_PROCESS_WIFI_EASY_CONNECT_URI}. If attached, it indicates the bands which
+     * the remote device (enrollee, device-to-be-configured) supports. The Settings operation
+     * may take this into account when presenting the user with list of networks configurations
+     * to be used. The calling app may obtain this information in any out-of-band method. The
+     * information should be attached as an array of raw integers - using the
+     * {@link Intent#putExtra(String, int[])}.
+     * <p>
+     * As output: an extra returned on the result intent received when using the
+     * {@link #ACTION_PROCESS_WIFI_EASY_CONNECT_URI} intent to launch the Easy Connect Operation
+     * . This value is populated only by remote R2 devices, and only for the following error
+     * codes:
+     * {@link android.net.wifi.EasyConnectStatusCallback#EASY_CONNECT_EVENT_FAILURE_CANNOT_FIND_NETWORK},
+     * {@link android.net.wifi.EasyConnectStatusCallback#EASY_CONNECT_EVENT_FAILURE_ENROLLEE_AUTHENTICATION},
+     * or
+     * {@link android.net.wifi.EasyConnectStatusCallback#EASY_CONNECT_EVENT_FAILURE_ENROLLEE_REJECTED_CONFIGURATION}.
+     * Therefore, always check if this extra is available using {@link Intent#hasExtra(String)}.
+     * If there is no error, i.e. if the operation returns {@link android.app.Activity#RESULT_OK}
+     * , then this extra is not attached to the result intent.
+     * <p>
+     * Use the {@link Intent#getIntArrayExtra(String)} to obtain the list.
+     */
+    public static final String EXTRA_EASY_CONNECT_BAND_LIST =
+            "android.provider.extra.EASY_CONNECT_BAND_LIST";
 
     /**
      * Activity Action: Show settings to allow configuration of data and view data usage.
@@ -568,14 +686,50 @@ public final class Settings {
     /**
      * Activity Action: Show settings to enroll fingerprints, and setup PIN/Pattern/Pass if
      * necessary.
+     * @deprecated See {@link #ACTION_BIOMETRIC_ENROLL}.
      * <p>
      * Input: Nothing.
      * <p>
      * Output: Nothing.
      */
+    @Deprecated
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_FINGERPRINT_ENROLL =
             "android.settings.FINGERPRINT_ENROLL";
+
+    /**
+     * Activity Action: Show settings to enroll biometrics, and setup PIN/Pattern/Pass if
+     * necessary. By default, this prompts the user to enroll biometrics with strength
+     * Weak or above, as defined by the CDD. Only biometrics that meet or exceed Strong, as defined
+     * in the CDD are allowed to participate in Keystore operations.
+     * <p>
+     * Input: extras {@link #EXTRA_BIOMETRIC_AUTHENTICATORS_ALLOWED} as an integer, with
+     * constants defined in {@link android.hardware.biometrics.BiometricManager.Authenticators},
+     * e.g. {@link android.hardware.biometrics.BiometricManager.Authenticators#BIOMETRIC_STRONG}.
+     * If not specified, the default behavior is
+     * {@link android.hardware.biometrics.BiometricManager.Authenticators#BIOMETRIC_WEAK}.
+     * <p>
+     * Output: Returns {@link android.app.Activity#RESULT_CANCELED} if the user already has an
+     * authenticator that meets the requirements, or if the device cannot fulfill the request
+     * (e.g. does not have biometric hardware). Returns {@link android.app.Activity#RESULT_OK}
+     * otherwise. Note that callers should still check
+     * {@link android.hardware.biometrics.BiometricManager#canAuthenticate(int)}
+     * afterwards to ensure that the user actually completed enrollment.
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_BIOMETRIC_ENROLL =
+            "android.settings.BIOMETRIC_ENROLL";
+
+    /**
+     * Activity Extra: The minimum strength to request enrollment for.
+     * <p>
+     * This can be passed as an extra field to the {@link #ACTION_BIOMETRIC_ENROLL} intent to
+     * indicate that only enrollment for sensors that meet these requirements should be shown. The
+     * value should be a combination of the constants defined in
+     * {@link android.hardware.biometrics.BiometricManager.Authenticators}.
+     */
+    public static final String EXTRA_BIOMETRIC_AUTHENTICATORS_ALLOWED =
+            "android.provider.extra.BIOMETRIC_AUTHENTICATORS_ALLOWED";
 
     /**
      * Activity Action: Show settings to allow configuration of cast endpoints.
@@ -850,8 +1004,9 @@ public final class Settings {
      * <p>
      * In some cases, a matching Activity may not exist, so ensure you safeguard against this.
      * <p>
-     * Input: Optionally, in versions of Android prior to 11, the Intent's data URI can specify the
-     * application package name to directly invoke the management GUI specific to the package name.
+     * Input: Optionally, in versions of Android prior to {@link android.os.Build.VERSION_CODES#R},
+     * the Intent's data URI can specify the application package name to directly invoke the
+     * management GUI specific to the package name.
      * For example "package:com.my.app".
      * <p>
      * Output: Nothing.
@@ -864,9 +1019,10 @@ public final class Settings {
      * Activity Action: Show screen for controlling if the app specified in the data URI of the
      * intent can draw on top of other apps.
      * <p>
-     * Unlike {@link #ACTION_MANAGE_OVERLAY_PERMISSION}, which in Android 11 can't be used to show
-     * a GUI for a specific package, permission {@code android.permission.INTERNAL_SYSTEM_WINDOW} is
-     * needed to start an activity with this intent.
+     * Unlike {@link #ACTION_MANAGE_OVERLAY_PERMISSION}, which in Android {@link
+     * android.os.Build.VERSION_CODES#R} can't be used to show a GUI for a specific package,
+     * permission {@code android.permission.INTERNAL_SYSTEM_WINDOW} is needed to start an activity
+     * with this intent.
      * <p>
      * In some cases, a matching Activity may not exist, so ensure you
      * safeguard against this.
@@ -1624,6 +1780,15 @@ public final class Settings {
             = "android.settings.NOTIFICATION_SETTINGS";
 
     /**
+     * Activity Action: Show notification history screen.
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_NOTIFICATION_HISTORY
+            = "android.settings.NOTIFICATION_HISTORY";
+
+    /**
      * Activity Action: Show app listing settings, filtered by those that send notifications.
      *
      * @hide
@@ -1681,6 +1846,17 @@ public final class Settings {
      * This must be passed as an extra field to the {@link #ACTION_CHANNEL_NOTIFICATION_SETTINGS}.
      */
     public static final String EXTRA_CHANNEL_ID = "android.provider.extra.CHANNEL_ID";
+
+    /**
+     * Activity Extra: The {@link NotificationChannel#getConversationId()} of the notification
+     * conversation settings to display.
+     * <p>
+     * This is an optional extra field to the {@link #ACTION_CHANNEL_NOTIFICATION_SETTINGS}. If
+     * included the system will first look up notification settings by channel and conversation id,
+     * and will fall back to channel id if a specialized channel for this conversation doesn't
+     * exist, similar to {@link NotificationManager#getNotificationChannel(String, String)}.
+     */
+    public static final String EXTRA_CONVERSATION_ID = "android.provider.extra.CONVERSATION_ID";
 
     /**
      * Activity Action: Show notification redaction settings.
@@ -1823,6 +1999,21 @@ public final class Settings {
             "android.settings.REQUEST_SET_AUTOFILL_SERVICE";
 
     /**
+     * Activity Action: Show screen for controlling the Quick Access Wallet.
+     * <p>
+     * In some cases, a matching Activity may not exist, so ensure you
+     * safeguard against this.
+     * <p>
+     * Input: The Intent's data URI specifies the application package name
+     * to be shown, with the "package" scheme.  That is "package:com.my.app".
+     * <p>
+     * Output: Nothing.
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_QUICK_ACCESS_WALLET_SETTINGS =
+            "android.settings.QUICK_ACCESS_WALLET_SETTINGS";
+
+    /**
      * Activity Action: Show screen for controlling which apps have access on volume directories.
      * <p>
      * Input: Nothing.
@@ -1869,6 +2060,19 @@ public final class Settings {
     @SystemApi
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_MANAGE_DOMAIN_URLS = "android.settings.MANAGE_DOMAIN_URLS";
+
+    /**
+     * Activity Action: Show screen that let user select enable (or disable) tethering.
+     * <p>
+     * Input: Nothing.
+     * <p>
+     * Output: Nothing
+     *
+     * @hide
+     */
+    @SystemApi
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_TETHER_SETTINGS = "android.settings.TETHER_SETTINGS";
 
     /**
      * Broadcast to trigger notification of asking user to enable MMS.
@@ -2000,9 +2204,19 @@ public final class Settings {
     public static final String CALL_METHOD_PREFIX_KEY = "_prefix";
 
     /**
+     * @hide - RemoteCallback monitor callback argument extra to the fast-path call()-based requests
+     */
+    public static final String CALL_METHOD_MONITOR_CALLBACK_KEY = "_monitor_callback_key";
+
+    /**
      * @hide - String argument extra to the fast-path call()-based requests
      */
     public static final String CALL_METHOD_FLAGS_KEY = "_flags";
+
+    /**
+     * @hide - String argument extra to the fast-path call()-based requests
+     */
+    public static final String CALL_METHOD_OVERRIDEABLE_BY_RESTORE_KEY = "_overrideable_by_restore";
 
     /** @hide - Private call() method to write to 'system' table */
     public static final String CALL_METHOD_PUT_SYSTEM = "PUT_system";
@@ -2051,6 +2265,26 @@ public final class Settings {
 
     /** @hide - Private call() method to reset to defaults the 'configuration' table */
     public static final String CALL_METHOD_LIST_CONFIG = "LIST_config";
+
+    /** @hide - Private call() method to register monitor callback for 'configuration' table */
+    public static final String CALL_METHOD_REGISTER_MONITOR_CALLBACK_CONFIG =
+            "REGISTER_MONITOR_CALLBACK_config";
+
+    /** @hide - String argument extra to the config monitor callback */
+    public static final String EXTRA_MONITOR_CALLBACK_TYPE = "monitor_callback_type";
+
+    /** @hide - String argument extra to the config monitor callback */
+    public static final String EXTRA_ACCESS_CALLBACK = "access_callback";
+
+    /** @hide - String argument extra to the config monitor callback */
+    public static final String EXTRA_NAMESPACE_UPDATED_CALLBACK =
+            "namespace_updated_callback";
+
+    /** @hide - String argument extra to the config monitor callback */
+    public static final String EXTRA_NAMESPACE = "namespace";
+
+    /** @hide - String argument extra to the config monitor callback */
+    public static final String EXTRA_CALLING_PACKAGE = "calling_package";
 
     /**
      * Activity Extra: Limit available options in launched activity based on the given authority.
@@ -2225,6 +2459,10 @@ public final class Settings {
     public static class NameValueTable implements BaseColumns {
         public static final String NAME = "name";
         public static final String VALUE = "value";
+        // A flag indicating whether the current value of a setting should be preserved during
+        // restore.
+        /** @hide */
+        public static final String IS_PRESERVED_IN_RESTORE = "is_preserved_in_restore";
 
         protected static boolean putString(ContentResolver resolver, Uri uri,
                 String name, String value) {
@@ -2372,7 +2610,8 @@ public final class Settings {
         }
 
         public boolean putStringForUser(ContentResolver cr, String name, String value,
-                String tag, boolean makeDefault, final int userHandle) {
+                String tag, boolean makeDefault, final int userHandle,
+                boolean overrideableByRestore) {
             try {
                 Bundle arg = new Bundle();
                 arg.putString(Settings.NameValueTable.VALUE, value);
@@ -2382,6 +2621,9 @@ public final class Settings {
                 }
                 if (makeDefault) {
                     arg.putBoolean(CALL_METHOD_MAKE_DEFAULT_KEY, true);
+                }
+                if (overrideableByRestore) {
+                    arg.putBoolean(CALL_METHOD_OVERRIDEABLE_BY_RESTORE_KEY, true);
                 }
                 IContentProvider cp = mProviderHolder.getProvider(cr);
                 cp.call(cr.getPackageName(), cr.getFeatureId(),
@@ -2404,13 +2646,14 @@ public final class Settings {
                 args.putString(CALL_METHOD_PREFIX_KEY, prefix);
                 args.putSerializable(CALL_METHOD_FLAGS_KEY, keyValues);
                 IContentProvider cp = mProviderHolder.getProvider(cr);
-                cp.call(cr.getPackageName(), cr.getFeatureId(), mProviderHolder.mUri.getAuthority(),
+                Bundle bundle = cp.call(cr.getPackageName(), cr.getFeatureId(),
+                        mProviderHolder.mUri.getAuthority(),
                         mCallSetAllCommand, null, args);
+                return bundle.getBoolean(KEY_CONFIG_SET_RETURN);
             } catch (RemoteException e) {
                 // Not supported by the remote side
                 return false;
             }
-            return true;
         }
 
         @UnsupportedAppUsage
@@ -2524,6 +2767,7 @@ public final class Settings {
                                                 }
                                             }
                                         });
+                                        currentGeneration = generation;
                                     }
                                 }
                                 if (mGenerationTracker != null && currentGeneration ==
@@ -2590,6 +2834,8 @@ public final class Settings {
 
         public ArrayMap<String, String> getStringsForPrefix(ContentResolver cr, String prefix,
                 List<String> names) {
+            String namespace = prefix.substring(0, prefix.length() - 1);
+            DeviceConfig.enforceReadPermission(ActivityThread.currentApplication(), namespace);
             ArrayMap<String, String> keyValues = new ArrayMap<>();
             int currentGeneration = -1;
 
@@ -2602,14 +2848,7 @@ public final class Settings {
                         }
                         mValues.clear();
                     } else {
-                        boolean prefixCached = false;
-                        int size = mValues.size();
-                        for (int i = 0; i < size; ++i) {
-                            if (mValues.keyAt(i).startsWith(prefix)) {
-                                prefixCached = true;
-                                break;
-                            }
-                        }
+                        boolean prefixCached = mValues.containsKey(prefix);
                         if (prefixCached) {
                             if (!names.isEmpty()) {
                                 for (String name : names) {
@@ -2618,9 +2857,11 @@ public final class Settings {
                                     }
                                 }
                             } else {
-                                for (int i = 0; i < size; ++i) {
+                                for (int i = 0; i < mValues.size(); ++i) {
                                     String key = mValues.keyAt(i);
-                                    if (key.startsWith(prefix)) {
+                                    // Explicitly exclude the prefix as it is only there to
+                                    // signal that the prefix has been cached.
+                                    if (key.startsWith(prefix) && !key.equals(prefix)) {
                                         keyValues.put(key, mValues.get(key));
                                     }
                                 }
@@ -2708,12 +2949,15 @@ public final class Settings {
                                     }
                                 }
                             });
+                            currentGeneration = generation;
                         }
                     }
                     if (mGenerationTracker != null && currentGeneration
                             == mGenerationTracker.getCurrentGeneration()) {
                         // cache the complete list of flags for the namespace
                         mValues.putAll(flagsToValues);
+                        // Adding the prefix as a signal that the prefix is cached.
+                        mValues.put(prefix, null);
                     }
                 }
                 return keyValues;
@@ -2784,6 +3028,7 @@ public final class Settings {
         private static final HashSet<String> MOVED_TO_SECURE;
         static {
             MOVED_TO_SECURE = new HashSet<>(30);
+            MOVED_TO_SECURE.add(Secure.ADAPTIVE_SLEEP);
             MOVED_TO_SECURE.add(Secure.ANDROID_ID);
             MOVED_TO_SECURE.add(Secure.HTTP_PROXY);
             MOVED_TO_SECURE.add(Secure.LOCATION_PROVIDERS_ALLOWED);
@@ -2932,10 +3177,36 @@ public final class Settings {
             return putStringForUser(resolver, name, value, resolver.getUserId());
         }
 
+        /**
+         * Store a name/value pair into the database. Values written by this method will be
+         * overridden if a restore happens in the future.
+         *
+         * @param resolver to access the database with
+         * @param name to store
+         * @param value to associate with the name
+         *
+         * @return true if the value was set, false on database errors
+         *
+         * @hide
+         */
+        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
+        @SystemApi
+        public static boolean putString(@NonNull ContentResolver resolver,
+                @NonNull String name, @Nullable String value, boolean overrideableByRestore) {
+            return putStringForUser(resolver, name, value, resolver.getUserId(),
+                   overrideableByRestore);
+        }
+
         /** @hide */
         @UnsupportedAppUsage
         public static boolean putStringForUser(ContentResolver resolver, String name, String value,
                 int userHandle) {
+            return putStringForUser(resolver, name, value, userHandle,
+                    DEFAULT_OVERRIDEABLE_BY_RESTORE);
+        }
+
+        private static boolean putStringForUser(ContentResolver resolver, String name, String value,
+                int userHandle, boolean overrideableByRestore) {
             if (MOVED_TO_SECURE.contains(name)) {
                 Log.w(TAG, "Setting " + name + " has moved from android.provider.Settings.System"
                         + " to android.provider.Settings.Secure, value is unchanged.");
@@ -2946,7 +3217,8 @@ public final class Settings {
                         + " to android.provider.Settings.Global, value is unchanged.");
                 return false;
             }
-            return sNameValueCache.putStringForUser(resolver, name, value, null, false, userHandle);
+            return sNameValueCache.putStringForUser(resolver, name, value, null, false, userHandle,
+                    overrideableByRestore);
         }
 
         /**
@@ -3270,7 +3542,7 @@ public final class Settings {
                     // need to store the adjusted configuration as the initial settings.
                     Settings.System.putStringForUser(
                             cr, SYSTEM_LOCALES, outConfig.getLocales().toLanguageTags(),
-                            userHandle);
+                            userHandle, DEFAULT_OVERRIDEABLE_BY_RESTORE);
                 }
             }
         }
@@ -3303,7 +3575,8 @@ public final class Settings {
                 int userHandle) {
             return Settings.System.putFloatForUser(cr, FONT_SCALE, config.fontScale, userHandle) &&
                     Settings.System.putStringForUser(
-                            cr, SYSTEM_LOCALES, config.getLocales().toLanguageTags(), userHandle);
+                            cr, SYSTEM_LOCALES, config.getLocales().toLanguageTags(), userHandle,
+                            DEFAULT_OVERRIDEABLE_BY_RESTORE);
         }
 
         /** @hide */
@@ -3674,6 +3947,19 @@ public final class Settings {
         public static final String SCREEN_BRIGHTNESS_FOR_VR = "screen_brightness_for_vr";
 
         /**
+         * The screen backlight brightness between 0.0f and 1.0f.
+         * @hide
+         */
+        public static final String SCREEN_BRIGHTNESS_FOR_VR_FLOAT =
+                "screen_brightness_for_vr_float";
+
+        /**
+         * The screen backlight brightness between 0.0f and 1.0f.
+         * @hide
+         */
+        public static final String SCREEN_BRIGHTNESS_FLOAT = "screen_brightness_float";
+
+        /**
          * Control whether to enable automatic brightness mode.
          */
         public static final String SCREEN_BRIGHTNESS_MODE = "screen_brightness_mode";
@@ -3698,6 +3984,7 @@ public final class Settings {
 
         /**
          * Control whether to enable adaptive sleep mode.
+         * @deprecated Use {@link android.provider.Settings.Secure#ADAPTIVE_SLEEP} instead.
          * @hide
          */
         public static final String ADAPTIVE_SLEEP = "adaptive_sleep";
@@ -3869,6 +4156,12 @@ public final class Settings {
         public static final String VOLUME_ACCESSIBILITY = "volume_a11y";
 
         /**
+         * @hide
+         * Volume index for virtual assistant.
+         */
+        public static final String VOLUME_ASSISTANT = "volume_assistant";
+
+        /**
          * Master volume (float in the range 0.0f to 1.0f).
          *
          * @hide
@@ -3946,7 +4239,7 @@ public final class Settings {
                 "" /*STREAM_SYSTEM_ENFORCED, no setting for this stream*/,
                 "" /*STREAM_DTMF, no setting for this stream*/,
                 "" /*STREAM_TTS, no setting for this stream*/,
-                VOLUME_ACCESSIBILITY
+                VOLUME_ACCESSIBILITY, VOLUME_ASSISTANT
             };
 
         /**
@@ -4480,9 +4773,10 @@ public final class Settings {
             PUBLIC_SETTINGS.add(DIM_SCREEN);
             PUBLIC_SETTINGS.add(SCREEN_OFF_TIMEOUT);
             PUBLIC_SETTINGS.add(SCREEN_BRIGHTNESS);
+            PUBLIC_SETTINGS.add(SCREEN_BRIGHTNESS_FLOAT);
             PUBLIC_SETTINGS.add(SCREEN_BRIGHTNESS_FOR_VR);
+            PUBLIC_SETTINGS.add(SCREEN_BRIGHTNESS_FOR_VR_FLOAT);
             PUBLIC_SETTINGS.add(SCREEN_BRIGHTNESS_MODE);
-            PUBLIC_SETTINGS.add(ADAPTIVE_SLEEP);
             PUBLIC_SETTINGS.add(MODE_RINGER_STREAMS_AFFECTED);
             PUBLIC_SETTINGS.add(MUTE_STREAMS_AFFECTED);
             PUBLIC_SETTINGS.add(VIBRATE_ON);
@@ -4493,6 +4787,7 @@ public final class Settings {
             PUBLIC_SETTINGS.add(VOLUME_ALARM);
             PUBLIC_SETTINGS.add(VOLUME_NOTIFICATION);
             PUBLIC_SETTINGS.add(VOLUME_BLUETOOTH_SCO);
+            PUBLIC_SETTINGS.add(VOLUME_ASSISTANT);
             PUBLIC_SETTINGS.add(RINGTONE);
             PUBLIC_SETTINGS.add(NOTIFICATION_SOUND);
             PUBLIC_SETTINGS.add(ALARM_ALERT);
@@ -4982,9 +5277,7 @@ public final class Settings {
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_NUM_OPEN_NETWORKS_KEPT);
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_ON);
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_P2P_DEVICE_NAME);
-            MOVED_TO_GLOBAL.add(Settings.Global.WIFI_SAVED_STATE);
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_SUPPLICANT_SCAN_INTERVAL_MS);
-            MOVED_TO_GLOBAL.add(Settings.Global.WIFI_SUSPEND_OPTIMIZATIONS_ENABLED);
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_VERBOSE_LOGGING_ENABLED);
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_ENHANCED_AUTO_JOIN);
             MOVED_TO_GLOBAL.add(Settings.Global.WIFI_NETWORK_SHOW_RSSI);
@@ -5099,6 +5392,24 @@ public final class Settings {
         }
 
         /**
+         * Store a name/value pair into the database. Values written by this method will be
+         * overridden if a restore happens in the future.
+         *
+         * @param resolver to access the database with
+         * @param name to store
+         * @param value to associate with the name
+         * @return true if the value was set, false on database errors
+         *
+         * @hide
+         */
+        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
+        public static boolean putString(ContentResolver resolver, String name,
+                String value, boolean overrideableByRestore) {
+            return putStringForUser(resolver, name, value, /* tag */ null, /* makeDefault */ false,
+                    resolver.getUserId(), overrideableByRestore);
+        }
+
+        /**
          * Store a name/value pair into the database.
          * @param resolver to access the database with
          * @param name to store
@@ -5113,22 +5424,23 @@ public final class Settings {
         @UnsupportedAppUsage
         public static boolean putStringForUser(ContentResolver resolver, String name, String value,
                 int userHandle) {
-            return putStringForUser(resolver, name, value, null, false, userHandle);
+            return putStringForUser(resolver, name, value, null, false, userHandle,
+                    DEFAULT_OVERRIDEABLE_BY_RESTORE);
         }
 
         /** @hide */
         @UnsupportedAppUsage
         public static boolean putStringForUser(@NonNull ContentResolver resolver,
                 @NonNull String name, @Nullable String value, @Nullable String tag,
-                boolean makeDefault, @UserIdInt int userHandle) {
+                boolean makeDefault, @UserIdInt int userHandle, boolean overrideableByRestore) {
             if (MOVED_TO_GLOBAL.contains(name)) {
                 Log.w(TAG, "Setting " + name + " has moved from android.provider.Settings.Secure"
                         + " to android.provider.Settings.Global");
                 return Global.putStringForUser(resolver, name, value,
-                        tag, makeDefault, userHandle);
+                        tag, makeDefault, userHandle, DEFAULT_OVERRIDEABLE_BY_RESTORE);
             }
             return sNameValueCache.putStringForUser(resolver, name, value, tag,
-                    makeDefault, userHandle);
+                    makeDefault, userHandle, overrideableByRestore);
         }
 
         /**
@@ -5177,7 +5489,7 @@ public final class Settings {
                 @NonNull String name, @Nullable String value, @Nullable String tag,
                 boolean makeDefault) {
             return putStringForUser(resolver, name, value, tag, makeDefault,
-                    resolver.getUserId());
+                    resolver.getUserId(), DEFAULT_OVERRIDEABLE_BY_RESTORE);
         }
 
         /**
@@ -5518,6 +5830,12 @@ public final class Settings {
         }
 
         /**
+         * Control whether to enable adaptive sleep mode.
+         * @hide
+         */
+        public static final String ADAPTIVE_SLEEP = "adaptive_sleep";
+
+        /**
          * @deprecated Use {@link android.provider.Settings.Global#DEVELOPMENT_SETTINGS_ENABLED}
          * instead
          */
@@ -5670,6 +5988,22 @@ public final class Settings {
          */
         public static final String DARK_MODE_DIALOG_SEEN =
                 "dark_mode_dialog_seen";
+
+        /**
+         * Custom time when Dark theme is scheduled to activate.
+         * Represented as milliseconds from midnight (e.g. 79200000 == 10pm).
+         * @hide
+         */
+        public static final String DARK_THEME_CUSTOM_START_TIME =
+                "dark_theme_custom_start_time";
+
+        /**
+         * Custom time when Dark theme is scheduled to deactivate.
+         * Represented as milliseconds from midnight (e.g. 79200000 == 10pm).
+         * @hide
+         */
+        public static final String DARK_THEME_CUSTOM_END_TIME =
+                "dark_theme_custom_end_time";
 
         /**
          * Defines value returned by {@link android.service.autofill.UserData#getMaxUserDataSize()}.
@@ -5961,16 +6295,19 @@ public final class Settings {
          * @hide
          */
         public static final String LOCATION_CHANGER = "location_changer";
+
         /**
          * The location changer is unknown or unable to detect.
          * @hide
          */
         public static final int LOCATION_CHANGER_UNKNOWN = 0;
+
         /**
          * Location settings in system settings.
          * @hide
          */
         public static final int LOCATION_CHANGER_SYSTEM_SETTINGS = 1;
+
         /**
          * The location icon in drop down notification drawer.
          * @hide
@@ -6016,6 +6353,14 @@ public final class Settings {
          */
         @SystemApi
         public static final int LOCATION_MODE_ON = LOCATION_MODE_HIGH_ACCURACY;
+
+        /**
+         * The accuracy in meters used for coarsening location for clients with only the coarse
+         * location permission.
+         *
+         * @hide
+         */
+        public static final String LOCATION_COARSE_ACCURACY_M = "locationCoarseAccuracy";
 
         /**
          * A flag containing settings used for biometric weak
@@ -6124,6 +6469,7 @@ public final class Settings {
          * @hide
          */
         @SystemApi
+        @TestApi
         public static final String LOCK_SCREEN_ALLOW_PRIVATE_NOTIFICATIONS =
                 "lock_screen_allow_private_notifications";
 
@@ -6265,6 +6611,27 @@ public final class Settings {
          */
         public static final String ACCESSIBILITY_BUTTON_TARGET_COMPONENT =
                 "accessibility_button_target_component";
+
+        /**
+         * Setting specifying the accessibility services, accessibility shortcut targets,
+         * or features to be toggled via the long press accessibility button in the navigation bar.
+         *
+         * <p> This is a colon-separated string list which contains the flattened
+         * {@link ComponentName} and the class name of a system class implementing a supported
+         * accessibility feature.
+         * @hide
+         */
+        public static final String ACCESSIBILITY_BUTTON_LONG_PRESS_TARGETS =
+                "accessibility_button_long_press_targets";
+
+        /**
+         * The system class name of magnification controller which is a target to be toggled via
+         * accessibility shortcut or accessibility button.
+         *
+         * @hide
+         */
+        public static final String ACCESSIBILITY_SHORTCUT_TARGET_MAGNIFICATION_CONTROLLER =
+                "com.android.server.accessibility.MagnificationController";
 
         /**
          * If touch exploration is enabled.
@@ -7268,6 +7635,21 @@ public final class Settings {
         public static final String INCALL_POWER_BUTTON_BEHAVIOR = "incall_power_button_behavior";
 
         /**
+         * Whether the user allows minimal post processing or not.
+         *
+         * <p>Values:
+         * 0 - Not allowed. Any preferences set through the Window.setPreferMinimalPostProcessing
+         *     API will be ignored.
+         * 1 - Allowed. Any preferences set through the Window.setPreferMinimalPostProcessing API
+         *     will be respected and the appropriate signals will be sent to display.
+         *     (Default behaviour)
+         *
+         * @hide
+         */
+        public static final String MINIMAL_POST_PROCESSING_ALLOWED =
+                "minimal_post_processing_allowed";
+
+        /**
          * INCALL_POWER_BUTTON_BEHAVIOR value for "turn off screen".
          * @hide
          */
@@ -7378,6 +7760,12 @@ public final class Settings {
         public static final String DOZE_WAKE_DISPLAY_GESTURE = "doze_wake_display_gesture";
 
         /**
+         * Whether the device should suppress the current doze configuration and disable dozing.
+         * @hide
+         */
+        public static final String SUPPRESS_DOZE = "suppress_doze";
+
+        /**
          * Gesture that skips media.
          * @hide
          */
@@ -7465,6 +7853,22 @@ public final class Settings {
         public static final String UI_NIGHT_MODE = "ui_night_mode";
 
         /**
+         * The current night mode that has been overridden to turn on by the system.  Owned
+         * and controlled by UiModeManagerService.  Constants are as per
+         * UiModeManager.
+         * @hide
+         */
+        public static final String UI_NIGHT_MODE_OVERRIDE_ON = "ui_night_mode_override_on";
+
+        /**
+         * The current night mode that has been overridden to turn off by the system.  Owned
+         * and controlled by UiModeManagerService.  Constants are as per
+         * UiModeManager.
+         * @hide
+         */
+        public static final String UI_NIGHT_MODE_OVERRIDE_OFF = "ui_night_mode_override_off";
+
+        /**
          * Whether screensavers are enabled.
          * @hide
          */
@@ -7504,6 +7908,7 @@ public final class Settings {
          * @hide
          */
         @UnsupportedAppUsage
+        @TestApi
         public static final String NFC_PAYMENT_DEFAULT_COMPONENT = "nfc_payment_default_component";
 
         /**
@@ -7706,6 +8111,7 @@ public final class Settings {
          * @hide
          */
         @SystemApi
+        @TestApi
         public static final String LOCK_SCREEN_SHOW_NOTIFICATIONS =
                 "lock_screen_show_notifications";
 
@@ -8096,6 +8502,7 @@ public final class Settings {
          *
          * @hide
          */
+        @SystemApi
         public static final String CARRIER_APPS_HANDLED = "carrier_apps_handled";
 
         /**
@@ -8213,6 +8620,15 @@ public final class Settings {
          * @hide
          */
         public static final String NOTIFICATION_HISTORY_ENABLED = "notification_history_enabled";
+
+        /**
+         * When enabled conversations marked as favorites will be set to bubble.
+         *
+         * The value 1 - enable, 0 - disable
+         * @hide
+         */
+        public static final String BUBBLE_IMPORTANT_CONVERSATIONS
+                = "bubble_important_conversations";
 
         /**
          * Whether notifications are dismissed by a right-to-left swipe (instead of a left-to-right
@@ -8371,6 +8787,13 @@ public final class Settings {
                 "location_permissions_upgrade_to_q_mode";
 
         /**
+         * Whether or not the system Auto Revoke feature is disabled.
+         * @hide
+         */
+        @SystemApi
+        public static final String AUTO_REVOKE_DISABLED = "auto_revoke_disabled";
+
+        /**
          * Map of android.theme.customization.* categories to the enabled overlay package for that
          * category, formatted as a serialized {@link org.json.JSONObject}. If there is no
          * corresponding package included for a category, then all overlay packages in that
@@ -8390,6 +8813,28 @@ public final class Settings {
          */
         public static final String NAVIGATION_MODE =
                 "navigation_mode";
+
+        /**
+         * Scale factor for the back gesture inset size on the left side of the screen.
+         * @hide
+         */
+        public static final String BACK_GESTURE_INSET_SCALE_LEFT =
+                "back_gesture_inset_scale_left";
+
+        /**
+         * Scale factor for the back gesture inset size on the right side of the screen.
+         * @hide
+         */
+        public static final String BACK_GESTURE_INSET_SCALE_RIGHT =
+                "back_gesture_inset_scale_right";
+
+        /**
+         * Current provider of proximity-based sharing services.
+         * Default value in @string/config_defaultNearbySharingComponent.
+         * No VALIDATOR as this setting will not be backed up.
+         * @hide
+         */
+        public static final String NEARBY_SHARING_COMPONENT = "nearby_sharing_component";
 
         /**
          * Controls whether aware is enabled.
@@ -8414,6 +8859,35 @@ public final class Settings {
          * @hide
          */
         public static final String PEOPLE_STRIP = "people_strip";
+
+        /**
+         * Controls if window magnification is enabled.
+         * @hide
+         */
+        public static final String WINDOW_MAGNIFICATION = "window_magnification";
+
+        /**
+         * Controls magnification mode when magnification is enabled via a system-wide
+         * triple tap gesture or the accessibility shortcut.
+         *
+         * @see#ACCESSIBILITY_MAGNIFICATION_MODE_FULLSCREEN
+         * @see#ACCESSIBILITY_MAGNIFICATION_MODE_WINDOW
+         * @hide
+         */
+        public static final String ACCESSIBILITY_MAGNIFICATION_MODE =
+                "accessibility_magnification_mode";
+
+        /**
+         * Magnification mode value that magnifies whole display.
+         * @hide
+         */
+        public static final int ACCESSIBILITY_MAGNIFICATION_MODE_FULLSCREEN = 0x1;
+
+        /**
+         * Magnification mode value that magnifies magnify particular region in a window
+         * @hide
+         */
+        public static final int ACCESSIBILITY_MAGNIFICATION_MODE_WINDOW = 0x2;
 
         /**
          * Keys we no longer back up under the current schema, but want to continue to
@@ -8615,9 +9089,9 @@ public final class Settings {
          * added to both AIRPLANE_MODE_RADIOS and AIRPLANE_MODE_TOGGLEABLE_RADIOS, then Wifi
          * will be turned off when entering airplane mode, but the user will be able to reenable
          * Wifi in the Settings app.
-         *
-         * {@hide}
+         * @hide
          */
+        @SystemApi
         public static final String AIRPLANE_MODE_TOGGLEABLE_RADIOS = "airplane_mode_toggleable_radios";
 
         /**
@@ -8653,26 +9127,34 @@ public final class Settings {
          * Set to one of {@link #WIFI_SLEEP_POLICY_DEFAULT},
          * {@link #WIFI_SLEEP_POLICY_NEVER_WHILE_PLUGGED}, or
          * {@link #WIFI_SLEEP_POLICY_NEVER}.
+         * @deprecated This is no longer used or set by the platform.
          */
+        @Deprecated
         public static final String WIFI_SLEEP_POLICY = "wifi_sleep_policy";
 
         /**
          * Value for {@link #WIFI_SLEEP_POLICY} to use the default Wi-Fi sleep
          * policy, which is to sleep shortly after the turning off
          * according to the {@link #STAY_ON_WHILE_PLUGGED_IN} setting.
+         * @deprecated This is no longer used by the platform.
          */
+        @Deprecated
         public static final int WIFI_SLEEP_POLICY_DEFAULT = 0;
 
         /**
          * Value for {@link #WIFI_SLEEP_POLICY} to use the default policy when
          * the device is on battery, and never go to sleep when the device is
          * plugged in.
+         * @deprecated This is no longer used by the platform.
          */
+        @Deprecated
         public static final int WIFI_SLEEP_POLICY_NEVER_WHILE_PLUGGED = 1;
 
         /**
          * Value for {@link #WIFI_SLEEP_POLICY} to never go to sleep.
+         * @deprecated This is no longer used by the platform.
          */
+        @Deprecated
         public static final int WIFI_SLEEP_POLICY_NEVER = 2;
 
         /**
@@ -8820,9 +9302,15 @@ public final class Settings {
         public static final String CUSTOM_BUGREPORT_HANDLER_USER = "custom_bugreport_handler_user";
 
         /**
-         * Whether ADB is enabled.
+         * Whether ADB over USB is enabled.
          */
         public static final String ADB_ENABLED = "adb_enabled";
+
+        /**
+         * Whether ADB over Wifi is enabled.
+         * @hide
+         */
+        public static final String ADB_WIFI_ENABLED = "adb_wifi_enabled";
 
         /**
          * Whether Views are allowed to save their attribute data.
@@ -9011,6 +9499,16 @@ public final class Settings {
          */
         public static final String DEVELOPMENT_ENABLE_SIZECOMPAT_FREEFORM =
                 "enable_sizecompat_freeform";
+
+        /**
+         * If true, shadows drawn around the window will be rendered by the system compositor. If
+         * false, shadows will be drawn by the client by setting an elevation on the root view and
+         * the contents will be inset by the surface insets.
+         * (0 = false, 1 = true)
+         * @hide
+         */
+        public static final String DEVELOPMENT_RENDER_SHADOWS_IN_COMPOSITOR =
+                "render_shadows_in_compositor";
 
        /**
         * Whether user has enabled development settings.
@@ -9387,6 +9885,15 @@ public final class Settings {
         */
        public static final String PACKAGE_VERIFIER_INCLUDE_ADB = "verifier_verify_adb_installs";
 
+        /**
+         * Run integrity checks for integrity rule providers.
+         * 0 = bypass integrity verification on installs from rule providers (default)
+         * 1 = perform integrity verification on installs from rule providers
+         * @hide
+         */
+        public static final String INTEGRITY_CHECK_INCLUDES_RULE_PROVIDER =
+                "verify_integrity_for_rule_provider";
+
        /**
         * Time since last fstrim (milliseconds) after which we force one to happen
         * during device startup.  If unset, the default is 3 days.
@@ -9505,35 +10012,37 @@ public final class Settings {
          */
         public static final String SMS_SHORT_CODE_RULE = "sms_short_code_rule";
 
-       /**
-        * Used to select TCP's default initial receiver window size in segments - defaults to a build config value
-        * @hide
-        */
-       public static final String TCP_DEFAULT_INIT_RWND = "tcp_default_init_rwnd";
+        /**
+         * Used to select TCP's default initial receiver window size in segments - defaults to a
+         * build config value.
+         * @hide
+         */
+        public static final String TCP_DEFAULT_INIT_RWND = "tcp_default_init_rwnd";
 
-       /**
-        * Used to disable Tethering on a device - defaults to true
-        * @hide
-        */
-       public static final String TETHER_SUPPORTED = "tether_supported";
+        /**
+         * Used to disable Tethering on a device - defaults to true.
+         * @hide
+         */
+        @SystemApi
+        public static final String TETHER_SUPPORTED = "tether_supported";
 
-       /**
-        * Used to require DUN APN on the device or not - defaults to a build config value
-        * which defaults to false
-        * @hide
-        */
-       public static final String TETHER_DUN_REQUIRED = "tether_dun_required";
+        /**
+         * Used to require DUN APN on the device or not - defaults to a build config value
+         * which defaults to false.
+         * @hide
+         */
+        public static final String TETHER_DUN_REQUIRED = "tether_dun_required";
 
-       /**
-        * Used to hold a gservices-provisioned apn value for DUN.  If set, or the
-        * corresponding build config values are set it will override the APN DB
-        * values.
-        * Consists of a comma seperated list of strings:
-        * "name,apn,proxy,port,username,password,server,mmsc,mmsproxy,mmsport,mcc,mnc,auth,type"
-        * note that empty fields can be omitted: "name,apn,,,,,,,,,310,260,,DUN"
-        * @hide
-        */
-       public static final String TETHER_DUN_APN = "tether_dun_apn";
+        /**
+         * Used to hold a gservices-provisioned apn value for DUN.  If set, or the
+         * corresponding build config values are set it will override the APN DB
+         * values.
+         * Consists of a comma separated list of strings:
+         * "name,apn,proxy,port,username,password,server,mmsc,mmsproxy,mmsport,mcc,mnc,auth,type"
+         * note that empty fields can be omitted: "name,apn,,,,,,,,,310,260,,DUN"
+         * @hide
+         */
+        public static final String TETHER_DUN_APN = "tether_dun_apn";
 
         /**
          * Used to disable trying to talk to any available tethering offload HAL.
@@ -9542,6 +10051,8 @@ public final class Settings {
          * is interpreted as |false|.
          * @hide
          */
+        @SystemApi
+        @TestApi
         public static final String TETHER_OFFLOAD_DISABLED = "tether_offload_disabled";
 
         /**
@@ -9743,7 +10254,9 @@ public final class Settings {
        /**
         * Delay (in seconds) before repeating the Wi-Fi networks available notification.
         * Connecting to a network will reset the timer.
+        * @deprecated This is no longer used or set by the platform.
         */
+       @Deprecated
        public static final String WIFI_NETWORKS_AVAILABLE_REPEAT_DELAY =
                "wifi_networks_available_repeat_delay";
 
@@ -9773,7 +10286,9 @@ public final class Settings {
        /**
         * When the number of open networks exceeds this number, the
         * least-recently-used excess networks will be removed.
+        * @deprecated This is no longer used or set by the platform.
         */
+       @Deprecated
        public static final String WIFI_NUM_OPEN_NETWORKS_KEPT = "wifi_num_open_networks_kept";
 
        /**
@@ -9784,24 +10299,18 @@ public final class Settings {
        /**
         * Setting to allow scans to be enabled even wifi is turned off for connectivity.
         * @hide
+        * @deprecated To be removed. Use {@link WifiManager#setScanAlwaysAvailable(boolean)} for
+        * setting the value and {@link WifiManager#isScanAlwaysAvailable()} for query.
         */
        public static final String WIFI_SCAN_ALWAYS_AVAILABLE =
                 "wifi_scan_always_enabled";
-
-        /**
-         * The interval in milliseconds at which wifi rtt ranging requests will be throttled when
-         * they are coming from the background.
-         *
-         * @hide
-         */
-        public static final String WIFI_RTT_BACKGROUND_EXEC_GAP_MS =
-                "wifi_rtt_background_exec_gap_ms";
 
         /**
          * Indicate whether factory reset request is pending.
          *
          * Type: int (0 for false, 1 for true)
          * @hide
+         * @deprecated To be removed.
          */
         public static final String WIFI_P2P_PENDING_FACTORY_RESET =
                 "wifi_p2p_pending_factory_reset";
@@ -9811,6 +10320,9 @@ public final class Settings {
          *
          * Type: int (0 for false, 1 for true)
          * @hide
+         * @deprecated To be removed. Use {@link SoftApConfiguration.Builder#
+         * setAutoShutdownEnabled(boolean)} for setting the value and {@link SoftApConfiguration#
+         * isAutoShutdownEnabled()} for query.
          */
         public static final String SOFT_AP_TIMEOUT_ENABLED = "soft_ap_timeout_enabled";
 
@@ -9819,7 +10331,10 @@ public final class Settings {
          *
          * Type: int (0 for false, 1 for true)
          * @hide
+         * @deprecated Use {@link WifiManager#setAutoWakeupEnabled(boolean)} for setting the value
+         * and {@link WifiManager#isAutoWakeupEnabled()} for query.
          */
+        @Deprecated
         @SystemApi
         public static final String WIFI_WAKEUP_ENABLED = "wifi_wakeup_enabled";
 
@@ -9854,10 +10369,10 @@ public final class Settings {
          * Most readers of this setting should simply check if value == 1 to determined the
          * enabled state.
          * @hide
+         * @deprecated To be removed.
          */
         public static final String NETWORK_RECOMMENDATIONS_ENABLED =
                 "network_recommendations_enabled";
-
 
         /**
          * Which package name to use for network recommendations. If null, network recommendations
@@ -9883,17 +10398,6 @@ public final class Settings {
         public static final String USE_OPEN_WIFI_PACKAGE = "use_open_wifi_package";
 
         /**
-         * The number of milliseconds the {@link com.android.server.NetworkScoreService}
-         * will give a recommendation request to complete before returning a default response.
-         *
-         * Type: long
-         * @hide
-         * @deprecated to be removed
-         */
-        public static final String NETWORK_RECOMMENDATION_REQUEST_TIMEOUT_MS =
-                "network_recommendation_request_timeout_ms";
-
-        /**
          * The expiration time in milliseconds for the {@link android.net.WifiKey} request cache in
          * {@link com.android.server.wifi.RecommendedNetworkEvaluator}.
          *
@@ -9905,11 +10409,11 @@ public final class Settings {
 
         /**
          * Whether wifi scan throttle is enabled or not.
-         * This is intended to be used via adb commands or a menu in developer option to turn off
-         * the default wifi scan throttling mechanism for apps.
          *
          * Type: int (0 for false, 1 for true)
          * @hide
+         * @deprecated Use {@link WifiManager#setScanThrottleEnabled(boolean)} for setting the value
+         * and {@link WifiManager#isScanThrottleEnabled()} for query.
          */
         public static final String WIFI_SCAN_THROTTLE_ENABLED = "wifi_scan_throttle_enabled";
 
@@ -9967,16 +10471,6 @@ public final class Settings {
         public static final String BLE_SCAN_BACKGROUND_MODE = "ble_scan_background_mode";
 
        /**
-        * Used to save the Wifi_ON state prior to tethering.
-        * This state will be checked to restore Wifi after
-        * the user turns off tethering.
-        *
-        * @hide
-        */
-       @UnsupportedAppUsage
-       public static final String WIFI_SAVED_STATE = "wifi_saved_state";
-
-       /**
         * The interval in milliseconds to scan as used by the wifi supplicant
         * @hide
         */
@@ -10019,17 +10513,11 @@ public final class Settings {
                "wifi_watchdog_poor_network_test_enabled";
 
        /**
-        * Setting to turn on suspend optimizations at screen off on Wi-Fi. Enabled by default and
-        * needs to be set to 0 to disable it.
-        * @hide
-        */
-       public static final String WIFI_SUSPEND_OPTIMIZATIONS_ENABLED =
-               "wifi_suspend_optimizations_enabled";
-
-       /**
         * Setting to enable verbose logging in Wi-Fi; disabled by default, and setting to 1
         * will enable it. In the future, additional values may be supported.
         * @hide
+        * @deprecated Use {@link WifiManager#setVerboseLoggingEnabled(boolean)} for setting the
+        * value and {@link WifiManager#isVerboseLoggingEnabled()} for query.
         */
        public static final String WIFI_VERBOSE_LOGGING_ENABLED =
                "wifi_verbose_logging_enabled";
@@ -10055,69 +10543,10 @@ public final class Settings {
          * Default values are provided by code or device configurations.
          * Errors in the parameters will cause the entire setting to be ignored.
          * @hide
+         * @deprecated This is no longer used or set by the platform.
          */
         public static final String WIFI_SCORE_PARAMS =
                 "wifi_score_params";
-
-        /**
-         * Setting to enable logging WifiIsUnusableEvent in metrics
-         * which gets triggered when wifi becomes unusable.
-         * Disabled by default, and setting it to 1 will enable it.
-         * @hide
-         */
-        public static final String WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED =
-                "wifi_is_unusable_event_metrics_enabled";
-
-        /**
-         * The minimum number of txBad the framework has to observe
-         * to trigger a wifi data stall.
-         * @hide
-         */
-        public static final String WIFI_DATA_STALL_MIN_TX_BAD =
-                "wifi_data_stall_min_tx_bad";
-
-        /**
-         * The minimum number of txSuccess the framework has to observe
-         * to trigger a wifi data stall when rxSuccess is 0.
-         * @hide
-         */
-        public static final String WIFI_DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX =
-                "wifi_data_stall_min_tx_success_without_rx";
-
-        /**
-         * Setting to enable logging Wifi LinkSpeedCounts in metrics.
-         * Disabled by default, and setting it to 1 will enable it.
-         * @hide
-         */
-        public static final String WIFI_LINK_SPEED_METRICS_ENABLED =
-                "wifi_link_speed_metrics_enabled";
-
-        /**
-         * Setting to enable the PNO frequency culling optimization.
-         * Disabled by default, and setting it to 1 will enable it.
-         * The value is boolean (0 or 1).
-         * @hide
-         */
-        public static final String WIFI_PNO_FREQUENCY_CULLING_ENABLED =
-                "wifi_pno_frequency_culling_enabled";
-
-        /**
-         * Setting to enable including recency information when determining pno network priorities.
-         * Disabled by default, and setting it to 1 will enable it.
-         * The value is boolean (0 or 1).
-         * @hide
-         */
-        public static final String WIFI_PNO_RECENCY_SORTING_ENABLED =
-                "wifi_pno_recency_sorting_enabled";
-
-        /**
-         * Setting to enable the Wi-Fi link probing.
-         * Enabled by default, and setting it to 0 will disable it.
-         * The value is boolean (0 or 1).
-         * @hide
-         */
-        public static final String WIFI_LINK_PROBING_ENABLED =
-                "wifi_link_probing_enabled";
 
        /**
         * The maximum number of times we will retry a connection to an access
@@ -10157,6 +10586,9 @@ public final class Settings {
        /**
         * The Wi-Fi peer-to-peer device name
         * @hide
+        * @deprecated Use {@link WifiP2pManager#setDeviceName(WifiP2pManager.Channel, String,
+        * WifiP2pManager.ActionListener)} for setting the value and
+        * {@link android.net.wifi.p2p.WifiP2pDevice#deviceName} for query.
         */
        public static final String WIFI_P2P_DEVICE_NAME = "wifi_p2p_device_name";
 
@@ -10216,6 +10648,17 @@ public final class Settings {
         * change the ringer mode. See AudioManager.
         */
        public static final String MODE_RINGER = "mode_ringer";
+
+        /**
+         * Specifies whether Enhanced Connectivity is enabled or not. This setting allows the
+         * Connectivity Thermal Power Manager to actively help the device to save power in 5G
+         * scenarios
+         * Type: int 1 is enabled, 0 is disabled
+         *
+         * @hide
+         */
+        public static final String ENHANCED_CONNECTIVITY_ENABLED =
+                "enhanced_connectivity_enable";
 
         /**
          * Overlay display devices setting.
@@ -10809,6 +11252,15 @@ public final class Settings {
                 = "activity_starts_logging_enabled";
 
         /**
+         * Feature flag to enable or disable the foreground service starts logging feature.
+         * Type: int (0 for false, 1 for true)
+         * Default: 1
+         * @hide
+         */
+        public static final String FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED =
+                "foreground_service_starts_logging_enabled";
+
+        /**
          * @hide
          * @see com.android.server.appbinding.AppBindingConstants
          */
@@ -11109,6 +11561,7 @@ public final class Settings {
          * exempted_sync_duration           (long)
          * system_interaction_duration      (long)
          * initial_foreground_service_start_duration (long)
+         * cross_profile_apps_share_standby_buckets  (boolean)
          * </pre>
          *
          * <p>
@@ -12303,16 +12756,17 @@ public final class Settings {
 
         /**
          * Whether the Volte is enabled. If this setting is not set then we use the Carrier Config
-         * value {@link CarrierConfigManager#KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL}.
+         * value
+         * {@link android.telephony.CarrierConfigManager#KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL}.
          * <p>
          * Type: int (0 for false, 1 for true)
          * @hide
-         * @deprecated Use {@link android.telephony.SubscriptionManager#ENHANCED_4G_MODE_ENABLED}
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#ENHANCED_4G_MODE_ENABLED}
          * instead.
          */
         @Deprecated
         public static final String ENHANCED_4G_MODE_ENABLED =
-                SubscriptionManager.ENHANCED_4G_MODE_ENABLED;
+                Telephony.SimInfo.ENHANCED_4G_MODE_ENABLED;
 
         /**
          * Whether VT (Video Telephony over IMS) is enabled
@@ -12320,10 +12774,10 @@ public final class Settings {
          * Type: int (0 for false, 1 for true)
          *
          * @hide
-         * @deprecated Use {@link android.telephony.SubscriptionManager#VT_IMS_ENABLED} instead.
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#VT_IMS_ENABLED} instead.
          */
         @Deprecated
-        public static final String VT_IMS_ENABLED = SubscriptionManager.VT_IMS_ENABLED;
+        public static final String VT_IMS_ENABLED = Telephony.SimInfo.VT_IMS_ENABLED;
 
         /**
          * Whether WFC is enabled
@@ -12331,10 +12785,10 @@ public final class Settings {
          * Type: int (0 for false, 1 for true)
          *
          * @hide
-         * @deprecated Use {@link android.telephony.SubscriptionManager#WFC_IMS_ENABLED} instead.
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_ENABLED} instead.
          */
         @Deprecated
-        public static final String WFC_IMS_ENABLED = SubscriptionManager.WFC_IMS_ENABLED;
+        public static final String WFC_IMS_ENABLED = Telephony.SimInfo.WFC_IMS_ENABLED;
 
         /**
          * WFC mode on home/non-roaming network.
@@ -12342,10 +12796,10 @@ public final class Settings {
          * Type: int - 2=Wi-Fi preferred, 1=Cellular preferred, 0=Wi-Fi only
          *
          * @hide
-         * @deprecated Use {@link android.telephony.SubscriptionManager#WFC_IMS_MODE} instead.
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_MODE} instead.
          */
         @Deprecated
-        public static final String WFC_IMS_MODE = SubscriptionManager.WFC_IMS_MODE;
+        public static final String WFC_IMS_MODE = Telephony.SimInfo.WFC_IMS_MODE;
 
         /**
          * WFC mode on roaming network.
@@ -12353,11 +12807,11 @@ public final class Settings {
          * Type: int - see {@link #WFC_IMS_MODE} for values
          *
          * @hide
-         * @deprecated Use {@link android.telephony.SubscriptionManager#WFC_IMS_ROAMING_MODE}
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_ROAMING_MODE}
          * instead.
          */
         @Deprecated
-        public static final String WFC_IMS_ROAMING_MODE = SubscriptionManager.WFC_IMS_ROAMING_MODE;
+        public static final String WFC_IMS_ROAMING_MODE = Telephony.SimInfo.WFC_IMS_ROAMING_MODE;
 
         /**
          * Whether WFC roaming is enabled
@@ -12365,12 +12819,12 @@ public final class Settings {
          * Type: int (0 for false, 1 for true)
          *
          * @hide
-         * @deprecated Use {@link android.telephony.SubscriptionManager#WFC_IMS_ROAMING_ENABLED}
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_ROAMING_ENABLED}
          * instead
          */
         @Deprecated
         public static final String WFC_IMS_ROAMING_ENABLED =
-                SubscriptionManager.WFC_IMS_ROAMING_ENABLED;
+                Telephony.SimInfo.WFC_IMS_ROAMING_ENABLED;
 
         /**
          * Whether user can enable/disable LTE as a preferred network. A carrier might control
@@ -12812,7 +13266,29 @@ public final class Settings {
          */
         public static boolean putString(ContentResolver resolver,
                 String name, String value) {
-            return putStringForUser(resolver, name, value, null, false, resolver.getUserId());
+            return putStringForUser(resolver, name, value, null, false, resolver.getUserId(),
+                    DEFAULT_OVERRIDEABLE_BY_RESTORE);
+        }
+
+        /**
+         * Store a name/value pair into the database.
+         *
+         * @param resolver to access the database with
+         * @param name to store
+         * @param value to associate with the name
+         * @param tag to associated with the setting.
+         * @param makeDefault whether to make the value the default one.
+         * @param overrideableByRestore whether restore can override this value
+         * @return true if the value was set, false on database errors
+         *
+         * @hide
+         */
+        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
+        public static boolean putString(@NonNull ContentResolver resolver,
+                @NonNull String name, @Nullable String value, @Nullable String tag,
+                boolean makeDefault, boolean overrideableByRestore) {
+            return putStringForUser(resolver, name, value, tag, makeDefault,
+                    resolver.getUserId(), overrideableByRestore);
         }
 
         /**
@@ -12861,7 +13337,7 @@ public final class Settings {
                 @NonNull String name, @Nullable String value, @Nullable String tag,
                 boolean makeDefault) {
             return putStringForUser(resolver, name, value, tag, makeDefault,
-                    resolver.getUserId());
+                    resolver.getUserId(), DEFAULT_OVERRIDEABLE_BY_RESTORE);
         }
 
         /**
@@ -12923,13 +13399,14 @@ public final class Settings {
         @UnsupportedAppUsage
         public static boolean putStringForUser(ContentResolver resolver,
                 String name, String value, int userHandle) {
-            return putStringForUser(resolver, name, value, null, false, userHandle);
+            return putStringForUser(resolver, name, value, null, false, userHandle,
+                    DEFAULT_OVERRIDEABLE_BY_RESTORE);
         }
 
         /** @hide */
         public static boolean putStringForUser(@NonNull ContentResolver resolver,
                 @NonNull String name, @Nullable String value, @Nullable String tag,
-                boolean makeDefault, @UserIdInt int userHandle) {
+                boolean makeDefault, @UserIdInt int userHandle, boolean overrideableByRestore) {
             if (LOCAL_LOGV) {
                 Log.v(TAG, "Global.putString(name=" + name + ", value=" + value
                         + " for " + userHandle);
@@ -12939,10 +13416,10 @@ public final class Settings {
                 Log.w(TAG, "Setting " + name + " has moved from android.provider.Settings.Global"
                         + " to android.provider.Settings.Secure, value is unchanged.");
                 return Secure.putStringForUser(resolver, name, value, tag,
-                        makeDefault, userHandle);
+                        makeDefault, userHandle, overrideableByRestore);
             }
             return sNameValueCache.putStringForUser(resolver, name, value, tag,
-                    makeDefault, userHandle);
+                    makeDefault, userHandle, overrideableByRestore);
         }
 
         /**
@@ -13557,14 +14034,6 @@ public final class Settings {
                 "backup_agent_timeout_parameters";
 
         /**
-         * Whether the backup system service supports multiple users (0 = disabled, 1 = enabled). If
-         * disabled, the service will only be active for the system user.
-         *
-         * @hide
-         */
-        public static final String BACKUP_MULTI_USER_ENABLED = "backup_multi_user_enabled";
-
-        /**
          * Blacklist of GNSS satellites.
          *
          * This is a list of integers separated by commas to represent pairs of (constellation,
@@ -13631,13 +14100,6 @@ public final class Settings {
          * @hide
          */
         public static final String KERNEL_CPU_THREAD_READER = "kernel_cpu_thread_reader";
-
-        /**
-         * Default user id to boot into. They map to user ids, for example, 10, 11, 12.
-         *
-         * @hide
-         */
-        public static final String DEFAULT_USER_ID_TO_BOOT_INTO = "default_boot_into_user_id";
 
         /**
          * Persistent user id that is last logged in to.
@@ -13734,6 +14196,26 @@ public final class Settings {
          */
         public static final String POWER_BUTTON_SUPPRESSION_DELAY_AFTER_GESTURE_WAKE =
                 "power_button_suppression_delay_after_gesture_wake";
+
+        /**
+         * An integer indicating whether the device is in Common Criteria mode. When enabled,
+         * certain device functionalities are tuned to meet the higher security level required
+         * by Common Criteria certification. Examples include:
+         *   Bluetooth long term key material is additionally integrity-protected with AES-GCM.
+         *   WiFi configuration store is additionally integrity-protected with AES-GCM.
+         * A value of 0 means Common Criteria mode is not enabled (default), a value of non-zero
+         * means Common Criteria mode is enabled.
+         * @hide
+         */
+        @SystemApi
+        public static final String COMMON_CRITERIA_MODE = "common_criteria_mode";
+
+        /**
+         * The usage amount of advanced battery. The value is 0~100.
+         *
+         * @hide
+         */
+        public static final String ADVANCED_BATTERY_USAGE_AMOUNT = "advanced_battery_usage_amount";
     }
 
     /**
@@ -13781,7 +14263,7 @@ public final class Settings {
          * @hide
          */
         @RequiresPermission(Manifest.permission.READ_DEVICE_CONFIG)
-        static Map<String, String> getStrings(@NonNull ContentResolver resolver,
+        public static Map<String, String> getStrings(@NonNull ContentResolver resolver,
                 @NonNull String namespace, @NonNull List<String> names) {
             List<String> compositeNames = new ArrayList<>(names.size());
             for (String name : names) {
@@ -13824,7 +14306,8 @@ public final class Settings {
         static boolean putString(@NonNull ContentResolver resolver, @NonNull String namespace,
                 @NonNull String name, @Nullable String value, boolean makeDefault) {
             return sNameValueCache.putStringForUser(resolver, createCompositeName(namespace, name),
-                    value, null, makeDefault, resolver.getUserId());
+                    value, null, makeDefault, resolver.getUserId(),
+                    DEFAULT_OVERRIDEABLE_BY_RESTORE);
         }
 
         /**
@@ -13839,15 +14322,20 @@ public final class Settings {
          * @hide
          */
         @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
-        static boolean setStrings(@NonNull ContentResolver resolver, @NonNull String namespace,
-                @NonNull Map<String, String> keyValues) {
+        public static boolean setStrings(@NonNull ContentResolver resolver,
+                @NonNull String namespace, @NonNull Map<String, String> keyValues)
+                throws DeviceConfig.BadConfigException {
             HashMap<String, String> compositeKeyValueMap = new HashMap<>(keyValues.keySet().size());
             for (Map.Entry<String, String> entry : keyValues.entrySet()) {
                 compositeKeyValueMap.put(
                         createCompositeName(namespace, entry.getKey()), entry.getValue());
             }
-            return sNameValueCache.setStringsForPrefix(resolver, createPrefix(namespace),
-                    compositeKeyValueMap);
+            // If can't set given configuration that means it's bad
+            if (!sNameValueCache.setStringsForPrefix(resolver, createPrefix(namespace),
+                    compositeKeyValueMap)) {
+                throw new DeviceConfig.BadConfigException();
+            }
+            return true;
         }
 
         /**
@@ -13880,6 +14368,42 @@ public final class Settings {
             } catch (RemoteException e) {
                 Log.w(TAG, "Can't reset to defaults for " + DeviceConfig.CONTENT_URI, e);
             }
+        }
+
+        /**
+         * Register callback for monitoring Config table.
+         *
+         * @param resolver Handle to the content resolver.
+         * @param callback callback to register
+         *
+         * @hide
+         */
+        @RequiresPermission(Manifest.permission.MONITOR_DEVICE_CONFIG_ACCESS)
+        public static void registerMonitorCallback(@NonNull ContentResolver resolver,
+                @NonNull RemoteCallback callback) {
+            registerMonitorCallbackAsUser(resolver, resolver.getUserId(), callback);
+        }
+
+        private static void registerMonitorCallbackAsUser(
+                @NonNull ContentResolver resolver, @UserIdInt int userHandle,
+                @NonNull RemoteCallback callback) {
+            try {
+                Bundle arg = new Bundle();
+                arg.putInt(CALL_METHOD_USER_KEY, userHandle);
+                arg.putParcelable(CALL_METHOD_MONITOR_CALLBACK_KEY, callback);
+                IContentProvider cp = sProviderHolder.getProvider(resolver);
+                cp.call(resolver.getPackageName(), resolver.getFeatureId(),
+                        sProviderHolder.mUri.getAuthority(),
+                        CALL_METHOD_REGISTER_MONITOR_CALLBACK_CONFIG, null, arg);
+            } catch (RemoteException e) {
+                Log.w(TAG, "Can't register config monitor callback", e);
+            }
+        }
+
+        /** @hide */
+        public static void clearProviderForTest() {
+            sProviderHolder.clearProviderForTest();
+            sNameValueCache.clearGenerationTrackerForTest();
         }
 
         private static String createCompositeName(@NonNull String namespace, @NonNull String name) {
@@ -14160,46 +14684,74 @@ public final class Settings {
 
     /**
      * Activity Action: Show setting page to process the addition of Wi-Fi networks to the user's
-     * saved network list. The app should send a new intent with an extra that holds a maximum of
-     * five {@link android.net.wifi.WifiConfiguration} that specify credentials for the networks to
-     * be added to the user's database. The Intent should be sent via the {@link
-     * android.app.Activity#startActivityForResult(Intent, int)} API.
+     * saved network list. The app should send a new intent with an extra that holds a maximum
+     * of five {@link android.net.wifi.WifiNetworkSuggestion} that specify credentials for the
+     * networks to be added to the user's database. The Intent should be sent via the
+     * {@link android.app.Activity#startActivityForResult(Intent, int)} API.
      * <p>
      * Note: The app sending the Intent to add the credentials doesn't get any ownership over the
      * newly added network(s). For the Wi-Fi stack, these networks will look like the user
      * manually added them from the Settings UI.
      * <p>
-     * Input: The app should put parcelable array list to
-     * {@link android.net.wifi.WifiConfiguration} into the
-     * {@link #EXTRA_WIFI_CONFIGURATION_LIST} extra.
+     * Input: The app should put parcelable array list of
+     * {@link android.net.wifi.WifiNetworkSuggestion} into the {@link #EXTRA_WIFI_NETWORK_LIST}
+     * extra.
      * <p>
      * Output: After {@link android.app.Activity#startActivityForResult(Intent, int)}, the
      * callback {@link android.app.Activity#onActivityResult(int, int, Intent)} will have a
      * result code {@link android.app.Activity#RESULT_OK} to indicate user pressed the save
      * button to save the networks or {@link android.app.Activity#RESULT_CANCELED} to indicate
      * that the user rejected the request. Additionally, an integer array list, stored in
-     * {@link #EXTRA_WIFI_CONFIGURATION_RESULT_LIST}, will indicate the process result of
-     * each network.
+     * {@link #EXTRA_WIFI_NETWORK_RESULT_LIST}, will indicate the process result of each network.
      */
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_WIFI_ADD_NETWORKS =
             "android.settings.WIFI_ADD_NETWORKS";
 
     /**
-     * A bundle extra of {@link #ACTION_WIFI_ADD_NETWORKS} intent action that indicates all the
-     * {@link android.net.wifi.WifiConfiguration} that would be saved.
+     * A bundle extra of {@link #ACTION_WIFI_ADD_NETWORKS} intent action that indicates the list
+     * of the {@link android.net.wifi.WifiNetworkSuggestion} elements. The maximum count of the
+     * {@link android.net.wifi.WifiNetworkSuggestion} elements in the list will be five.
+     * <p>
+     * For example:
+     * To provide credentials for one open and one WPA2 networks:
+     *
+     * <pre>{@code
+     * final WifiNetworkSuggestion suggestion1 =
+     *       new WifiNetworkSuggestion.Builder()
+     *       .setSsid("test111111")
+     *       .build();
+     * final WifiNetworkSuggestion suggestion2 =
+     *       new WifiNetworkSuggestion.Builder()
+     *       .setSsid("test222222")
+     *       .setWpa2Passphrase("test123456")
+     *       .build();
+     * final List<WifiNetworkSuggestion> suggestionsList = new ArrayList<>;
+     * suggestionsList.add(suggestion1);
+     * suggestionsList.add(suggestion2);
+     * Bundle bundle = new Bundle();
+     * bundle.putParcelableArrayList(Settings.EXTRA_WIFI_NETWORK_LIST,(ArrayList<? extends
+     * Parcelable>) suggestionsList);
+     * final Intent intent = new Intent(Settings.ACTION_WIFI_ADD_NETWORKS);
+     * intent.putExtras(bundle);
+     * startActivityForResult(intent, 0);
+     * }</pre>
      */
-    public static final String EXTRA_WIFI_CONFIGURATION_LIST =
-            "android.provider.extra.WIFI_CONFIGURATION_LIST";
+    public static final String EXTRA_WIFI_NETWORK_LIST =
+            "android.provider.extra.WIFI_NETWORK_LIST";
 
     /**
      * A bundle extra of the result of {@link #ACTION_WIFI_ADD_NETWORKS} intent action that
-     * indicates the action result of the saved {@link android.net.wifi.WifiConfiguration}. It's
-     * value of AddWifiResult interface, and will be 1:1 mapping to the element in {@link
-     * #EXTRA_WIFI_CONFIGURATION_LIST}.
+     * indicates the action result of the saved {@link android.net.wifi.WifiNetworkSuggestion}.
+     * Its value is a list of integers, and all the elements will be 1:1 mapping to the elements
+     * in {@link #EXTRA_WIFI_NETWORK_LIST}, if user press cancel to cancel the add networks
+     * request, then its value will be null.
+     * <p>
+     * Note: The integer value will be one of the {@link #ADD_WIFI_RESULT_SUCCESS},
+     * {@link #ADD_WIFI_RESULT_ADD_OR_UPDATE_FAILED}, or {@link #ADD_WIFI_RESULT_ALREADY_EXISTS}}.
      */
-    public static final String EXTRA_WIFI_CONFIGURATION_RESULT_LIST =
-            "android.provider.extra.WIFI_CONFIGURATION_RESULT_LIST";
+    public static final String EXTRA_WIFI_NETWORK_RESULT_LIST =
+            "android.provider.extra.WIFI_NETWORK_RESULT_LIST";
 
     /** @hide */
     @Retention(RetentionPolicy.SOURCE)
@@ -14229,6 +14781,20 @@ public final class Settings {
      */
     public static final int ADD_WIFI_RESULT_ALREADY_EXISTS = 2;
 
+    /**
+     * Activity Action: Allows user to select current bug report handler.
+     * <p>
+     * Input: Nothing.
+     * <p>
+     * Output: Nothing.
+     *
+     * @hide
+     */
+    @SystemApi
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_BUGREPORT_HANDLER_SETTINGS =
+            "android.settings.BUGREPORT_HANDLER_SETTINGS";
+
     private static final String[] PM_WRITE_SETTINGS = {
         android.Manifest.permission.WRITE_SETTINGS
     };
@@ -14239,6 +14805,42 @@ public final class Settings {
     private static final String[] PM_SYSTEM_ALERT_WINDOW = {
         android.Manifest.permission.SYSTEM_ALERT_WINDOW
     };
+
+    /**
+     * Activity Action: Show screen for controlling which apps have access to manage external
+     * storage.
+     * <p>
+     * In some cases, a matching Activity may not exist, so ensure you safeguard against this.
+     * <p>
+     * If you want to control a specific app's access to manage external storage, use
+     * {@link #ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION} instead.
+     * <p>
+     * Output: Nothing.
+     * @see #ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION =
+            "android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION";
+
+    /**
+     * Activity Action: Show screen for controlling if the app specified in the data URI of the
+     * intent can manage external storage.
+     * <p>
+     * Launching the corresponding activity requires the permission
+     * {@link Manifest.permission#MANAGE_EXTERNAL_STORAGE}.
+     * <p>
+     * In some cases, a matching Activity may not exist, so ensure you safeguard against this.
+     * <p>
+     * Input: The Intent's data URI MUST specify the application package name whose ability of
+     * managing external storage you want to control.
+     * For example "package:com.my.app".
+     * <p>
+     * Output: Nothing.
+     * @see #ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION =
+            "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION";
 
     /**
      * Performs a strict and comprehensive check of whether a calling package is allowed to
@@ -14266,8 +14868,9 @@ public final class Settings {
      * current time.
      * @hide
      */
-    public static boolean checkAndNoteWriteSettingsOperation(Context context, int uid,
-            String callingPackage, boolean throwException) {
+    @SystemApi
+    public static boolean checkAndNoteWriteSettingsOperation(@NonNull Context context, int uid,
+            @NonNull String callingPackage, boolean throwException) {
         return isCallingPackageAllowedToPerformAppOpsProtectedOperation(context, uid,
                 callingPackage, throwException, AppOpsManager.OP_WRITE_SETTINGS,
                 PM_WRITE_SETTINGS, true);

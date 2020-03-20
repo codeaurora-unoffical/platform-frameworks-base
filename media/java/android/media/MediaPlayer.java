@@ -19,8 +19,8 @@ package android.media;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityThread;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ContentProvider;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -632,7 +632,6 @@ public class MediaPlayer extends PlayerBase
     private boolean mScreenOnWhilePlaying;
     private boolean mStayAwake;
     private int mStreamType = AudioManager.USE_DEFAULT_STREAM_TYPE;
-    private int mUsage = -1;
 
     // Modular DRM
     private UUID mDrmUUID;
@@ -1106,7 +1105,6 @@ public class MediaPlayer extends PlayerBase
             setDataSource(afd);
             return true;
         } catch (NullPointerException | SecurityException | IOException ex) {
-            Log.w(TAG, "Couldn't open " + (uri == null ? "null uri" : uri.toSafeString()), ex);
             return false;
         }
     }
@@ -2220,7 +2218,6 @@ public class MediaPlayer extends PlayerBase
             throw new IllegalArgumentException(msg);
         }
         baseUpdateAudioAttributes(attributes);
-        mUsage = attributes.getUsage();
         Parcel pattributes = Parcel.obtain();
         attributes.writeToParcel(pattributes, AudioAttributes.FLATTEN_TAGS);
         setParameter(KEY_PARAMETER_AUDIO_ATTRIBUTES, pattributes);

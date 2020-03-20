@@ -59,10 +59,22 @@ static void strcpy16_htod(uint16_t* dst, size_t len, const StringPiece16& src) {
   dst[i] = 0;
 }
 
+static bool cmp_style_ids(ResourceId a, ResourceId b) {
+  // If one of a and b is from the framework package (package ID 0x01), and the
+  // other is a dynamic ID (package ID 0x00), then put the dynamic ID after the
+  // framework ID. This ensures that when AssetManager resolves the dynamic IDs,
+  // they will be in sorted order as expected by AssetManager.
+  if ((a.package_id() == kFrameworkPackageId && b.package_id() == 0x00) ||
+      (a.package_id() == 0x00 && b.package_id() == kFrameworkPackageId)) {
+    return b < a;
+  }
+  return a < b;
+}
+
 static bool cmp_style_entries(const Style::Entry& a, const Style::Entry& b) {
   if (a.key.id) {
     if (b.key.id) {
-      return a.key.id.value() < b.key.id.value();
+      return cmp_style_ids(a.key.id.value(), b.key.id.value());
     }
     return true;
   } else if (!b.key.id) {
@@ -221,7 +233,7 @@ class MapFlattenVisitor : public ValueVisitor {
 struct OverlayableChunk {
   std::string actor;
   Source source;
-  std::map<OverlayableItem::PolicyFlags, std::set<ResourceId>> policy_ids;
+  std::map<PolicyFlags, std::set<ResourceId>> policy_ids;
 };
 
 class PackageFlattener {
@@ -481,35 +493,12 @@ class PackageFlattener {
           return false;
         }
 
-        uint32_t policy_flags = 0;
-        if (item.policies & OverlayableItem::Policy::kPublic) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_PUBLIC;
-        }
-        if (item.policies & OverlayableItem::Policy::kSystem) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_SYSTEM_PARTITION;
-        }
-        if (item.policies & OverlayableItem::Policy::kVendor) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_VENDOR_PARTITION;
-        }
-        if (item.policies & OverlayableItem::Policy::kProduct) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_PRODUCT_PARTITION;
-        }
-        if (item.policies & OverlayableItem::Policy::kSignature) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_SIGNATURE;
-        }
-        if (item.policies & OverlayableItem::Policy::kOdm) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_ODM_PARTITION;
-        }
-        if (item.policies & OverlayableItem::Policy::kOem) {
-          policy_flags |= ResTable_overlayable_policy_header::POLICY_OEM_PARTITION;
-        }
-
-        auto policy = overlayable_chunk->policy_ids.find(policy_flags);
+        auto policy = overlayable_chunk->policy_ids.find(item.policies);
         if (policy != overlayable_chunk->policy_ids.end()) {
           policy->second.insert(id);
         } else {
           overlayable_chunk->policy_ids.insert(
-              std::make_pair(policy_flags, std::set<ResourceId>{id}));
+              std::make_pair(item.policies, std::set<ResourceId>{id}));
         }
       }
     }
@@ -547,7 +536,8 @@ class PackageFlattener {
         ChunkWriter policy_writer(buffer);
         auto* policy_type = policy_writer.StartChunk<ResTable_overlayable_policy_header>(
             RES_TABLE_OVERLAYABLE_POLICY_TYPE);
-        policy_type->policy_flags = util::HostToDevice32(static_cast<uint32_t>(policy_ids.first));
+        policy_type->policy_flags =
+            static_cast<PolicyFlags>(util::HostToDevice32(static_cast<uint32_t>(policy_ids.first)));
         policy_type->entry_count = util::HostToDevice32(static_cast<uint32_t>(
                                                             policy_ids.second.size()));
         // Write the ids after the policy header

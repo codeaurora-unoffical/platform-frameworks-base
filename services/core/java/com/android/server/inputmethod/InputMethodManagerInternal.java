@@ -18,8 +18,12 @@ package com.android.server.inputmethod;
 
 import android.annotation.NonNull;
 import android.annotation.UserIdInt;
+import android.view.inputmethod.InlineSuggestionsRequest;
 import android.view.inputmethod.InputMethodInfo;
 
+import com.android.internal.inputmethod.SoftInputShowHideReason;
+import com.android.internal.view.IInlineSuggestionsRequestCallback;
+import com.android.internal.view.InlineSuggestionsRequestInfo;
 import com.android.server.LocalServices;
 
 import java.util.Collections;
@@ -30,15 +34,19 @@ import java.util.List;
  */
 public abstract class InputMethodManagerInternal {
     /**
-     * Called by the power manager to tell the input method manager whether it
-     * should start watching for wake events.
+     * Listener for input method list changed events.
      */
-    public abstract void setInteractive(boolean interactive);
+    public interface InputMethodListListener {
+        /**
+         * Called with the list of the installed IMEs when it's updated.
+         */
+        void onInputMethodListUpdated(List<InputMethodInfo> info, @UserIdInt int userId);
+    }
 
     /**
      * Hides the current input method, if visible.
      */
-    public abstract void hideCurrentInputMethod();
+    public abstract void hideCurrentInputMethod(@SoftInputShowHideReason int reason);
 
     /**
      * Returns the list of installed input methods for the specified user.
@@ -57,16 +65,39 @@ public abstract class InputMethodManagerInternal {
     public abstract List<InputMethodInfo> getEnabledInputMethodListAsUser(@UserIdInt int userId);
 
     /**
+     * Called by the Autofill Frameworks to request an {@link InlineSuggestionsRequest} from
+     * the input method.
+     *
+     * @param requestInfo information needed to create an {@link InlineSuggestionsRequest}.
+     * @param cb {@link IInlineSuggestionsRequestCallback} used to pass back the request object.
+     */
+    public abstract void onCreateInlineSuggestionsRequest(@UserIdInt int userId,
+            InlineSuggestionsRequestInfo requestInfo, IInlineSuggestionsRequestCallback cb);
+
+    /**
+     * Force switch to the enabled input method by {@code imeId} for current user. If the input
+     * method with {@code imeId} is not enabled or not installed, do nothing.
+     *
+     * @param imeId  The input method ID to be switched to.
+     * @param userId The user ID to be queried.
+     * @return {@code true} if the current input method was successfully switched to the input
+     * method by {@code imeId}; {@code false} the input method with {@code imeId} is not available
+     * to be switched.
+     */
+    public abstract boolean switchToInputMethod(String imeId, @UserIdInt int userId);
+
+    /**
+     * Registers a new {@link InputMethodListListener}.
+     */
+    public abstract void registerInputMethodListListener(InputMethodListListener listener);
+
+    /**
      * Fake implementation of {@link InputMethodManagerInternal}.  All the methods do nothing.
      */
     private static final InputMethodManagerInternal NOP =
             new InputMethodManagerInternal() {
                 @Override
-                public void setInteractive(boolean interactive) {
-                }
-
-                @Override
-                public void hideCurrentInputMethod() {
+                public void hideCurrentInputMethod(@SoftInputShowHideReason int reason) {
                 }
 
                 @Override
@@ -77,6 +108,21 @@ public abstract class InputMethodManagerInternal {
                 @Override
                 public List<InputMethodInfo> getEnabledInputMethodListAsUser(int userId) {
                     return Collections.emptyList();
+                }
+
+                @Override
+                public void onCreateInlineSuggestionsRequest(int userId,
+                        InlineSuggestionsRequestInfo requestInfo,
+                        IInlineSuggestionsRequestCallback cb) {
+                }
+
+                @Override
+                public boolean switchToInputMethod(String imeId, int userId) {
+                    return false;
+                }
+
+                @Override
+                public void registerInputMethodListListener(InputMethodListListener listener) {
                 }
             };
 

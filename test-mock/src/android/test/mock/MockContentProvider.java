@@ -21,6 +21,7 @@ import android.annotation.Nullable;
 import android.content.ContentProvider;
 import android.content.ContentProviderOperation;
 import android.content.ContentProviderResult;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.IContentProvider;
@@ -31,10 +32,12 @@ import android.content.pm.ProviderInfo;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.ICancellationSignal;
 import android.os.ParcelFileDescriptor;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
 
 import java.io.FileNotFoundException;
@@ -78,6 +81,11 @@ public class MockContentProvider extends ContentProvider {
         @Override
         public String getType(Uri url) throws RemoteException {
             return MockContentProvider.this.getType(url);
+        }
+
+        @Override
+        public void getTypeAsync(Uri uri, RemoteCallback callback) throws RemoteException {
+            MockContentProvider.this.getTypeAsync(uri, callback);
         }
 
         @Override
@@ -148,6 +156,12 @@ public class MockContentProvider extends ContentProvider {
         }
 
         @Override
+        public void canonicalizeAsync(String callingPkg, String featureId, Uri uri,
+                RemoteCallback callback) {
+            MockContentProvider.this.canonicalizeAsync(uri, callback);
+        }
+
+        @Override
         public Uri uncanonicalize(String callingPkg, @Nullable String featureId, Uri uri)
                 throws RemoteException {
             return MockContentProvider.this.uncanonicalize(uri);
@@ -212,6 +226,18 @@ public class MockContentProvider extends ContentProvider {
         throw new UnsupportedOperationException("unimplemented mock method");
     }
 
+    /**
+     * @hide
+     */
+    @SuppressWarnings("deprecation")
+    public void getTypeAsync(Uri uri, RemoteCallback remoteCallback) {
+        AsyncTask.SERIAL_EXECUTOR.execute(() -> {
+            final Bundle bundle = new Bundle();
+            bundle.putString(ContentResolver.REMOTE_CALLBACK_RESULT, getType(uri));
+            remoteCallback.sendResult(bundle);
+        });
+    }
+
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         throw new UnsupportedOperationException("unimplemented mock method");
@@ -267,6 +293,18 @@ public class MockContentProvider extends ContentProvider {
     @Override
     public AssetFileDescriptor openTypedAssetFile(Uri url, String mimeType, Bundle opts) {
         throw new UnsupportedOperationException("unimplemented mock method call");
+    }
+
+    /**
+     * @hide
+     */
+    @SuppressWarnings("deprecation")
+    public void canonicalizeAsync(Uri uri, RemoteCallback callback) {
+        AsyncTask.SERIAL_EXECUTOR.execute(() -> {
+            final Bundle bundle = new Bundle();
+            bundle.putParcelable(ContentResolver.REMOTE_CALLBACK_RESULT, canonicalize(uri));
+            callback.sendResult(bundle);
+        });
     }
 
     /**

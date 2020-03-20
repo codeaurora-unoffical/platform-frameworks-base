@@ -36,12 +36,14 @@ import android.util.SparseArray;
 import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.util.Preconditions;
 
 import java.io.File;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Settings base class for pending and resolved classes.
@@ -77,12 +79,12 @@ public abstract class PackageSettingBase extends SettingBase {
     /**
      * The primary CPU abi for this package.
      */
-    String primaryCpuAbiString;
+    public String primaryCpuAbiString;
 
     /**
      * The secondary CPU abi for this package.
      */
-    String secondaryCpuAbiString;
+    public String secondaryCpuAbiString;
 
     /**
      * The install time CPU override, if any. This value is written at install time
@@ -130,6 +132,8 @@ public abstract class PackageSettingBase extends SettingBase {
 
     IntentFilterVerificationInfo verificationInfo;
 
+    boolean forceQueryableOverride;
+
     PackageSettingBase(String name, String realName, File codePath, File resourcePath,
             String legacyNativeLibraryPathString, String primaryCpuAbiString,
             String secondaryCpuAbiString, String cpuAbiOverrideString,
@@ -172,7 +176,7 @@ public abstract class PackageSettingBase extends SettingBase {
     }
 
     public void setInstallSource(InstallSource installSource) {
-        this.installSource = Preconditions.checkNotNull(installSource);
+        this.installSource = Objects.requireNonNull(installSource);
     }
 
     void removeInstallerPackage(String packageName) {
@@ -259,6 +263,7 @@ public abstract class PackageSettingBase extends SettingBase {
                 ? Arrays.copyOf(orig.usesStaticLibrariesVersions,
                        orig.usesStaticLibrariesVersions.length) : null;
         updateAvailable = orig.updateAvailable;
+        forceQueryableOverride = orig.forceQueryableOverride;
     }
 
     @VisibleForTesting
@@ -311,12 +316,21 @@ public abstract class PackageSettingBase extends SettingBase {
     }
 
     void setOverlayPaths(List<String> overlayPaths, int userId) {
-        modifyUserState(userId).overlayPaths = overlayPaths == null ? null :
-            overlayPaths.toArray(new String[overlayPaths.size()]);
+        modifyUserState(userId).setOverlayPaths(overlayPaths == null ? null :
+            overlayPaths.toArray(new String[overlayPaths.size()]));
     }
 
     String[] getOverlayPaths(int userId) {
-        return readUserState(userId).overlayPaths;
+        return readUserState(userId).getOverlayPaths();
+    }
+
+    void setOverlayPathsForLibrary(String libName, List<String> overlayPaths, int userId) {
+        modifyUserState(userId).setSharedLibraryOverlayPaths(libName,
+                overlayPaths == null ? null : overlayPaths.toArray(new String[0]));
+    }
+
+    Map<String, String[]> getOverlayPathsForLibrary(int userId) {
+        return readUserState(userId).getSharedLibraryOverlayPaths();
     }
 
     /** Only use for testing. Do NOT use in production code. */
@@ -413,6 +427,22 @@ public abstract class PackageSettingBase extends SettingBase {
         final PackageUserState existingUserState = modifyUserState(userId);
         if (existingUserState.suspendParams != null) {
             existingUserState.suspendParams.remove(suspendingPackage);
+            if (existingUserState.suspendParams.size() == 0) {
+                existingUserState.suspendParams = null;
+            }
+        }
+        existingUserState.suspended = (existingUserState.suspendParams != null);
+    }
+
+    void removeSuspension(Predicate<String> suspendingPackagePredicate, int userId) {
+        final PackageUserState existingUserState = modifyUserState(userId);
+        if (existingUserState.suspendParams != null) {
+            for (int i = existingUserState.suspendParams.size() - 1; i >= 0; i--) {
+                final String suspendingPackage = existingUserState.suspendParams.keyAt(i);
+                if (suspendingPackagePredicate.test(suspendingPackage)) {
+                    existingUserState.suspendParams.removeAt(i);
+                }
+            }
             if (existingUserState.suspendParams.size() == 0) {
                 existingUserState.suspendParams = null;
             }
@@ -682,6 +712,7 @@ public abstract class PackageSettingBase extends SettingBase {
         this.categoryHint = other.categoryHint;
         this.updateAvailable = other.updateAvailable;
         this.verificationInfo = other.verificationInfo;
+        this.forceQueryableOverride = other.forceQueryableOverride;
 
         if (mOldCodePaths != null) {
             if (other.mOldCodePaths != null) {

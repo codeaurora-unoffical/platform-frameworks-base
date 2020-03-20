@@ -25,10 +25,15 @@ import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
+import android.app.ActivityManager;
 import android.app.ActivityThread;
+import android.app.IActivityManager;
+import android.app.PropertyInvalidatedCache;
 import android.content.Context;
 import android.content.pm.IPackageManager;
+import android.content.pm.PackageManager;
 import android.content.pm.permission.SplitPermissionInfoParcelable;
+import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.UserHandle;
@@ -39,6 +44,7 @@ import com.android.internal.annotations.Immutable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
@@ -92,7 +98,10 @@ public final class PermissionManager {
      */
     @TestApi
     @SystemApi
-    @RequiresPermission(Manifest.permission.ADJUST_RUNTIME_PERMISSIONS_POLICY)
+    @RequiresPermission(anyOf = {
+            Manifest.permission.ADJUST_RUNTIME_PERMISSIONS_POLICY,
+            Manifest.permission.UPGRADE_RUNTIME_PERMISSIONS
+    })
     public @IntRange(from = 0) int getRuntimePermissionsVersion() {
         try {
             return mPackageManager.getRuntimePermissionsVersion(mContext.getUserId());
@@ -110,7 +119,10 @@ public final class PermissionManager {
      */
     @TestApi
     @SystemApi
-    @RequiresPermission(Manifest.permission.ADJUST_RUNTIME_PERMISSIONS_POLICY)
+    @RequiresPermission(anyOf = {
+            Manifest.permission.ADJUST_RUNTIME_PERMISSIONS_POLICY,
+            Manifest.permission.UPGRADE_RUNTIME_PERMISSIONS
+    })
     public void setRuntimePermissionsVersion(@IntRange(from = 0) int version) {
         try {
             mPackageManager.setRuntimePermissionsVersion(version, mContext.getUserId());
@@ -159,6 +171,7 @@ public final class PermissionManager {
      * Grant default permissions to currently active LUI app
      * @param packageName The package name for the LUI app
      * @param user The user handle
+     * @param executor The executor for the callback
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
@@ -180,6 +193,7 @@ public final class PermissionManager {
      * Revoke default permissions to currently active LUI app
      * @param packageNames The package names for the LUI apps
      * @param user The user handle
+     * @param executor The executor for the callback
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
@@ -191,6 +205,94 @@ public final class PermissionManager {
         try {
             mPermissionManager.revokeDefaultPermissionsFromLuiApps(
                     packageNames, user.getIdentifier());
+            executor.execute(() -> callback.accept(true));
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Grant default permissions to currently active Ims services
+     * @param packageNames The package names for the Ims services
+     * @param user The user handle
+     * @param executor The executor for the callback
+     * @param callback The callback provided by caller to be notified when grant completes
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
+    public void grantDefaultPermissionsToEnabledImsServices(
+            @NonNull String[] packageNames, @NonNull UserHandle user,
+            @NonNull @CallbackExecutor Executor executor, @NonNull Consumer<Boolean> callback) {
+        try {
+            mPermissionManager.grantDefaultPermissionsToEnabledImsServices(
+                    packageNames, user.getIdentifier());
+            executor.execute(() -> callback.accept(true));
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Grant default permissions to currently enabled telephony data services
+     * @param packageNames The package name for the services
+     * @param user The user handle
+     * @param executor The executor for the callback
+     * @param callback The callback provided by caller to be notified when grant completes
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
+    public void grantDefaultPermissionsToEnabledTelephonyDataServices(
+            @NonNull String[] packageNames, @NonNull UserHandle user,
+            @NonNull @CallbackExecutor Executor executor, @NonNull Consumer<Boolean> callback) {
+        try {
+            mPermissionManager.grantDefaultPermissionsToEnabledTelephonyDataServices(
+                    packageNames, user.getIdentifier());
+            executor.execute(() -> callback.accept(true));
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Revoke default permissions to currently active telephony data services
+     * @param packageNames The package name for the services
+     * @param user The user handle
+     * @param executor The executor for the callback
+     * @param callback The callback provided by caller to be notified when revoke completes
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
+    public void revokeDefaultPermissionsFromDisabledTelephonyDataServices(
+            @NonNull String[] packageNames, @NonNull UserHandle user,
+            @NonNull @CallbackExecutor Executor executor, @NonNull Consumer<Boolean> callback) {
+        try {
+            mPermissionManager.revokeDefaultPermissionsFromDisabledTelephonyDataServices(
+                    packageNames, user.getIdentifier());
+            executor.execute(() -> callback.accept(true));
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Grant default permissions to currently enabled carrier apps
+     * @param packageNames Package names of the apps to be granted permissions
+     * @param user The user handle
+     * @param executor The executor for the callback
+     * @param callback The callback provided by caller to be notified when grant completes
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
+    public void grantDefaultPermissionsToEnabledCarrierApps(@NonNull String[] packageNames,
+            @NonNull UserHandle user, @NonNull @CallbackExecutor Executor executor,
+            @NonNull Consumer<Boolean> callback) {
+        try {
+            mPermissionManager.grantDefaultPermissionsToEnabledCarrierApps(packageNames,
+                    user.getIdentifier());
             executor.execute(() -> callback.accept(true));
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
@@ -284,4 +386,258 @@ public final class PermissionManager {
             mSplitPermissionInfoParcelable = parcelable;
         }
     }
+
+    /**
+     * Starts a one-time permission session for a given package. A one-time permission session is
+     * ended if app becomes inactive. Inactivity is defined as the package's uid importance level
+     * staying > importanceToResetTimer for timeoutMillis milliseconds. If the package's uid
+     * importance level goes <= importanceToResetTimer then the timer is reset and doesn't start
+     * until going > importanceToResetTimer.
+     * <p>
+     * When this timeoutMillis is reached if the importance level is <= importanceToKeepSessionAlive
+     * then the session is extended until either the importance goes above
+     * importanceToKeepSessionAlive which will end the session or <= importanceToResetTimer which
+     * will continue the session and reset the timer.
+     * </p>
+     * <p>
+     * Importance levels are defined in {@link android.app.ActivityManager.RunningAppProcessInfo}.
+     * </p>
+     * <p>
+     * Once the session ends
+     * {@link PermissionControllerService#onOneTimePermissionSessionTimeout(String)} is invoked.
+     * </p>
+     * <p>
+     * Note that if there is currently an active session for a package a new one isn't created and
+     * the existing one isn't changed.
+     * </p>
+     * @param packageName The package to start a one-time permission session for
+     * @param timeoutMillis Number of milliseconds for an app to be in an inactive state
+     * @param importanceToResetTimer The least important level to uid must be to reset the timer
+     * @param importanceToKeepSessionAlive The least important level the uid must be to keep the
+     *                                    session alive
+     *
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.MANAGE_ONE_TIME_PERMISSION_SESSIONS)
+    public void startOneTimePermissionSession(@NonNull String packageName, long timeoutMillis,
+            @ActivityManager.RunningAppProcessInfo.Importance int importanceToResetTimer,
+            @ActivityManager.RunningAppProcessInfo.Importance int importanceToKeepSessionAlive) {
+        try {
+            mPermissionManager.startOneTimePermissionSession(packageName, mContext.getUserId(),
+                    timeoutMillis, importanceToResetTimer, importanceToKeepSessionAlive);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Stops the one-time permission session for the package. The callback to the end of session is
+     * not invoked. If there is no one-time session for the package then nothing happens.
+     *
+     * @param packageName Package to stop the one-time permission session for
+     *
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.MANAGE_ONE_TIME_PERMISSION_SESSIONS)
+    public void stopOneTimePermissionSession(@NonNull String packageName) {
+        try {
+            mPermissionManager.stopOneTimePermissionSession(packageName,
+                    mContext.getUserId());
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /* @hide */
+    private static int checkPermissionUncached(@Nullable String permission, int pid, int uid) {
+        final IActivityManager am = ActivityManager.getService();
+        if (am == null) {
+            // Well this is super awkward; we somehow don't have an active ActivityManager
+            // instance. If we're testing a root or system UID, then they totally have whatever
+            // permission this is.
+            final int appId = UserHandle.getAppId(uid);
+            if (appId == Process.ROOT_UID || appId == Process.SYSTEM_UID) {
+                Slog.w(TAG, "Missing ActivityManager; assuming " + uid + " holds " + permission);
+                return PackageManager.PERMISSION_GRANTED;
+            }
+            Slog.w(TAG, "Missing ActivityManager; assuming " + uid + " does not hold "
+                    + permission);
+            return PackageManager.PERMISSION_DENIED;
+        }
+        try {
+            return am.checkPermission(permission, pid, uid);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Identifies a permission query.
+     *
+     * N.B. we include the checking pid for tracking purposes but don't include it in the equality
+     * comparison: we use only uid for the actual security check, so comparing pid would result
+     * in spurious misses.
+     *
+     * @hide
+     */
+    @Immutable
+    private static final class PermissionQuery {
+        final String permission;
+        final int pid;
+        final int uid;
+
+        PermissionQuery(@Nullable String permission, int pid, int uid) {
+            this.permission = permission;
+            this.pid = pid;
+            this.uid = uid;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("PermissionQuery(permission=\"%s\", pid=%s, uid=%s)",
+                    permission, pid, uid);
+        }
+
+        @Override
+        public int hashCode() {
+            // N.B. pid doesn't count toward equality and therefore shouldn't count for
+            // hashing either.
+            int hash = Objects.hashCode(permission);
+            hash = hash * 13 + Objects.hashCode(uid);
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object rval) {
+            // N.B. pid doesn't count toward equality!
+            if (rval == null) {
+                return false;
+            }
+            PermissionQuery other;
+            try {
+                other = (PermissionQuery) rval;
+            } catch (ClassCastException ex) {
+                return false;
+            }
+            return uid == other.uid
+                    && Objects.equals(permission, other.permission);
+        }
+    }
+
+    /** @hide */
+    public static final String CACHE_KEY_PACKAGE_INFO = "cache_key.package_info";
+
+    /** @hide */
+    private static final PropertyInvalidatedCache<PermissionQuery, Integer> sPermissionCache =
+            new PropertyInvalidatedCache<PermissionQuery, Integer>(
+                    16, CACHE_KEY_PACKAGE_INFO) {
+                @Override
+                protected Integer recompute(PermissionQuery query) {
+                    return checkPermissionUncached(query.permission, query.pid, query.uid);
+                }
+            };
+
+    /** @hide */
+    public static int checkPermission(@Nullable String permission, int pid, int uid) {
+        return sPermissionCache.query(new PermissionQuery(permission, pid, uid));
+    }
+
+    /**
+     * Make checkPermission() above bypass the permission cache in this process.
+     *
+     * @hide
+     */
+    public static void disablePermissionCache() {
+        sPermissionCache.disableLocal();
+    }
+
+    /**
+     * Like PermissionQuery, but for permission checks based on a package name instead of
+     * a UID.
+     */
+    @Immutable
+    private static final class PackageNamePermissionQuery {
+        final String permName;
+        final String pkgName;
+        final int uid;
+
+        PackageNamePermissionQuery(@Nullable String permName, @Nullable String pkgName, int uid) {
+            this.permName = permName;
+            this.pkgName = pkgName;
+            this.uid = uid;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "PackageNamePermissionQuery(pkgName=\"%s\", permName=\"%s, uid=%s\")",
+                    pkgName, permName, uid);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(permName, pkgName, uid);
+        }
+
+        @Override
+        public boolean equals(Object rval) {
+            if (rval == null) {
+                return false;
+            }
+            PackageNamePermissionQuery other;
+            try {
+                other = (PackageNamePermissionQuery) rval;
+            } catch (ClassCastException ex) {
+                return false;
+            }
+            return Objects.equals(permName, other.permName)
+                    && Objects.equals(pkgName, other.pkgName)
+                    && uid == other.uid;
+        }
+    }
+
+    /* @hide */
+    private static int checkPackageNamePermissionUncached(
+            String permName, String pkgName, int uid) {
+        try {
+            return ActivityThread.getPermissionManager().checkPermission(
+                    permName, pkgName, uid);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /* @hide */
+    private static PropertyInvalidatedCache<PackageNamePermissionQuery, Integer>
+            sPackageNamePermissionCache =
+            new PropertyInvalidatedCache<PackageNamePermissionQuery, Integer>(
+                    16, CACHE_KEY_PACKAGE_INFO) {
+                @Override
+                protected Integer recompute(PackageNamePermissionQuery query) {
+                    return checkPackageNamePermissionUncached(
+                            query.permName, query.pkgName, query.uid);
+                }
+            };
+
+    /**
+     * Check whether a package has a permission.
+     *
+     * @hide
+     */
+    public static int checkPackageNamePermission(String permName, String pkgName, int uid) {
+        return sPackageNamePermissionCache.query(
+                new PackageNamePermissionQuery(permName, pkgName, uid));
+    }
+
+    /**
+     * Make checkPackageNamePermission() bypass the cache in this process.
+     *
+     * @hide
+     */
+    public static void disablePackageNamePermissionCache() {
+        sPackageNamePermissionCache.disableLocal();
+    }
+
 }

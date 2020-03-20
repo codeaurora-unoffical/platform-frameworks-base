@@ -18,7 +18,7 @@ package android.media;
 
 import android.bluetooth.BluetoothDevice;
 import android.media.AudioAttributes;
-import android.media.AudioDeviceAddress;
+import android.media.AudioDeviceAttributes;
 import android.media.AudioFocusInfo;
 import android.media.AudioPlaybackConfiguration;
 import android.media.AudioRecordingConfiguration;
@@ -29,6 +29,7 @@ import android.media.IAudioServerStateDispatcher;
 import android.media.IPlaybackConfigDispatcher;
 import android.media.IRecordingConfigDispatcher;
 import android.media.IRingtonePlayer;
+import android.media.IStrategyPreferredDeviceDispatcher;
 import android.media.IVolumeController;
 import android.media.IVolumeController;
 import android.media.PlayerBase;
@@ -104,6 +105,10 @@ interface IAudioService {
     int getMinVolumeIndexForAttributes(in AudioAttributes aa);
 
     int getLastAudibleStreamVolume(int streamType);
+
+    void setSupportedSystemUsages(in int[] systemUsages);
+
+    int[] getSupportedSystemUsages();
 
     List<AudioProductStrategy> getAudioProductStrategies();
 
@@ -262,15 +267,30 @@ interface IAudioService {
 
     int removeUidDeviceAffinity(in IAudioPolicyCallback pcb, in int uid);
 
+    int setUserIdDeviceAffinity(in IAudioPolicyCallback pcb, in int userId, in int[] deviceTypes,
+             in String[] deviceAddresses);
+    int removeUserIdDeviceAffinity(in IAudioPolicyCallback pcb, in int userId);
+
     boolean hasHapticChannels(in Uri uri);
 
     boolean isCallScreeningModeSupported();
 
-    int setPreferredDeviceForStrategy(in int strategy, in AudioDeviceAddress device);
+    int setPreferredDeviceForStrategy(in int strategy, in AudioDeviceAttributes device);
 
     int removePreferredDeviceForStrategy(in int strategy);
 
-    AudioDeviceAddress getPreferredDeviceForStrategy(in int strategy);
+    AudioDeviceAttributes getPreferredDeviceForStrategy(in int strategy);
+
+    List<AudioDeviceAttributes> getDevicesForAttributes(in AudioAttributes attributes);
+
+    int setAllowedCapturePolicy(in int capturePolicy);
+
+    int getAllowedCapturePolicy();
+
+    void registerStrategyPreferredDeviceDispatcher(IStrategyPreferredDeviceDispatcher dispatcher);
+
+    oneway void unregisterStrategyPreferredDeviceDispatcher(
+            IStrategyPreferredDeviceDispatcher dispatcher);
 
     // WARNING: read warning at top of file, new methods that need to be used by native
     // code via IAudioManager.h need to be added to the top section.

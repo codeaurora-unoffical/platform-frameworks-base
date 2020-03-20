@@ -23,7 +23,7 @@
 #include <media/AudioResamplerPublic.h>
 #include <media/IMediaHTTPService.h>
 #include <media/MediaPlayerInterface.h>
-#include <media/MediaAnalyticsItem.h>
+#include <media/MediaMetricsItem.h>
 #include <media/stagefright/foundation/ByteUtils.h>  // for FOURCC definition
 #include <stdio.h>
 #include <assert.h>
@@ -682,7 +682,7 @@ android_media_MediaPlayer_native_getMetrics(JNIEnv *env, jobject thiz)
         return (jobject) NULL;
     }
 
-    std::unique_ptr<MediaAnalyticsItem> item(MediaAnalyticsItem::create());
+    std::unique_ptr<mediametrics::Item> item(mediametrics::Item::create());
     item->readFromParcel(p);
     jobject mybundle = MediaMetricsJNI::writeMetricsToBundle(env, item.get(), NULL);
 
@@ -1453,6 +1453,7 @@ extern int register_android_media_MediaProfiles(JNIEnv *env);
 extern int register_android_mtp_MtpDatabase(JNIEnv *env);
 extern int register_android_mtp_MtpDevice(JNIEnv *env);
 extern int register_android_mtp_MtpServer(JNIEnv *env);
+extern int register_android_media_MediaTranscodeManager(JNIEnv *env);
 
 jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
 {
@@ -1562,6 +1563,11 @@ jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
 
     if (register_android_media_MediaHTTPConnection(env) < 0) {
         ALOGE("ERROR: MediaHTTPConnection native registration failed");
+        goto bail;
+    }
+
+    if (register_android_media_MediaTranscodeManager(env) < 0) {
+        ALOGE("ERROR: MediaTranscodeManager native registration failed");
         goto bail;
     }
 

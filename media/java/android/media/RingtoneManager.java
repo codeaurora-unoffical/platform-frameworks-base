@@ -23,9 +23,9 @@ import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.WorkerThread;
 import android.app.Activity;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ContentProvider;
 import android.content.ContentResolver;
 import android.content.ContentUris;
@@ -512,15 +512,19 @@ public class RingtoneManager {
      * @return The position of the {@link Uri}, or -1 if it cannot be found.
      */
     public int getRingtonePosition(Uri ringtoneUri) {
-        if (ringtoneUri == null) return -1;
-        final long ringtoneId = ContentUris.parseId(ringtoneUri);
-        
-        final Cursor cursor = getCursor();
-        cursor.moveToPosition(-1);
-        while (cursor.moveToNext()) {
-            if (ringtoneId == cursor.getLong(ID_COLUMN_INDEX)) {
-                return cursor.getPosition();
+        try {
+            if (ringtoneUri == null) return -1;
+            final long ringtoneId = ContentUris.parseId(ringtoneUri);
+
+            final Cursor cursor = getCursor();
+            cursor.moveToPosition(-1);
+            while (cursor.moveToNext()) {
+                if (ringtoneId == cursor.getLong(ID_COLUMN_INDEX)) {
+                    return cursor.getPosition();
+                }
             }
+        } catch (NumberFormatException e) {
+            Log.e(TAG, "NumberFormatException while getting ringtone position, returning -1", e);
         }
         return -1;
     }
@@ -908,7 +912,7 @@ public class RingtoneManager {
         }
 
         // Tell MediaScanner about the new file. Wait for it to assign a {@link Uri}.
-        return MediaStore.scanFile(mContext, outFile);
+        return MediaStore.scanFile(mContext.getContentResolver(), outFile);
     }
 
     private static final String getExternalDirectoryForType(final int type) {

@@ -36,11 +36,11 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.RemoteException;
 import android.os.WorkSource;
+import android.text.TextUtils;
 import android.util.Log;
 import android.util.SparseArray;
 
 import com.android.internal.util.AsyncChannel;
-import com.android.internal.util.Preconditions;
 import com.android.internal.util.Protocol;
 
 import java.lang.annotation.Retention;
@@ -48,6 +48,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 
 /**
@@ -88,16 +89,6 @@ public class WifiScanner {
     public static final int WIFI_BAND_5_GHZ_DFS_ONLY  = 1 << WIFI_BAND_INDEX_5_GHZ_DFS_ONLY;
     /** 6 GHz band */
     public static final int WIFI_BAND_6_GHZ = 1 << WIFI_BAND_INDEX_6_GHZ;
-
-    /** @hide */
-    @Retention(RetentionPolicy.SOURCE)
-    @IntDef(prefix = {"WIFI_BAND_"}, value = {
-            WIFI_BAND_UNSPECIFIED,
-            WIFI_BAND_24_GHZ,
-            WIFI_BAND_5_GHZ,
-            WIFI_BAND_5_GHZ_DFS_ONLY,
-            WIFI_BAND_6_GHZ})
-    public @interface WifiBandBasic {}
 
     /**
      * Combination of bands
@@ -249,14 +240,6 @@ public class WifiScanner {
      */
     public static final int REPORT_EVENT_NO_BATCH = (1 << 2);
 
-    /** @hide */
-    @Retention(RetentionPolicy.SOURCE)
-    @IntDef(prefix = {"SCAN_TYPE_"}, value = {
-            SCAN_TYPE_LOW_LATENCY,
-            SCAN_TYPE_LOW_POWER,
-            SCAN_TYPE_HIGH_ACCURACY})
-    public @interface ScanType {}
-
     /**
      * Optimize the scan for lower latency.
      * @see ScanSettings#type
@@ -309,28 +292,58 @@ public class WifiScanner {
         @NonNull
         @RequiresPermission(android.Manifest.permission.NETWORK_STACK)
         public final List<HiddenNetwork> hiddenNetworks = new ArrayList<>();
-        /** period of background scan; in millisecond, 0 => single shot scan */
+        /**
+         * period of background scan; in millisecond, 0 => single shot scan
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
+         */
+        @Deprecated
         public int periodInMs;
-        /** must have a valid REPORT_EVENT value */
+        /**
+         * must have a valid REPORT_EVENT value
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
+         */
+        @Deprecated
         public int reportEvents;
-        /** defines number of bssids to cache from each scan */
+        /**
+         * defines number of bssids to cache from each scan
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
+         */
+        @Deprecated
         public int numBssidsPerScan;
         /**
          * defines number of scans to cache; use it with REPORT_EVENT_AFTER_BUFFER_FULL
          * to wake up at fixed interval
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
          */
+        @Deprecated
         public int maxScansToCache;
         /**
          * if maxPeriodInMs is non zero or different than period, then this bucket is
          * a truncated binary exponential backoff bucket and the scan period will grow
          * exponentially as per formula: actual_period(N) = period * (2 ^ (N/stepCount))
          * to maxPeriodInMs
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
          */
+        @Deprecated
         public int maxPeriodInMs;
         /**
          * for truncated binary exponential back off bucket, number of scans to perform
          * for a given period
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
          */
+        @Deprecated
         public int stepCount;
         /**
          * Flag to indicate if the scan settings are targeted for PNO scan.
@@ -354,7 +367,7 @@ public class WifiScanner {
          * {@link #SCAN_TYPE_HIGH_ACCURACY}.
          * Default value: {@link #SCAN_TYPE_LOW_LATENCY}.
          */
-        @ScanType
+        @WifiAnnotations.ScanType
         @RequiresPermission(android.Manifest.permission.NETWORK_STACK)
         public int type = SCAN_TYPE_LOW_LATENCY;
         /**
@@ -732,6 +745,25 @@ public class WifiScanner {
             public PnoNetwork(String ssid) {
                 this.ssid = ssid;
             }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(ssid, flags, authBitField);
+            }
+
+            @Override
+            public boolean equals(Object obj) {
+                if (this == obj) {
+                    return true;
+                }
+                if (!(obj instanceof PnoNetwork)) {
+                    return false;
+                }
+                PnoNetwork lhs = (PnoNetwork) obj;
+                return TextUtils.equals(this.ssid, lhs.ssid)
+                        && this.flags == lhs.flags
+                        && this.authBitField == lhs.authBitField;
+            }
         }
 
         /** Connected vs Disconnected PNO flag {@hide} */
@@ -742,21 +774,6 @@ public class WifiScanner {
         public int min24GHzRssi;
         /** Minimum 6GHz RSSI for a BSSID to be considered */
         public int min6GHzRssi;
-        /** Maximum score that a network can have before bonuses */
-        public int initialScoreMax;
-        /**
-         *  Only report when there is a network's score this much higher
-         *  than the current connection.
-         */
-        public int currentConnectionBonus;
-        /** score bonus for all networks with the same network flag */
-        public int sameNetworkBonus;
-        /** score bonus for networks that are not open */
-        public int secureBonus;
-        /** 5GHz RSSI score bonus (applied to all 5GHz networks) */
-        public int band5GHzBonus;
-        /** 6GHz RSSI score bonus (applied to all 5GHz networks) */
-        public int band6GHzBonus;
         /** Pno Network filter list */
         public PnoNetwork[] networkList;
 
@@ -771,12 +788,6 @@ public class WifiScanner {
             dest.writeInt(min5GHzRssi);
             dest.writeInt(min24GHzRssi);
             dest.writeInt(min6GHzRssi);
-            dest.writeInt(initialScoreMax);
-            dest.writeInt(currentConnectionBonus);
-            dest.writeInt(sameNetworkBonus);
-            dest.writeInt(secureBonus);
-            dest.writeInt(band5GHzBonus);
-            dest.writeInt(band6GHzBonus);
             if (networkList != null) {
                 dest.writeInt(networkList.length);
                 for (int i = 0; i < networkList.length; i++) {
@@ -799,12 +810,6 @@ public class WifiScanner {
                         settings.min5GHzRssi = in.readInt();
                         settings.min24GHzRssi = in.readInt();
                         settings.min6GHzRssi = in.readInt();
-                        settings.initialScoreMax = in.readInt();
-                        settings.currentConnectionBonus = in.readInt();
-                        settings.sameNetworkBonus = in.readInt();
-                        settings.secureBonus = in.readInt();
-                        settings.band5GHzBonus = in.readInt();
-                        settings.band6GHzBonus = in.readInt();
                         int numNetworks = in.readInt();
                         settings.networkList = new PnoNetwork[numNetworks];
                         for (int i = 0; i < numNetworks; i++) {
@@ -833,7 +838,11 @@ public class WifiScanner {
         /**
          * Framework co-ordinates scans across multiple apps; so it may not give exactly the
          * same period requested. If period of a scan is changed; it is reported by this event.
+         * @deprecated Background scan support has always been hardware vendor dependent. This
+         * support may not be present on newer devices. Use {@link #startScan(ScanSettings,
+         * ScanListener)} instead for single scans.
          */
+        @Deprecated
         public void onPeriodChanged(int periodInMs);
         /**
          * reports results retrieved from background scan and single shot scans
@@ -861,6 +870,8 @@ public class WifiScanner {
      * Enable/Disable wifi scanning.
      *
      * @param enable set to true to enable scanning, set to false to disable all types of scanning.
+     *
+     * @see WifiManager#ACTION_WIFI_SCAN_AVAILABILITY_CHANGED
      * {@hide}
      */
     @SystemApi
@@ -878,6 +889,7 @@ public class WifiScanner {
      * delivered to the listener. It is possible that onFullResult will not be called for all
      * results of the first scan if the listener was registered during the scan.
      *
+     * @param executor the Executor on which to run the callback.
      * @param listener specifies the object to report events to. This object is also treated as a
      *                 key for this request, and must also be specified to cancel the request.
      *                 Multiple requests should also not share this object.
@@ -885,8 +897,8 @@ public class WifiScanner {
     @RequiresPermission(Manifest.permission.NETWORK_STACK)
     public void registerScanListener(@NonNull @CallbackExecutor Executor executor,
             @NonNull ScanListener listener) {
-        Preconditions.checkNotNull(executor, "executor cannot be null");
-        Preconditions.checkNotNull(listener, "listener cannot be null");
+        Objects.requireNonNull(executor, "executor cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         int key = addListener(listener, executor);
         if (key == INVALID_KEY) return;
         validateChannel();
@@ -909,7 +921,7 @@ public class WifiScanner {
      *  #registerScanListener}
      */
     public void unregisterScanListener(@NonNull ScanListener listener) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         int key = removeListener(listener);
         if (key == INVALID_KEY) return;
         validateChannel();
@@ -935,11 +947,15 @@ public class WifiScanner {
      * @param listener specifies the object to report events to. This object is also treated as a
      *                 key for this scan, and must also be specified to cancel the scan. Multiple
      *                 scans should also not share this object.
+     * @deprecated Background scan support has always been hardware vendor dependent. This support
+     * may not be present on newer devices. Use {@link #startScan(ScanSettings, ScanListener)}
+     * instead for single scans.
      */
+    @Deprecated
     @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public void startBackgroundScan(ScanSettings settings, ScanListener listener,
             WorkSource workSource) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         int key = addListener(listener);
         if (key == INVALID_KEY) return;
         validateChannel();
@@ -955,10 +971,14 @@ public class WifiScanner {
      * stop an ongoing wifi scan
      * @param listener specifies which scan to cancel; must be same object as passed in {@link
      *  #startBackgroundScan}
+     * @deprecated Background scan support has always been hardware vendor dependent. This support
+     * may not be present on newer devices. Use {@link #startScan(ScanSettings, ScanListener)}
+     * instead for single scans.
      */
+    @Deprecated
     @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public void stopBackgroundScan(ScanListener listener) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         int key = removeListener(listener);
         if (key == INVALID_KEY) return;
         validateChannel();
@@ -971,7 +991,11 @@ public class WifiScanner {
     /**
      * reports currently available scan results on appropriate listeners
      * @return true if all scan results were reported correctly
+     * @deprecated Background scan support has always been hardware vendor dependent. This support
+     * may not be present on newer devices. Use {@link #startScan(ScanSettings, ScanListener)}
+     * instead for single scans.
      */
+    @Deprecated
     @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public boolean getScanResults() {
         validateChannel();
@@ -1000,15 +1024,32 @@ public class WifiScanner {
      * starts a single scan and reports results asynchronously
      * @param settings specifies various parameters for the scan; for more information look at
      * {@link ScanSettings}
-     * @param workSource WorkSource to blame for power usage
      * @param listener specifies the object to report events to. This object is also treated as a
      *                 key for this scan, and must also be specified to cancel the scan. Multiple
      *                 scans should also not share this object.
+     * @param workSource WorkSource to blame for power usage
      */
     @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public void startScan(ScanSettings settings, ScanListener listener, WorkSource workSource) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
-        int key = addListener(listener);
+        startScan(settings, null, listener, workSource);
+    }
+
+    /**
+     * starts a single scan and reports results asynchronously
+     * @param settings specifies various parameters for the scan; for more information look at
+     * {@link ScanSettings}
+     * @param executor the Executor on which to run the callback.
+     * @param listener specifies the object to report events to. This object is also treated as a
+     *                 key for this scan, and must also be specified to cancel the scan. Multiple
+     *                 scans should also not share this object.
+     * @param workSource WorkSource to blame for power usage
+     * @hide
+     */
+    @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
+    public void startScan(ScanSettings settings, @Nullable @CallbackExecutor Executor executor,
+            ScanListener listener, WorkSource workSource) {
+        Objects.requireNonNull(listener, "listener cannot be null");
+        int key = addListener(listener, executor);
         if (key == INVALID_KEY) return;
         validateChannel();
         Bundle scanParams = new Bundle();
@@ -1026,7 +1067,7 @@ public class WifiScanner {
      */
     @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public void stopScan(ScanListener listener) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         int key = removeListener(listener);
         if (key == INVALID_KEY) return;
         validateChannel();
@@ -1038,10 +1079,8 @@ public class WifiScanner {
 
     /**
      * Retrieve the most recent scan results from a single scan request.
-     * {@hide}
      */
     @NonNull
-    @SystemApi
     @RequiresPermission(android.Manifest.permission.LOCATION_HARDWARE)
     public List<ScanResult> getSingleScanResults() {
         validateChannel();
@@ -1074,16 +1113,17 @@ public class WifiScanner {
      * {@link ScanSettings}
      * @param pnoSettings specifies various parameters for PNO; for more information look at
      * {@link PnoSettings}
+     * @param executor the Executor on which to run the callback.
      * @param listener specifies the object to report events to. This object is also treated as a
      *                 key for this scan, and must also be specified to cancel the scan. Multiple
      *                 scans should also not share this object.
      * {@hide}
      */
     public void startConnectedPnoScan(ScanSettings scanSettings, PnoSettings pnoSettings,
-            PnoScanListener listener) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
-        Preconditions.checkNotNull(pnoSettings, "pnoSettings cannot be null");
-        int key = addListener(listener);
+            @NonNull @CallbackExecutor Executor executor, PnoScanListener listener) {
+        Objects.requireNonNull(listener, "listener cannot be null");
+        Objects.requireNonNull(pnoSettings, "pnoSettings cannot be null");
+        int key = addListener(listener, executor);
         if (key == INVALID_KEY) return;
         validateChannel();
         pnoSettings.isConnected = true;
@@ -1102,10 +1142,10 @@ public class WifiScanner {
      */
     @RequiresPermission(android.Manifest.permission.NETWORK_STACK)
     public void startDisconnectedPnoScan(ScanSettings scanSettings, PnoSettings pnoSettings,
-            PnoScanListener listener) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
-        Preconditions.checkNotNull(pnoSettings, "pnoSettings cannot be null");
-        int key = addListener(listener);
+            @NonNull @CallbackExecutor Executor executor, PnoScanListener listener) {
+        Objects.requireNonNull(listener, "listener cannot be null");
+        Objects.requireNonNull(pnoSettings, "pnoSettings cannot be null");
+        int key = addListener(listener, executor);
         if (key == INVALID_KEY) return;
         validateChannel();
         pnoSettings.isConnected = false;
@@ -1119,7 +1159,7 @@ public class WifiScanner {
      */
     @RequiresPermission(android.Manifest.permission.NETWORK_STACK)
     public void stopPnoScan(ScanListener listener) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         int key = removeListener(listener);
         if (key == INVALID_KEY) return;
         validateChannel();

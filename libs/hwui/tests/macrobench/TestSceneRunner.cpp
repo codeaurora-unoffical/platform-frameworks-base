@@ -109,16 +109,14 @@ void outputBenchmarkReport(const TestScene::Info& info, const TestScene::Options
 
 void run(const TestScene::Info& info, const TestScene::Options& opts,
          benchmark::BenchmarkReporter* reporter) {
-    // Switch to the real display
-    gDisplay = getInternalDisplay();
-
     Properties::forceDrawFrame = true;
     TestContext testContext;
     testContext.setRenderOffscreen(opts.renderOffscreen);
 
     // create the native surface
-    const int width = gDisplay.w;
-    const int height = gDisplay.h;
+    const ui::Size& resolution = getActiveDisplayResolution();
+    const int width = resolution.getWidth();
+    const int height = resolution.getHeight();
     sp<Surface> surface = testContext.surface();
 
     std::unique_ptr<TestScene> scene(info.createScene(opts));
@@ -133,7 +131,7 @@ void run(const TestScene::Info& info, const TestScene::Options& opts,
     ContextFactory factory;
     std::unique_ptr<RenderProxy> proxy(new RenderProxy(false, rootNode.get(), &factory));
     proxy->loadSystemProperties();
-    proxy->setSurface(surface);
+    proxy->setSurface(surface.get());
     float lightX = width / 2.0;
     proxy->setLightAlpha(255 * 0.075, 255 * 0.15);
     proxy->setLightGeometry((Vector3){lightX, dp(-200.0f), dp(800.0f)}, dp(800.0f));

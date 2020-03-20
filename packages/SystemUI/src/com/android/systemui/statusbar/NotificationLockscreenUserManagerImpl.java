@@ -48,7 +48,7 @@ import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.systemui.Dependency;
 import com.android.systemui.Dumpable;
 import com.android.systemui.broadcast.BroadcastDispatcher;
-import com.android.systemui.dagger.qualifiers.MainHandler;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController.StateListener;
 import com.android.systemui.recents.OverviewProxyService;
@@ -79,6 +79,7 @@ public class NotificationLockscreenUserManagerImpl implements
 
     private final DeviceProvisionedController mDeviceProvisionedController;
     private final KeyguardStateController mKeyguardStateController;
+    private final Object mLock = new Object();
 
     // Lazy
     private NotificationEntryManager mEntryManager;
@@ -117,51 +118,63 @@ public class NotificationLockscreenUserManagerImpl implements
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-            if (Intent.ACTION_USER_SWITCHED.equals(action)) {
-                mCurrentUserId = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, -1);
-                updateCurrentProfilesCache();
-                Log.v(TAG, "userId " + mCurrentUserId + " is in the house");
+            switch (action) {
+                case Intent.ACTION_USER_SWITCHED:
+                    mCurrentUserId = intent.getIntExtra(
+                            Intent.EXTRA_USER_HANDLE, UserHandle.USER_ALL);
+                    updateCurrentProfilesCache();
 
-                updateLockscreenNotificationSetting();
-                updatePublicMode();
-                // The filtering needs to happen before the update call below in order to make sure
-                // the presenter has the updated notifications from the new user
-                getEntryManager().reapplyFilterAndSort("user switched");
-                mPresenter.onUserSwitched(mCurrentUserId);
+                    Log.v(TAG, "userId " + mCurrentUserId + " is in the house");
 
-                for (UserChangedListener listener : mListeners) {
-                    listener.onUserChanged(mCurrentUserId);
-                }
-            } else if (Intent.ACTION_USER_ADDED.equals(action)) {
-                updateCurrentProfilesCache();
-            } else if (Intent.ACTION_USER_UNLOCKED.equals(action)) {
-                // Start the overview connection to the launcher service
-                Dependency.get(OverviewProxyService.class).startConnectionToCurrentUser();
-            } else if (NOTIFICATION_UNLOCKED_BY_WORK_CHALLENGE_ACTION.equals(action)) {
-                final IntentSender intentSender = intent.getParcelableExtra(Intent.EXTRA_INTENT);
-                final String notificationKey = intent.getStringExtra(Intent.EXTRA_INDEX);
-                if (intentSender != null) {
-                    try {
-                        mContext.startIntentSender(intentSender, null, 0, 0, 0);
-                    } catch (IntentSender.SendIntentException e) {
-                        /* ignore */
+                    updateLockscreenNotificationSetting();
+                    updatePublicMode();
+                    // The filtering needs to happen before the update call below in order to
+                    // make sure
+                    // the presenter has the updated notifications from the new user
+                    getEntryManager().reapplyFilterAndSort("user switched");
+                    mPresenter.onUserSwitched(mCurrentUserId);
+
+                    for (UserChangedListener listener : mListeners) {
+                        listener.onUserChanged(mCurrentUserId);
                     }
-                }
-                if (notificationKey != null) {
-                    NotificationEntry entry =
-                            getEntryManager().getActiveNotificationUnfiltered(notificationKey);
-                    final int count = getEntryManager().getActiveNotificationsCount();
-                    final int rank = entry != null ? entry.getRanking().getRank() : 0;
-                    NotificationVisibility.NotificationLocation location =
-                            NotificationLogger.getNotificationLocation(entry);
-                    final NotificationVisibility nv = NotificationVisibility.obtain(notificationKey,
-                            rank, count, true, location);
-                    try {
-                        mBarService.onNotificationClick(notificationKey, nv);
-                    } catch (RemoteException exception) {
-                        /* ignore */
+                    break;
+                case Intent.ACTION_USER_ADDED:
+                case Intent.ACTION_MANAGED_PROFILE_AVAILABLE:
+                case Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE:
+                    updateCurrentProfilesCache();
+                    break;
+                case Intent.ACTION_USER_UNLOCKED:
+                    // Start the overview connection to the launcher service
+                    Dependency.get(OverviewProxyService.class).startConnectionToCurrentUser();
+                    break;
+                case NOTIFICATION_UNLOCKED_BY_WORK_CHALLENGE_ACTION:
+                    final IntentSender intentSender = intent.getParcelableExtra(
+                            Intent.EXTRA_INTENT);
+                    final String notificationKey = intent.getStringExtra(Intent.EXTRA_INDEX);
+                    if (intentSender != null) {
+                        try {
+                            mContext.startIntentSender(intentSender, null, 0, 0, 0);
+                        } catch (IntentSender.SendIntentException e) {
+                            /* ignore */
+                        }
                     }
-                }
+                    if (notificationKey != null) {
+                        NotificationEntry entry =
+                                getEntryManager().getActiveNotificationUnfiltered(notificationKey);
+                        final int count = getEntryManager().getActiveNotificationsCount();
+                        final int rank = entry != null ? entry.getRanking().getRank() : 0;
+                        NotificationVisibility.NotificationLocation location =
+                                NotificationLogger.getNotificationLocation(entry);
+                        final NotificationVisibility nv = NotificationVisibility.obtain(
+                                notificationKey,
+                                rank, count, true, location);
+                        try {
+                            mBarService.onNotificationClick(notificationKey, nv);
+                        } catch (RemoteException exception) {
+                            /* ignore */
+                        }
+                    }
+                    break;
             }
         }
     };
@@ -169,6 +182,7 @@ public class NotificationLockscreenUserManagerImpl implements
     protected final Context mContext;
     private final Handler mMainHandler;
     protected final SparseArray<UserInfo> mCurrentProfiles = new SparseArray<>();
+    protected final ArrayList<UserInfo> mCurrentManagedProfiles = new ArrayList<>();
 
     protected int mCurrentUserId = 0;
     protected NotificationPresenter mPresenter;
@@ -190,7 +204,7 @@ public class NotificationLockscreenUserManagerImpl implements
             IStatusBarService iStatusBarService,
             KeyguardManager keyguardManager,
             StatusBarStateController statusBarStateController,
-            @MainHandler Handler mainHandler,
+            @Main Handler mainHandler,
             DeviceProvisionedController deviceProvisionedController,
             KeyguardStateController keyguardStateController) {
         mContext = context;
@@ -266,7 +280,10 @@ public class NotificationLockscreenUserManagerImpl implements
         filter.addAction(Intent.ACTION_USER_SWITCHED);
         filter.addAction(Intent.ACTION_USER_ADDED);
         filter.addAction(Intent.ACTION_USER_UNLOCKED);
-        mBroadcastDispatcher.registerReceiver(mBaseBroadcastReceiver, filter);
+        filter.addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE);
+        filter.addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE);
+        mBroadcastDispatcher.registerReceiver(mBaseBroadcastReceiver, filter,
+                null /* executor */, UserHandle.ALL);
 
         IntentFilter internalFilter = new IntentFilter();
         internalFilter.addAction(NOTIFICATION_UNLOCKED_BY_WORK_CHALLENGE_ACTION);
@@ -286,7 +303,7 @@ public class NotificationLockscreenUserManagerImpl implements
     }
 
     public boolean isCurrentProfile(int userId) {
-        synchronized (mCurrentProfiles) {
+        synchronized (mLock) {
             return userId == UserHandle.USER_ALL || mCurrentProfiles.get(userId) != null;
         }
     }
@@ -403,6 +420,20 @@ public class NotificationLockscreenUserManagerImpl implements
         return mUsersAllowingPrivateNotifications.get(userHandle);
     }
 
+    /**
+     * If all managed profiles (work profiles) can show private data in public (secure & locked.)
+     */
+    public boolean allowsManagedPrivateNotificationsInPublic() {
+        synchronized (mLock) {
+            for (UserInfo profile : mCurrentManagedProfiles) {
+                if (!userAllowsPrivateNotificationsInPublic(profile.id)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     private boolean adminAllowsKeyguardFeature(int userHandle, int feature) {
         if (userHandle == UserHandle.USER_ALL) {
             return true;
@@ -481,20 +512,48 @@ public class NotificationLockscreenUserManagerImpl implements
     }
 
     private void updateCurrentProfilesCache() {
-        synchronized (mCurrentProfiles) {
+        synchronized (mLock) {
             mCurrentProfiles.clear();
+            mCurrentManagedProfiles.clear();
             if (mUserManager != null) {
                 for (UserInfo user : mUserManager.getProfiles(mCurrentUserId)) {
                     mCurrentProfiles.put(user.id, user);
+                    if (UserManager.USER_TYPE_PROFILE_MANAGED.equals(user.userType)) {
+                        mCurrentManagedProfiles.add(user);
+                    }
                 }
             }
         }
+        mMainHandler.post(() -> {
+            for (UserChangedListener listener : mListeners) {
+                listener.onCurrentProfilesChanged(mCurrentProfiles);
+            }
+        });
     }
 
+    /**
+     * If any of the profiles are in public mode.
+     */
     public boolean isAnyProfilePublicMode() {
-        for (int i = mCurrentProfiles.size() - 1; i >= 0; i--) {
-            if (isLockscreenPublicMode(mCurrentProfiles.valueAt(i).id)) {
-                return true;
+        synchronized (mLock) {
+            for (int i = mCurrentProfiles.size() - 1; i >= 0; i--) {
+                if (isLockscreenPublicMode(mCurrentProfiles.valueAt(i).id)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * If any managed/work profiles are in public mode.
+     */
+    public boolean isAnyManagedProfilePublicMode() {
+        synchronized (mLock) {
+            for (int i = mCurrentManagedProfiles.size() - 1; i >= 0; i--) {
+                if (isLockscreenPublicMode(mCurrentManagedProfiles.get(i).id)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -555,6 +614,11 @@ public class NotificationLockscreenUserManagerImpl implements
         mListeners.add(listener);
     }
 
+    @Override
+    public void removeUserChangedListener(UserChangedListener listener) {
+        mListeners.remove(listener);
+    }
+
 //    public void updatePublicMode() {
 //        //TODO: I think there may be a race condition where mKeyguardViewManager.isShowing() returns
 //        // false when it should be true. Therefore, if we are not on the SHADE, don't even bother
@@ -596,9 +660,17 @@ public class NotificationLockscreenUserManagerImpl implements
         pw.print("  mAllowLockscreenRemoteInput=");
         pw.println(mAllowLockscreenRemoteInput);
         pw.print("  mCurrentProfiles=");
-        for (int i = mCurrentProfiles.size() - 1; i >= 0; i--) {
-            final int userId = mCurrentProfiles.valueAt(i).id;
-            pw.print("" + userId + " ");
+        synchronized (mLock) {
+            for (int i = mCurrentProfiles.size() - 1; i >= 0; i--) {
+                final int userId = mCurrentProfiles.valueAt(i).id;
+                pw.print("" + userId + " ");
+            }
+        }
+        pw.print("  mCurrentManagedProfiles=");
+        synchronized (mLock) {
+            for (UserInfo userInfo : mCurrentManagedProfiles) {
+                pw.print("" + userInfo.id + " ");
+            }
         }
         pw.println();
     }

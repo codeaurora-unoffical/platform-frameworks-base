@@ -91,6 +91,7 @@
     <uses-permission android:name="android.permission.TEST_MANAGE_ROLLBACKS" />
     <uses-permission android:name="android.permission.ACCESS_SURFACE_FLINGER" />
     <uses-permission android:name="android.permission.READ_FRAME_BUFFER" />
+    <uses-permission android:name="android.permission.REBOOT" />
     <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.POWER_SAVER" />
     <uses-permission android:name="android.permission.INSTALL_LOCATION_PROVIDER" />
@@ -137,6 +138,7 @@
     <uses-permission android:name="android.permission.GET_APP_OPS_STATS" />
     <uses-permission android:name="android.permission.MANAGE_APP_OPS_MODES" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_VIBRATOR_STATE" />
     <uses-permission android:name="android.permission.MANAGE_ACTIVITY_STACKS" />
     <uses-permission android:name="android.permission.START_TASKS_FROM_RECENTS" />
     <uses-permission android:name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
@@ -190,12 +192,19 @@
     <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND" />
     <!-- Permission needed to wipe the device for Test Harness Mode -->
     <uses-permission android:name="android.permission.ENABLE_TEST_HARNESS_MODE" />
+
+    <!-- Permissions required to test CompanionDeviceManager teses in CTS -->
     <uses-permission android:name="android.permission.MANAGE_COMPANION_DEVICES" />
+    <uses-permission android:name="android.permission.COMPANION_APPROVE_WIFI_CONNECTIONS" />
 
     <uses-permission android:name="android.permission.MANAGE_APPOPS" />
 
+    <!-- Permission required for storage tests - FuseDaemonHostTest -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+
     <!-- Permission needed to run network tests in CTS -->
     <uses-permission android:name="android.permission.MANAGE_TEST_NETWORKS" />
+    <uses-permission android:name="android.permission.NETWORK_STACK" />
     <!-- Permission needed to test tcp keepalive offload. -->
     <uses-permission android:name="android.permission.PACKET_KEEPALIVE_OFFLOAD" />
 
@@ -215,14 +224,57 @@
     <!-- Permission required for CTS test - CrossProfileAppsHostSideTest -->
     <uses-permission android:name="android.permission.INTERACT_ACROSS_PROFILES"/>
 
+    <!-- permissions required for CTS test - PhoneStateListenerTest -->
+    <uses-permission android:name="android.permission.LISTEN_ALWAYS_REPORTED_SIGNAL_STRENGTH" />
+
+    <!-- Permissions required for ganting and logging -->
+    <uses-permission android:name="android.permission.LOG_COMPAT_CHANGE"/>
+    <uses-permission android:name="android.permission.READ_COMPAT_CHANGE_CONFIG"/>
+    <uses-permission android:name="android.permission.OVERRIDE_COMPAT_CHANGE_CONFIG"/>
+
     <!-- Permission required for CTS test - UiModeManagerTest -->
     <uses-permission android:name="android.permission.ENTER_CAR_MODE_PRIORITIZED"/>
 
-      <!-- Permission required for CTS test - CarModeInCallServiceTest -->
+    <!-- Permission required for CTS test - SystemConfigTest -->
+    <uses-permission android:name="android.permission.READ_CARRIER_APP_INFO"/>
+
+    <!-- Permission required for CTS test - CarModeInCallServiceTest -->
     <uses-permission android:name="android.permission.CONTROL_INCALL_EXPERIENCE"/>
 
     <!-- Permission requried for CTS test - CellBroadcastIntentsTest -->
     <uses-permission android:name="android.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS"/>
+
+    <!-- Permission required for CTS test - TetheringManagerTest -->
+    <uses-permission android:name="android.permission.TETHER_PRIVILEGED"/>
+
+    <!-- Permission required for CTS test - CtsOsTestCases -->
+    <uses-permission android:name="android.permission.MANAGE_CRATES"/>
+
+    <!-- Allows setting brightness from the shell -->
+    <uses-permission android:name="android.permission.CONTROL_DISPLAY_BRIGHTNESS"/>
+
+    <!-- Permission required for CTS test - ShortcutManagerUsageTest -->
+    <uses-permission android:name="android.permission.ACCESS_SHORTCUTS"/>
+
+    <!-- Permissions required for CTS test - UsageStatsTest -->
+    <uses-permission android:name="android.permission.MANAGE_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.ACCESS_LOCUS_ID_USAGE_STATS"/>
+
+    <!-- Permissions required to test ambient display. -->
+    <uses-permission android:name="android.permission.READ_DREAM_STATE"/>
+    <uses-permission android:name="android.permission.WRITE_DREAM_STATE"/>
+
+    <!-- Permission required for CTS test - CtsLightsManagerTest -->
+    <uses-permission android:name="android.permission.CONTROL_DEVICE_LIGHTS" />
+
+    <!-- Permission needed to test mainline permission module rollback -->
+    <uses-permission android:name="android.permission.UPGRADE_RUNTIME_PERMISSIONS" />
+
+    <!-- Permission needed to read wifi network credentials for CtsNetTestCases -->
+    <uses-permission android:name="android.permission.READ_WIFI_CREDENTIAL" />
+
+    <!-- Permission needed to test registering pull atom callbacks -->
+    <uses-permission android:name="android.permission.REGISTER_STATS_PULL_ATOM" />
 
     <application android:label="@string/app_label"
                 android:theme="@android:style/Theme.DeviceDefault.DayNight"
@@ -269,6 +321,22 @@
                   android:noHistory="true"
                   android:excludeFromRecents="true"
                   android:exported="false" />
+
+        <!--
+        The following is used as a no-op/null home activity when
+        no other MAIN/HOME activity is present (e.g., in CSI).
+        -->
+        <activity android:name=".NullHome"
+                  android:excludeFromRecents="true"
+                  android:label=""
+                  android:screenOrientation="nosensor">
+            <!-- The priority here is set to be lower than that for Settings -->
+            <intent-filter android:priority="-1100">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".BugreportRequestedReceiver"

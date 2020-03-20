@@ -18,13 +18,13 @@ package com.android.systemui.statusbar.notification.collection.listbuilder;
 
 import android.annotation.IntDef;
 
-import com.android.systemui.statusbar.notification.collection.NotifListBuilderImpl;
+import com.android.systemui.statusbar.notification.collection.ShadeListBuilder;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
 /**
- * Used by {@link NotifListBuilderImpl} to track its internal state machine.
+ * Used by {@link ShadeListBuilder} to track its internal state machine.
  */
 public class PipelineState {
 
@@ -76,20 +76,24 @@ public class PipelineState {
     }
 
     public static final int STATE_IDLE = 0;
-    public static final int STATE_BUILD_PENDING = 1;
-    public static final int STATE_BUILD_STARTED = 2;
-    public static final int STATE_FILTERING = 3;
-    public static final int STATE_TRANSFORMING = 4;
-    public static final int STATE_SORTING = 5;
-    public static final int STATE_FINALIZING = 6;
+    public static final int STATE_BUILD_STARTED = 1;
+    public static final int STATE_RESETTING = 2;
+    public static final int STATE_PRE_GROUP_FILTERING = 3;
+    public static final int STATE_GROUPING = 4;
+    public static final int STATE_TRANSFORMING = 5;
+    public static final int STATE_SORTING = 6;
+    public static final int STATE_FINALIZE_FILTERING = 7;
+    public static final int STATE_FINALIZING = 8;
 
     @IntDef(prefix = { "STATE_" }, value = {
             STATE_IDLE,
-            STATE_BUILD_PENDING,
             STATE_BUILD_STARTED,
-            STATE_FILTERING,
+            STATE_RESETTING,
+            STATE_PRE_GROUP_FILTERING,
+            STATE_GROUPING,
             STATE_TRANSFORMING,
             STATE_SORTING,
+            STATE_FINALIZE_FILTERING,
             STATE_FINALIZING,
     })
     @Retention(RetentionPolicy.SOURCE)

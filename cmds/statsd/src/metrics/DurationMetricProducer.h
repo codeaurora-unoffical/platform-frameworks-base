@@ -59,8 +59,8 @@ protected:
 
     void onMatchedLogEventInternalLocked(
             const size_t matcherIndex, const MetricDimensionKey& eventKey,
-            const ConditionKey& conditionKeys, bool condition,
-            const LogEvent& event) override;
+            const ConditionKey& conditionKeys, bool condition, const LogEvent& event,
+            const std::map<int, HashableDimensionKey>& statePrimaryKeys) override;
 
 private:
     void handleStartEvent(const MetricDimensionKey& eventKey, const ConditionKey& conditionKeys,
@@ -132,8 +132,7 @@ private:
     std::unordered_map<MetricDimensionKey, std::vector<DurationBucket>> mPastBuckets;
 
     // The duration trackers in the current bucket.
-    std::unordered_map<HashableDimensionKey,
-        std::unordered_map<HashableDimensionKey, std::unique_ptr<DurationTracker>>>
+    std::unordered_map<HashableDimensionKey, std::unique_ptr<DurationTracker>>
             mCurrentSlicedDurationTrackerMap;
 
     // Helper function to create a duration tracker given the metric aggregation type.

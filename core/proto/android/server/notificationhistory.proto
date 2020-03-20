@@ -17,8 +17,6 @@
 syntax = "proto2";
 package com.android.server.notification;
 
-import "frameworks/base/core/proto/android/server/enums.proto";
-
 option java_multiple_files = true;
 
 // On disk data store for historical notifications
@@ -56,6 +54,11 @@ message NotificationHistoryProto {
     optional string text = 11;
     // The small icon of the notification
     optional Icon icon = 12;
+
+    // The conversation id, if any, that this notification belongs to
+    optional string conversation_id = 13;
+    // conversation_id_index contains the index + 1 of the conversation id in the string pool
+    optional int32 conversation_id_index = 14;
 
     // Matches the constants of android.graphics.drawable.Icon
     enum ImageTypeEnum {

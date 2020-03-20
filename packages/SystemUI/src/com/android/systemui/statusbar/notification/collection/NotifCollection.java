@@ -35,24 +35,45 @@ import static android.service.notification.NotificationListenerService.REASON_TI
 import static android.service.notification.NotificationListenerService.REASON_UNAUTOBUNDLED;
 import static android.service.notification.NotificationListenerService.REASON_USER_STOPPED;
 
-import static com.android.internal.util.Preconditions.checkNotNull;
+import static com.android.systemui.statusbar.notification.collection.NotificationEntry.DismissState.DISMISSED;
+import static com.android.systemui.statusbar.notification.collection.NotificationEntry.DismissState.NOT_DISMISSED;
+import static com.android.systemui.statusbar.notification.collection.NotificationEntry.DismissState.PARENT_DISMISSED;
+
+import static java.util.Objects.requireNonNull;
 
 import android.annotation.IntDef;
 import android.annotation.MainThread;
-import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.UserIdInt;
+import android.app.Notification;
 import android.os.RemoteException;
+import android.os.UserHandle;
+import android.service.notification.NotificationListenerService;
 import android.service.notification.NotificationListenerService.Ranking;
 import android.service.notification.NotificationListenerService.RankingMap;
 import android.service.notification.StatusBarNotification;
 import android.util.ArrayMap;
-import android.util.Log;
+import android.util.Pair;
+
+import androidx.annotation.NonNull;
 
 import com.android.internal.statusbar.IStatusBarService;
-import com.android.systemui.statusbar.NotificationListener;
-import com.android.systemui.statusbar.NotificationListener.NotifServiceListener;
+import com.android.systemui.Dumpable;
+import com.android.systemui.dump.DumpManager;
+import com.android.systemui.statusbar.FeatureFlags;
+import com.android.systemui.statusbar.notification.collection.coalescer.CoalescedEvent;
+import com.android.systemui.statusbar.notification.collection.coalescer.GroupCoalescer;
+import com.android.systemui.statusbar.notification.collection.coalescer.GroupCoalescer.BatchableNotificationHandler;
+import com.android.systemui.statusbar.notification.collection.notifcollection.CollectionReadyForBuildListener;
+import com.android.systemui.statusbar.notification.collection.notifcollection.DismissedByUserStats;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionLogger;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifDismissInterceptor;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifLifetimeExtender;
 import com.android.systemui.util.Assert;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
@@ -60,6 +81,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -83,13 +105,15 @@ import javax.inject.Singleton;
  * {@link #addNotificationLifetimeExtender(NotifLifetimeExtender)}).
  *
  * Interested parties can register listeners
- * ({@link #addCollectionListener(NotifCollectionListener)}) to be informed when notifications are
- * added, updated, or removed.
+ * ({@link #addCollectionListener(NotifCollectionListener)}) to be informed when notifications
+ * events occur.
  */
 @MainThread
 @Singleton
-public class NotifCollection {
+public class NotifCollection implements Dumpable {
     private final IStatusBarService mStatusBarService;
+    private final FeatureFlags mFeatureFlags;
+    private final NotifCollectionLogger mLogger;
 
     private final Map<String, NotificationEntry> mNotificationSet = new ArrayMap<>();
     private final Collection<NotificationEntry> mReadOnlyNotificationSet =
@@ -98,61 +122,58 @@ public class NotifCollection {
     @Nullable private CollectionReadyForBuildListener mBuildListener;
     private final List<NotifCollectionListener> mNotifCollectionListeners = new ArrayList<>();
     private final List<NotifLifetimeExtender> mLifetimeExtenders = new ArrayList<>();
+    private final List<NotifDismissInterceptor> mDismissInterceptors = new ArrayList<>();
 
     private boolean mAttached = false;
     private boolean mAmDispatchingToOtherCode;
 
     @Inject
-    public NotifCollection(IStatusBarService statusBarService) {
+    public NotifCollection(
+            IStatusBarService statusBarService,
+            DumpManager dumpManager,
+            FeatureFlags featureFlags,
+            NotifCollectionLogger logger) {
         Assert.isMainThread();
         mStatusBarService = statusBarService;
+        mLogger = logger;
+        dumpManager.registerDumpable(TAG, this);
+        mFeatureFlags = featureFlags;
     }
 
     /** Initializes the NotifCollection and registers it to receive notification events. */
-    public void attach(NotificationListener listenerService) {
+    public void attach(GroupCoalescer groupCoalescer) {
         Assert.isMainThread();
         if (mAttached) {
             throw new RuntimeException("attach() called twice");
         }
         mAttached = true;
 
-        listenerService.setDownstreamListener(mNotifServiceListener);
+        groupCoalescer.setNotificationHandler(mNotifHandler);
     }
 
     /**
      * Sets the class responsible for converting the collection into the list of currently-visible
      * notifications.
      */
-    public void setBuildListener(CollectionReadyForBuildListener buildListener) {
+    void setBuildListener(CollectionReadyForBuildListener buildListener) {
         Assert.isMainThread();
         mBuildListener = buildListener;
     }
 
-    /**
-     * Returns the list of "active" notifications, i.e. the notifications that are currently posted
-     * to the phone. In general, this tracks closely to the list maintained by NotificationManager,
-     * but it can diverge slightly due to lifetime extenders.
-     *
-     * The returned list is read-only, unsorted, unfiltered, and ungrouped.
-     */
-    public Collection<NotificationEntry> getNotifs() {
+    /** @see NotifPipeline#getActiveNotifs() */
+    Collection<NotificationEntry> getActiveNotifs() {
         Assert.isMainThread();
         return mReadOnlyNotificationSet;
     }
 
-    /**
-     * Registers a listener to be informed when notifications are added, removed or updated.
-     */
-    public void addCollectionListener(NotifCollectionListener listener) {
+    /** @see NotifPipeline#addCollectionListener(NotifCollectionListener) */
+    void addCollectionListener(NotifCollectionListener listener) {
         Assert.isMainThread();
         mNotifCollectionListeners.add(listener);
     }
 
-    /**
-     * Registers a lifetime extender. Lifetime extenders can cause notifications that have been
-     * dismissed or retracted to be temporarily retained in the collection.
-     */
-    public void addNotificationLifetimeExtender(NotifLifetimeExtender extender) {
+    /** @see NotifPipeline#addNotificationLifetimeExtender(NotifLifetimeExtender) */
+    void addNotificationLifetimeExtender(NotifLifetimeExtender extender) {
         Assert.isMainThread();
         checkForReentrantCall();
         if (mLifetimeExtenders.contains(extender)) {
@@ -162,91 +183,48 @@ public class NotifCollection {
         extender.setCallback(this::onEndLifetimeExtension);
     }
 
-    /**
-     * Dismiss a notification on behalf of the user.
-     */
-    public void dismissNotification(
-            NotificationEntry entry,
-            @CancellationReason int reason,
-            @NonNull DismissedByUserStats stats) {
+    /** @see NotifPipeline#addNotificationDismissInterceptor(NotifDismissInterceptor) */
+    void addNotificationDismissInterceptor(NotifDismissInterceptor interceptor) {
         Assert.isMainThread();
-        checkNotNull(stats);
+        checkForReentrantCall();
+        if (mDismissInterceptors.contains(interceptor)) {
+            throw new IllegalArgumentException("Interceptor " + interceptor + " already added.");
+        }
+        mDismissInterceptors.add(interceptor);
+        interceptor.setCallback(this::onEndDismissInterception);
+    }
+
+    /**
+     * Dismisses multiple notifications on behalf of the user.
+     */
+    public void dismissNotifications(
+            List<Pair<NotificationEntry, DismissedByUserStats>> entriesToDismiss) {
+        Assert.isMainThread();
         checkForReentrantCall();
 
-        removeNotification(entry.getKey(), null, reason, stats);
-    }
+        final List<NotificationEntry> entriesToLocallyDismiss = new ArrayList<>();
+        for (int i = 0; i < entriesToDismiss.size(); i++) {
+            NotificationEntry entry = entriesToDismiss.get(i).first;
+            DismissedByUserStats stats = entriesToDismiss.get(i).second;
 
-    private void onNotificationPosted(StatusBarNotification sbn, RankingMap rankingMap) {
-        Assert.isMainThread();
-
-        NotificationEntry entry = mNotificationSet.get(sbn.getKey());
-
-        if (entry == null) {
-            // A new notification!
-            Log.d(TAG, "POSTED  " + sbn.getKey());
-
-            entry = new NotificationEntry(sbn, requireRanking(rankingMap, sbn.getKey()));
-            mNotificationSet.put(sbn.getKey(), entry);
-            applyRanking(rankingMap);
-
-            dispatchOnEntryAdded(entry);
-
-        } else {
-            // Update to an existing entry
-            Log.d(TAG, "UPDATED " + sbn.getKey());
-
-            // Notification is updated so it is essentially re-added and thus alive again.  Don't
-            // need to keep its lifetime extended.
-            cancelLifetimeExtension(entry);
-
-            entry.setSbn(sbn);
-            applyRanking(rankingMap);
-
-            dispatchOnEntryUpdated(entry);
-        }
-
-        rebuildList();
-    }
-
-    private void onNotificationRemoved(
-            StatusBarNotification sbn,
-            @Nullable RankingMap rankingMap,
-            int reason) {
-        Assert.isMainThread();
-        Log.d(TAG, "REMOVED " + sbn.getKey() + " reason=" + reason);
-        removeNotification(sbn.getKey(), rankingMap, reason, null);
-    }
-
-    private void onNotificationRankingUpdate(RankingMap rankingMap) {
-        Assert.isMainThread();
-        applyRanking(rankingMap);
-        rebuildList();
-    }
-
-    private void removeNotification(
-            String key,
-            @Nullable RankingMap rankingMap,
-            @CancellationReason int reason,
-            DismissedByUserStats dismissedByUserStats) {
-
-        NotificationEntry entry = mNotificationSet.get(key);
-        if (entry == null) {
-            throw new IllegalStateException("No notification to remove with key " + key);
-        }
-
-        entry.mLifetimeExtenders.clear();
-        mAmDispatchingToOtherCode = true;
-        for (NotifLifetimeExtender extender : mLifetimeExtenders) {
-            if (extender.shouldExtendLifetime(entry, reason)) {
-                entry.mLifetimeExtenders.add(extender);
+            requireNonNull(stats);
+            if (entry != mNotificationSet.get(entry.getKey())) {
+                throw new IllegalStateException("Invalid entry: " + entry.getKey());
             }
-        }
-        mAmDispatchingToOtherCode = false;
 
-        if (!isLifetimeExtended(entry)) {
-            mNotificationSet.remove(entry.getKey());
+            if (entry.getDismissState() == DISMISSED) {
+                continue;
+            }
 
-            if (dismissedByUserStats != null) {
+            updateDismissInterceptors(entry);
+            if (isDismissIntercepted(entry)) {
+                mLogger.logNotifDismissedIntercepted(entry.getKey());
+                continue;
+            }
+
+            entriesToLocallyDismiss.add(entry);
+            if (!isCanceled(entry)) {
+                // send message to system server if this notification hasn't already been cancelled
                 try {
                     mStatusBarService.onNotificationClear(
                             entry.getSbn().getPackageName(),
@@ -254,29 +232,238 @@ public class NotifCollection {
                             entry.getSbn().getId(),
                             entry.getSbn().getUser().getIdentifier(),
                             entry.getSbn().getKey(),
-                            dismissedByUserStats.dismissalSurface,
-                            dismissedByUserStats.dismissalSentiment,
-                            dismissedByUserStats.notificationVisibility);
+                            stats.dismissalSurface,
+                            stats.dismissalSentiment,
+                            stats.notificationVisibility);
                 } catch (RemoteException e) {
                     // system process is dead if we're here.
                 }
             }
+        }
+
+        locallyDismissNotifications(entriesToLocallyDismiss);
+        rebuildList();
+    }
+
+    /**
+     * Dismisses a single notification on behalf of the user.
+     */
+    public void dismissNotification(
+            NotificationEntry entry,
+            @NonNull DismissedByUserStats stats) {
+        dismissNotifications(List.of(
+                new Pair<NotificationEntry, DismissedByUserStats>(entry, stats)));
+    }
+
+    /**
+     * Dismisses all clearable notifications for a given userid on behalf of the user.
+     */
+    public void dismissAllNotifications(@UserIdInt int userId) {
+        Assert.isMainThread();
+        checkForReentrantCall();
+
+        try {
+            mStatusBarService.onClearAllNotifications(userId);
+        } catch (RemoteException e) {
+            // system process is dead if we're here.
+        }
+
+        final List<NotificationEntry> entries = new ArrayList(getActiveNotifs());
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            NotificationEntry entry = entries.get(i);
+            if (!shouldDismissOnClearAll(entry, userId)) {
+                // system server won't be removing these notifications, but we still give dismiss
+                // interceptors the chance to filter the notification
+                updateDismissInterceptors(entry);
+                if (isDismissIntercepted(entry)) {
+                    mLogger.logNotifClearAllDismissalIntercepted(entry.getKey());
+                }
+                entries.remove(i);
+            }
+        }
+
+        locallyDismissNotifications(entries);
+        rebuildList();
+    }
+
+    /**
+     * Optimistically marks the given notifications as dismissed -- we'll wait for the signal
+     * from system server before removing it from our notification set.
+     */
+    private void locallyDismissNotifications(List<NotificationEntry> entries) {
+        final List<NotificationEntry> canceledEntries = new ArrayList<>();
+
+        for (int i = 0; i < entries.size(); i++) {
+            NotificationEntry entry = entries.get(i);
+
+            entry.setDismissState(DISMISSED);
+            mLogger.logNotifDismissed(entry.getKey());
+
+            if (isCanceled(entry)) {
+                canceledEntries.add(entry);
+            } else {
+                // Mark any children as dismissed as system server will auto-dismiss them as well
+                if (entry.getSbn().getNotification().isGroupSummary()) {
+                    for (NotificationEntry otherEntry : mNotificationSet.values()) {
+                        if (shouldAutoDismissChildren(otherEntry, entry.getSbn().getGroupKey())) {
+                            otherEntry.setDismissState(PARENT_DISMISSED);
+                            if (isCanceled(otherEntry)) {
+                                canceledEntries.add(otherEntry);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Immediately remove any dismissed notifs that have already been canceled by system server
+        // (probably due to being lifetime-extended up until this point).
+        for (NotificationEntry canceledEntry : canceledEntries) {
+            tryRemoveNotification(canceledEntry);
+        }
+    }
+
+    private void onNotificationPosted(StatusBarNotification sbn, RankingMap rankingMap) {
+        Assert.isMainThread();
+
+        postNotification(sbn, requireRanking(rankingMap, sbn.getKey()), rankingMap);
+        rebuildList();
+    }
+
+    private void onNotificationGroupPosted(List<CoalescedEvent> batch) {
+        Assert.isMainThread();
+
+        mLogger.logNotifGroupPosted(batch.get(0).getSbn().getGroupKey(), batch.size());
+
+        for (CoalescedEvent event : batch) {
+            postNotification(event.getSbn(), event.getRanking(), null);
+        }
+        rebuildList();
+    }
+
+    private void onNotificationRemoved(
+            StatusBarNotification sbn,
+            RankingMap rankingMap,
+            int reason) {
+        Assert.isMainThread();
+
+        mLogger.logNotifRemoved(sbn.getKey(), reason);
+
+        final NotificationEntry entry = mNotificationSet.get(sbn.getKey());
+        if (entry == null) {
+            throw new IllegalStateException("No notification to remove with key " + sbn.getKey());
+        }
+        entry.mCancellationReason = reason;
+        applyRanking(rankingMap);
+        tryRemoveNotification(entry);
+        rebuildList();
+    }
+
+    private void onNotificationRankingUpdate(RankingMap rankingMap) {
+        Assert.isMainThread();
+        applyRanking(rankingMap);
+        dispatchNotificationRankingUpdate(rankingMap);
+        rebuildList();
+    }
+
+    private void postNotification(
+            StatusBarNotification sbn,
+            Ranking ranking,
+            @Nullable RankingMap rankingMap) {
+        NotificationEntry entry = mNotificationSet.get(sbn.getKey());
+
+        if (entry == null) {
+            // A new notification!
+            mLogger.logNotifPosted(sbn.getKey());
+
+            entry = new NotificationEntry(sbn, ranking);
+            mNotificationSet.put(sbn.getKey(), entry);
+            dispatchOnEntryInit(entry);
 
             if (rankingMap != null) {
                 applyRanking(rankingMap);
             }
 
-            dispatchOnEntryRemoved(entry, reason, dismissedByUserStats != null /* removedByUser */);
-        }
+            dispatchOnEntryAdded(entry);
 
-        rebuildList();
+        } else {
+            // Update to an existing entry
+            mLogger.logNotifUpdated(sbn.getKey());
+
+            // Notification is updated so it is essentially re-added and thus alive again, so we
+            // can reset its state.
+            cancelLocalDismissal(entry);
+            cancelLifetimeExtension(entry);
+            cancelDismissInterception(entry);
+            entry.mCancellationReason = REASON_NOT_CANCELED;
+
+            entry.setSbn(sbn);
+            if (rankingMap != null) {
+                applyRanking(rankingMap);
+            }
+
+            dispatchOnEntryUpdated(entry);
+        }
     }
 
-    private void applyRanking(RankingMap rankingMap) {
+    /**
+     * Tries to remove a notification from the notification set. This removal may be blocked by
+     * lifetime extenders. Does not trigger a rebuild of the list; caller must do that manually.
+     *
+     * @return True if the notification was removed, false otherwise.
+     */
+    private boolean tryRemoveNotification(NotificationEntry entry) {
+        if (mNotificationSet.get(entry.getKey()) != entry) {
+            throw new IllegalStateException("No notification to remove with key " + entry.getKey());
+        }
+
+        if (!isCanceled(entry)) {
+            throw new IllegalStateException("Cannot remove notification " + entry.getKey()
+                        + ": has not been marked for removal");
+        }
+
+        if (isDismissedByUser(entry)) {
+            // User-dismissed notifications cannot be lifetime-extended
+            cancelLifetimeExtension(entry);
+        } else {
+            updateLifetimeExtension(entry);
+        }
+
+        if (!isLifetimeExtended(entry)) {
+            mNotificationSet.remove(entry.getKey());
+            cancelDismissInterception(entry);
+            dispatchOnEntryRemoved(entry, entry.mCancellationReason);
+            dispatchOnEntryCleanUp(entry);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    private void applyRanking(@NonNull RankingMap rankingMap) {
         for (NotificationEntry entry : mNotificationSet.values()) {
-            if (!isLifetimeExtended(entry)) {
-                Ranking ranking = requireRanking(rankingMap, entry.getKey());
-                entry.setRanking(ranking);
+            if (!isCanceled(entry)) {
+
+                // TODO: (b/148791039) We should crash if we are ever handed a ranking with
+                //  incomplete entries. Right now, there's a race condition in NotificationListener
+                //  that means this might occur when SystemUI is starting up.
+                Ranking ranking = new Ranking();
+                if (rankingMap.getRanking(entry.getKey(), ranking)) {
+                    entry.setRanking(ranking);
+
+                    // TODO: (b/145659174) update the sbn's overrideGroupKey in
+                    //  NotificationEntry.setRanking instead of here once we fully migrate to the
+                    //  NewNotifPipeline
+                    if (mFeatureFlags.isNewNotifPipelineRenderingEnabled()) {
+                        final String newOverrideGroupKey = ranking.getOverrideGroupKey();
+                        if (!Objects.equals(entry.getSbn().getOverrideGroupKey(),
+                                newOverrideGroupKey)) {
+                            entry.getSbn().setOverrideGroupKey(newOverrideGroupKey);
+                        }
+                    }
+                } else {
+                    mLogger.logRankingMissing(entry.getKey(), rankingMap);
+                }
             }
         }
     }
@@ -303,9 +490,9 @@ public class NotifCollection {
         }
 
         if (!isLifetimeExtended(entry)) {
-            // TODO: This doesn't need to be undefined -- we can set either EXTENDER_EXPIRED or
-            // save the original reason
-            removeNotification(entry.getKey(), null, REASON_UNKNOWN, null);
+            if (tryRemoveNotification(entry)) {
+                rebuildList();
+            }
         }
     }
 
@@ -320,6 +507,78 @@ public class NotifCollection {
 
     private boolean isLifetimeExtended(NotificationEntry entry) {
         return entry.mLifetimeExtenders.size() > 0;
+    }
+
+    private void updateLifetimeExtension(NotificationEntry entry) {
+        entry.mLifetimeExtenders.clear();
+        mAmDispatchingToOtherCode = true;
+        for (NotifLifetimeExtender extender : mLifetimeExtenders) {
+            if (extender.shouldExtendLifetime(entry, entry.mCancellationReason)) {
+                entry.mLifetimeExtenders.add(extender);
+            }
+        }
+        mAmDispatchingToOtherCode = false;
+    }
+
+    private void updateDismissInterceptors(@NonNull NotificationEntry entry) {
+        entry.mDismissInterceptors.clear();
+        mAmDispatchingToOtherCode = true;
+        for (NotifDismissInterceptor interceptor : mDismissInterceptors) {
+            if (interceptor.shouldInterceptDismissal(entry)) {
+                entry.mDismissInterceptors.add(interceptor);
+            }
+        }
+        mAmDispatchingToOtherCode = false;
+    }
+
+    private void cancelLocalDismissal(NotificationEntry entry) {
+        if (isDismissedByUser(entry)) {
+            entry.setDismissState(NOT_DISMISSED);
+            if (entry.getSbn().getNotification().isGroupSummary()) {
+                for (NotificationEntry otherEntry : mNotificationSet.values()) {
+                    if (otherEntry.getSbn().getGroupKey().equals(entry.getSbn().getGroupKey())
+                            && otherEntry.getDismissState() == PARENT_DISMISSED) {
+                        otherEntry.setDismissState(NOT_DISMISSED);
+                    }
+                }
+            }
+        }
+    }
+
+    private void onEndDismissInterception(
+            NotifDismissInterceptor interceptor,
+            NotificationEntry entry,
+            @NonNull DismissedByUserStats stats) {
+        Assert.isMainThread();
+        if (!mAttached) {
+            return;
+        }
+        checkForReentrantCall();
+
+        if (!entry.mDismissInterceptors.remove(interceptor)) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Cannot end dismiss interceptor for interceptor \"%s\" (%s)",
+                            interceptor.getName(),
+                            interceptor));
+        }
+
+        if (!isDismissIntercepted(entry)) {
+            dismissNotification(entry, stats);
+        }
+    }
+
+    private void cancelDismissInterception(NotificationEntry entry) {
+        mAmDispatchingToOtherCode = true;
+        for (NotifDismissInterceptor interceptor : entry.mDismissInterceptors) {
+            interceptor.cancelDismissInterception(entry);
+        }
+        mAmDispatchingToOtherCode = false;
+        entry.mDismissInterceptors.clear();
+    }
+
+    private boolean isDismissIntercepted(NotificationEntry entry) {
+        return entry.mDismissInterceptors.size() > 0;
     }
 
     private void checkForReentrantCall() {
@@ -337,11 +596,80 @@ public class NotifCollection {
         return ranking;
     }
 
+    /**
+     * True if the notification has been canceled by system server. Usually, such notifications are
+     * immediately removed from the collection, but can sometimes stick around due to lifetime
+     * extenders.
+     */
+    private static boolean isCanceled(NotificationEntry entry) {
+        return entry.mCancellationReason != REASON_NOT_CANCELED;
+    }
+
+    private static boolean isDismissedByUser(NotificationEntry entry) {
+        return entry.getDismissState() != NOT_DISMISSED;
+    }
+
+    /**
+     * When a group summary is dismissed, NotificationManager will also try to dismiss its children.
+     * Returns true if we think dismissing the group summary with group key
+     * <code>dismissedGroupKey</code> will cause NotificationManager to also dismiss
+     * <code>entry</code>.
+     *
+     * See NotificationManager.cancelGroupChildrenByListLocked() for corresponding code.
+     */
+    private static boolean shouldAutoDismissChildren(
+            NotificationEntry entry,
+            String dismissedGroupKey) {
+        return entry.getSbn().getGroupKey().equals(dismissedGroupKey)
+                && !entry.getSbn().getNotification().isGroupSummary()
+                && !hasFlag(entry, Notification.FLAG_FOREGROUND_SERVICE)
+                && !hasFlag(entry, Notification.FLAG_BUBBLE)
+                && entry.getDismissState() != DISMISSED;
+    }
+
+    /**
+     * When the user 'clears all notifications' through SystemUI, NotificationManager will not
+     * dismiss unclearable notifications.
+     * @return true if we think NotificationManager will dismiss the entry when asked to
+     * cancel this notification with {@link NotificationListenerService#REASON_CANCEL_ALL}
+     *
+     * See NotificationManager.cancelAllLocked for corresponding code.
+     */
+    private static boolean shouldDismissOnClearAll(
+            NotificationEntry entry,
+            @UserIdInt int userId) {
+        return userIdMatches(entry, userId)
+                && entry.isClearable()
+                && !hasFlag(entry, Notification.FLAG_BUBBLE)
+                && entry.getDismissState() != DISMISSED;
+    }
+
+    private static boolean hasFlag(NotificationEntry entry, int flag) {
+        return (entry.getSbn().getNotification().flags & flag) != 0;
+    }
+
+    /**
+     * Determine whether the userId applies to the notification in question, either because
+     * they match exactly, or one of them is USER_ALL (which is treated as a wildcard).
+     *
+     * See NotificationManager#notificationMatchesUserId
+     */
+    private static boolean userIdMatches(NotificationEntry entry, int userId) {
+        return userId == UserHandle.USER_ALL
+                || entry.getSbn().getUser().getIdentifier() == UserHandle.USER_ALL
+                || entry.getSbn().getUser().getIdentifier() == userId;
+    }
+
+    private void dispatchOnEntryInit(NotificationEntry entry) {
+        mAmDispatchingToOtherCode = true;
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onEntryInit(entry);
+        }
+        mAmDispatchingToOtherCode = false;
+    }
+
     private void dispatchOnEntryAdded(NotificationEntry entry) {
         mAmDispatchingToOtherCode = true;
-        if (mBuildListener != null) {
-            mBuildListener.onBeginDispatchToListeners();
-        }
         for (NotifCollectionListener listener : mNotifCollectionListeners) {
             listener.onEntryAdded(entry);
         }
@@ -350,33 +678,60 @@ public class NotifCollection {
 
     private void dispatchOnEntryUpdated(NotificationEntry entry) {
         mAmDispatchingToOtherCode = true;
-        if (mBuildListener != null) {
-            mBuildListener.onBeginDispatchToListeners();
-        }
         for (NotifCollectionListener listener : mNotifCollectionListeners) {
             listener.onEntryUpdated(entry);
         }
         mAmDispatchingToOtherCode = false;
     }
 
-    private void dispatchOnEntryRemoved(
-            NotificationEntry entry,
-            @CancellationReason int reason,
-            boolean removedByUser) {
+    private void dispatchNotificationRankingUpdate(RankingMap map) {
         mAmDispatchingToOtherCode = true;
-        if (mBuildListener != null) {
-            mBuildListener.onBeginDispatchToListeners();
-        }
         for (NotifCollectionListener listener : mNotifCollectionListeners) {
-            listener.onEntryRemoved(entry, reason, removedByUser);
+            listener.onRankingUpdate(map);
         }
         mAmDispatchingToOtherCode = false;
     }
 
-    private final NotifServiceListener mNotifServiceListener = new NotifServiceListener() {
+    private void dispatchOnEntryRemoved(NotificationEntry entry, @CancellationReason int reason) {
+        mAmDispatchingToOtherCode = true;
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onEntryRemoved(entry, reason);
+        }
+        mAmDispatchingToOtherCode = false;
+    }
+
+    private void dispatchOnEntryCleanUp(NotificationEntry entry) {
+        mAmDispatchingToOtherCode = true;
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onEntryCleanUp(entry);
+        }
+        mAmDispatchingToOtherCode = false;
+    }
+
+    @Override
+    public void dump(@NonNull FileDescriptor fd, PrintWriter pw, @NonNull String[] args) {
+        final List<NotificationEntry> entries = new ArrayList<>(getActiveNotifs());
+
+        pw.println("\t" + TAG + " unsorted/unfiltered notifications:");
+        if (entries.size() == 0) {
+            pw.println("\t\t None");
+        }
+        pw.println(
+                ListDumper.dumpList(
+                        entries,
+                        true,
+                        "\t\t"));
+    }
+
+    private final BatchableNotificationHandler mNotifHandler = new BatchableNotificationHandler() {
         @Override
         public void onNotificationPosted(StatusBarNotification sbn, RankingMap rankingMap) {
             NotifCollection.this.onNotificationPosted(sbn, rankingMap);
+        }
+
+        @Override
+        public void onNotificationBatchPosted(List<CoalescedEvent> events) {
+            NotifCollection.this.onNotificationGroupPosted(events);
         }
 
         @Override
@@ -420,7 +775,8 @@ public class NotifCollection {
             REASON_TIMEOUT,
     })
     @Retention(RetentionPolicy.SOURCE)
-    @interface CancellationReason {}
+    public @interface CancellationReason {}
 
+    public static final int REASON_NOT_CANCELED = -1;
     public static final int REASON_UNKNOWN = 0;
 }

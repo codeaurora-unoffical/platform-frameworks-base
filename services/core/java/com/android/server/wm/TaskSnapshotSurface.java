@@ -54,8 +54,11 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.GraphicBuffer;
+import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -115,6 +118,11 @@ class TaskSnapshotSurface implements StartingSurface {
     private static final String TAG = TAG_WITH_CLASS_NAME ? "SnapshotStartingWindow" : TAG_WM;
     private static final int MSG_REPORT_DRAW = 0;
     private static final String TITLE_FORMAT = "SnapshotStartingWindow for taskId=%s";
+
+    //tmp vars for unused relayout params
+    private static final Point sTmpSurfaceSize = new Point();
+    private static final SurfaceControl sTmpSurfaceControl = new SurfaceControl();
+
     private final Window mWindow;
     private final Surface mSurface;
     private SurfaceControl mSurfaceControl;
@@ -126,6 +134,8 @@ class TaskSnapshotSurface implements StartingSurface {
     private final Rect mContentInsets = new Rect();
     private final Rect mFrame = new Rect();
     private TaskSnapshot mSnapshot;
+    private final RectF mTmpSnapshotSize = new RectF();
+    private final RectF mTmpDstFrame = new RectF();
     private final CharSequence mTitle;
     private boolean mHasDrawn;
     private long mShownTime;
@@ -136,6 +146,8 @@ class TaskSnapshotSurface implements StartingSurface {
     @VisibleForTesting final SystemBarBackgroundPainter mSystemBarBackgroundPainter;
     private final int mOrientationOnCreation;
     private final SurfaceControl.Transaction mTransaction;
+    private final Matrix mSnapshotMatrix = new Matrix();
+    private final float[] mTmpFloat9 = new float[9];
 
     static TaskSnapshotSurface create(WindowManagerService service, ActivityRecord activity,
             TaskSnapshot snapshot) {
@@ -155,7 +167,7 @@ class TaskSnapshotSurface implements StartingSurface {
         final MergedConfiguration tmpMergedConfiguration = new MergedConfiguration();
         final TaskDescription taskDescription = new TaskDescription();
         taskDescription.setBackgroundColor(WHITE);
-        final WindowState topFullscreenWindow;
+        final WindowState topFullscreenOpaqueWindow;
         final int sysUiVis;
         final int windowFlags;
         final int windowPrivateFlags;
@@ -175,15 +187,16 @@ class TaskSnapshotSurface implements StartingSurface {
                         + task);
                 return null;
             }
-            topFullscreenWindow = topFullscreenActivity.getTopFullscreenWindow();
-            if (mainWindow == null || topFullscreenWindow == null) {
+            topFullscreenOpaqueWindow = topFullscreenActivity.getTopFullscreenOpaqueWindow();
+            if (mainWindow == null || topFullscreenOpaqueWindow == null) {
                 Slog.w(TAG, "TaskSnapshotSurface.create: Failed to find main window for activity="
                         + activity);
                 return null;
             }
-            sysUiVis = topFullscreenWindow.getSystemUiVisibility();
-            windowFlags = topFullscreenWindow.getAttrs().flags;
-            windowPrivateFlags = topFullscreenWindow.getAttrs().privateFlags;
+            sysUiVis = topFullscreenOpaqueWindow.getSystemUiVisibility();
+            WindowManager.LayoutParams attrs = topFullscreenOpaqueWindow.mAttrs;
+            windowFlags = attrs.flags;
+            windowPrivateFlags = attrs.privateFlags;
 
             layoutParams.packageName = mainWindow.getAttrs().packageName;
             layoutParams.windowAnimations = mainWindow.getAttrs().windowAnimations;
@@ -198,15 +211,23 @@ class TaskSnapshotSurface implements StartingSurface {
             layoutParams.width = LayoutParams.MATCH_PARENT;
             layoutParams.height = LayoutParams.MATCH_PARENT;
             layoutParams.systemUiVisibility = sysUiVis;
+            layoutParams.insetsFlags.behavior
+                    = topFullscreenOpaqueWindow.mAttrs.insetsFlags.behavior;
+            layoutParams.insetsFlags.appearance
+                    = topFullscreenOpaqueWindow.mAttrs.insetsFlags.appearance;
+            layoutParams.setFitInsetsTypes(attrs.getFitInsetsTypes());
+            layoutParams.setFitInsetsSides(attrs.getFitInsetsSides());
+            layoutParams.setFitInsetsIgnoringVisibility(attrs.isFitInsetsIgnoringVisibility());
+
             layoutParams.setTitle(String.format(TITLE_FORMAT, task.mTaskId));
 
             final TaskDescription td = task.getTaskDescription();
             if (td != null) {
-                taskDescription.copyFrom(td);
+                taskDescription.copyFromPreserveHiddenFields(td);
             }
             taskBounds = new Rect();
             task.getBounds(taskBounds);
-            currentOrientation = topFullscreenWindow.getConfiguration().orientation;
+            currentOrientation = topFullscreenOpaqueWindow.getConfiguration().orientation;
         }
         try {
             final int res = session.addToDisplay(window, window.mSeq, layoutParams,
@@ -222,12 +243,13 @@ class TaskSnapshotSurface implements StartingSurface {
         final TaskSnapshotSurface snapshotSurface = new TaskSnapshotSurface(service, window,
                 surfaceControl, snapshot, layoutParams.getTitle(), taskDescription, sysUiVis,
                 windowFlags, windowPrivateFlags, taskBounds,
-                currentOrientation, topFullscreenWindow.getClientInsetsState());
+                currentOrientation, topFullscreenOpaqueWindow.getRequestedInsetsState());
         window.setOuter(snapshotSurface);
         try {
             session.relayout(window, window.mSeq, layoutParams, -1, -1, View.VISIBLE, 0, -1,
                     tmpFrame, tmpContentInsets, tmpRect, tmpStableInsets, tmpRect,
-                    tmpCutout, tmpMergedConfiguration, surfaceControl, mTmpInsetsState);
+                    tmpCutout, tmpMergedConfiguration, surfaceControl, mTmpInsetsState,
+                    sTmpSurfaceSize, sTmpSurfaceControl);
         } catch (RemoteException e) {
             // Local call.
         }
@@ -350,13 +372,17 @@ class TaskSnapshotSurface implements StartingSurface {
             frame = calculateSnapshotFrame(crop);
             mTransaction.setWindowCrop(mChildSurfaceControl, crop);
             mTransaction.setPosition(mChildSurfaceControl, frame.left, frame.top);
+            mTmpDstFrame.set(frame);
         } else {
             frame = null;
+            mTmpDstFrame.set(mFrame);
         }
 
         // Scale the mismatch dimensions to fill the task bounds
-        final float scale = 1 / mSnapshot.getScale();
-        mTransaction.setMatrix(mChildSurfaceControl, scale, 0, 0, scale);
+        mTmpSnapshotSize.set(0, 0, buffer.getWidth(), buffer.getHeight());
+        mSnapshotMatrix.setRectToRect(mTmpSnapshotSize, mTmpDstFrame, Matrix.ScaleToFit.FILL);
+        mTransaction.setMatrix(mChildSurfaceControl, mSnapshotMatrix, mTmpFloat9);
+
         mTransaction.apply();
         surface.attachAndQueueBufferWithColorSpace(buffer, mSnapshot.getColorSpace());
         surface.release();
@@ -380,13 +406,17 @@ class TaskSnapshotSurface implements StartingSurface {
         rect.set(0, 0, mSnapshot.getSnapshot().getWidth(), mSnapshot.getSnapshot().getHeight());
         final Rect insets = mSnapshot.getContentInsets();
 
+        final float scaleX = (float) mSnapshot.getSnapshot().getWidth() / mSnapshot.getTaskSize().x;
+        final float scaleY =
+                (float) mSnapshot.getSnapshot().getHeight() / mSnapshot.getTaskSize().y;
+
         // Let's remove all system decorations except the status bar, but only if the task is at the
         // very top of the screen.
         final boolean isTop = mTaskBounds.top == 0 && mFrame.top == 0;
-        rect.inset((int) (insets.left * mSnapshot.getScale()),
-                isTop ? 0 : (int) (insets.top * mSnapshot.getScale()),
-                (int) (insets.right * mSnapshot.getScale()),
-                (int) (insets.bottom * mSnapshot.getScale()));
+        rect.inset((int) (insets.left * scaleX),
+                isTop ? 0 : (int) (insets.top * scaleY),
+                (int) (insets.right * scaleX),
+                (int) (insets.bottom * scaleY));
         return rect;
     }
 
@@ -397,14 +427,20 @@ class TaskSnapshotSurface implements StartingSurface {
      */
     @VisibleForTesting
     Rect calculateSnapshotFrame(Rect crop) {
-        final Rect frame = new Rect(crop);
-        final float scale = mSnapshot.getScale();
+        final float scaleX = (float) mSnapshot.getSnapshot().getWidth() / mSnapshot.getTaskSize().x;
+        final float scaleY =
+                (float) mSnapshot.getSnapshot().getHeight() / mSnapshot.getTaskSize().y;
 
         // Rescale the frame from snapshot to window coordinate space
-        frame.scale(1 / scale);
+        final Rect frame = new Rect(
+                (int) (crop.left / scaleX + 0.5f),
+                (int) (crop.top / scaleY + 0.5f),
+                (int) (crop.right / scaleX + 0.5f),
+                (int) (crop.bottom / scaleY + 0.5f)
+        );
 
         // By default, offset it to to top/left corner
-        frame.offsetTo((int) (-crop.left / scale), (int) (-crop.top / scale));
+        frame.offsetTo((int) (-crop.left / scaleX), (int) (-crop.top / scaleY));
 
         // However, we also need to make space for the navigation bar on the left side.
         final int colorViewLeftInset = getColorViewLeftInset(mStableInsets.left,

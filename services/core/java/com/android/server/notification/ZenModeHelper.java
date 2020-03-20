@@ -19,6 +19,7 @@ package com.android.server.notification;
 import static android.app.NotificationManager.AUTOMATIC_RULE_STATUS_DISABLED;
 import static android.app.NotificationManager.AUTOMATIC_RULE_STATUS_ENABLED;
 import static android.app.NotificationManager.AUTOMATIC_RULE_STATUS_REMOVED;
+import static android.app.NotificationManager.Policy.PRIORITY_SENDERS_ANY;
 
 import android.app.AppOpsManager;
 import android.app.AutomaticZenRule;
@@ -641,9 +642,11 @@ public class ZenModeHelper {
     }
 
     public void dump(PrintWriter pw, String prefix) {
-        pw.print(prefix); pw.print("mZenMode=");
+        pw.print(prefix);
+        pw.print("mZenMode=");
         pw.println(Global.zenModeToString(mZenMode));
-        pw.print("mConsolidatedPolicy=" + mConsolidatedPolicy.toString());
+        pw.print(prefix);
+        pw.println("mConsolidatedPolicy=" + mConsolidatedPolicy.toString());
         final int N = mConfigs.size();
         for (int i = 0; i < N; i++) {
             dump(pw, prefix, "mConfigs[u=" + mConfigs.keyAt(i) + "]", mConfigs.valueAt(i));
@@ -665,13 +668,17 @@ public class ZenModeHelper {
             return;
         }
         pw.printf("allow(alarms=%b,media=%b,system=%b,calls=%b,callsFrom=%s,repeatCallers=%b,"
-                + "messages=%b,messagesFrom=%s,events=%b,reminders=%b)\n",
+                + "messages=%b,messagesFrom=%s,conversations=%b,conversationsFrom=%s,"
+                        + "events=%b,reminders=%b)\n",
                 config.allowAlarms, config.allowMedia, config.allowSystem,
                 config.allowCalls, ZenModeConfig.sourceToString(config.allowCallsFrom),
                 config.allowRepeatCallers, config.allowMessages,
                 ZenModeConfig.sourceToString(config.allowMessagesFrom),
+                config.allowConversations,
+                ZenPolicy.conversationTypeToString(config.allowConversationsFrom),
                 config.allowEvents, config.allowReminders);
-        pw.printf(" disallow(visualEffects=%s)\n", config.suppressedVisualEffects);
+        pw.print(prefix);
+        pw.printf("  disallow(visualEffects=%s)\n", config.suppressedVisualEffects);
         pw.print(prefix); pw.print("  manualRule="); pw.println(config.manualRule);
         if (config.automaticRules.isEmpty()) return;
         final int N = config.automaticRules.size();
@@ -1005,21 +1012,23 @@ public class ZenModeHelper {
 
     @VisibleForTesting
     protected void applyRestrictions() {
+        final boolean zenOn = mZenMode != Global.ZEN_MODE_OFF;
         final boolean zenPriorityOnly = mZenMode == Global.ZEN_MODE_IMPORTANT_INTERRUPTIONS;
         final boolean zenSilence = mZenMode == Global.ZEN_MODE_NO_INTERRUPTIONS;
         final boolean zenAlarmsOnly = mZenMode == Global.ZEN_MODE_ALARMS;
-        final boolean allowCalls = mConsolidatedPolicy.allowCalls();
+        final boolean allowCalls = mConsolidatedPolicy.allowCalls()
+                && mConsolidatedPolicy.allowCallsFrom() == PRIORITY_SENDERS_ANY;
         final boolean allowRepeatCallers = mConsolidatedPolicy.allowRepeatCallers();
         final boolean allowSystem = mConsolidatedPolicy.allowSystem();
         final boolean allowMedia = mConsolidatedPolicy.allowMedia();
         final boolean allowAlarms = mConsolidatedPolicy.allowAlarms();
 
         // notification restrictions
-        final boolean muteNotifications =
-                (mSuppressedEffects & SUPPRESSED_EFFECT_NOTIFICATIONS) != 0;
+        final boolean muteNotifications = zenOn
+                || (mSuppressedEffects & SUPPRESSED_EFFECT_NOTIFICATIONS) != 0;
         // call restrictions
         final boolean muteCalls = zenAlarmsOnly
-                || (zenPriorityOnly && !allowCalls && !allowRepeatCallers)
+                || (zenPriorityOnly && !(allowCalls || allowRepeatCallers))
                 || (mSuppressedEffects & SUPPRESSED_EFFECT_CALLS) != 0;
         // alarm restrictions
         final boolean muteAlarms = zenPriorityOnly && !allowAlarms;

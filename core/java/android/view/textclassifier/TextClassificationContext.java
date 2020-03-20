@@ -24,9 +24,8 @@ import android.os.Parcelable;
 import android.os.UserHandle;
 import android.view.textclassifier.TextClassifier.WidgetType;
 
-import com.android.internal.util.Preconditions;
-
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * A representation of the context in which text classification would be performed.
@@ -39,13 +38,14 @@ public final class TextClassificationContext implements Parcelable {
     @Nullable private final String mWidgetVersion;
     @UserIdInt
     private int mUserId = UserHandle.USER_NULL;
+    private boolean mUseDefaultTextClassifier;
 
     private TextClassificationContext(
             String packageName,
             String widgetType,
             String widgetVersion) {
-        mPackageName = Preconditions.checkNotNull(packageName);
-        mWidgetType = Preconditions.checkNotNull(widgetType);
+        mPackageName = Objects.requireNonNull(packageName);
+        mWidgetType = Objects.requireNonNull(widgetType);
         mWidgetVersion = widgetVersion;
     }
 
@@ -74,6 +74,26 @@ public final class TextClassificationContext implements Parcelable {
     @UserIdInt
     public int getUserId() {
         return mUserId;
+    }
+
+    /**
+     * Sets whether to use the default text classifier to handle this request.
+     * This will be ignored if it is not the system text classifier to handle this request.
+     *
+     * @hide
+     */
+    void setUseDefaultTextClassifier(boolean useDefaultTextClassifier) {
+        mUseDefaultTextClassifier = useDefaultTextClassifier;
+    }
+
+    /**
+     * Returns whether to use the default text classifier to handle this request. This
+     * will be ignored if it is not the system text classifier to handle this request.
+     *
+     * @hide
+     */
+    public boolean getUseDefaultTextClassifier() {
+        return mUseDefaultTextClassifier;
     }
 
     /**
@@ -121,8 +141,8 @@ public final class TextClassificationContext implements Parcelable {
          * @return this builder
          */
         public Builder(@NonNull String packageName, @NonNull @WidgetType String widgetType) {
-            mPackageName = Preconditions.checkNotNull(packageName);
-            mWidgetType = Preconditions.checkNotNull(widgetType);
+            mPackageName = Objects.requireNonNull(packageName);
+            mWidgetType = Objects.requireNonNull(widgetType);
         }
 
         /**
@@ -157,6 +177,7 @@ public final class TextClassificationContext implements Parcelable {
         parcel.writeString(mWidgetType);
         parcel.writeString(mWidgetVersion);
         parcel.writeInt(mUserId);
+        parcel.writeBoolean(mUseDefaultTextClassifier);
     }
 
     private TextClassificationContext(Parcel in) {
@@ -164,6 +185,7 @@ public final class TextClassificationContext implements Parcelable {
         mWidgetType = in.readString();
         mWidgetVersion = in.readString();
         mUserId = in.readInt();
+        mUseDefaultTextClassifier = in.readBoolean();
     }
 
     public static final @android.annotation.NonNull Parcelable.Creator<TextClassificationContext> CREATOR =

@@ -36,7 +36,6 @@ import androidx.test.filters.SmallTest;
 import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.assist.AssistManager;
-import com.android.systemui.doze.DozeEvent;
 import com.android.systemui.doze.DozeHost;
 import com.android.systemui.doze.DozeLog;
 import com.android.systemui.keyguard.KeyguardViewMediator;
@@ -79,14 +78,14 @@ public class DozeServiceHostTest extends SysuiTestCase {
     @Mock private DozeLog mDozeLog;
     @Mock private PulseExpansionHandler mPulseExpansionHandler;
     @Mock private NotificationWakeUpCoordinator mNotificationWakeUpCoordinator;
-    @Mock private StatusBarWindowController mStatusBarWindowController;
+    @Mock private NotificationShadeWindowController mNotificationShadeWindowController;
     @Mock private PowerManager mPowerManager;
     @Mock private WakefulnessLifecycle mWakefullnessLifecycle;
     @Mock private StatusBar mStatusBar;
     @Mock private NotificationIconAreaController mNotificationIconAreaController;
-    @Mock private StatusBarWindowViewController mStatusBarWindowViewController;
+    @Mock private NotificationShadeWindowViewController mNotificationShadeWindowViewController;
     @Mock private StatusBarKeyguardViewManager mStatusBarKeyguardViewManager;
-    @Mock private NotificationPanelView mNotificationPanel;
+    @Mock private NotificationPanelViewController mNotificationPanel;
     @Mock private View mAmbientIndicationContainer;
     @Mock private BiometricUnlockController mBiometricUnlockController;
     @Mock private LockscreenLockIconController mLockscreenLockIconController;
@@ -99,12 +98,12 @@ public class DozeServiceHostTest extends SysuiTestCase {
                 mBatteryController, mScrimController, () -> mBiometricUnlockController,
                 mKeyguardViewMediator, () -> mAssistManager, mDozeScrimController,
                 mKeyguardUpdateMonitor, mVisualStabilityManager, mPulseExpansionHandler,
-                mStatusBarWindowController, mNotificationWakeUpCoordinator,
+                mNotificationShadeWindowController, mNotificationWakeUpCoordinator,
                 mLockscreenLockIconController);
 
         mDozeServiceHost.initialize(mStatusBar, mNotificationIconAreaController,
-                mStatusBarKeyguardViewManager, mStatusBarWindowViewController, mNotificationPanel,
-                mAmbientIndicationContainer);
+                mStatusBarKeyguardViewManager, mNotificationShadeWindowViewController,
+                mNotificationPanel, mAmbientIndicationContainer);
     }
 
     @Test
@@ -144,13 +143,13 @@ public class DozeServiceHostTest extends SysuiTestCase {
             @Override
             public void onPulseFinished() {
             }
-        }, DozeEvent.PULSE_REASON_NOTIFICATION);
+        }, DozeLog.PULSE_REASON_NOTIFICATION);
 
         ArgumentCaptor<DozeHost.PulseCallback> pulseCallbackArgumentCaptor =
                 ArgumentCaptor.forClass(DozeHost.PulseCallback.class);
 
         verify(mDozeScrimController).pulse(
-                pulseCallbackArgumentCaptor.capture(), eq(DozeEvent.PULSE_REASON_NOTIFICATION));
+                pulseCallbackArgumentCaptor.capture(), eq(DozeLog.PULSE_REASON_NOTIFICATION));
         verify(mStatusBar).updateScrimController();
         reset(mStatusBar);
 
@@ -162,21 +161,21 @@ public class DozeServiceHostTest extends SysuiTestCase {
     @Test
     public void testPulseWhileDozing_notifyAuthInterrupt() {
         HashSet<Integer> reasonsWantingAuth = new HashSet<>(
-                Collections.singletonList(DozeEvent.PULSE_REASON_SENSOR_WAKE_LOCK_SCREEN));
+                Collections.singletonList(DozeLog.PULSE_REASON_SENSOR_WAKE_LOCK_SCREEN));
         HashSet<Integer> reasonsSkippingAuth = new HashSet<>(
-                Arrays.asList(DozeEvent.PULSE_REASON_INTENT,
-                        DozeEvent.PULSE_REASON_NOTIFICATION,
-                        DozeEvent.PULSE_REASON_SENSOR_SIGMOTION,
-                        DozeEvent.REASON_SENSOR_PICKUP,
-                        DozeEvent.REASON_SENSOR_DOUBLE_TAP,
-                        DozeEvent.PULSE_REASON_SENSOR_LONG_PRESS,
-                        DozeEvent.PULSE_REASON_DOCKING,
-                        DozeEvent.REASON_SENSOR_WAKE_UP,
-                        DozeEvent.REASON_SENSOR_TAP));
+                Arrays.asList(DozeLog.PULSE_REASON_INTENT,
+                        DozeLog.PULSE_REASON_NOTIFICATION,
+                        DozeLog.PULSE_REASON_SENSOR_SIGMOTION,
+                        DozeLog.REASON_SENSOR_PICKUP,
+                        DozeLog.REASON_SENSOR_DOUBLE_TAP,
+                        DozeLog.PULSE_REASON_SENSOR_LONG_PRESS,
+                        DozeLog.PULSE_REASON_DOCKING,
+                        DozeLog.REASON_SENSOR_WAKE_UP,
+                        DozeLog.REASON_SENSOR_TAP));
         HashSet<Integer> reasonsThatDontPulse = new HashSet<>(
-                Arrays.asList(DozeEvent.REASON_SENSOR_PICKUP,
-                        DozeEvent.REASON_SENSOR_DOUBLE_TAP,
-                        DozeEvent.REASON_SENSOR_TAP));
+                Arrays.asList(DozeLog.REASON_SENSOR_PICKUP,
+                        DozeLog.REASON_SENSOR_DOUBLE_TAP,
+                        DozeLog.REASON_SENSOR_TAP));
 
         doAnswer(invocation -> {
             DozeHost.PulseCallback callback = invocation.getArgument(0);
@@ -185,7 +184,7 @@ public class DozeServiceHostTest extends SysuiTestCase {
         }).when(mDozeScrimController).pulse(any(), anyInt());
 
         mDozeServiceHost.mWakeLockScreenPerformsAuth = true;
-        for (int i = 0; i < DozeEvent.TOTAL_REASONS; i++) {
+        for (int i = 0; i < DozeLog.TOTAL_REASONS; i++) {
             reset(mKeyguardUpdateMonitor);
             mDozeServiceHost.pulseWhileDozing(mock(DozeHost.PulseCallback.class), i);
             if (reasonsWantingAuth.contains(i)) {

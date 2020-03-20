@@ -18,6 +18,8 @@ package com.android.internal.app;
 
 import android.app.AppOpsManager;
 import android.app.AsyncNotedAppOp;
+import android.app.SyncNotedAppOp;
+import android.app.RuntimeAppOpAccessMessage;
 import android.content.pm.ParceledListSlice;
 import android.os.Bundle;
 import android.os.RemoteCallback;
@@ -25,25 +27,25 @@ import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsActiveCallback;
 import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsNotedCallback;
+import com.android.internal.app.MessageSamplingConfig;
 
 interface IAppOpsService {
     // These methods are also called by native code, so must
     // be kept in sync with frameworks/native/libs/binder/include/binder/IAppOpsService.h
     // and not be reordered
     int checkOperation(int code, int uid, String packageName);
-    int noteOperation(int code, int uid, String packageName, @nullable String featureId);
-    int startOperation(IBinder token, int code, int uid, String packageName,
-            @nullable String featureId, boolean startIfModeDefault);
+    int noteOperation(int code, int uid, String packageName, @nullable String featureId,
+            boolean shouldCollectAsyncNotedOp, String message);
+    int startOperation(IBinder clientId, int code, int uid, String packageName,
+            @nullable String featureId, boolean startIfModeDefault,
+            boolean shouldCollectAsyncNotedOp, String message);
     @UnsupportedAppUsage
-    void finishOperation(IBinder token, int code, int uid, String packageName,
+    void finishOperation(IBinder clientId, int code, int uid, String packageName,
             @nullable String featureId);
     void startWatchingMode(int op, String packageName, IAppOpsCallback callback);
     void stopWatchingMode(IAppOpsCallback callback);
-    IBinder getToken(IBinder clientToken);
     int permissionToOpCode(String permission);
     int checkAudioOperation(int code, int usage, int uid, String packageName);
-    void noteAsyncOp(@nullable String callingPackageName, int uid, @nullable String packageName,
-            int opCode, @nullable String featureId, String message);
     boolean shouldCollectNotes(int opCode);
     void setCameraAudioRestriction(int mode);
     // End of methods also called by native code.
@@ -51,18 +53,23 @@ interface IAppOpsService {
 
     int noteProxyOperation(int code, int proxiedUid, String proxiedPackageName,
             String proxiedFeatureId, int proxyUid, String proxyPackageName,
-            String proxyFeatureId);
+            String proxyFeatureId, boolean shouldCollectAsyncNotedOp, String message);
 
     // Remaining methods are only used in Java.
     int checkPackage(int uid, String packageName);
+    RuntimeAppOpAccessMessage collectRuntimeAppOpAccessMessage();
+    MessageSamplingConfig reportRuntimeAppOpAccessMessageAndGetConfig(String packageName,
+            in SyncNotedAppOp appOp, String message);
     @UnsupportedAppUsage
     List<AppOpsManager.PackageOps> getPackagesForOps(in int[] ops);
     @UnsupportedAppUsage
     List<AppOpsManager.PackageOps> getOpsForPackage(int uid, String packageName, in int[] ops);
-    void getHistoricalOps(int uid, String packageName, in List<String> ops, long beginTimeMillis,
-            long endTimeMillis, int flags, in RemoteCallback callback);
-    void getHistoricalOpsFromDiskRaw(int uid, String packageName, in List<String> ops,
-            long beginTimeMillis, long endTimeMillis, int flags, in RemoteCallback callback);
+    void getHistoricalOps(int uid, String packageName, String featureId, in List<String> ops,
+            int filter, long beginTimeMillis, long endTimeMillis, int flags,
+            in RemoteCallback callback);
+    void getHistoricalOpsFromDiskRaw(int uid, String packageName, String featureId,
+            in List<String> ops, int filter, long beginTimeMillis, long endTimeMillis, int flags,
+            in RemoteCallback callback);
     void offsetHistory(long duration);
     void setHistoryParameters(int mode, long baseSnapshotInterval, int compressionStep);
     void addHistoricalOps(in AppOpsManager.HistoricalOps ops);
@@ -96,4 +103,6 @@ interface IAppOpsService {
     int checkOperationRaw(int code, int uid, String packageName);
 
     void reloadNonHistoricalState();
+
+    void collectNoteOpCallsForValidation(String stackTrace, int op, String packageName, long version);
 }

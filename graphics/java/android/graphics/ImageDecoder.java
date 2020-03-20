@@ -28,8 +28,8 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.Px;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.WorkerThread;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ContentResolver;
 import android.content.res.AssetFileDescriptor;
 import android.content.res.AssetManager;
@@ -270,13 +270,17 @@ public final class ImageDecoder implements AutoCloseable {
         public ImageDecoder createImageDecoder(boolean preferAnimation) throws IOException {
             AssetFileDescriptor assetFd = null;
             try {
-                if (mUri.getScheme() == ContentResolver.SCHEME_CONTENT) {
+                if (mUri.getScheme().equals(ContentResolver.SCHEME_CONTENT)) {
                     assetFd = mResolver.openTypedAssetFileDescriptor(mUri,
                             "image/*", null);
                 } else {
                     assetFd = mResolver.openAssetFileDescriptor(mUri, "r");
                 }
             } catch (FileNotFoundException e) {
+                // Handled below, along with the case where assetFd was set to null.
+            }
+
+            if (assetFd == null) {
                 // Some images cannot be opened as AssetFileDescriptors (e.g.
                 // bmp, ico). Open them as InputStreams.
                 InputStream is = mResolver.openInputStream(mUri);
@@ -286,9 +290,7 @@ public final class ImageDecoder implements AutoCloseable {
 
                 return createFromStream(is, true, preferAnimation, this);
             }
-            if (assetFd == null) {
-                throw new FileNotFoundException(mUri.toString());
-            }
+
             return createFromAssetFileDescriptor(assetFd, preferAnimation, this);
         }
     }

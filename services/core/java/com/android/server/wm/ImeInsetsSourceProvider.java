@@ -16,8 +16,12 @@
 
 package com.android.server.wm;
 
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_IME;
+
 import android.view.InsetsSource;
 import android.view.WindowInsets;
+
+import com.android.server.protolog.common.ProtoLog;
 
 /**
  * Controller for IME inset source on the server. It's called provider as it provides the
@@ -35,51 +39,62 @@ class ImeInsetsSourceProvider extends InsetsSourceProvider {
     }
 
     /**
-     * Called when a layout pass has occurred.
-     */
-    void onPostLayout() {
-        super.onPostLayout();
-
-        if (mImeTargetFromIme != null
-                && isImeTargetFromDisplayContentAndImeSame()
-                && mWin != null
-                && mWin.isDrawnLw()
-                && !mWin.mGivenInsetsPending) {
-            mIsImeLayoutDrawn = true;
-        }
-    }
-
-    /**
-     * Called when Insets have been dispatched to client.
-     */
-    void onPostInsetsDispatched() {
-        if (mIsImeLayoutDrawn && mShowImeRunner != null) {
-            // Show IME if InputMethodService requested to be shown and it's layout has finished.
-            mShowImeRunner.run();
-        }
-    }
-
-    /**
      * Called from {@link WindowManagerInternal#showImePostLayout} when {@link InputMethodService}
      * requests to show IME on {@param imeTarget}.
+     *
      * @param imeTarget imeTarget on which IME request is coming from.
      */
     void scheduleShowImePostLayout(WindowState imeTarget) {
+        boolean targetChanged = mImeTargetFromIme != imeTarget
+                && mImeTargetFromIme != null && imeTarget != null && mShowImeRunner != null
+                && mImeTargetFromIme.mActivityRecord == imeTarget.mActivityRecord;
         mImeTargetFromIme = imeTarget;
+        if (targetChanged) {
+            // target changed, check if new target can show IME.
+            ProtoLog.d(WM_DEBUG_IME, "IME target changed within ActivityRecord");
+            checkShowImePostLayout();
+            // if IME cannot be shown at this time, it is scheduled to be shown.
+            // once window that called IMM.showSoftInput() and DisplayContent's ImeTarget match,
+            // it will be shown.
+            return;
+        }
+
+        ProtoLog.d(WM_DEBUG_IME, "Schedule IME show for %s", mImeTargetFromIme.getName());
         mShowImeRunner = () -> {
+            ProtoLog.d(WM_DEBUG_IME, "Run showImeRunner");
             // Target should still be the same.
             if (isImeTargetFromDisplayContentAndImeSame()) {
-                mDisplayContent.mInputMethodTarget.showInsets(
-                        WindowInsets.Type.ime(), true /* fromIme */);
+                final InsetsControlTarget target = mDisplayContent.mInputMethodControlTarget;
+                ProtoLog.d(WM_DEBUG_IME, "call showInsets(ime) on %s",
+                        target.getWindow() != null ? target.getWindow().getName() : "");
+                target.showInsets(WindowInsets.Type.ime(), true /* fromIme */);
             }
             abortShowImePostLayout();
         };
+        mDisplayContent.mWmService.requestTraversal();
+    }
+
+    void checkShowImePostLayout() {
+        // check if IME is drawn
+        if (mIsImeLayoutDrawn
+                || (mImeTargetFromIme != null
+                && isImeTargetFromDisplayContentAndImeSame()
+                && mWin != null
+                && mWin.isDrawnLw()
+                && !mWin.mGivenInsetsPending)) {
+            mIsImeLayoutDrawn = true;
+            // show IME if InputMethodService requested it to be shown.
+            if (mShowImeRunner != null) {
+                mShowImeRunner.run();
+            }
+        }
     }
 
     /**
      * Abort any pending request to show IME post layout.
      */
     void abortShowImePostLayout() {
+        ProtoLog.d(WM_DEBUG_IME, "abortShowImePostLayout");
         mImeTargetFromIme = null;
         mIsImeLayoutDrawn = false;
         mShowImeRunner = null;
@@ -96,9 +111,15 @@ class ImeInsetsSourceProvider extends InsetsSourceProvider {
         // TODO(b/139861270): Remove the child & sublayer check once IMMS is aware of
         //  actual IME target.
         final WindowState dcTarget = mDisplayContent.mInputMethodTarget;
-        return (!dcTarget.isClosing() && mImeTargetFromIme == dcTarget)
-                || (dcTarget.getParentWindow() == mImeTargetFromIme
-                        && dcTarget.mSubLayer > mImeTargetFromIme.mSubLayer);
-    }
+        if (dcTarget == null || mImeTargetFromIme == null) {
+            return false;
+        }
+        ProtoLog.d(WM_DEBUG_IME, "dcTarget: %s mImeTargetFromIme: %s",
+                dcTarget.getName(), mImeTargetFromIme.getName());
 
+        return (!dcTarget.isClosing() && mImeTargetFromIme == dcTarget)
+                || (mImeTargetFromIme != null && dcTarget.getParentWindow() == mImeTargetFromIme
+                        && dcTarget.mSubLayer > mImeTargetFromIme.mSubLayer)
+                || mImeTargetFromIme == mDisplayContent.getImeFallback();
+    }
 }

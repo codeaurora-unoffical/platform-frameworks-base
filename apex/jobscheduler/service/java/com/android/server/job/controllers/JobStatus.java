@@ -17,6 +17,9 @@
 package com.android.server.job.controllers;
 
 import static com.android.server.job.JobSchedulerService.ACTIVE_INDEX;
+import static com.android.server.job.JobSchedulerService.NEVER_INDEX;
+import static com.android.server.job.JobSchedulerService.RESTRICTED_INDEX;
+import static com.android.server.job.JobSchedulerService.WORKING_INDEX;
 import static com.android.server.job.JobSchedulerService.sElapsedRealtimeClock;
 
 import android.app.AppGlobals;
@@ -28,14 +31,16 @@ import android.net.Network;
 import android.net.Uri;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.provider.MediaStore;
 import android.text.format.DateFormat;
 import android.util.ArraySet;
 import android.util.Pair;
 import android.util.Slog;
-import android.util.StatsLog;
 import android.util.TimeUtils;
 import android.util.proto.ProtoOutputStream;
 
+import com.android.internal.util.ArrayUtils;
+import com.android.internal.util.FrameworkStatsLog;
 import com.android.server.LocalServices;
 import com.android.server.job.GrantedUriPermissions;
 import com.android.server.job.JobSchedulerInternal;
@@ -63,7 +68,7 @@ import java.util.function.Predicate;
  * @hide
  */
 public final class JobStatus {
-    static final String TAG = "JobSchedulerService";
+    private static final String TAG = "JobScheduler.JobStatus";
     static final boolean DEBUG = JobSchedulerService.DEBUG;
 
     public static final long NO_LATEST_RUNTIME = Long.MAX_VALUE;
@@ -75,11 +80,31 @@ public final class JobStatus {
     static final int CONSTRAINT_STORAGE_NOT_LOW = JobInfo.CONSTRAINT_FLAG_STORAGE_NOT_LOW; // 1 << 3
     static final int CONSTRAINT_TIMING_DELAY = 1<<31;
     static final int CONSTRAINT_DEADLINE = 1<<30;
-    static final int CONSTRAINT_CONNECTIVITY = 1<<28;
+    static final int CONSTRAINT_CONNECTIVITY = 1 << 28;
     static final int CONSTRAINT_CONTENT_TRIGGER = 1<<26;
     static final int CONSTRAINT_DEVICE_NOT_DOZING = 1 << 25; // Implicit constraint
     static final int CONSTRAINT_WITHIN_QUOTA = 1 << 24;      // Implicit constraint
     static final int CONSTRAINT_BACKGROUND_NOT_RESTRICTED = 1 << 22; // Implicit constraint
+
+    /**
+     * The additional set of dynamic constraints that must be met if the job's effective bucket is
+     * {@link JobSchedulerService#RESTRICTED_INDEX}. Connectivity can be ignored if the job doesn't
+     * need network.
+     */
+    private static final int DYNAMIC_RESTRICTED_CONSTRAINTS =
+            CONSTRAINT_BATTERY_NOT_LOW
+                    | CONSTRAINT_CHARGING
+                    | CONSTRAINT_CONNECTIVITY
+                    | CONSTRAINT_IDLE;
+
+    /**
+     * Standard media URIs that contain the media files that might be important to the user.
+     * @see #mHasMediaBackupExemption
+     */
+    private static final Uri[] MEDIA_URIS_FOR_STANDBY_EXEMPTION = {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+    };
 
     /**
      * The constraints that we want to log to statsd.
@@ -117,7 +142,7 @@ public final class JobStatus {
     /** The minimum possible update delay is 1/2 second. */
     public static final long MIN_TRIGGER_UPDATE_DELAY = 500;
 
-    /** If not specified, trigger maxumum delay is 2 minutes. */
+    /** If not specified, trigger maximum delay is 2 minutes. */
     public static final long DEFAULT_TRIGGER_MAX_DELAY = 2*60*1000;
 
     /** The minimum possible update delay is 1 second. */
@@ -188,6 +213,23 @@ public final class JobStatus {
     private final int mRequiredConstraintsOfInterest;
     int satisfiedConstraints = 0;
     private int mSatisfiedConstraintsOfInterest = 0;
+    /**
+     * Set of constraints that must be satisfied for the job if/because it's in the RESTRICTED
+     * bucket.
+     */
+    private int mDynamicConstraints = 0;
+
+    /**
+     * Indicates whether the job is responsible for backing up media, so we can be lenient in
+     * applying standby throttling.
+     *
+     * Doesn't exempt jobs with a deadline constraint, as they can be started without any content or
+     * network changes, in which case this exemption does not make sense.
+     *
+     * TODO(b/149519887): Use a more explicit signal, maybe an API flag, that the scheduling package
+     * needs to provide at the time of scheduling a job.
+     */
+    private final boolean mHasMediaBackupExemption;
 
     // Set to true if doze constraint was satisfied due to app being whitelisted.
     public boolean dozeWhitelisted;
@@ -328,6 +370,9 @@ public final class JobStatus {
     /** The job is within its quota based on its standby bucket. */
     private boolean mReadyWithinQuota;
 
+    /** The job's dynamic requirements have been satisfied. */
+    private boolean mReadyDynamicSatisfied;
+
     /** Provide a handle to the service that this job will be run on. */
     public int getServiceToken() {
         return callingUid;
@@ -394,9 +439,11 @@ public final class JobStatus {
         this.mOriginalLatestRunTimeElapsedMillis = latestRunTimeElapsedMillis;
         this.numFailures = numFailures;
 
+        boolean requiresNetwork = false;
         int requiredConstraints = job.getConstraintFlags();
         if (job.getRequiredNetwork() != null) {
             requiredConstraints |= CONSTRAINT_CONNECTIVITY;
+            requiresNetwork = true;
         }
         if (earliestRunTimeElapsedMillis != NO_EARLIEST_RUNTIME) {
             requiredConstraints |= CONSTRAINT_TIMING_DELAY;
@@ -404,12 +451,25 @@ public final class JobStatus {
         if (latestRunTimeElapsedMillis != NO_LATEST_RUNTIME) {
             requiredConstraints |= CONSTRAINT_DEADLINE;
         }
+        boolean exemptedMediaUrisOnly = false;
         if (job.getTriggerContentUris() != null) {
             requiredConstraints |= CONSTRAINT_CONTENT_TRIGGER;
+            exemptedMediaUrisOnly = true;
+            for (JobInfo.TriggerContentUri uri : job.getTriggerContentUris()) {
+                if (!ArrayUtils.contains(MEDIA_URIS_FOR_STANDBY_EXEMPTION, uri.getUri())) {
+                    exemptedMediaUrisOnly = false;
+                    break;
+                }
+            }
         }
         this.requiredConstraints = requiredConstraints;
         mRequiredConstraintsOfInterest = requiredConstraints & CONSTRAINTS_OF_INTEREST;
         mReadyNotDozing = (job.getFlags() & JobInfo.FLAG_WILL_BE_FOREGROUND) != 0;
+        if (standbyBucket == RESTRICTED_INDEX) {
+            addDynamicConstraints(DYNAMIC_RESTRICTED_CONSTRAINTS);
+        } else {
+            mReadyDynamicSatisfied = true;
+        }
 
         mLastSuccessfulRunTime = lastSuccessfulRunTime;
         mLastFailedRunTime = lastFailedRunTime;
@@ -424,6 +484,9 @@ public final class JobStatus {
             // our source UID into place.
             job.getRequiredNetwork().networkCapabilities.setSingleUid(this.sourceUid);
         }
+        final JobSchedulerInternal jsi = LocalServices.getService(JobSchedulerInternal.class);
+        mHasMediaBackupExemption = !job.hasLateConstraint() && exemptedMediaUrisOnly
+                && requiresNetwork && this.sourcePackageName.equals(jsi.getMediaBackupPackage());
     }
 
     /** Copy constructor: used specifically when cloning JobStatus objects for persistence,
@@ -519,7 +582,6 @@ public final class JobStatus {
 
         int standbyBucket = JobSchedulerService.standbyBucketForPackage(jobPackage,
                 sourceUserId, elapsedNow);
-        JobSchedulerInternal js = LocalServices.getService(JobSchedulerInternal.class);
         return new JobStatus(job, callingUid, sourcePkg, sourceUserId,
                 standbyBucket, tag, 0,
                 earliestRunTimeElapsedMillis, latestRunTimeElapsedMillis,
@@ -708,7 +770,14 @@ public final class JobStatus {
             // like other ACTIVE apps.
             return ACTIVE_INDEX;
         }
-        return getStandbyBucket();
+        final int actualBucket = getStandbyBucket();
+        if (actualBucket != RESTRICTED_INDEX && actualBucket != NEVER_INDEX
+                && mHasMediaBackupExemption) {
+            // Cap it at WORKING_INDEX as media back up jobs are important to the user, and the
+            // source package may not have been used directly in a while.
+            return Math.min(WORKING_INDEX, actualBucket);
+        }
+        return actualBucket;
     }
 
     /** Returns the real standby bucket of the job. */
@@ -717,6 +786,14 @@ public final class JobStatus {
     }
 
     public void setStandbyBucket(int newBucket) {
+        if (newBucket == RESTRICTED_INDEX) {
+            // Adding to the bucket.
+            addDynamicConstraints(DYNAMIC_RESTRICTED_CONSTRAINTS);
+        } else if (standbyBucket == RESTRICTED_INDEX) {
+            // Removing from the RESTRICTED bucket.
+            removeDynamicConstraints(DYNAMIC_RESTRICTED_CONSTRAINTS);
+        }
+
         standbyBucket = newBucket;
     }
 
@@ -830,39 +907,52 @@ public final class JobStatus {
 
     /** Does this job have any sort of networking constraint? */
     public boolean hasConnectivityConstraint() {
+        // No need to check mDynamicConstraints since connectivity will only be in that list if
+        // it's already in the requiredConstraints list.
         return (requiredConstraints&CONSTRAINT_CONNECTIVITY) != 0;
     }
 
     public boolean hasChargingConstraint() {
-        return (requiredConstraints&CONSTRAINT_CHARGING) != 0;
+        return hasConstraint(CONSTRAINT_CHARGING);
     }
 
     public boolean hasBatteryNotLowConstraint() {
-        return (requiredConstraints&CONSTRAINT_BATTERY_NOT_LOW) != 0;
+        return hasConstraint(CONSTRAINT_BATTERY_NOT_LOW);
     }
 
-    public boolean hasPowerConstraint() {
-        return (requiredConstraints&(CONSTRAINT_CHARGING|CONSTRAINT_BATTERY_NOT_LOW)) != 0;
+    /** Returns true if the job requires charging OR battery not low. */
+    boolean hasPowerConstraint() {
+        return hasConstraint(CONSTRAINT_CHARGING | CONSTRAINT_BATTERY_NOT_LOW);
     }
 
     public boolean hasStorageNotLowConstraint() {
-        return (requiredConstraints&CONSTRAINT_STORAGE_NOT_LOW) != 0;
+        return hasConstraint(CONSTRAINT_STORAGE_NOT_LOW);
     }
 
     public boolean hasTimingDelayConstraint() {
-        return (requiredConstraints&CONSTRAINT_TIMING_DELAY) != 0;
+        return hasConstraint(CONSTRAINT_TIMING_DELAY);
     }
 
     public boolean hasDeadlineConstraint() {
-        return (requiredConstraints&CONSTRAINT_DEADLINE) != 0;
+        return hasConstraint(CONSTRAINT_DEADLINE);
     }
 
     public boolean hasIdleConstraint() {
-        return (requiredConstraints&CONSTRAINT_IDLE) != 0;
+        return hasConstraint(CONSTRAINT_IDLE);
     }
 
     public boolean hasContentTriggerConstraint() {
+        // No need to check mDynamicConstraints since content trigger will only be in that list if
+        // it's already in the requiredConstraints list.
         return (requiredConstraints&CONSTRAINT_CONTENT_TRIGGER) != 0;
+    }
+
+    /**
+     * Checks both {@link #requiredConstraints} and {@link #mDynamicConstraints} to see if this job
+     * requires the specified constraint.
+     */
+    private boolean hasConstraint(int constraint) {
+        return (requiredConstraints & constraint) != 0 || (mDynamicConstraints & constraint) != 0;
     }
 
     public long getTriggerContentUpdateDelay() {
@@ -1031,13 +1121,22 @@ public final class JobStatus {
         if (old == state) {
             return false;
         }
+        if (DEBUG) {
+            Slog.v(TAG,
+                    "Constraint " + constraint + " is " + (!state ? "NOT " : "") + "satisfied for "
+                            + toShortString());
+        }
         satisfiedConstraints = (satisfiedConstraints&~constraint) | (state ? constraint : 0);
         mSatisfiedConstraintsOfInterest = satisfiedConstraints & CONSTRAINTS_OF_INTEREST;
+        mReadyDynamicSatisfied =
+                mDynamicConstraints == (satisfiedConstraints & mDynamicConstraints);
         if (STATS_LOG_ENABLED && (STATSD_CONSTRAINTS_TO_LOG & constraint) != 0) {
-            StatsLog.write_non_chained(StatsLog.SCHEDULED_JOB_CONSTRAINT_CHANGED,
+            FrameworkStatsLog.write_non_chained(
+                    FrameworkStatsLog.SCHEDULED_JOB_CONSTRAINT_CHANGED,
                     sourceUid, null, getBatteryName(), getProtoConstraint(constraint),
-                    state ? StatsLog.SCHEDULED_JOB_CONSTRAINT_CHANGED__STATE__SATISFIED
-                            : StatsLog.SCHEDULED_JOB_CONSTRAINT_CHANGED__STATE__UNSATISFIED);
+                    state ? FrameworkStatsLog.SCHEDULED_JOB_CONSTRAINT_CHANGED__STATE__SATISFIED
+                            : FrameworkStatsLog
+                                    .SCHEDULED_JOB_CONSTRAINT_CHANGED__STATE__UNSATISFIED);
         }
         return true;
     }
@@ -1056,6 +1155,45 @@ public final class JobStatus {
 
     void setTrackingController(int which) {
         trackingControllers |= which;
+    }
+
+    /**
+     * Indicates that this job cannot run without the specified constraints. This is evaluated
+     * separately from the job's explicitly requested constraints and MUST be satisfied before
+     * the job can run if the app doesn't have quota.
+     */
+    private void addDynamicConstraints(int constraints) {
+        if ((constraints & CONSTRAINT_WITHIN_QUOTA) != 0) {
+            // Quota should never be used as a dynamic constraint.
+            Slog.wtf(TAG, "Tried to set quota as a dynamic constraint");
+            constraints &= ~CONSTRAINT_WITHIN_QUOTA;
+        }
+
+        // Connectivity and content trigger are special since they're only valid to add if the
+        // job has requested network or specific content URIs. Adding these constraints to jobs
+        // that don't need them doesn't make sense.
+        if (!hasConnectivityConstraint()) {
+            constraints &= ~CONSTRAINT_CONNECTIVITY;
+        }
+        if (!hasContentTriggerConstraint()) {
+            constraints &= ~CONSTRAINT_CONTENT_TRIGGER;
+        }
+
+        mDynamicConstraints |= constraints;
+        mReadyDynamicSatisfied =
+                mDynamicConstraints == (satisfiedConstraints & mDynamicConstraints);
+    }
+
+    /**
+     * Removes dynamic constraints from a job, meaning that the requirements are not required for
+     * the job to run (if the job itself hasn't requested the constraint. This is separate from
+     * the job's explicitly requested constraints and does not remove those requested constraints.
+     *
+     */
+    private void removeDynamicConstraints(int constraints) {
+        mDynamicConstraints &= ~constraints;
+        mReadyDynamicSatisfied =
+                mDynamicConstraints == (satisfiedConstraints & mDynamicConstraints);
     }
 
     public long getLastSuccessfulRunTime() {
@@ -1099,6 +1237,8 @@ public final class JobStatus {
                 break;
             default:
                 satisfied |= constraint;
+                mReadyDynamicSatisfied =
+                        mDynamicConstraints == (satisfied & mDynamicConstraints);
                 break;
         }
 
@@ -1117,24 +1257,34 @@ public final class JobStatus {
             case CONSTRAINT_WITHIN_QUOTA:
                 mReadyWithinQuota = oldValue;
                 break;
+            default:
+                mReadyDynamicSatisfied =
+                        mDynamicConstraints == (satisfiedConstraints & mDynamicConstraints);
+                break;
         }
         return toReturn;
     }
 
     private boolean isReady(int satisfiedConstraints) {
-        // Quota constraints trumps all other constraints.
-        if (!mReadyWithinQuota) {
+        // Quota and dynamic constraints trump all other constraints.
+        // NEVER jobs are not supposed to run at all. Since we're using quota to allow parole
+        // sessions (exempt from dynamic restrictions), we need the additional check to ensure
+        // that NEVER jobs don't run.
+        // TODO: cleanup quota and standby bucket management so we don't need the additional checks
+        if ((!mReadyWithinQuota && !mReadyDynamicSatisfied)
+                || getEffectiveStandbyBucket() == NEVER_INDEX) {
             return false;
         }
-        // Deadline constraint trumps other constraints besides quota (except for periodic jobs
-        // where deadline is an implementation detail. A periodic job should only run if its
-        // constraints are satisfied).
+        // Deadline constraint trumps other constraints besides quota and dynamic (except for
+        // periodic jobs where deadline is an implementation detail. A periodic job should only
+        // run if its constraints are satisfied).
         // DeviceNotDozing implicit constraint must be satisfied
         // NotRestrictedInBackground implicit constraint must be satisfied
         return mReadyNotDozing && mReadyNotRestrictedInBg && (mReadyDeadlineSatisfied
                 || isConstraintsSatisfied(satisfiedConstraints));
     }
 
+    /** All constraints besides implicit and deadline. */
     static final int CONSTRAINTS_OF_INTEREST = CONSTRAINT_CHARGING | CONSTRAINT_BATTERY_NOT_LOW
             | CONSTRAINT_STORAGE_NOT_LOW | CONSTRAINT_TIMING_DELAY | CONSTRAINT_CONNECTIVITY
             | CONSTRAINT_IDLE | CONSTRAINT_CONTENT_TRIGGER;
@@ -1143,6 +1293,11 @@ public final class JobStatus {
     static final int SOFT_OVERRIDE_CONSTRAINTS =
             CONSTRAINT_CHARGING | CONSTRAINT_BATTERY_NOT_LOW | CONSTRAINT_STORAGE_NOT_LOW
                     | CONSTRAINT_TIMING_DELAY | CONSTRAINT_IDLE;
+
+    /** Returns true whenever all dynamically set constraints are satisfied. */
+    public boolean areDynamicConstraintsSatisfied() {
+        return mReadyDynamicSatisfied;
+    }
 
     /**
      * @return Whether the constraints set on this job are satisfied.
@@ -1441,6 +1596,8 @@ public final class JobStatus {
             case 2: return "FREQUENT";
             case 3: return "RARE";
             case 4: return "NEVER";
+            case 5:
+                return "RESTRICTED";
             default:
                 return "Unknown: " + standbyBucket;
         }
@@ -1507,11 +1664,11 @@ public final class JobStatus {
                     pw.println();
                 }
             }
-            if (job.getExtras() != null && !job.getExtras().maybeIsEmpty()) {
+            if (job.getExtras() != null && !job.getExtras().isDefinitelyEmpty()) {
                 pw.print(prefix); pw.print("  Extras: ");
                 pw.println(job.getExtras().toShortString());
             }
-            if (job.getTransientExtras() != null && !job.getTransientExtras().maybeIsEmpty()) {
+            if (job.getTransientExtras() != null && !job.getTransientExtras().isDefinitelyEmpty()) {
                 pw.print(prefix); pw.print("  Transient extras: ");
                 pw.println(job.getTransientExtras().toShortString());
             }
@@ -1560,6 +1717,10 @@ public final class JobStatus {
         pw.print(prefix); pw.print("Required constraints:");
         dumpConstraints(pw, requiredConstraints);
         pw.println();
+        pw.print(prefix);
+        pw.print("Dynamic constraints:");
+        dumpConstraints(pw, mDynamicConstraints);
+        pw.println();
         if (full) {
             pw.print(prefix); pw.print("Satisfied constraints:");
             dumpConstraints(pw, satisfiedConstraints);
@@ -1599,6 +1760,9 @@ public final class JobStatus {
             pw.print(prefix); pw.print("  readyDeadlineSatisfied: ");
             pw.println(mReadyDeadlineSatisfied);
         }
+        pw.print(prefix);
+        pw.print("  readyDynamicSatisfied: ");
+        pw.println(mReadyDynamicSatisfied);
 
         if (changedAuthorities != null) {
             pw.print(prefix); pw.println("Changed authorities:");
@@ -1721,10 +1885,10 @@ public final class JobStatus {
                             job.getTriggerContentMaxDelay());
                 }
             }
-            if (job.getExtras() != null && !job.getExtras().maybeIsEmpty()) {
+            if (job.getExtras() != null && !job.getExtras().isDefinitelyEmpty()) {
                 job.getExtras().dumpDebug(proto, JobStatusDumpProto.JobInfo.EXTRAS);
             }
-            if (job.getTransientExtras() != null && !job.getTransientExtras().maybeIsEmpty()) {
+            if (job.getTransientExtras() != null && !job.getTransientExtras().isDefinitelyEmpty()) {
                 job.getTransientExtras().dumpDebug(proto, JobStatusDumpProto.JobInfo.TRANSIENT_EXTRAS);
             }
             if (job.getClipData() != null) {
@@ -1760,6 +1924,7 @@ public final class JobStatus {
         }
 
         dumpConstraints(proto, JobStatusDumpProto.REQUIRED_CONSTRAINTS, requiredConstraints);
+        dumpConstraints(proto, JobStatusDumpProto.DYNAMIC_CONSTRAINTS, mDynamicConstraints);
         if (full) {
             dumpConstraints(proto, JobStatusDumpProto.SATISFIED_CONSTRAINTS, satisfiedConstraints);
             dumpConstraints(proto, JobStatusDumpProto.UNSATISFIED_CONSTRAINTS,
@@ -1807,6 +1972,8 @@ public final class JobStatus {
                 mReadyNotRestrictedInBg);
         // mReadyDeadlineSatisfied isn't an implicit constraint...and can be determined from other
         // field values.
+        proto.write(JobStatusDumpProto.ImplicitConstraints.IS_DYNAMIC_SATISFIED,
+                mReadyDynamicSatisfied);
         proto.end(icToken);
 
         if (changedAuthorities != null) {

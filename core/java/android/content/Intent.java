@@ -28,14 +28,15 @@ import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.AppGlobals;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ComponentInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ShortcutInfo;
+import android.content.pm.SuspendDialogInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.Rect;
@@ -750,6 +751,22 @@ public class Intent implements Parcelable, Cloneable {
      */
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_PICK = "android.intent.action.PICK";
+
+    /**
+     * Activity Action: Creates a reminder.
+     * <p>Input: {@link #EXTRA_TITLE} The title of the reminder that will be shown to the user.
+     * {@link #EXTRA_TEXT} The reminder text that will be shown to the user. The intent should at
+     * least specify a title or a text. {@link #EXTRA_TIME} The time when the reminder will be shown
+     * to the user. The time is specified in milliseconds since the Epoch (optional).
+     * </p>
+     * <p>Output: Nothing.</p>
+     *
+     * @see #EXTRA_TITLE
+     * @see #EXTRA_TEXT
+     * @see #EXTRA_TIME
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_CREATE_REMINDER = "android.intent.action.CREATE_REMINDER";
 
     /**
      * Activity Action: Creates a shortcut.
@@ -2651,6 +2668,34 @@ public class Intent implements Parcelable, Cloneable {
             "android.intent.action.SHOW_SUSPENDED_APP_DETAILS";
 
     /**
+     * Broadcast Action: Sent to indicate that the user unsuspended a package.
+     *
+     * <p>This can happen when the user taps on the neutral button of the
+     * {@linkplain SuspendDialogInfo suspend-dialog} which was created by using
+     * {@link SuspendDialogInfo#BUTTON_ACTION_UNSUSPEND}. This broadcast is only sent to the
+     * suspending app that originally specified this dialog while calling
+     * {@link PackageManager#setPackagesSuspended(String[], boolean, PersistableBundle,
+     * PersistableBundle, SuspendDialogInfo)}.
+     *
+     * <p>Includes an extra {@link #EXTRA_PACKAGE_NAME} which is the name of the package that just
+     * got unsuspended.
+     *
+     * <p class="note">This is a protected intent that can only be sent
+     * by the system. <em>This will be delivered to {@link BroadcastReceiver} components declared in
+     * the manifest.</em>
+     *
+     * @see PackageManager#setPackagesSuspended(String[], boolean, PersistableBundle,
+     * PersistableBundle, SuspendDialogInfo)
+     * @see PackageManager#isPackageSuspended()
+     * @see SuspendDialogInfo#BUTTON_ACTION_MORE_DETAILS
+     * @hide
+     */
+    @SystemApi
+    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+    public static final String ACTION_PACKAGE_UNSUSPENDED_MANUALLY =
+            "android.intent.action.PACKAGE_UNSUSPENDED_MANUALLY";
+
+    /**
      * Broadcast Action: Sent to a package that has been unsuspended.
      *
      * <p class="note">This is a protected intent that can only be sent
@@ -3613,7 +3658,9 @@ public class Intent implements Parcelable, Cloneable {
      * {@link android.Manifest.permission#MANAGE_USERS} to receive this broadcast.
      * @hide
      */
-    @UnsupportedAppUsage
+    @RequiresPermission(android.Manifest.permission.MANAGE_USERS)
+    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+    @SystemApi
     public static final String ACTION_USER_SWITCHED =
             "android.intent.action.USER_SWITCHED";
 
@@ -4005,6 +4052,7 @@ public class Intent implements Parcelable, Cloneable {
      * <p>
      * @see #EXTRA_SIM_STATE
      * @see #EXTRA_SIM_LOCKED_REASON
+     * @see #EXTRA_REBROADCAST_ON_UNLOCK
      *
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED} or
      * {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
@@ -4032,8 +4080,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String EXTRA_SIM_STATE = "ss";
 
     /**
@@ -4041,8 +4087,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_UNKNOWN = "UNKNOWN";
 
     /**
@@ -4050,8 +4094,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_NOT_READY = "NOT_READY";
 
     /**
@@ -4059,8 +4101,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_ABSENT = "ABSENT";
 
     /**
@@ -4068,8 +4108,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_PRESENT = "PRESENT";
 
     /**
@@ -4077,8 +4115,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     static public final String SIM_STATE_CARD_IO_ERROR = "CARD_IO_ERROR";
 
     /**
@@ -4087,8 +4123,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     static public final String SIM_STATE_CARD_RESTRICTED = "CARD_RESTRICTED";
 
     /**
@@ -4096,8 +4130,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_LOCKED = "LOCKED";
 
     /**
@@ -4105,8 +4137,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_READY = "READY";
 
     /**
@@ -4114,8 +4144,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_IMSI = "IMSI";
 
     /**
@@ -4123,8 +4151,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_STATE_LOADED = "LOADED";
 
     /**
@@ -4139,8 +4165,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String EXTRA_SIM_LOCKED_REASON = "reason";
 
     /**
@@ -4148,8 +4172,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_LOCKED_ON_PIN = "PIN";
 
     /**
@@ -4158,8 +4180,6 @@ public class Intent implements Parcelable, Cloneable {
      * @deprecated Use {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
      */
     /* PUK means ICC is locked on PUK1 */
-    @Deprecated
-    @SystemApi
     public static final String SIM_LOCKED_ON_PUK = "PUK";
 
     /**
@@ -4167,8 +4187,6 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_LOCKED_NETWORK = "NETWORK";
 
     /**
@@ -4176,9 +4194,17 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      * @deprecated Use {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
      */
-    @Deprecated
-    @SystemApi
     public static final String SIM_ABSENT_ON_PERM_DISABLED = "PERM_DISABLED";
+
+    /**
+     * The extra used with {@link #ACTION_SIM_STATE_CHANGED} for indicating whether this broadcast
+     * is a rebroadcast on unlock. Defaults to {@code false} if not specified.
+     *
+     * @hide
+     * @deprecated Use {@link #ACTION_SIM_CARD_STATE_CHANGED} or
+     * {@link #ACTION_SIM_APPLICATION_STATE_CHANGED}
+     */
+    public static final String EXTRA_REBROADCAST_ON_UNLOCK = "rebroadcastOnUnlock";
 
     /**
      * Broadcast Action: indicate that the phone service state has changed.
@@ -4224,9 +4250,20 @@ public class Intent implements Parcelable, Cloneable {
     public static final String ACTION_SERVICE_STATE = "android.intent.action.SERVICE_STATE";
 
     /**
-     * Used for looking up a Data Loader Service providers.
+     * Used by {@link services.core.java.com.android.server.pm.DataLoaderManagerService}
+     * for querying Data Loader Service providers. Data loader service providers register this
+     * intent filter in their manifests, so that they can be looked up and bound to by
+     * {@code DataLoaderManagerService}.
+     *
+     * <p class="note">This is a protected intent that can only be sent by the system.
+     *
+     * Data loader service providers must be privileged apps.
+     * See {@link com.android.server.pm.PackageManagerShellCommandDataLoader} as an example of such
+     * data loader service provider.
+     *
      * @hide
      */
+    @SystemApi
     @SdkConstant(SdkConstant.SdkConstantType.SERVICE_ACTION)
     public static final String ACTION_LOAD_DATA = "android.intent.action.LOAD_DATA";
 
@@ -4499,12 +4536,6 @@ public class Intent implements Parcelable, Cloneable {
     @Deprecated
     @SystemApi
     public static final String EXTRA_LTE_EARFCN_RSRP_BOOST = "LteEarfcnRsrpBoost";
-
-    /**
-     * An parcelable extra used with {@link #ACTION_SERVICE_STATE} representing the service state.
-     * @hide
-     */
-    public static final String EXTRA_SERVICE_STATE = "android.intent.extra.SERVICE_STATE";
 
     /**
      * The name of the extra used to define the text to be processed, as a
@@ -4907,11 +4938,17 @@ public class Intent implements Parcelable, Cloneable {
      * <pre>
      * &lt;accessibility-shortcut-target
      *     android:description="@string/shortcut_target_description"
-     *     android:summary="@string/shortcut_target_summary" /&gt;
+     *     android:summary="@string/shortcut_target_summary"
+     *     android:animatedImageDrawable="@drawable/shortcut_target_animated_image"
+     *     android:htmlDescription="@string/shortcut_target_html_description"
+     *     android:settingsActivity="com.example.android.shortcut.target.SettingsActivity" /&gt;
      * </pre>
      * <p>
      * Both description and summary are necessary. The system will ignore the accessibility
-     * shortcut target if they are missing.
+     * shortcut target if they are missing. The animated image and html description are supported
+     * to help users understand how to use the shortcut target. The settings activity is a
+     * component name that allows the user to modify the settings for this accessibility shortcut
+     * target.
      * </p>
      */
     @SdkConstant(SdkConstantType.INTENT_CATEGORY)
@@ -5725,6 +5762,15 @@ public class Intent implements Parcelable, Cloneable {
             = "android.intent.extra.SHUTDOWN_USERSPACE_ONLY";
 
     /**
+     * Optional extra specifying a time in milliseconds since the Epoch. The value must be
+     * non-negative.
+     * <p>
+     * Type: long
+     * </p>
+     */
+    public static final String EXTRA_TIME = "android.intent.extra.TIME";
+
+    /**
      * Optional int extra for {@link #ACTION_TIME_CHANGED} that indicates the
      * user has set their time format preference. See {@link #EXTRA_TIME_PREF_VALUE_USE_12_HOUR},
      * {@link #EXTRA_TIME_PREF_VALUE_USE_24_HOUR} and
@@ -6401,6 +6447,21 @@ public class Intent implements Parcelable, Cloneable {
     public static final int FLAG_ACTIVITY_MATCH_EXTERNAL = 0x00000800;
 
     /**
+     * If set in an intent passed to {@link Context#startActivity Context.startActivity()}, this
+     * flag will only launch the intent if it resolves to a result that is not a browser. If no such
+     * result exists, an {@link ActivityNotFoundException} will be thrown.
+     */
+    public static final int FLAG_ACTIVITY_REQUIRE_NON_BROWSER = 0x00000400;
+
+    /**
+     * If set in an intent passed to {@link Context#startActivity Context.startActivity()}, this
+     * flag will only launch the intent if it resolves to a single result. If no such result exists
+     * or if the system chooser would otherwise be displayed, an {@link ActivityNotFoundException}
+     * will be thrown.
+     */
+    public static final int FLAG_ACTIVITY_REQUIRE_DEFAULT = 0x00000200;
+
+    /**
      * If set, when sending a broadcast only registered receivers will be
      * called -- no BroadcastReceiver components will be launched.
      */
@@ -6439,19 +6500,22 @@ public class Intent implements Parcelable, Cloneable {
      */
     public static final int FLAG_RECEIVER_NO_ABORT = 0x08000000;
     /**
-     * If set, when sending a broadcast <i>before boot has completed</i> only
+     * If set, when sending a broadcast <i>before the system has fully booted up
+     * (which is even before {@link #ACTION_LOCKED_BOOT_COMPLETED} has been sent)"</i> only
      * registered receivers will be called -- no BroadcastReceiver components
      * will be launched.  Sticky intent state will be recorded properly even
      * if no receivers wind up being called.  If {@link #FLAG_RECEIVER_REGISTERED_ONLY}
      * is specified in the broadcast intent, this flag is unnecessary.
      *
-     * <p>This flag is only for use by system sevices as a convenience to
-     * avoid having to implement a more complex mechanism around detection
+     * <p>This flag is only for use by system services (even services from mainline modules) as a
+     * convenience to avoid having to implement a more complex mechanism around detection
      * of boot completion.
+     *
+     * <p>This is useful to system server mainline modules
      *
      * @hide
      */
-    @UnsupportedAppUsage
+    @SystemApi
     public static final int FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT = 0x04000000;
     /**
      * Set when this broadcast is for a boot upgrade, a special mode that
@@ -6687,7 +6751,7 @@ public class Intent implements Parcelable, Cloneable {
                     this.mClipData = new ClipData(o.mClipData);
                 }
             } else {
-                if (o.mExtras != null && !o.mExtras.maybeIsEmpty()) {
+                if (o.mExtras != null && !o.mExtras.isDefinitelyEmpty()) {
                     this.mExtras = Bundle.STRIPPED;
                 }
 
@@ -11050,6 +11114,7 @@ public class Intent implements Parcelable, Cloneable {
                 case ACTION_MEDIA_SCANNER_FINISHED:
                 case ACTION_MEDIA_SCANNER_SCAN_FILE:
                 case ACTION_PACKAGE_NEEDS_VERIFICATION:
+                case ACTION_PACKAGE_NEEDS_INTEGRITY_VERIFICATION:
                 case ACTION_PACKAGE_VERIFIED:
                 case ACTION_PACKAGE_ENABLE_ROLLBACK:
                     // Ignore legacy actions

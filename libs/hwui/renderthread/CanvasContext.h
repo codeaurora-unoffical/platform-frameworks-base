@@ -35,7 +35,6 @@
 #include <SkRect.h>
 #include <SkSize.h>
 #include <cutils/compiler.h>
-#include <gui/Surface.h>
 #include <utils/Functor.h>
 
 #include <functional>
@@ -111,7 +110,7 @@ public:
     // Won't take effect until next EGLSurface creation
     void setSwapBehavior(SwapBehavior swapBehavior);
 
-    void setSurface(sp<Surface>&& surface, bool enableTimeout = true);
+    void setSurface(ANativeWindow* window, bool enableTimeout = true);
     bool pauseSurface();
     void setStopped(bool stopped);
     bool hasSurface() const { return mNativeSurface.get(); }
@@ -220,7 +219,7 @@ private:
     int32_t mLastFrameHeight = 0;
 
     RenderThread& mRenderThread;
-    sp<ReliableSurface> mNativeSurface;
+    std::unique_ptr<ReliableSurface> mNativeSurface;
     // stopped indicates the CanvasContext will reject actual redraw operations,
     // and defer repaint until it is un-stopped
     bool mStopped = false;
@@ -251,7 +250,6 @@ private:
     nsecs_t mLastDropVsync = 0;
 
     bool mOpaque;
-    bool mWideColorGamut = false;
     bool mUseForceDark = false;
     LightInfo mLightInfo;
     LightGeometry mLightGeometry = {{0, 0, 0}, 0};

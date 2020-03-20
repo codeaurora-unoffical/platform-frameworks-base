@@ -16,6 +16,9 @@
 
 package android.accessibilityservice;
 
+import static android.accessibilityservice.util.AccessibilityUtils.getFilteredHtmlText;
+import static android.accessibilityservice.util.AccessibilityUtils.loadSafeAnimatedImage;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.ComponentName;
@@ -26,6 +29,8 @@ import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
+import android.graphics.drawable.Drawable;
+import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Xml;
 
@@ -76,6 +81,22 @@ public final class AccessibilityShortcutInfo {
     private final int mDescriptionResId;
 
     /**
+     * Resource id of the animated image of the accessibility shortcut target.
+     */
+    private final int mAnimatedImageRes;
+
+    /**
+     * Resource id of the html description of the accessibility shortcut target.
+     */
+    private final int mHtmlDescriptionRes;
+
+    /**
+     * The accessibility shortcut target setting activity's name, used by the system
+     * settings to launch the setting activity of this accessibility shortcut target.
+     */
+    private String mSettingsActivityName;
+
+    /**
      * Creates a new instance.
      *
      * @param context Context for accessing resources.
@@ -119,6 +140,17 @@ public final class AccessibilityShortcutInfo {
             // Gets summary
             mSummaryResId = asAttributes.getResourceId(
                     com.android.internal.R.styleable.AccessibilityShortcutTarget_summary, 0);
+            // Gets animated image
+            mAnimatedImageRes = asAttributes.getResourceId(
+                    com.android.internal.R.styleable
+                            .AccessibilityShortcutTarget_animatedImageDrawable, /* defValue= */ 0);
+            // Gets html description
+            mHtmlDescriptionRes = asAttributes.getResourceId(
+                    com.android.internal.R.styleable.AccessibilityShortcutTarget_htmlDescription,
+                    0);
+            // Get settings activity name
+            mSettingsActivityName = asAttributes.getString(
+                    com.android.internal.R.styleable.AccessibilityShortcutTarget_settingsActivity);
             asAttributes.recycle();
 
             if (mDescriptionResId == 0 || mSummaryResId == 0) {
@@ -169,6 +201,59 @@ public final class AccessibilityShortcutInfo {
     @Nullable
     public String loadDescription(@NonNull PackageManager packageManager) {
         return loadResourceString(packageManager, mActivityInfo, mDescriptionResId);
+    }
+
+    /**
+     * Gets the animated image resource id.
+     *
+     * @return The animated image resource id.
+     *
+     * @hide
+     */
+    public int getAnimatedImageRes() {
+        return mAnimatedImageRes;
+    }
+
+    /**
+     * The animated image drawable of the accessibility shortcut target.
+     *
+     * @return The animated image drawable, or null if the resource is invalid or the image
+     * exceed the screen size.
+     *
+     * @hide
+     */
+    @Nullable
+    public Drawable loadAnimatedImage(@NonNull Context context) {
+        if (mAnimatedImageRes == /* invalid */ 0) {
+            return null;
+        }
+
+        return loadSafeAnimatedImage(context, mActivityInfo.applicationInfo, mAnimatedImageRes);
+    }
+
+    /**
+     * The localized and restricted html description of the accessibility shortcut target.
+     * It filters the <img> tag which do not meet the custom specification and the <a> tag.
+     *
+     * @return The localized and restricted html description.
+     *
+     * @hide
+     */
+    @Nullable
+    public String loadHtmlDescription(@NonNull PackageManager packageManager) {
+        final String htmlDescription = loadResourceString(packageManager, mActivityInfo,
+                mHtmlDescriptionRes);
+        return TextUtils.isEmpty(htmlDescription) ? null : getFilteredHtmlText(htmlDescription);
+    }
+
+    /**
+     * The settings activity name.
+     *
+     * @return The settings activity name.
+     */
+    @Nullable
+    public String getSettingsActivityName() {
+        return mSettingsActivityName;
     }
 
     /**

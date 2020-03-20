@@ -36,6 +36,8 @@ using google::protobuf::FieldDescriptor;
 
 const int PULL_ATOM_START_ID = 10000;
 
+const int FIRST_UID_IN_CHAIN_ID = 0;
+
 /**
  * The types for atom parameters.
  */
@@ -86,6 +88,9 @@ struct AtomDecl {
 
     vector<int> primaryFields;
     int exclusiveField = 0;
+    int defaultState = INT_MAX;
+    int resetState = INT_MAX;
+    bool nested;
 
     int uidField = 0;
 
@@ -93,8 +98,7 @@ struct AtomDecl {
 
     vector<int> binaryFields;
 
-    bool hasModule = false;
-    string moduleName;
+    set<string> moduleNames;
 
     AtomDecl();
     AtomDecl(const AtomDecl& that);
@@ -111,6 +115,7 @@ struct Atoms {
     set<AtomDecl> decls;
     set<AtomDecl> non_chained_decls;
     map<vector<java_type_t>, set<string>> non_chained_signatures_to_modules;
+    int maxPushedAtomId;
 };
 
 /**

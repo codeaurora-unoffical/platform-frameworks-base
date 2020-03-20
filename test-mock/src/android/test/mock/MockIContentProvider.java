@@ -19,16 +19,19 @@ package android.test.mock;
 import android.annotation.Nullable;
 import android.content.ContentProviderOperation;
 import android.content.ContentProviderResult;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.EntityIterator;
 import android.content.IContentProvider;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.ICancellationSignal;
 import android.os.ParcelFileDescriptor;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
 
 import java.io.FileNotFoundException;
@@ -58,6 +61,16 @@ public class MockIContentProvider implements IContentProvider {
     @Override
     public String getType(Uri url) {
         throw new UnsupportedOperationException("unimplemented mock method");
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void getTypeAsync(Uri uri, RemoteCallback remoteCallback) {
+        AsyncTask.SERIAL_EXECUTOR.execute(() -> {
+            final Bundle bundle = new Bundle();
+            bundle.putString(ContentResolver.REMOTE_CALLBACK_RESULT, getType(uri));
+            remoteCallback.sendResult(bundle);
+        });
     }
 
     @Override
@@ -132,9 +145,20 @@ public class MockIContentProvider implements IContentProvider {
     }
 
     @Override
-    public Uri canonicalize(String callingPkg, @Nullable String featureId, Uri uri)
-            throws RemoteException {
+    public Uri canonicalize(String callingPkg, @Nullable String featureId, Uri uri) {
         throw new UnsupportedOperationException("unimplemented mock method");
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void canonicalizeAsync(String callingPkg, String featureId, Uri uri,
+            RemoteCallback remoteCallback) {
+        AsyncTask.SERIAL_EXECUTOR.execute(() -> {
+            final Bundle bundle = new Bundle();
+            bundle.putParcelable(ContentResolver.REMOTE_CALLBACK_RESULT,
+                    canonicalize(callingPkg, featureId, uri));
+            remoteCallback.sendResult(bundle);
+        });
     }
 
     @Override

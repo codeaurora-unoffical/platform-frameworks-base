@@ -202,7 +202,8 @@ public abstract class PermissionControllerService extends Service {
     /**
      * Grant or upgrade runtime permissions. The upgrade could be performed
      * based on whether the device upgraded, whether the permission database
-     * version is old, or because the permission policy changed.
+     * version is old, because the permission policy changed, or because the
+     * permission controller has updated.
      *
      * @param callback Callback waiting for operation to be complete
      *
@@ -239,6 +240,18 @@ public abstract class PermissionControllerService extends Service {
             @NonNull String callerPackageName, @NonNull String packageName,
             @NonNull String permission, @PermissionGrantState int grantState,
             @NonNull Consumer<Boolean> callback);
+
+    /**
+     * Called when a package is considered inactive based on the criteria given by
+     * {@link PermissionManager#startOneTimePermissionSession(String, long, int, int)}.
+     * This method is called at the end of a one-time permission session
+     *
+     * @param packageName The package that has been inactive
+     */
+    @BinderThread
+    public void onOneTimePermissionSessionTimeout(@NonNull String packageName) {
+        throw new AbstractMethodError("Must be overridden in implementing class");
+    }
 
     @Override
     public final @NonNull IBinder onBind(Intent intent) {
@@ -451,6 +464,15 @@ public abstract class PermissionControllerService extends Service {
 
                 onUpdateUserSensitivePermissionFlags();
                 callback.complete(null);
+            }
+
+            @Override
+            public void notifyOneTimePermissionSessionTimeout(String packageName) {
+                enforceSomePermissionsGrantedToCaller(
+                        Manifest.permission.REVOKE_RUNTIME_PERMISSIONS);
+                packageName = Preconditions.checkNotNull(packageName,
+                        "packageName cannot be null");
+                onOneTimePermissionSessionTimeout(packageName);
             }
         };
     }

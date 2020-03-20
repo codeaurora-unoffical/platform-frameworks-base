@@ -25,9 +25,11 @@ import android.content.pm.FeatureInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Environment;
+import android.os.FileUtils;
 import android.os.Process;
 import android.os.SystemProperties;
 import android.os.Trace;
+import android.os.incremental.IncrementalManager;
 import android.os.storage.StorageManager;
 import android.permission.PermissionManager.SplitPermissionInfo;
 import android.text.TextUtils;
@@ -217,6 +219,7 @@ public class SystemConfig {
     final ArrayMap<String, ArraySet<String>> mAllowedAssociations = new ArrayMap<>();
 
     private final ArraySet<String> mBugreportWhitelistedPackages = new ArraySet<>();
+    private final ArraySet<String> mAppDataIsolationWhitelistedApps = new ArraySet<>();
 
     // Map of packagesNames to userTypes. Stored temporarily until cleared by UserManagerService().
     private ArrayMap<String, Set<String>> mPackageToUserTypeWhitelist = new ArrayMap<>();
@@ -228,7 +231,7 @@ public class SystemConfig {
      * Map of system pre-defined, uniquely named actors; keys are namespace,
      * value maps actor name to package name.
      */
-    private ArrayMap<String, ArrayMap<String, String>> mNamedActors = null;
+    private Map<String, Map<String, String>> mNamedActors = null;
 
     public static SystemConfig getInstance() {
         if (!isSystemProcess()) {
@@ -388,6 +391,10 @@ public class SystemConfig {
         return mRollbackWhitelistedPackages;
     }
 
+    public ArraySet<String> getAppDataIsolationWhitelistedApps() {
+        return mAppDataIsolationWhitelistedApps;
+    }
+
     /**
      * Gets map of packagesNames to userTypes, dictating on which user types each package should be
      * initially installed, and then removes this map from SystemConfig.
@@ -412,7 +419,7 @@ public class SystemConfig {
     }
 
     @NonNull
-    public Map<String, ? extends Map<String, String>> getNamedActors() {
+    public Map<String, Map<String, String>> getNamedActors() {
         return mNamedActors != null ? mNamedActors : Collections.emptyMap();
     }
 
@@ -498,6 +505,19 @@ public class SystemConfig {
                 Environment.getSystemExtDirectory(), "etc", "sysconfig"), ALLOW_ALL);
         readPermissions(Environment.buildPath(
                 Environment.getSystemExtDirectory(), "etc", "permissions"), ALLOW_ALL);
+
+        // Skip loading configuration from apex if it is not a system process.
+        if (!isSystemProcess()) {
+            return;
+        }
+        // Read configuration of libs from apex module.
+        // TODO: Use a solid way to filter apex module folders?
+        for (File f: FileUtils.listFilesOrEmpty(Environment.getApexDirectory())) {
+            if (f.isFile() || f.getPath().contains("@")) {
+                continue;
+            }
+            readPermissions(Environment.buildPath(f, "etc", "permissions"), ALLOW_LIBS);
+        }
     }
 
     @VisibleForTesting
@@ -883,7 +903,6 @@ public class SystemConfig {
                     } break;
                     case "component-override": {
                         readComponentOverrides(parser, permFile);
-                        XmlUtils.skipCurrentTag(parser);
                     } break;
                     case "backup-transport-whitelisted-service": {
                         if (allowFeatures) {
@@ -1031,6 +1050,16 @@ public class SystemConfig {
                         }
                         XmlUtils.skipCurrentTag(parser);
                     } break;
+                    case "app-data-isolation-whitelisted-app": {
+                        String pkgname = parser.getAttributeValue(null, "package");
+                        if (pkgname == null) {
+                            Slog.w(TAG, "<" + name + "> without package in " + permFile
+                                    + " at " + parser.getPositionDescription());
+                        } else {
+                            mAppDataIsolationWhitelistedApps.add(pkgname);
+                        }
+                        XmlUtils.skipCurrentTag(parser);
+                    } break;
                     case "bugreport-whitelisted": {
                         String pkgname = parser.getAttributeValue(null, "package");
                         if (pkgname == null) {
@@ -1069,7 +1098,7 @@ public class SystemConfig {
                                 mNamedActors = new ArrayMap<>();
                             }
 
-                            ArrayMap<String, String> nameToPkgMap = mNamedActors.get(namespace);
+                            Map<String, String> nameToPkgMap = mNamedActors.get(namespace);
                             if (nameToPkgMap == null) {
                                 nameToPkgMap = new ArrayMap<>();
                                 mNamedActors.put(namespace, nameToPkgMap);
@@ -1125,6 +1154,14 @@ public class SystemConfig {
             addFeature(PackageManager.FEATURE_RAM_LOW, 0);
         } else {
             addFeature(PackageManager.FEATURE_RAM_NORMAL, 0);
+        }
+
+        if (IncrementalManager.isFeatureEnabled()) {
+            addFeature(PackageManager.FEATURE_INCREMENTAL_DELIVERY, 0);
+        }
+
+        if (PackageManager.APP_ENUMERATION_ENABLED_BY_DEFAULT) {
+            addFeature(PackageManager.FEATURE_APP_ENUMERATION, 0);
         }
 
         for (String featureName : mUnavailableFeatures) {
@@ -1369,8 +1406,7 @@ public class SystemConfig {
 
         final int depth = parser.getDepth();
         while (XmlUtils.nextElementWithin(parser, depth)) {
-            String name = parser.getName();
-            if ("component".equals(name)) {
+            if ("component".equals(parser.getName())) {
                 String clsname = parser.getAttributeValue(null, "class");
                 String enabled = parser.getAttributeValue(null, "enabled");
                 if (clsname == null) {
@@ -1398,8 +1434,6 @@ public class SystemConfig {
                 }
 
                 componentEnabledStates.put(clsname, !"false".equals(enabled));
-            } else {
-                XmlUtils.skipCurrentTag(parser);
             }
         }
     }

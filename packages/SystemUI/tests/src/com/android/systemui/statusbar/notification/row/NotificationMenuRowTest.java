@@ -38,8 +38,8 @@ import android.view.ViewGroup;
 import androidx.test.filters.SmallTest;
 
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
-import com.android.systemui.statusbar.NotificationEntryBuilder;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.collection.NotificationEntryBuilder;
 import com.android.systemui.utils.leaks.LeakCheckedTest;
 
 import org.junit.After;
@@ -129,16 +129,6 @@ public class NotificationMenuRowTest extends LeakCheckedTest {
         ViewGroup container = (ViewGroup) row.getMenuView();
         // one for snooze and one for noti blocking
         assertEquals(2, container.getChildCount());
-    }
-
-    @Test
-    public void testNoAppOpsInSlowSwipe_biDirectionalSwipe() {
-        NotificationMenuRow row = new NotificationMenuRow(mContext, true);
-        row.createMenu(mRow, null);
-
-        ViewGroup container = (ViewGroup) row.getMenuView();
-        // in the new interruption model there is only the blocking item
-        assertEquals(1, container.getChildCount());
     }
 
     @Test

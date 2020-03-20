@@ -32,9 +32,9 @@ import static android.net.NetworkStats.METERED_YES;
 import static android.net.NetworkStats.ROAMING_ALL;
 import static android.net.NetworkStats.ROAMING_NO;
 import static android.net.NetworkStats.ROAMING_YES;
-import static android.net.wifi.WifiInfo.removeDoubleQuotes;
+import static android.net.wifi.WifiInfo.sanitizeSsid;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.util.BackupUtils;
@@ -401,7 +401,7 @@ public class NetworkTemplate implements Parcelable {
         switch (ident.mType) {
             case TYPE_WIFI:
                 return Objects.equals(
-                        removeDoubleQuotes(mNetworkId), removeDoubleQuotes(ident.mNetworkId));
+                        sanitizeSsid(mNetworkId), sanitizeSsid(ident.mNetworkId));
             default:
                 return false;
         }

@@ -40,9 +40,8 @@ import android.util.Slog;
 import android.util.SparseArray;
 
 import com.android.internal.annotations.GuardedBy;
-import com.android.internal.util.Preconditions;
 
-import java.io.FileDescriptor;
+import java.util.Objects;
 
 /**
  * Controls storage sessions for users initiated by the {@link StorageManagerService}.
@@ -63,7 +62,7 @@ public final class StorageSessionController {
     private volatile boolean mIsResetting;
 
     public StorageSessionController(Context context, boolean isFuseEnabled) {
-        mContext = Preconditions.checkNotNull(context);
+        mContext = Objects.requireNonNull(context);
         mIsFuseEnabled = isFuseEnabled;
     }
 
@@ -81,7 +80,7 @@ public final class StorageSessionController {
      * @throws ExternalStorageServiceException if the session fails to start
      * @throws IllegalStateException if a session has already been created for {@code vol}
      */
-    public void onVolumeMount(FileDescriptor deviceFd, VolumeInfo vol)
+    public void onVolumeMount(ParcelFileDescriptor deviceFd, VolumeInfo vol)
             throws ExternalStorageServiceException {
         if (!shouldHandle(vol)) {
             return;
@@ -101,8 +100,8 @@ public final class StorageSessionController {
                 mConnections.put(userId, connection);
             }
             Slog.i(TAG, "Creating and starting session with id: " + sessionId);
-            connection.startSession(sessionId, new ParcelFileDescriptor(deviceFd),
-                    vol.getPath().getPath(), vol.getInternalPath().getPath());
+            connection.startSession(sessionId, deviceFd, vol.getPath().getPath(),
+                    vol.getInternalPath().getPath());
         }
     }
 
@@ -184,7 +183,7 @@ public final class StorageSessionController {
      * This call removes all sessions for the user that is being stopped;
      * this will make sure that we don't rebind to the service needlessly.
      */
-    public void onUserStopping(int userId) throws ExternalStorageServiceException {
+    public void onUserStopping(int userId) {
         if (!shouldHandle(null)) {
             return;
         }

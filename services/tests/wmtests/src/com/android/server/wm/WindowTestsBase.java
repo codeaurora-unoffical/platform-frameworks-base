@@ -31,6 +31,7 @@ import static android.view.WindowManager.LayoutParams.TYPE_DOCK_DIVIDER;
 import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD;
 import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD_DIALOG;
 import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR;
+import static android.view.WindowManager.LayoutParams.TYPE_NOTIFICATION_SHADE;
 import static android.view.WindowManager.LayoutParams.TYPE_STATUS_BAR;
 import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
 
@@ -39,11 +40,13 @@ import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentat
 import static org.mockito.Mockito.mock;
 
 import android.content.Context;
+import android.content.Intent;
 import android.util.Log;
 import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.IWindow;
 import android.view.SurfaceControl.Transaction;
+import android.view.View;
 import android.view.WindowManager;
 
 import com.android.server.AttributeCache;
@@ -75,6 +78,7 @@ class WindowTestsBase extends SystemServiceTestsBase {
     WindowState mImeWindow;
     WindowState mImeDialogWindow;
     WindowState mStatusBarWindow;
+    WindowState mNotificationShadeWindow;
     WindowState mDockedDividerWindow;
     WindowState mNavBarWindow;
     WindowState mAppWindow;
@@ -107,7 +111,7 @@ class WindowTestsBase extends SystemServiceTestsBase {
             beforeCreateDisplay();
 
             context.getDisplay().getDisplayInfo(mDisplayInfo);
-            mDisplayContent = createNewDisplay();
+            mDisplayContent = createNewDisplay(true /* supportIme */);
 
             // Set-up some common windows.
             mCommonWindows = new HashSet<>();
@@ -118,6 +122,8 @@ class WindowTestsBase extends SystemServiceTestsBase {
                 mImeDialogWindow = createCommonWindow(null, TYPE_INPUT_METHOD_DIALOG,
                         "mImeDialogWindow");
                 mStatusBarWindow = createCommonWindow(null, TYPE_STATUS_BAR, "mStatusBarWindow");
+                mNotificationShadeWindow = createCommonWindow(null, TYPE_NOTIFICATION_SHADE,
+                        "mNotificationShadeWindow");
                 mNavBarWindow = createCommonWindow(null, TYPE_NAVIGATION_BAR, "mNavBarWindow");
                 mDockedDividerWindow = createCommonWindow(null, TYPE_DOCK_DIVIDER,
                         "mDockedDividerWindow");
@@ -129,6 +135,7 @@ class WindowTestsBase extends SystemServiceTestsBase {
                         TYPE_APPLICATION_MEDIA_OVERLAY,
                         "mChildAppWindowBelow");
             }
+
             // Adding a display will cause freezing the display. Make sure to wait until it's
             // unfrozen to not run into race conditions with the tests.
             waitUntilHandlersIdle();
@@ -311,6 +318,16 @@ class WindowTestsBase extends SystemServiceTestsBase {
         }
     }
 
+    static void makeWindowVisible(WindowState... windows) {
+        for (WindowState win : windows) {
+            win.mViewVisibility = View.VISIBLE;
+            win.mRelayoutCalled = true;
+            win.mHasSurface = true;
+            win.mHidden = false;
+            win.showLw(false /* doAnimation */, false /* requestAnim */);
+        }
+    }
+
     /** Creates a {@link ActivityStack} and adds it to the specified {@link DisplayContent}. */
     ActivityStack createTaskStackOnDisplay(DisplayContent dc) {
         return createTaskStackOnDisplay(WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, dc);
@@ -319,11 +336,12 @@ class WindowTestsBase extends SystemServiceTestsBase {
     ActivityStack createTaskStackOnDisplay(int windowingMode, int activityType, DisplayContent dc) {
         synchronized (mWm.mGlobalLock) {
             return new ActivityTestsBase.StackBuilder(
-                    dc.mWmService.mAtmService.mRootActivityContainer)
+                    dc.mWmService.mAtmService.mRootWindowContainer)
                     .setDisplay(dc)
                     .setWindowingMode(windowingMode)
                     .setActivityType(activityType)
                     .setCreateActivity(false)
+                    .setIntent(new Intent())
                     .build();
         }
     }
@@ -333,16 +351,29 @@ class WindowTestsBase extends SystemServiceTestsBase {
         return WindowTestUtils.createTaskInStack(mWm, stack, userId);
     }
 
-    /** Creates a {@link DisplayContent} and adds it to the system. */
+    /** Creates a {@link DisplayContent} that supports IME and adds it to the system. */
     DisplayContent createNewDisplay() {
-        return createNewDisplay(mDisplayInfo);
+        return createNewDisplay(true /* supportIme */);
     }
 
     /** Creates a {@link DisplayContent} and adds it to the system. */
+    private DisplayContent createNewDisplay(boolean supportIme) {
+        return createNewDisplay(mDisplayInfo, supportIme);
+    }
+
+    /** Creates a {@link DisplayContent} that supports IME and adds it to the system. */
     DisplayContent createNewDisplay(DisplayInfo info) {
+        return createNewDisplay(info, true /* supportIme */);
+    }
+
+    /** Creates a {@link DisplayContent} and adds it to the system. */
+    private DisplayContent createNewDisplay(DisplayInfo info, boolean supportIme) {
         final DisplayContent display =
                 new TestDisplayContent.Builder(mWm.mAtmService, info).build();
-        return display.mDisplayContent;
+        final DisplayContent dc = display.mDisplayContent;
+        // this display can show IME.
+        dc.mWmService.mDisplayWindowSettings.setShouldShowImeLocked(dc, supportIme);
+        return dc;
     }
 
     /**
@@ -356,7 +387,7 @@ class WindowTestsBase extends SystemServiceTestsBase {
         DisplayInfo displayInfo = new DisplayInfo();
         displayInfo.copyFrom(mDisplayInfo);
         displayInfo.state = displayState;
-        return createNewDisplay(displayInfo);
+        return createNewDisplay(displayInfo, true /* supportIme */);
     }
 
     /** Creates a {@link com.android.server.wm.WindowTestUtils.TestWindowState} */
@@ -373,11 +404,11 @@ class WindowTestsBase extends SystemServiceTestsBase {
         displayInfo.copyFrom(mDisplayInfo);
         displayInfo.type = Display.TYPE_VIRTUAL;
         displayInfo.ownerUid = SYSTEM_UID;
-        return createNewDisplay(displayInfo);
+        return createNewDisplay(displayInfo, false /* supportIme */);
     }
 
     /** Sets the default minimum task size to 1 so that tests can use small task sizes */
     void removeGlobalMinSizeRestriction() {
-        mWm.mAtmService.mRootActivityContainer.mDefaultMinSizeOfResizeableTaskDp = 1;
+        mWm.mAtmService.mRootWindowContainer.mDefaultMinSizeOfResizeableTaskDp = 1;
     }
 }

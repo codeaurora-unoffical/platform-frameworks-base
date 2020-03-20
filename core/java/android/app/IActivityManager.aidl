@@ -18,6 +18,7 @@ package android.app;
 
 import android.app.ActivityManager;
 import android.app.ApplicationErrorReport;
+import android.app.ApplicationExitInfo;
 import android.app.ContentProviderHolder;
 import android.app.GrantedUriPermission;
 import android.app.IApplicationThread;
@@ -52,6 +53,7 @@ import android.content.pm.ParceledListSlice;
 import android.content.pm.ProviderInfo;
 import android.content.pm.UserInfo;
 import android.content.res.Configuration;
+import android.content.LocusId;
 import android.graphics.Bitmap;
 import android.graphics.GraphicBuffer;
 import android.graphics.Point;
@@ -102,23 +104,36 @@ interface IActivityManager {
     // Special low-level communication with activity manager.
     void handleApplicationCrash(in IBinder app,
             in ApplicationErrorReport.ParcelableCrashInfo crashInfo);
-    @UnsupportedAppUsage
+    /** @deprecated Use {@link #startActivityWithFeature} instead */
+    @UnsupportedAppUsage(maxTargetSdk=29, publicAlternatives="Use {@link android.content.Context#startActivity(android.content.Intent)} instead")
     int startActivity(in IApplicationThread caller, in String callingPackage, in Intent intent,
             in String resolvedType, in IBinder resultTo, in String resultWho, int requestCode,
             int flags, in ProfilerInfo profilerInfo, in Bundle options);
+    int startActivityWithFeature(in IApplicationThread caller, in String callingPackage,
+            in String callingFeatureId, in Intent intent, in String resolvedType,
+            in IBinder resultTo, in String resultWho, int requestCode, int flags,
+            in ProfilerInfo profilerInfo, in Bundle options);
     @UnsupportedAppUsage
     void unhandledBack();
     @UnsupportedAppUsage
     boolean finishActivity(in IBinder token, int code, in Intent data, int finishTask);
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk=29, publicAlternatives="Use {@link android.content.Context#registerReceiver(android.content.BroadcastReceiver, android.content.IntentFilter)} instead")
     Intent registerReceiver(in IApplicationThread caller, in String callerPackage,
             in IIntentReceiver receiver, in IntentFilter filter,
             in String requiredPermission, int userId, int flags);
+    Intent registerReceiverWithFeature(in IApplicationThread caller, in String callerPackage,
+            in String callingFeatureId, in IIntentReceiver receiver, in IntentFilter filter,
+            in String requiredPermission, int userId, int flags);
     @UnsupportedAppUsage
     void unregisterReceiver(in IIntentReceiver receiver);
-    @UnsupportedAppUsage
+    /** @deprecated Use {@link #broadcastIntentWithFeature} instead */
+    @UnsupportedAppUsage(maxTargetSdk=29, publicAlternatives="Use {@link android.content.Context#sendBroadcast(android.content.Intent)} instead")
     int broadcastIntent(in IApplicationThread caller, in Intent intent,
             in String resolvedType, in IIntentReceiver resultTo, int resultCode,
+            in String resultData, in Bundle map, in String[] requiredPermissions,
+            int appOp, in Bundle options, boolean serialized, boolean sticky, int userId);
+    int broadcastIntentWithFeature(in IApplicationThread caller, in String callingFeatureId,
+            in Intent intent, in String resolvedType, in IIntentReceiver resultTo, int resultCode,
             in String resultData, in Bundle map, in String[] requiredPermissions,
             int appOp, in Bundle options, boolean serialized, boolean sticky, int userId);
     void unbroadcastIntent(in IApplicationThread caller, in Intent intent, int userId);
@@ -143,7 +158,8 @@ interface IActivityManager {
     boolean refContentProvider(in IBinder connection, int stableDelta, int unstableDelta);
     PendingIntent getRunningServiceControlPanel(in ComponentName service);
     ComponentName startService(in IApplicationThread caller, in Intent service,
-            in String resolvedType, boolean requireForeground, in String callingPackage, int userId);
+            in String resolvedType, boolean requireForeground, in String callingPackage,
+            in String callingFeatureId, int userId);
     @UnsupportedAppUsage
     int stopService(in IApplicationThread caller, in Intent service,
             in String resolvedType, int userId);
@@ -188,6 +204,16 @@ interface IActivityManager {
      */
     @UnsupportedAppUsage
     boolean updateConfiguration(in Configuration values);
+    /**
+     * Updates mcc mnc configuration and applies changes to the entire system.
+     *
+     * @param mcc mcc configuration to update.
+     * @param mnc mnc configuration to update.
+     * @throws RemoteException; IllegalArgumentException if mcc or mnc is null.
+     * @return Returns {@code true} if the configuration was updated;
+     *         {@code false} otherwise.
+     */
+    boolean updateMccMncConfiguration(in String mcc, in String mnc);
     boolean stopServiceToken(in ComponentName className, in IBinder token, int startId);
     @UnsupportedAppUsage
     void setProcessLimit(int max);
@@ -214,10 +240,14 @@ interface IActivityManager {
     ParceledListSlice getRecentTasks(int maxNum, int flags, int userId);
     @UnsupportedAppUsage
     oneway void serviceDoneExecuting(in IBinder token, int type, int startId, int res);
-    @UnsupportedAppUsage
+    /** @deprecated  Use {@link #getIntentSenderWithFeature} instead */
+    @UnsupportedAppUsage(maxTargetSdk=29, publicAlternatives="Use {@link PendingIntent#getIntentSender()} instead")
     IIntentSender getIntentSender(int type, in String packageName, in IBinder token,
             in String resultWho, int requestCode, in Intent[] intents, in String[] resolvedTypes,
             int flags, in Bundle options, int userId);
+    IIntentSender getIntentSenderWithFeature(int type, in String packageName, in String featureId,
+            in IBinder token, in String resultWho, int requestCode, in Intent[] intents,
+            in String[] resolvedTypes, int flags, in Bundle options, int userId);
     void cancelIntentSender(in IIntentSender sender);
     String getPackageForIntentSender(in IIntentSender sender);
     void registerIntentSenderCancelListener(in IIntentSender sender, in IResultReceiver receiver);
@@ -275,7 +305,7 @@ interface IActivityManager {
     void killApplicationProcess(in String processName, int uid);
     // Special low-level communication with activity manager.
     boolean handleApplicationWtf(in IBinder app, in String tag, boolean system,
-            in ApplicationErrorReport.ParcelableCrashInfo crashInfo);
+            in ApplicationErrorReport.ParcelableCrashInfo crashInfo, int immediateCallerPid);
     @UnsupportedAppUsage
     void killBackgroundProcesses(in String packageName, int userId);
     boolean isUserAMonkey();
@@ -291,8 +321,13 @@ interface IActivityManager {
     boolean isTopActivityImmersive();
     void crashApplication(int uid, int initialPid, in String packageName, int userId,
             in String message, boolean force);
-    @UnsupportedAppUsage
+    /** @deprecated -- use getProviderMimeTypeAsync */
+    @UnsupportedAppUsage(maxTargetSdk = 29, publicAlternatives =
+            "Use {@link android.content.ContentResolver#getType} public API instead.")
     String getProviderMimeType(in Uri uri, int userId);
+
+    oneway void getProviderMimeTypeAsync(in Uri uri, int userId, in RemoteCallback resultCallback);
+
     // Cause the specified process to dump the specified heap.
     boolean dumpHeap(in String process, int userId, boolean managed, boolean mallocInfo,
             boolean runGc, in String path, in ParcelFileDescriptor fd,
@@ -338,13 +373,24 @@ interface IActivityManager {
     boolean isIntentSenderAnActivity(in IIntentSender sender);
     boolean isIntentSenderAForegroundService(in IIntentSender sender);
     boolean isIntentSenderABroadcast(in IIntentSender sender);
-    @UnsupportedAppUsage
+    /** @deprecated Use {@link startActivityAsUserWithFeature} instead */
+    @UnsupportedAppUsage(maxTargetSdk=29, publicAlternatives="Use {@code android.content.Context#createContextAsUser(android.os.UserHandle, int)} and {@link android.content.Context#startActivity(android.content.Intent)} instead")
     int startActivityAsUser(in IApplicationThread caller, in String callingPackage,
             in Intent intent, in String resolvedType, in IBinder resultTo, in String resultWho,
             int requestCode, int flags, in ProfilerInfo profilerInfo,
             in Bundle options, int userId);
+    int startActivityAsUserWithFeature(in IApplicationThread caller, in String callingPackage,
+            in String callingFeatureId, in Intent intent, in String resolvedType,
+            in IBinder resultTo, in String resultWho, int requestCode, int flags,
+            in ProfilerInfo profilerInfo, in Bundle options, int userId);
     @UnsupportedAppUsage
     int stopUser(int userid, boolean force, in IStopUserCallback callback);
+    /**
+     * Check {@link com.android.server.am.ActivityManagerService#stopUserWithDelayedLocking(int, boolean, IStopUserCallback)}
+     * for details.
+     */
+    int stopUserWithDelayedLocking(int userid, boolean force, in IStopUserCallback callback);
+
     @UnsupportedAppUsage
     void registerUserSwitchObserver(in IUserSwitchObserver observer, in String name);
     void unregisterUserSwitchObserver(in IUserSwitchObserver observer);
@@ -388,6 +434,7 @@ interface IActivityManager {
     void requestFullBugReport();
     void requestRemoteBugReport();
     boolean launchBugReportHandlerApp();
+    List<String> getBugreportWhitelistedPackages();
 
     @UnsupportedAppUsage
     Intent getIntentForIntentSender(in IIntentSender sender);
@@ -481,29 +528,6 @@ interface IActivityManager {
     boolean unlockUser(int userid, in byte[] token, in byte[] secret,
             in IProgressListener listener);
     void killPackageDependents(in String packageName, int userId);
-    /**
-     * Resizes the docked stack, and all other stacks as the result of the dock stack bounds change.
-     *
-     * @param dockedBounds The bounds for the docked stack.
-     * @param tempDockedTaskBounds The temporary bounds for the tasks in the docked stack, which
-     *                             might be different from the stack bounds to allow more
-     *                             flexibility while resizing, or {@code null} if they should be the
-     *                             same as the stack bounds.
-     * @param tempDockedTaskInsetBounds The temporary bounds for the tasks to calculate the insets.
-     *                                  When resizing, we usually "freeze" the layout of a task. To
-     *                                  achieve that, we also need to "freeze" the insets, which
-     *                                  gets achieved by changing task bounds but not bounds used
-     *                                  to calculate the insets in this transient state
-     * @param tempOtherTaskBounds The temporary bounds for the tasks in all other stacks, or
-     *                            {@code null} if they should be the same as the stack bounds.
-     * @param tempOtherTaskInsetBounds Like {@code tempDockedTaskInsetBounds}, but for the other
-     *                                 stacks.
-     * @throws RemoteException
-     */
-    @UnsupportedAppUsage
-    void resizeDockedStack(in Rect dockedBounds, in Rect tempDockedTaskBounds,
-            in Rect tempDockedTaskInsetBounds,
-            in Rect tempOtherTaskBounds, in Rect tempOtherTaskInsetBounds);
     @UnsupportedAppUsage
     void removeStack(int stackId);
     void makePackageIdle(String packageName, int userId);
@@ -537,12 +561,12 @@ interface IActivityManager {
     void cancelTaskWindowTransition(int taskId);
     /**
      * @param taskId the id of the task to retrieve the sAutoapshots for
-     * @param reducedResolution if set, if the snapshot needs to be loaded from disk, this will load
+     * @param isLowResolution if set, if the snapshot needs to be loaded from disk, this will load
      *                          a reduced resolution of it, which is much faster
      * @return a graphic buffer representing a screenshot of a task
      */
     @UnsupportedAppUsage
-    ActivityManager.TaskSnapshot getTaskSnapshot(int taskId, boolean reducedResolution);
+    ActivityManager.TaskSnapshot getTaskSnapshot(int taskId, boolean isLowResolution);
     void scheduleApplicationInfoChanged(in List<String> packageNames, int userId);
     void setPersistentVrThread(int tid);
 
@@ -582,4 +606,50 @@ interface IActivityManager {
      * unlockProgressListener can be null if monitoring progress is not necessary.
      */
     boolean startUserInForegroundWithListener(int userid, IProgressListener unlockProgressListener);
+
+    /**
+     * Method for the app to tell system that it's wedged and would like to trigger an ANR.
+     */
+    void appNotResponding(String reason);
+
+    /**
+     * Return a list of {@link ApplicationExitInfo} records.
+     *
+     * <p class="note"> Note: System stores these historical information in a ring buffer, older
+     * records would be overwritten by newer records. </p>
+     *
+     * <p class="note"> Note: In the case that this application bound to an external service with
+     * flag {@link android.content.Context#BIND_EXTERNAL_SERVICE}, the process of that external
+     * service will be included in this package's exit info. </p>
+     *
+     * @param packageName Optional, an empty value means match all packages belonging to the
+     *                    caller's UID. If this package belongs to another UID, you must hold
+     *                    {@link android.Manifest.permission#DUMP} in order to retrieve it.
+     * @param pid         Optional, it could be a process ID that used to belong to this package but
+     *                    died later; A value of 0 means to ignore this parameter and return all
+     *                    matching records.
+     * @param maxNum      Optional, the maximum number of results should be returned; A value of 0
+     *                    means to ignore this parameter and return all matching records
+     * @param userId      The userId in the multi-user environment.
+     *
+     * @return a list of {@link ApplicationExitInfo} records with the matching criteria, sorted in
+     *         the order from most recent to least recent.
+     */
+    ParceledListSlice<ApplicationExitInfo> getHistoricalProcessExitReasons(String packageName,
+            int pid, int maxNum, int userId);
+
+    /*
+     * Kill the given PIDs, but the killing will be delayed until the device is idle
+     * and the given process is imperceptible.
+     */
+    void killProcessesWhenImperceptible(in int[] pids, String reason);
+
+    /**
+     * Set locus context for a given activity.
+     * @param activity
+     * @param locusId a unique, stable id that identifies this activity instance from others.
+     * @param appToken ActivityRecord's appToken.
+     */
+    void setActivityLocusContext(in ComponentName activity, in LocusId locusId,
+            in IBinder appToken);
 }

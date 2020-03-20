@@ -5,12 +5,14 @@
       "options": [
         {
           "include-filter": "com.android.server.integrity."
-        },
+        }
+      ]
+    },
+    {
+      "name": "GtsSecurityHostTestCases",
+      "options": [
         {
-          "include-annotation": "android.platform.test.annotations.Presubmit"
-        },
-        {
-          "exclude-annotation": "androidx.test.filters.FlakyTest"
+          "include-filter": "com.google.android.security.gts.AppIntegrityManagerTest"
         }
       ]
     }

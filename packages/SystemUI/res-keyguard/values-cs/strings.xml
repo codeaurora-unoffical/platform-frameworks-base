@@ -87,14 +87,6 @@
     <string name="kg_too_many_failed_pin_attempts_dialog_message" msgid="544687656831558971">"Již <xliff:g id="NUMBER_0">%1$d</xliff:g>krát jste zadali nesprávný kód PIN. \n\nZkuste to znovu za <xliff:g id="NUMBER_1">%2$d</xliff:g> s."</string>
     <string name="kg_too_many_failed_password_attempts_dialog_message" msgid="190984061975729494">"Již <xliff:g id="NUMBER_0">%1$d</xliff:g>krát jste nesprávně zadali heslo. \n\nZkuste to znovu za <xliff:g id="NUMBER_1">%2$d</xliff:g> s."</string>
     <string name="kg_too_many_failed_pattern_attempts_dialog_message" msgid="4252405904570284368">"Již <xliff:g id="NUMBER_0">%1$d</xliff:g>krát jste zadali nesprávné bezpečnostní gesto. \n\nZkuste to znovu za <xliff:g id="NUMBER_1">%2$d</xliff:g> s."</string>
-    <!-- no translation found for kg_failed_attempts_now_erasing_user (9046628517316763961) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_now_erasing_user (3588779327358321092) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_almost_at_erase_profile (6114158710353725041) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_almost_at_erase_profile (8345451368768804892) -->
-    <skip />
     <string name="kg_password_wrong_pin_code_pukked" msgid="8047350661459040581">"Zadali jste nesprávný kód PIN SIM karty. Nyní musíte za účelem odemknutí zařízení kontaktovat svého operátora."</string>
     <plurals name="kg_password_wrong_pin_code" formatted="false" msgid="7030584350995485026">
       <item quantity="few">Zadali jste nesprávný kód PIN SIM karty. Máte ještě <xliff:g id="NUMBER_1">%d</xliff:g> pokusy.</item>
@@ -115,6 +107,9 @@
     <string name="keyguard_carrier_default" msgid="6359808469637388586">"Žádný signál"</string>
     <string name="accessibility_ime_switch_button" msgid="9082358310194861329">"Přepnout metodu zadávání"</string>
     <string name="airplane_mode" msgid="2528005343938497866">"Režim Letadlo"</string>
+    <string name="kg_prompt_reason_prepare_for_update_pin" msgid="8878724145347297575">"Příprava na aktualizaci vyžaduje PIN"</string>
+    <string name="kg_prompt_reason_prepare_for_update_pattern" msgid="4873394344883271519">"Příprava na aktualizaci vyžaduje gesto"</string>
+    <string name="kg_prompt_reason_prepare_for_update_password" msgid="5625446803865598337">"Příprava na aktualizaci vyžaduje heslo"</string>
     <string name="kg_prompt_reason_restart_pattern" msgid="4720554342633852066">"Po restartování zařízení je vyžadováno gesto"</string>
     <string name="kg_prompt_reason_restart_pin" msgid="1587671566498057656">"Po restartování zařízení je vyžadován kód PIN"</string>
     <string name="kg_prompt_reason_restart_password" msgid="8061279087240952002">"Po restartování zařízení je vyžadováno heslo"</string>

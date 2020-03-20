@@ -27,6 +27,8 @@
 #include <android/hardware_buffer.h>
 #endif
 
+class SkWStream;
+
 namespace android {
 
 enum class PixelStorageType {
@@ -142,6 +144,20 @@ public:
   // and places that value in size.
   static bool computeAllocationSize(size_t rowBytes, int height, size_t* size);
 
+  // These must match the int values of CompressFormat in Bitmap.java, as well as
+  // AndroidBitmapCompressFormat.
+  enum class JavaCompressFormat {
+    Jpeg = 0,
+    Png = 1,
+    Webp = 2,
+    WebpLossy = 3,
+    WebpLossless = 4,
+  };
+
+  bool compress(JavaCompressFormat format, int32_t quality, SkWStream* stream);
+
+  static bool compress(const SkBitmap& bitmap, JavaCompressFormat format,
+                       int32_t quality, SkWStream* stream);
 private:
     static sk_sp<Bitmap> allocateAshmemBitmap(size_t size, const SkImageInfo& i, size_t rowBytes);
     static sk_sp<Bitmap> allocateHeapBitmap(size_t size, const SkImageInfo& i, size_t rowBytes);
@@ -153,6 +169,12 @@ private:
 #ifdef __ANDROID__ // Layoutlib does not support hardware acceleration
     Bitmap(AHardwareBuffer* buffer, const SkImageInfo& info, size_t rowBytes,
            BitmapPalette palette);
+
+    // Common code for the two public facing createFrom(AHardwareBuffer*, ...)
+    // methods.
+    // bufferDesc is only used to compute rowBytes.
+    static sk_sp<Bitmap> createFrom(AHardwareBuffer* hardwareBuffer, const SkImageInfo& info,
+                                    const AHardwareBuffer_Desc& bufferDesc, BitmapPalette palette);
 #endif
 
     virtual ~Bitmap();

@@ -16,20 +16,25 @@
 
 package android.view;
 
+import android.annotation.Hide;
 import android.annotation.NonNull;
 import android.view.WindowInsets.Type.InsetsType;
 import android.view.inputmethod.EditorInfo;
 
 /**
  * Interface that informs the client about {@link WindowInsetsAnimationController} state changes.
- * @hide pending unhide
  */
 public interface WindowInsetsAnimationControlListener {
 
     /**
-     * Gets called as soon as the animation is ready to be controlled. This may be
-     * delayed when the IME needs to redraw because of an {@link EditorInfo} change, or when the
-     * window is starting up.
+     * @hide
+     */
+    default void onPrepare(int types) {
+    }
+
+    /**
+     * Called when the animation is ready to be controlled. This may be delayed when the IME needs
+     * to redraw because of an {@link EditorInfo} change, or when the window is starting up.
      *
      * @param controller The controller to control the inset animation.
      * @param types The {@link InsetsType}s it was able to gain control over. Note that this may be

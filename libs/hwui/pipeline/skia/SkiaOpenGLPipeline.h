@@ -16,8 +16,10 @@
 
 #pragma once
 
-#include "SkiaPipeline.h"
+#include <EGL/egl.h>
+#include <system/window.h>
 
+#include "SkiaPipeline.h"
 #include "renderstate/RenderState.h"
 
 namespace android {
@@ -44,7 +46,7 @@ public:
                      FrameInfo* currentFrameInfo, bool* requireSwap) override;
     DeferredLayerUpdater* createTextureLayer() override;
     bool setSurface(ANativeWindow* surface, renderthread::SwapBehavior swapBehavior,
-                    renderthread::ColorMode colorMode, uint32_t extraBuffers) override;
+                    uint32_t extraBuffers) override;
     void onStop() override;
     bool isSurfaceReady() override;
     bool isContextReady() override;

@@ -31,6 +31,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.content.rollback.RollbackInfo;
 import android.content.rollback.RollbackManager;
 import android.os.UserManager;
@@ -391,9 +392,6 @@ public class RollbackTest {
                     RollbackManager.PROPERTY_ROLLBACK_LIFETIME_MILLIS,
                     Long.toString(expirationTime), false /* makeDefault*/);
 
-            // Pull the new expiration time from DeviceConfig
-            rm.reloadPersistedData();
-
             // Uninstall TestApp.A
             Uninstall.packages(TestApp.A);
             assertThat(InstallUtils.getInstalledVersion(TestApp.A)).isEqualTo(-1);
@@ -455,9 +453,6 @@ public class RollbackTest {
             DeviceConfig.setProperty(DeviceConfig.NAMESPACE_ROLLBACK_BOOT,
                     RollbackManager.PROPERTY_ROLLBACK_LIFETIME_MILLIS,
                     Long.toString(expirationTime), false /* makeDefault*/);
-
-            // Pull the new expiration time from DeviceConfig
-            rm.reloadPersistedData();
 
             // Install app A with rollback enabled
             Uninstall.packages(TestApp.A);
@@ -1095,6 +1090,65 @@ public class RollbackTest {
             DeviceConfig.setProperty(DeviceConfig.NAMESPACE_ROLLBACK,
                     PROPERTY_ENABLE_ROLLBACK_TIMEOUT_MILLIS,
                     null, false /* makeDefault*/);
+            InstallUtils.dropShellPermissionIdentity();
+        }
+    }
+
+    /**
+     * Test we can't enable rollback for non-whitelisted app without
+     * TEST_MANAGE_ROLLBACKS permission
+     */
+    @Test
+    public void testNonRollbackWhitelistedApp() throws Exception {
+        try {
+            InstallUtils.adoptShellPermissionIdentity(
+                    Manifest.permission.INSTALL_PACKAGES,
+                    Manifest.permission.DELETE_PACKAGES,
+                    Manifest.permission.MANAGE_ROLLBACKS);
+
+            Uninstall.packages(TestApp.A);
+            Install.single(TestApp.A1).commit();
+            assertThat(RollbackUtils.getAvailableRollback(TestApp.A)).isNull();
+
+            Install.single(TestApp.A2).setEnableRollback().commit();
+            Thread.sleep(TimeUnit.SECONDS.toMillis(2));
+            assertThat(RollbackUtils.getAvailableRollback(TestApp.A)).isNull();
+        } finally {
+            InstallUtils.dropShellPermissionIdentity();
+        }
+    }
+
+    @Test
+    public void testRollbackDataPolicy() throws Exception {
+        try {
+            InstallUtils.adoptShellPermissionIdentity(
+                    Manifest.permission.INSTALL_PACKAGES,
+                    Manifest.permission.DELETE_PACKAGES,
+                    Manifest.permission.TEST_MANAGE_ROLLBACKS);
+
+            Uninstall.packages(TestApp.A, TestApp.B);
+            Install.multi(TestApp.A1, TestApp.B1).commit();
+            // Write user data version = 1
+            InstallUtils.processUserData(TestApp.A);
+            InstallUtils.processUserData(TestApp.B);
+
+            Install a2 = Install.single(TestApp.A2)
+                    .setEnableRollback(PackageManager.RollbackDataPolicy.WIPE);
+            Install b2 = Install.single(TestApp.B2)
+                    .setEnableRollback(PackageManager.RollbackDataPolicy.RESTORE);
+            Install.multi(a2, b2).setEnableRollback().commit();
+            // Write user data version = 2
+            InstallUtils.processUserData(TestApp.A);
+            InstallUtils.processUserData(TestApp.B);
+
+            RollbackInfo info = RollbackUtils.getAvailableRollback(TestApp.A);
+            RollbackUtils.rollback(info.getRollbackId());
+            // Read user data version from userdata.txt
+            // A's user data version is -1 for user data is wiped.
+            // B's user data version is 1 as rollback committed.
+            assertThat(InstallUtils.getUserDataVersion(TestApp.A)).isEqualTo(-1);
+            assertThat(InstallUtils.getUserDataVersion(TestApp.B)).isEqualTo(1);
+        } finally {
             InstallUtils.dropShellPermissionIdentity();
         }
     }

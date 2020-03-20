@@ -78,6 +78,7 @@ interface IStatusBarService
             in int notificationLocation, boolean modifiedBeforeSending);
     void onNotificationSettingsViewed(String key);
     void onNotificationBubbleChanged(String key, boolean isBubble);
+    void onBubbleNotificationSuppressionChanged(String key, boolean isSuppressed);
     void grantInlineReplyUriPermission(String key, in Uri uri, in UserHandle user, String packageName);
     void clearInlineReplyUriPermissions(String key);
 
@@ -123,4 +124,25 @@ interface IStatusBarService
      * Dismiss the warning that the device is about to go to sleep due to user inactivity.
      */
     void dismissInattentiveSleepWarning(boolean animated);
+
+    /**
+     * Notifies SystemUI to start tracing.
+     */
+    void startTracing();
+
+    /**
+     * Notifies SystemUI to stop tracing.
+     */
+    void stopTracing();
+
+    /**
+     * Returns whether SystemUI tracing is enabled.
+     */
+    boolean isTracing();
+
+    /**
+     * If true, suppresses the ambient display from showing. If false, re-enables the ambient
+     * display.
+     */
+    void suppressAmbientDisplay(boolean suppress);
 }

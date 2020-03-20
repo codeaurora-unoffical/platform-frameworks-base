@@ -87,17 +87,31 @@ public abstract class CameraMetadata<TKey> {
      */
      protected abstract <T> T getProtected(TKey key);
 
-     /**
-      * @hide
-      */
-     protected void setNativeInstance(CameraMetadataNative nativeInstance) {
+    /**
+     * @hide
+     */
+    protected void setNativeInstance(CameraMetadataNative nativeInstance) {
         mNativeInstance = nativeInstance;
-     }
+    }
 
-     /**
-      * @hide
-      */
-     protected abstract Class<TKey> getKeyClass();
+    /**
+     * Retrieves the native std::shared_ptr<CameraMetadata*>* as a Java long.
+     * Returns 0 if mNativeInstance is null.
+     *
+     * @hide
+     */
+    public long getNativeMetadataPtr() {
+        if (mNativeInstance == null) {
+            return 0;
+        } else {
+            return mNativeInstance.getMetadataPtr();
+        }
+    }
+
+    /**
+     * @hide
+     */
+    protected abstract Class<TKey> getKeyClass();
 
     /**
      * Returns a list of the keys contained in this map.
@@ -365,6 +379,20 @@ public abstract class CameraMetadata<TKey> {
      * @see CameraCharacteristics#LENS_POSE_REFERENCE
      */
     public static final int LENS_POSE_REFERENCE_GYROSCOPE = 1;
+
+    /**
+     * <p>The camera device cannot represent the values of {@link CameraCharacteristics#LENS_POSE_TRANSLATION android.lens.poseTranslation}
+     * and {@link CameraCharacteristics#LENS_POSE_ROTATION android.lens.poseRotation} accurately enough. One such example is a camera device
+     * on the cover of a foldable phone: in order to measure the pose translation and rotation,
+     * some kind of hinge position sensor would be needed.</p>
+     * <p>The value of {@link CameraCharacteristics#LENS_POSE_TRANSLATION android.lens.poseTranslation} must be all zeros, and
+     * {@link CameraCharacteristics#LENS_POSE_ROTATION android.lens.poseRotation} must be values matching its default facing.</p>
+     *
+     * @see CameraCharacteristics#LENS_POSE_ROTATION
+     * @see CameraCharacteristics#LENS_POSE_TRANSLATION
+     * @see CameraCharacteristics#LENS_POSE_REFERENCE
+     */
+    public static final int LENS_POSE_REFERENCE_UNDEFINED = 2;
 
     //
     // Enumeration values for CameraCharacteristics#REQUEST_AVAILABLE_CAPABILITIES
@@ -764,6 +792,7 @@ public abstract class CameraMetadata<TKey> {
      * <li>{@link CaptureRequest#CONTROL_AWB_REGIONS android.control.awbRegions}</li>
      * <li>{@link CaptureRequest#CONTROL_AF_TRIGGER android.control.afTrigger}</li>
      * <li>{@link CaptureRequest#CONTROL_AE_PRECAPTURE_TRIGGER android.control.aePrecaptureTrigger}</li>
+     * <li>{@link CaptureRequest#CONTROL_ZOOM_RATIO android.control.zoomRatio}</li>
      * </ul>
      * <p>Outside of android.control.*, the following controls will work:</p>
      * <ul>
@@ -812,6 +841,7 @@ public abstract class CameraMetadata<TKey> {
      * @see CaptureRequest#CONTROL_AWB_REGIONS
      * @see CaptureRequest#CONTROL_EFFECT_MODE
      * @see CaptureRequest#CONTROL_MODE
+     * @see CaptureRequest#CONTROL_ZOOM_RATIO
      * @see CaptureRequest#FLASH_MODE
      * @see CaptureRequest#LENS_OPTICAL_STABILIZATION_MODE
      * @see CaptureRequest#SCALER_CROP_REGION
@@ -835,14 +865,20 @@ public abstract class CameraMetadata<TKey> {
      * <p>The camera device is a logical camera backed by two or more physical cameras.</p>
      * <p>In API level 28, the physical cameras must also be exposed to the application via
      * {@link android.hardware.camera2.CameraManager#getCameraIdList }.</p>
-     * <p>Starting from API level 29, some or all physical cameras may not be independently
-     * exposed to the application, in which case the physical camera IDs will not be
-     * available in {@link android.hardware.camera2.CameraManager#getCameraIdList }. But the
+     * <p>Starting from API level 29:</p>
+     * <ul>
+     * <li>Some or all physical cameras may not be independently exposed to the application,
+     * in which case the physical camera IDs will not be available in
+     * {@link android.hardware.camera2.CameraManager#getCameraIdList }. But the
      * application can still query the physical cameras' characteristics by calling
-     * {@link android.hardware.camera2.CameraManager#getCameraCharacteristics }. Additionally,
-     * if a physical camera is hidden from camera ID list, the mandatory stream combinations
-     * for that physical camera must be supported through the logical camera using physical
-     * streams.</p>
+     * {@link android.hardware.camera2.CameraManager#getCameraCharacteristics }.</li>
+     * <li>If a physical camera is hidden from camera ID list, the mandatory stream
+     * combinations for that physical camera must be supported through the logical camera
+     * using physical streams. One exception is that in API level 30, a physical camera
+     * may become unavailable via
+     * {@link CameraManager.AvailabilityCallback#onPhysicalCameraUnavailable }
+     * callback.</li>
+     * </ul>
      * <p>Combinations of logical and physical streams, or physical streams from different
      * physical cameras are not guaranteed. However, if the camera device supports
      * {@link CameraDevice#isSessionConfigurationSupported },
@@ -1004,6 +1040,51 @@ public abstract class CameraMetadata<TKey> {
      */
     public static final int REQUEST_AVAILABLE_CAPABILITIES_SYSTEM_CAMERA = 14;
 
+    /**
+     * <p>The camera device supports the OFFLINE_PROCESSING use case.</p>
+     * <p>With OFFLINE_PROCESSING capability, the application can switch an ongoing
+     * capture session to offline mode by calling the
+     * CameraCaptureSession#switchToOffline method and specify streams to be kept in offline
+     * mode. The camera will then stop currently active repeating requests, prepare for
+     * some requests to go into offline mode, and return an offline session object. After
+     * the switchToOffline call returns, the original capture session is in closed state as
+     * if the CameraCaptureSession#close method has been called.
+     * In the offline mode, all inflight requests will continue to be processed in the
+     * background, and the application can immediately close the camera or create a new
+     * capture session without losing those requests' output images and capture results.</p>
+     * <p>While the camera device is processing offline requests, it
+     * might not be able to support all stream configurations it can support
+     * without offline requests. When that happens, the createCaptureSession
+     * method call will fail. The following stream configurations are guaranteed to work
+     * without hitting the resource busy exception:</p>
+     * <ul>
+     * <li>One ongoing offline session: target one output surface of YUV or
+     * JPEG format, any resolution.</li>
+     * <li>The active camera capture session:<ol>
+     * <li>One preview surface (SurfaceView or SurfaceTexture) up to 1920 width</li>
+     * <li>One YUV ImageReader surface up to 1920 width</li>
+     * <li>One Jpeg ImageReader, any resolution: the camera device is
+     *    allowed to slow down JPEG output speed by 50% if there is any ongoing offline
+     *    session.</li>
+     * <li>One ImageWriter surface of private format, any resolution if the device supports
+     *    PRIVATE_REPROCESSING capability</li>
+     * </ol>
+     * </li>
+     * <li>Alternatively, the active camera session above can be replaced by an legacy
+     * {@link android.hardware.Camera Camera} with the following parameter settings:<ol>
+     * <li>Preview size up to 1920 width</li>
+     * <li>Preview callback size up to 1920 width</li>
+     * <li>Video size up to 1920 width</li>
+     * <li>Picture size, any resolution: the camera device is
+     *     allowed to slow down JPEG output speed by 50% if there is any ongoing offline
+     *     session.</li>
+     * </ol>
+     * </li>
+     * </ul>
+     * @see CameraCharacteristics#REQUEST_AVAILABLE_CAPABILITIES
+     */
+    public static final int REQUEST_AVAILABLE_CAPABILITIES_OFFLINE_PROCESSING = 15;
+
     //
     // Enumeration values for CameraCharacteristics#SCALER_CROPPING_TYPE
     //
@@ -1074,12 +1155,16 @@ public abstract class CameraMetadata<TKey> {
     //
 
     /**
-     * <p>Timestamps from {@link CaptureResult#SENSOR_TIMESTAMP android.sensor.timestamp} are in nanoseconds and monotonic,
-     * but can not be compared to timestamps from other subsystems
-     * (e.g. accelerometer, gyro etc.), or other instances of the same or different
-     * camera devices in the same system. Timestamps between streams and results for
-     * a single camera instance are comparable, and the timestamps for all buffers
-     * and the result metadata generated by a single capture are identical.</p>
+     * <p>Timestamps from {@link CaptureResult#SENSOR_TIMESTAMP android.sensor.timestamp} are in nanoseconds and monotonic, but can
+     * not be compared to timestamps from other subsystems (e.g. accelerometer, gyro etc.),
+     * or other instances of the same or different camera devices in the same system with
+     * accuracy. However, the timestamps are roughly in the same timebase as
+     * {@link android.os.SystemClock#uptimeMillis }.  The accuracy is sufficient for tasks
+     * like A/V synchronization for video recording, at least, and the timestamps can be
+     * directly used together with timestamps from the audio subsystem for that task.</p>
+     * <p>Timestamps between streams and results for a single camera instance are comparable,
+     * and the timestamps for all buffers and the result metadata generated by a single
+     * capture are identical.</p>
      *
      * @see CaptureResult#SENSOR_TIMESTAMP
      * @see CameraCharacteristics#SENSOR_INFO_TIMESTAMP_SOURCE
@@ -1090,6 +1175,14 @@ public abstract class CameraMetadata<TKey> {
      * <p>Timestamps from {@link CaptureResult#SENSOR_TIMESTAMP android.sensor.timestamp} are in the same timebase as
      * {@link android.os.SystemClock#elapsedRealtimeNanos },
      * and they can be compared to other timestamps using that base.</p>
+     * <p>When buffers from a REALTIME device are passed directly to a video encoder from the
+     * camera, automatic compensation is done to account for differing timebases of the
+     * audio and camera subsystems.  If the application is receiving buffers and then later
+     * sending them to a video encoder or other application where they are compared with
+     * audio subsystem timestamps or similar, this compensation is not present.  In those
+     * cases, applications need to adjust the timestamps themselves.  Since {@link android.os.SystemClock#elapsedRealtimeNanos } and {@link android.os.SystemClock#uptimeMillis } only diverge while the device is asleep, an
+     * offset between the two sources can be measured once per active session and applied
+     * to timestamps for sufficient accuracy for A/V sync.</p>
      *
      * @see CaptureResult#SENSOR_TIMESTAMP
      * @see CameraCharacteristics#SENSOR_INFO_TIMESTAMP_SOURCE
@@ -2271,6 +2364,7 @@ public abstract class CameraMetadata<TKey> {
      * <li>{@link CaptureRequest#CONTROL_AWB_REGIONS android.control.awbRegions}</li>
      * <li>{@link CaptureRequest#CONTROL_AF_TRIGGER android.control.afTrigger}</li>
      * <li>{@link CaptureRequest#CONTROL_AE_PRECAPTURE_TRIGGER android.control.aePrecaptureTrigger}</li>
+     * <li>{@link CaptureRequest#CONTROL_ZOOM_RATIO android.control.zoomRatio}</li>
      * </ul>
      * <p>Outside of android.control.*, the following controls will work:</p>
      * <ul>
@@ -2317,6 +2411,7 @@ public abstract class CameraMetadata<TKey> {
      * @see CaptureRequest#CONTROL_AWB_REGIONS
      * @see CaptureRequest#CONTROL_EFFECT_MODE
      * @see CaptureRequest#CONTROL_MODE
+     * @see CaptureRequest#CONTROL_ZOOM_RATIO
      * @see CaptureRequest#FLASH_MODE
      * @see CaptureRequest#LENS_OPTICAL_STABILIZATION_MODE
      * @see CaptureRequest#SCALER_CROP_REGION
@@ -2652,6 +2747,56 @@ public abstract class CameraMetadata<TKey> {
      * @see CaptureRequest#NOISE_REDUCTION_MODE
      */
     public static final int NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG = 4;
+
+    //
+    // Enumeration values for CaptureRequest#SCALER_ROTATE_AND_CROP
+    //
+
+    /**
+     * <p>No rotate and crop is applied. Processed outputs are in the sensor orientation.</p>
+     * @see CaptureRequest#SCALER_ROTATE_AND_CROP
+     */
+    public static final int SCALER_ROTATE_AND_CROP_NONE = 0;
+
+    /**
+     * <p>Processed images are rotated by 90 degrees clockwise, and then cropped
+     * to the original aspect ratio.</p>
+     * @see CaptureRequest#SCALER_ROTATE_AND_CROP
+     */
+    public static final int SCALER_ROTATE_AND_CROP_90 = 1;
+
+    /**
+     * <p>Processed images are rotated by 180 degrees.  Since the aspect ratio does not
+     * change, no cropping is performed.</p>
+     * @see CaptureRequest#SCALER_ROTATE_AND_CROP
+     */
+    public static final int SCALER_ROTATE_AND_CROP_180 = 2;
+
+    /**
+     * <p>Processed images are rotated by 270 degrees clockwise, and then cropped
+     * to the original aspect ratio.</p>
+     * @see CaptureRequest#SCALER_ROTATE_AND_CROP
+     */
+    public static final int SCALER_ROTATE_AND_CROP_270 = 3;
+
+    /**
+     * <p>The camera API automatically selects the best concrete value for
+     * rotate-and-crop based on the application's support for resizability and the current
+     * multi-window mode.</p>
+     * <p>If the application does not support resizing but the display mode for its main
+     * Activity is not in a typical orientation, the camera API will set <code>ROTATE_AND_CROP_90</code>
+     * or some other supported rotation value, depending on device configuration,
+     * to ensure preview and captured images are correctly shown to the user. Otherwise,
+     * <code>ROTATE_AND_CROP_NONE</code> will be selected.</p>
+     * <p>When a value other than NONE is selected, several metadata fields will also be parsed
+     * differently to ensure that coordinates are correctly handled for features like drawing
+     * face detection boxes or passing in tap-to-focus coordinates.  The camera API will
+     * convert positions in the active array coordinate system to/from the cropped-and-rotated
+     * coordinate system to make the operation transparent for applications.</p>
+     * <p>No coordinate mapping will be done when the application selects a non-AUTO mode.</p>
+     * @see CaptureRequest#SCALER_ROTATE_AND_CROP
+     */
+    public static final int SCALER_ROTATE_AND_CROP_AUTO = 4;
 
     //
     // Enumeration values for CaptureRequest#SENSOR_TEST_PATTERN_MODE

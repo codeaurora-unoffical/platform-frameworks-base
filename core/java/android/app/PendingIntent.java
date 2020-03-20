@@ -19,7 +19,7 @@ package android.app;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.IIntentReceiver;
 import android.content.IIntentSender;
@@ -354,8 +354,8 @@ public final class PendingIntent implements Parcelable {
             intent.migrateExtraStreamToClipData();
             intent.prepareToLeaveProcess(context);
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName, context.getFeatureId(),
                     null, null, requestCode, new Intent[] { intent },
                     resolvedType != null ? new String[] { resolvedType } : null,
                     flags, options, context.getUserId());
@@ -380,8 +380,8 @@ public final class PendingIntent implements Parcelable {
             intent.migrateExtraStreamToClipData();
             intent.prepareToLeaveProcess(context);
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName, context.getFeatureId(),
                     null, null, requestCode, new Intent[] { intent },
                     resolvedType != null ? new String[] { resolvedType } : null,
                     flags, options, user.getIdentifier());
@@ -497,8 +497,8 @@ public final class PendingIntent implements Parcelable {
         }
         try {
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName, context.getFeatureId(),
                     null, null, requestCode, intents, resolvedTypes, flags, options,
                     context.getUserId());
             return target != null ? new PendingIntent(target) : null;
@@ -523,8 +523,8 @@ public final class PendingIntent implements Parcelable {
         }
         try {
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                    ActivityManager.INTENT_SENDER_ACTIVITY, packageName, context.getFeatureId(),
                     null, null, requestCode, intents, resolvedTypes,
                     flags, options, user.getIdentifier());
             return target != null ? new PendingIntent(target) : null;
@@ -575,8 +575,8 @@ public final class PendingIntent implements Parcelable {
         try {
             intent.prepareToLeaveProcess(context);
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                    ActivityManager.INTENT_SENDER_BROADCAST, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                    ActivityManager.INTENT_SENDER_BROADCAST, packageName, context.getFeatureId(),
                     null, null, requestCode, new Intent[] { intent },
                     resolvedType != null ? new String[] { resolvedType } : null,
                     flags, null, userHandle.getIdentifier());
@@ -654,8 +654,8 @@ public final class PendingIntent implements Parcelable {
         try {
             intent.prepareToLeaveProcess(context);
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                    serviceKind, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                    serviceKind, packageName, context.getFeatureId(),
                     null, null, requestCode, new Intent[] { intent },
                     resolvedType != null ? new String[] { resolvedType } : null,
                     flags, null, context.getUserId());

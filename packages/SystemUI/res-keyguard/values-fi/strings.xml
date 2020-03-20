@@ -85,14 +85,6 @@
     <string name="kg_too_many_failed_pin_attempts_dialog_message" msgid="544687656831558971">"Olet kirjoittanut PIN-koodin väärin <xliff:g id="NUMBER_0">%1$d</xliff:g> kertaa. \n\nYritä uudelleen <xliff:g id="NUMBER_1">%2$d</xliff:g> sekunnin kuluttua."</string>
     <string name="kg_too_many_failed_password_attempts_dialog_message" msgid="190984061975729494">"Olet kirjoittanut salasanan väärin <xliff:g id="NUMBER_0">%1$d</xliff:g> kertaa. \n\nYritä uudelleen <xliff:g id="NUMBER_1">%2$d</xliff:g> sekunnin kuluttua."</string>
     <string name="kg_too_many_failed_pattern_attempts_dialog_message" msgid="4252405904570284368">"Olet piirtänyt lukituksenpoistokuvion väärin <xliff:g id="NUMBER_0">%1$d</xliff:g> kertaa. \n\nYritä uudelleen <xliff:g id="NUMBER_1">%2$d</xliff:g> sekunnin kuluttua."</string>
-    <!-- no translation found for kg_failed_attempts_now_erasing_user (9046628517316763961) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_now_erasing_user (3588779327358321092) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_almost_at_erase_profile (6114158710353725041) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_almost_at_erase_profile (8345451368768804892) -->
-    <skip />
     <string name="kg_password_wrong_pin_code_pukked" msgid="8047350661459040581">"Virheellinen SIM-kortin PIN-koodi. Sinun on nyt otettava yhteys operaattoriin laitteen lukituksen avaamiseksi."</string>
     <plurals name="kg_password_wrong_pin_code" formatted="false" msgid="7030584350995485026">
       <item quantity="other">Virheellinen SIM-kortin PIN-koodi. Sinulla on <xliff:g id="NUMBER_1">%d</xliff:g> yritystä jäljellä.</item>
@@ -109,6 +101,9 @@
     <string name="keyguard_carrier_default" msgid="6359808469637388586">"Ei yhteyttä"</string>
     <string name="accessibility_ime_switch_button" msgid="9082358310194861329">"Vaihda syöttötapaa."</string>
     <string name="airplane_mode" msgid="2528005343938497866">"Lentokonetila"</string>
+    <string name="kg_prompt_reason_prepare_for_update_pin" msgid="8878724145347297575">"Päivitykseen valmistautuminen edellyttää PIN-koodia"</string>
+    <string name="kg_prompt_reason_prepare_for_update_pattern" msgid="4873394344883271519">"Päivitykseen valmistautuminen edellyttää kuviota"</string>
+    <string name="kg_prompt_reason_prepare_for_update_password" msgid="5625446803865598337">"Päivitykseen valmistautuminen edellyttää salasanaa"</string>
     <string name="kg_prompt_reason_restart_pattern" msgid="4720554342633852066">"Kuvio vaaditaan laitteen uudelleenkäynnistyksen jälkeen."</string>
     <string name="kg_prompt_reason_restart_pin" msgid="1587671566498057656">"PIN-koodi vaaditaan laitteen uudelleenkäynnistyksen jälkeen."</string>
     <string name="kg_prompt_reason_restart_password" msgid="8061279087240952002">"Salasana vaaditaan laitteen uudelleenkäynnistyksen jälkeen."</string>

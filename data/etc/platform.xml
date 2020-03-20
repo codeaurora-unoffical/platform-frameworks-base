@@ -60,8 +60,8 @@
         <group gid="log" />
     </permission>
 
-    <permission name="android.permission.WRITE_MEDIA_STORAGE" >
-        <group gid="media_rw" />
+    <permission name="android.permission.MANAGE_EXTERNAL_STORAGE" >
+        <group gid="external_storage" />
     </permission>
 
     <permission name="android.permission.ACCESS_MTP" >
@@ -70,6 +70,11 @@
 
     <permission name="android.permission.NET_ADMIN" >
         <group gid="net_admin" />
+    </permission>
+
+    <permission name="android.permission.MAINLINE_NETWORK_STACK" >
+        <group gid="net_admin" />
+        <group gid="net_raw" />
     </permission>
 
     <!-- The group that /cache belongs to, linked to the permission
@@ -157,6 +162,7 @@
     <assign-permission name="android.permission.UPDATE_DEVICE_STATS" uid="audioserver" />
     <assign-permission name="android.permission.UPDATE_APP_OPS_STATS" uid="audioserver" />
     <assign-permission name="android.permission.PACKAGE_USAGE_STATS" uid="audioserver" />
+    <assign-permission name="android.permission.PREEMPT_SOUND_TRIGGER" uid="audioserver" />
 
     <assign-permission name="android.permission.MODIFY_AUDIO_SETTINGS" uid="cameraserver" />
     <assign-permission name="android.permission.ACCESS_SURFACE_FLINGER" uid="cameraserver" />
@@ -179,7 +185,6 @@
     <assign-permission name="android.permission.ACCESS_LOWPAN_STATE" uid="lowpan" />
     <assign-permission name="android.permission.MANAGE_LOWPAN_INTERFACES" uid="lowpan" />
 
-    <assign-permission name="android.permission.BATTERY_STATS" uid="statsd" />
     <assign-permission name="android.permission.DUMP" uid="statsd" />
     <assign-permission name="android.permission.PACKAGE_USAGE_STATS" uid="statsd" />
     <assign-permission name="android.permission.STATSCOMPANION" uid="statsd" />

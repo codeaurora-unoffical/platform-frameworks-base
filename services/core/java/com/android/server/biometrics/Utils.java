@@ -22,11 +22,17 @@ import android.content.Context;
 import android.hardware.biometrics.BiometricConstants;
 import android.hardware.biometrics.BiometricManager;
 import android.hardware.biometrics.BiometricPrompt;
+import android.hardware.biometrics.BiometricPrompt.AuthenticationResultType;
+import android.hardware.biometrics.IBiometricNativeHandle;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.NativeHandle;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.Slog;
+
+import java.io.FileDescriptor;
+import java.io.IOException;
 
 public class Utils {
     public static boolean isDebugEnabled(Context context, int targetUserId) {
@@ -74,7 +80,7 @@ public class Utils {
      * @param authenticators composed of one or more values from {@link Authenticators}
      * @return true if device credential is allowed.
      */
-    public static boolean isDeviceCredentialAllowed(@Authenticators.Types int authenticators) {
+    public static boolean isCredentialRequested(@Authenticators.Types int authenticators) {
         return (authenticators & Authenticators.DEVICE_CREDENTIAL) != 0;
     }
 
@@ -82,8 +88,8 @@ public class Utils {
      * @param bundle should be first processed by {@link #combineAuthenticatorBundles(Bundle)}
      * @return true if device credential is allowed.
      */
-    public static boolean isDeviceCredentialAllowed(Bundle bundle) {
-        return isDeviceCredentialAllowed(bundle.getInt(BiometricPrompt.KEY_AUTHENTICATORS_ALLOWED));
+    public static boolean isCredentialRequested(Bundle bundle) {
+        return isCredentialRequested(bundle.getInt(BiometricPrompt.KEY_AUTHENTICATORS_ALLOWED));
     }
 
     /**
@@ -114,7 +120,7 @@ public class Utils {
      * @param bundle should be first processed by {@link #combineAuthenticatorBundles(Bundle)}
      * @return true if biometric authentication is allowed.
      */
-    public static boolean isBiometricAllowed(Bundle bundle) {
+    public static boolean isBiometricRequested(Bundle bundle) {
         return getPublicBiometricStrength(bundle) != 0;
     }
 
@@ -124,8 +130,24 @@ public class Utils {
      * @return true only if the sensor is at least as strong as the requested strength
      */
     public static boolean isAtLeastStrength(int sensorStrength, int requestedStrength) {
+        // Clear out any bits that are not reserved for biometric
+        sensorStrength &= Authenticators.BIOMETRIC_MIN_STRENGTH;
+
         // If the authenticator contains bits outside of the requested strength, it is too weak.
-        return (~requestedStrength & sensorStrength) == 0;
+        if ((sensorStrength & ~requestedStrength) != 0) {
+            return false;
+        }
+
+        for (int i = Authenticators.BIOMETRIC_MAX_STRENGTH;
+                i <= requestedStrength; i = (i << 1) | 1) {
+            if (i == sensorStrength) {
+                return true;
+            }
+        }
+
+        Slog.e(BiometricService.TAG, "Unknown sensorStrength: " + sensorStrength
+                + ", requestedStrength: " + requestedStrength);
+        return false;
     }
 
     /**
@@ -163,7 +185,7 @@ public class Utils {
         // should be set.
         final int biometricBits = authenticators & Authenticators.BIOMETRIC_MIN_STRENGTH;
         if (biometricBits == Authenticators.EMPTY_SET
-                && isDeviceCredentialAllowed(authenticators)) {
+                && isCredentialRequested(authenticators)) {
             return true;
         } else if (biometricBits == Authenticators.BIOMETRIC_STRONG) {
             return true;
@@ -203,11 +225,67 @@ public class Utils {
             case BiometricConstants.BIOMETRIC_ERROR_HW_NOT_PRESENT:
                 biometricManagerCode = BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE;
                 break;
+            case BiometricConstants.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED:
+                biometricManagerCode = BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED;
+                break;
             default:
                 Slog.e(BiometricService.TAG, "Unhandled result code: " + biometricConstantsCode);
                 biometricManagerCode = BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE;
                 break;
         }
         return biometricManagerCode;
+    }
+
+    /**
+     * Converts a {@link BiometricPrompt} dismissal reason to an authentication type at the level of
+     * granularity supported by {@link BiometricPrompt.AuthenticationResult}.
+     *
+     * @param reason The reason that the {@link BiometricPrompt} was dismissed. Must be one of:
+     *               {@link BiometricPrompt#DISMISSED_REASON_CREDENTIAL_CONFIRMED},
+     *               {@link BiometricPrompt#DISMISSED_REASON_BIOMETRIC_CONFIRMED}, or
+     *               {@link BiometricPrompt#DISMISSED_REASON_BIOMETRIC_CONFIRM_NOT_REQUIRED}
+     * @return An integer representing the authentication type for {@link
+     *         BiometricPrompt.AuthenticationResult}.
+     * @throws IllegalArgumentException if given an invalid dismissal reason.
+     */
+    public static @AuthenticationResultType int getAuthenticationTypeForResult(int reason) {
+        switch (reason) {
+            case BiometricPrompt.DISMISSED_REASON_CREDENTIAL_CONFIRMED:
+                return BiometricPrompt.AUTHENTICATION_RESULT_TYPE_DEVICE_CREDENTIAL;
+
+            case BiometricPrompt.DISMISSED_REASON_BIOMETRIC_CONFIRMED:
+            case BiometricPrompt.DISMISSED_REASON_BIOMETRIC_CONFIRM_NOT_REQUIRED:
+                return BiometricPrompt.AUTHENTICATION_RESULT_TYPE_BIOMETRIC;
+
+            default:
+                throw new IllegalArgumentException("Unsupported dismissal reason: " + reason);
+        }
+    }
+
+    /**
+     * Converts an {@link IBiometricNativeHandle} to a {@link NativeHandle} by duplicating the
+     * the underlying file descriptors.
+     *
+     * Both the original and new handle must be closed after use.
+     *
+     * @param h {@link IBiometricNativeHandle} received as a binder call argument. Usually used to
+     *          identify a WindowManager window. Can be null.
+     * @return A {@link NativeHandle} representation of {@code h}. Will be null if either {@code h}
+     *          or its contents are null.
+     */
+    public static NativeHandle dupNativeHandle(IBiometricNativeHandle h) {
+        NativeHandle handle = null;
+        if (h != null && h.fds != null && h.ints != null) {
+            FileDescriptor[] fds = new FileDescriptor[h.fds.length];
+            for (int i = 0; i < h.fds.length; ++i) {
+                try {
+                    fds[i] = h.fds[i].dup().getFileDescriptor();
+                } catch (IOException e) {
+                    return null;
+                }
+            }
+            handle = new NativeHandle(fds, h.ints, true /* own */);
+        }
+        return handle;
     }
 }

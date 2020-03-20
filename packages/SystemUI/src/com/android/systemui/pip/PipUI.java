@@ -16,7 +16,6 @@
 
 package com.android.systemui.pip;
 
-import static android.content.pm.PackageManager.FEATURE_LEANBACK_ONLY;
 import static android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE;
 
 import android.content.Context;
@@ -26,7 +25,7 @@ import android.os.UserHandle;
 import android.os.UserManager;
 
 import com.android.systemui.SystemUI;
-import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.shared.recents.IPinnedStackAnimationListener;
 import com.android.systemui.statusbar.CommandQueue;
 
 import java.io.FileDescriptor;
@@ -43,23 +42,20 @@ public class PipUI extends SystemUI implements CommandQueue.Callbacks {
 
     private final CommandQueue mCommandQueue;
     private BasePipManager mPipManager;
-    private final BroadcastDispatcher mBroadcastDispatcher;
-
-    private boolean mSupportsPip;
 
     @Inject
     public PipUI(Context context, CommandQueue commandQueue,
-            BroadcastDispatcher broadcastDispatcher) {
+            BasePipManager pipManager) {
         super(context);
-        mBroadcastDispatcher = broadcastDispatcher;
         mCommandQueue = commandQueue;
+        mPipManager = pipManager;
     }
 
     @Override
     public void start() {
         PackageManager pm = mContext.getPackageManager();
-        mSupportsPip = pm.hasSystemFeature(FEATURE_PICTURE_IN_PICTURE);
-        if (!mSupportsPip) {
+        boolean supportsPip = pm.hasSystemFeature(FEATURE_PICTURE_IN_PICTURE);
+        if (!supportsPip) {
             return;
         }
 
@@ -68,11 +64,6 @@ public class PipUI extends SystemUI implements CommandQueue.Callbacks {
         if (processUser != UserHandle.USER_SYSTEM) {
             throw new IllegalStateException("Non-primary Pip component not currently supported.");
         }
-
-        mPipManager = pm.hasSystemFeature(FEATURE_LEANBACK_ONLY)
-                ? com.android.systemui.pip.tv.PipManager.getInstance()
-                : com.android.systemui.pip.phone.PipManager.getInstance();
-        mPipManager.initialize(mContext, mBroadcastDispatcher);
 
         mCommandQueue.addCallback(this);
     }
@@ -106,6 +97,18 @@ public class PipUI extends SystemUI implements CommandQueue.Callbacks {
         }
 
         mPipManager.setShelfHeight(visible, height);
+    }
+
+    public void setPinnedStackAnimationType(int animationType) {
+        if (mPipManager != null) {
+            mPipManager.setPinnedStackAnimationType(animationType);
+        }
+    }
+
+    public void setPinnedStackAnimationListener(IPinnedStackAnimationListener listener) {
+        if (mPipManager != null) {
+            mPipManager.setPinnedStackAnimationListener(listener);
+        }
     }
 
     @Override

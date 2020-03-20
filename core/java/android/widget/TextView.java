@@ -17,6 +17,7 @@
 package android.widget;
 
 import static android.Manifest.permission.INTERACT_ACROSS_USERS_FULL;
+import static android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY;
 import static android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH;
 import static android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX;
 import static android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY;
@@ -37,11 +38,11 @@ import android.annotation.RequiresPermission;
 import android.annotation.Size;
 import android.annotation.StringRes;
 import android.annotation.StyleRes;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.XmlRes;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.app.assist.AssistStructure;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ClipboardManager;
@@ -727,6 +728,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
     @UnsupportedAppUsage
     private Layout mLayout;
     private boolean mLocalesChanged = false;
+    private int mTextSizeUnit = -1;
 
     // True if setKeyListener() has been explicitly called
     private boolean mListenerChanged = false;
@@ -3842,6 +3844,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
         ColorStateList mTextColorHint = null;
         ColorStateList mTextColorLink = null;
         int mTextSize = -1;
+        int mTextSizeUnit = -1;
         LocaleList mTextLocales = null;
         String mFontFamily = null;
         Typeface mFontTypeface = null;
@@ -3869,6 +3872,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                     + "    mTextColorHint:" + mTextColorHint + "\n"
                     + "    mTextColorLink:" + mTextColorLink + "\n"
                     + "    mTextSize:" + mTextSize + "\n"
+                    + "    mTextSizeUnit:" + mTextSizeUnit + "\n"
                     + "    mTextLocales:" + mTextLocales + "\n"
                     + "    mFontFamily:" + mFontFamily + "\n"
                     + "    mFontTypeface:" + mFontTypeface + "\n"
@@ -3980,6 +3984,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                 case com.android.internal.R.styleable.TextAppearance_textSize:
                     attributes.mTextSize =
                             appearance.getDimensionPixelSize(attr, attributes.mTextSize);
+                    attributes.mTextSizeUnit = appearance.peekValue(attr).getComplexUnit();
                     break;
                 case com.android.internal.R.styleable.TextAppearance_textLocale:
                     final String localeString = appearance.getString(attr);
@@ -4073,6 +4078,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
         }
 
         if (attributes.mTextSize != -1) {
+            mTextSizeUnit = attributes.mTextSizeUnit;
             setRawTextSize(attributes.mTextSize, true /* shouldRequestLayout */);
         }
 
@@ -4295,6 +4301,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
             r = c.getResources();
         }
 
+        mTextSizeUnit = unit;
         setRawTextSize(TypedValue.applyDimension(unit, size, r.getDisplayMetrics()),
                 shouldRequestLayout);
     }
@@ -4312,6 +4319,17 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                 invalidate();
             }
         }
+    }
+
+    /**
+     * Gets the text size unit defined by the developer. It may be specified in resources or be
+     * passed as the unit argument of {@link #setTextSize(int, float)} at runtime.
+     *
+     * @return the dimension type of the text size unit originally defined.
+     * @see TypedValue#TYPE_DIMENSION
+     */
+    public int getTextSizeUnit() {
+        return mTextSizeUnit;
     }
 
     /**
@@ -8282,9 +8300,9 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
         if (getKeyListener() != null && !mSingleLine && mEditor != null
                 && (mEditor.mInputType & EditorInfo.TYPE_MASK_CLASS)
                         == EditorInfo.TYPE_CLASS_TEXT) {
-            int variation = mEditor.mInputType & EditorInfo.TYPE_MASK_VARIATION;
-            if (variation == EditorInfo.TYPE_TEXT_FLAG_IME_MULTI_LINE
-                    || variation == EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE) {
+            int multilineFlags = EditorInfo.TYPE_TEXT_FLAG_IME_MULTI_LINE
+                    | EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE;
+            if ((mEditor.mInputType & multilineFlags) != 0) {
                 return false;
             }
         }
@@ -8668,6 +8686,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                 outAttrs.initialSelStart = getSelectionStart();
                 outAttrs.initialSelEnd = getSelectionEnd();
                 outAttrs.initialCapsMode = ic.getCursorCapsMode(getInputType());
+                outAttrs.setInitialSurroundingText(mText);
                 return ic;
             }
         }
@@ -10870,6 +10889,10 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
         if (mEditor != null) {
             mEditor.onTouchEvent(event);
 
+            if (mEditor.mInsertionPointCursorController != null
+                    && mEditor.mInsertionPointCursorController.isCursorBeingModified()) {
+                return true;
+            }
             if (mEditor.mSelectionModifierCursorController != null
                     && mEditor.mSelectionModifierCursorController.isDragAcceleratorActive()) {
                 return true;
@@ -11736,6 +11759,23 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                 info.setContentInvalid(true);
                 info.setError(mEditor.mError);
             }
+            // TextView will expose this action if it is editable and has focus.
+            if (isTextEditable() && isFocused()) {
+                CharSequence imeActionLabel = mContext.getResources().getString(
+                        com.android.internal.R.string.keyboardview_keycode_enter);
+                if (getImeActionId() != 0 && getImeActionLabel() != null) {
+                    imeActionLabel = getImeActionLabel();
+                    final int imeActionId = getImeActionId();
+                    // put ime action id into the extra data with ACTION_ARGUMENT_IME_ACTION_ID_INT.
+                    final Bundle argument = info.getExtras();
+                    argument.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_IME_ACTION_ID_INT,
+                            imeActionId);
+                }
+                AccessibilityNodeInfo.AccessibilityAction action =
+                        new AccessibilityNodeInfo.AccessibilityAction(
+                                R.id.accessibilityActionImeEnter, imeActionLabel);
+                info.addAction(action);
+            }
         }
 
         if (!TextUtils.isEmpty(mText)) {
@@ -11747,8 +11787,14 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                     | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH
                     | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PAGE);
             info.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION);
-            info.setAvailableExtraData(
-                    Arrays.asList(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY));
+            info.setAvailableExtraData(Arrays.asList(
+                    EXTRA_DATA_RENDERING_INFO_KEY,
+                    EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY
+            ));
+        } else {
+            info.setAvailableExtraData(Arrays.asList(
+                    EXTRA_DATA_RENDERING_INFO_KEY
+            ));
         }
 
         if (isFocused()) {
@@ -11802,11 +11848,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
     @Override
     public void addExtraDataToAccessibilityNodeInfo(
             AccessibilityNodeInfo info, String extraDataKey, Bundle arguments) {
-        // The only extra data we support requires arguments.
-        if (arguments == null) {
-            return;
-        }
-        if (extraDataKey.equals(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)) {
+        if (arguments != null && extraDataKey.equals(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)) {
             int positionInfoStartIndex = arguments.getInt(
                     EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, -1);
             int positionInfoLength = arguments.getInt(
@@ -11834,6 +11876,15 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                 }
             }
             info.getExtras().putParcelableArray(extraDataKey, boundingRects);
+            return;
+        }
+        if (extraDataKey.equals(AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY)) {
+            final AccessibilityNodeInfo.ExtraRenderingInfo extraRenderingInfo =
+                    AccessibilityNodeInfo.ExtraRenderingInfo.obtain();
+            extraRenderingInfo.setLayoutParams(getLayoutParams().width, getLayoutParams().height);
+            extraRenderingInfo.setTextSizeInPx(getTextSize());
+            extraRenderingInfo.setTextSizeUnit(getTextSizeUnit());
+            info.setExtraRenderingInfo(extraRenderingInfo);
         }
     }
 
@@ -12044,6 +12095,17 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
                     int updatedTextLength = mText.length();
                     if (updatedTextLength > 0) {
                         Selection.setSelection(mSpannable, updatedTextLength);
+                    }
+                }
+            } return true;
+            case R.id.accessibilityActionImeEnter: {
+                if (isFocused() && isTextEditable()) {
+                    final int imeActionId = (arguments != null) ? arguments.getInt(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_IME_ACTION_ID_INT,
+                            EditorInfo.IME_ACTION_UNSPECIFIED)
+                            : EditorInfo.IME_ACTION_UNSPECIFIED;
+                    if (imeActionId == getImeActionId()) {
+                        onEditorAction(imeActionId);
                     }
                 }
             } return true;
@@ -13112,7 +13174,7 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
         stream.addProperty("text:selectionStart", getSelectionStart());
         stream.addProperty("text:selectionEnd", getSelectionEnd());
         stream.addProperty("text:curTextColor", mCurTextColor);
-        stream.addProperty("text:text", mText == null ? null : mText.toString());
+        stream.addUserProperty("text:text", mText == null ? null : mText.toString());
         stream.addProperty("text:gravity", mGravity);
     }
 

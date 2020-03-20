@@ -18,6 +18,7 @@
 package android.app;
 
 import android.app.ITransientNotification;
+import android.app.ITransientNotificationCallback;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationChannelGroup;
@@ -45,13 +46,12 @@ interface INotificationManager
     void cancelAllNotifications(String pkg, int userId);
 
     void clearData(String pkg, int uid, boolean fromApp);
-    // TODO: Replace parameter (ITransientNotification callback) with (CharSequence text)
-    void enqueueTextToast(String pkg, ITransientNotification callback, int duration, int displayId);
-    @UnsupportedAppUsage
-    void enqueueToast(String pkg, ITransientNotification callback, int duration, int displayId);
-    @UnsupportedAppUsage
-    void cancelToast(String pkg, ITransientNotification callback);
-    void finishToken(String pkg, ITransientNotification callback);
+    void enqueueTextToast(String pkg, IBinder token, CharSequence text, int duration, int displayId, @nullable ITransientNotificationCallback callback);
+    void enqueueToast(String pkg, IBinder token, ITransientNotification callback, int duration, int displayId);
+    // TODO(b/144152069): Remove this after assessing impact on dogfood.
+    void enqueueTextOrCustomToast(String pkg, IBinder token, ITransientNotification callback, int duration, int displayId, boolean isCustom);
+    void cancelToast(String pkg, IBinder token);
+    void finishToken(String pkg, IBinder token);
 
     void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id,
             in Notification notification, int userId);
@@ -88,14 +88,19 @@ interface INotificationManager
     void createNotificationChannelGroups(String pkg, in ParceledListSlice channelGroupList);
     void createNotificationChannels(String pkg, in ParceledListSlice channelsList);
     void createNotificationChannelsForPackage(String pkg, int uid, in ParceledListSlice channelsList);
+    ParceledListSlice getConversations(boolean onlyImportant);
+    ParceledListSlice getConversationsForPackage(String pkg, int uid);
     ParceledListSlice getNotificationChannelGroupsForPackage(String pkg, int uid, boolean includeDeleted);
     NotificationChannelGroup getNotificationChannelGroupForPackage(String groupId, String pkg, int uid);
     NotificationChannelGroup getPopulatedNotificationChannelGroupForPackage(String pkg, int uid, String groupId, boolean includeDeleted);
     void updateNotificationChannelGroupForPackage(String pkg, int uid, in NotificationChannelGroup group);
     void updateNotificationChannelForPackage(String pkg, int uid, in NotificationChannel channel);
     NotificationChannel getNotificationChannel(String callingPkg, int userId, String pkg, String channelId);
-    NotificationChannel getNotificationChannelForPackage(String pkg, int uid, String channelId, boolean includeDeleted);
+    NotificationChannel getConversationNotificationChannel(String callingPkg, int userId, String pkg, String channelId, boolean returnParentIfNoConversationChannel, String conversationId);
+    void createConversationNotificationChannelForPackage(String pkg, int uid, String triggeringKey, in NotificationChannel parentChannel, String conversationId);
+    NotificationChannel getNotificationChannelForPackage(String pkg, int uid, String channelId, String conversationId, boolean includeDeleted);
     void deleteNotificationChannel(String pkg, String channelId);
+    void deleteConversationNotificationChannels(String pkg, int uid, String conversationId);
     ParceledListSlice getNotificationChannels(String callingPkg, String targetPkg, int userId);
     ParceledListSlice getNotificationChannelsForPackage(String pkg, int uid, boolean includeDeleted);
     int getNumNotificationChannelsForPackage(String pkg, int uid, boolean includeDeleted);
@@ -110,6 +115,7 @@ interface INotificationManager
     int getAppsBypassingDndCount(int uid);
     ParceledListSlice getNotificationChannelsBypassingDnd(String pkg, int userId);
     boolean isPackagePaused(String pkg);
+    void deleteNotificationHistoryItem(String pkg, int uid, long postedTime);
 
     void silenceNotificationSound();
 
@@ -118,7 +124,7 @@ interface INotificationManager
     @UnsupportedAppUsage
     StatusBarNotification[] getActiveNotifications(String callingPkg);
     @UnsupportedAppUsage
-    StatusBarNotification[] getHistoricalNotifications(String callingPkg, int count);
+    StatusBarNotification[] getHistoricalNotifications(String callingPkg, int count, boolean includeSnoozed);
 
     NotificationHistory getNotificationHistory(String callingPkg);
 
@@ -157,6 +163,7 @@ interface INotificationManager
     void applyAdjustmentFromAssistant(in INotificationListener token, in Adjustment adjustment);
     void applyAdjustmentsFromAssistant(in INotificationListener token, in List<Adjustment> adjustments);
     void unsnoozeNotificationFromAssistant(in INotificationListener token, String key);
+    void unsnoozeNotificationFromSystemListener(in INotificationListener token, String key);
 
     ComponentName getEffectsSuppressor();
     boolean matchesCallFilter(in Bundle extras);

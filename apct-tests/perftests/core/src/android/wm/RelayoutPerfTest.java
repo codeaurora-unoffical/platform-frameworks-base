@@ -20,6 +20,7 @@ import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentat
 
 import android.app.Activity;
 import android.content.Context;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.os.RemoteException;
 import android.perftests.utils.BenchmarkState;
@@ -124,7 +125,9 @@ public class RelayoutPerfTest extends WindowManagerPerfTestBase {
         final WindowManager.LayoutParams mParams;
         final int mWidth;
         final int mHeight;
+        final Point mOutSurfaceSize = new Point();
         final SurfaceControl mOutSurfaceControl;
+        final SurfaceControl mOutBlastSurfaceControl = new SurfaceControl();
 
         final IntSupplier mViewVisibility;
 
@@ -149,7 +152,8 @@ public class RelayoutPerfTest extends WindowManagerPerfTestBase {
                         mViewVisibility.getAsInt(), mFlags, mFrameNumber, mOutFrame,
                         mOutContentInsets, mOutVisibleInsets, mOutStableInsets,
                         mOutBackDropFrame, mOutDisplayCutout, mOutMergedConfiguration,
-                        mOutSurfaceControl, mOutInsetsState);
+                        mOutSurfaceControl, mOutInsetsState, mOutSurfaceSize,
+                        mOutBlastSurfaceControl);
             }
         }
     }

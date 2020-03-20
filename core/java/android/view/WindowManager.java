@@ -66,9 +66,9 @@ import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.KeyguardManager;
 import android.app.Presentation;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.graphics.PixelFormat;
@@ -80,6 +80,7 @@ import android.os.Parcelable;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.proto.ProtoOutputStream;
+import android.view.View.OnApplyWindowInsetsListener;
 import android.view.WindowInsets.Side;
 import android.view.WindowInsets.Side.InsetsSide;
 import android.view.WindowInsets.Type;
@@ -421,7 +422,9 @@ public interface WindowManager extends ViewManager {
      * </p>
      *
      * @return The display that this window manager is managing.
+     * @deprecated Use {@link Context#getDisplay()} instead.
      */
+    @Deprecated
     public Display getDefaultDisplay();
 
     /**
@@ -433,6 +436,49 @@ public interface WindowManager extends ViewManager {
      * @param view The view to be removed.
      */
     public void removeViewImmediate(View view);
+
+    /**
+     * Returns the {@link WindowMetrics} according to the current system state.
+     * <p>
+     * The metrics describe the size of the area the window would occupy with
+     * {@link LayoutParams#MATCH_PARENT MATCH_PARENT} width and height, and the {@link WindowInsets}
+     * such a window would have.
+     * <p>
+     * The value of this is based on the <b>current</b> windowing state of the system.
+     *
+     * For example, for activities in multi-window mode, the metrics returned are based on the
+     * current bounds that the user has selected for the {@link android.app.Activity Activity}'s
+     * task.
+     *
+     * @see #getMaximumWindowMetrics()
+     * @see WindowMetrics
+     */
+    default @NonNull WindowMetrics getCurrentWindowMetrics() {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Returns the largest {@link WindowMetrics} an app may expect in the current system state.
+     * <p>
+     * The metrics describe the size of the largest potential area the window might occupy with
+     * {@link LayoutParams#MATCH_PARENT MATCH_PARENT} width and height, and the {@link WindowInsets}
+     * such a window would have.
+     * <p>
+     * The value of this is based on the largest <b>potential</b> windowing state of the system.
+     *
+     * For example, for activities in multi-window mode, the metrics returned are based on the
+     * what the bounds would be if the user expanded the {@link android.app.Activity Activity}'s
+     * task to cover the entire screen.
+     *
+     * Note that this might still be smaller than the size of the physical display if certain areas
+     * of the display are not available to windows created in this {@link Context}.
+     *
+     * @see #getMaximumWindowMetrics()
+     * @see WindowMetrics
+     */
+    default @NonNull WindowMetrics getMaximumWindowMetrics() {
+        throw new UnsupportedOperationException();
+    }
 
     /**
      * Used to asynchronously request Keyboard Shortcuts from the focused window.
@@ -452,13 +498,48 @@ public interface WindowManager extends ViewManager {
      * Message for taking fullscreen screenshot
      * @hide
      */
-    final int TAKE_SCREENSHOT_FULLSCREEN = 1;
+    int TAKE_SCREENSHOT_FULLSCREEN = 1;
 
     /**
      * Message for taking screenshot of selected region.
      * @hide
      */
-    final int TAKE_SCREENSHOT_SELECTED_REGION = 2;
+    int TAKE_SCREENSHOT_SELECTED_REGION = 2;
+
+    /**
+     * Message for handling a screenshot flow with an image provided by the caller.
+     * @hide
+     */
+    int TAKE_SCREENSHOT_PROVIDED_IMAGE = 3;
+
+    /**
+     * Parcel key for the screen shot bitmap sent with messages of type
+     * {@link #TAKE_SCREENSHOT_PROVIDED_IMAGE}, type {@link android.graphics.Bitmap}
+     * @hide
+     */
+    String PARCEL_KEY_SCREENSHOT_BITMAP = "screenshot_screen_bitmap";
+
+    /**
+     * Parcel key for the screen bounds of the image sent with messages of type
+     * [@link {@link #TAKE_SCREENSHOT_PROVIDED_IMAGE}], type {@link Rect} in screen coordinates.
+     * @hide
+     */
+    String PARCEL_KEY_SCREENSHOT_BOUNDS = "screenshot_screen_bounds";
+
+    /**
+     * Parcel key for the task id of the task that the screen shot was taken of, sent with messages
+     * of type [@link {@link #TAKE_SCREENSHOT_PROVIDED_IMAGE}], type int.
+     * @hide
+     */
+    String PARCEL_KEY_SCREENSHOT_TASK_ID = "screenshot_task_id";
+
+    /**
+     * Parcel key for the visible insets of the image sent with messages of type
+     * [@link {@link #TAKE_SCREENSHOT_PROVIDED_IMAGE}], type {@link android.graphics.Insets} in
+     * screen coordinates.
+     * @hide
+     */
+    String PARCEL_KEY_SCREENSHOT_INSETS = "screenshot_insets";
 
     /**
      * @hide
@@ -945,7 +1026,11 @@ public interface WindowManager extends ViewManager {
         /**
          * Window type: panel that slides out from over the status bar
          * In multiuser systems shows on all users' windows.
+         *
+         * @deprecated This became API by accident and was never intended to be used for
+         * applications.
          */
+        @Deprecated
         public static final int TYPE_STATUS_BAR_PANEL   = FIRST_SYSTEM_WINDOW+14;
 
         /**
@@ -1131,6 +1216,23 @@ public interface WindowManager extends ViewManager {
         public static final int TYPE_ACCESSIBILITY_MAGNIFICATION_OVERLAY = FIRST_SYSTEM_WINDOW + 39;
 
         /**
+         * Window type: the notification shade and keyguard. There can be only one status bar
+         * window; it is placed at the top of the screen, and all other
+         * windows are shifted down so they are below it.
+         * In multiuser systems shows on all users' windows.
+         * @hide
+         */
+        public static final int TYPE_NOTIFICATION_SHADE = FIRST_SYSTEM_WINDOW + 40;
+
+        /**
+         * Window type: used to show the status bar in non conventional parts of the screen (i.e.
+         * the left or the bottom of the screen).
+         * In multiuser systems shows on all users' windows.
+         * @hide
+         */
+        public static final int TYPE_STATUS_BAR_ADDITIONAL = FIRST_SYSTEM_WINDOW + 41;
+
+        /**
          * End of types of system windows.
          */
         public static final int LAST_SYSTEM_WINDOW      = 2999;
@@ -1234,11 +1336,9 @@ public interface WindowManager extends ViewManager {
          *  the device's screen turned on and bright. */
         public static final int FLAG_KEEP_SCREEN_ON     = 0x00000080;
 
-        /** Window flag: place the window within the entire screen, ignoring
-         *  decorations around the border (such as the status bar).  The
-         *  window must correctly position its contents to take the screen
-         *  decoration into account.  This flag is normally set for you
-         *  by Window as described in {@link Window#setFlags}.
+        /**
+         * Window flag for attached windows: Place the window within the entire screen, ignoring
+         * any constraints from the parent window.
          *
          *  <p>Note: on displays that have a {@link DisplayCutout}, the window may be placed
          *  such that it avoids the {@link DisplayCutout} area if necessary according to the
@@ -1268,11 +1368,21 @@ public interface WindowManager extends ViewManager {
          * {@link android.R.style#Theme_Holo_Light_NoActionBar_Fullscreen},
          * {@link android.R.style#Theme_DeviceDefault_NoActionBar_Fullscreen}, and
          * {@link android.R.style#Theme_DeviceDefault_Light_NoActionBar_Fullscreen}.</p>
+         *
+         * @deprecated Use {@link WindowInsetsController#hide(int)} with {@link Type#statusBars()}
+         * instead.
          */
+        @Deprecated
         public static final int FLAG_FULLSCREEN      = 0x00000400;
 
-        /** Window flag: override {@link #FLAG_FULLSCREEN} and force the
-         *  screen decorations (such as the status bar) to be shown. */
+        /**
+         * Window flag: override {@link #FLAG_FULLSCREEN} and force the
+         * screen decorations (such as the status bar) to be shown.
+         *
+         * @deprecated This value became API "by accident", and shouldn't be used by 3rd party
+         * applications.
+         */
+        @Deprecated
         public static final int FLAG_FORCE_NOT_FULLSCREEN   = 0x00000800;
 
         /** Window flag: turn on dithering when compositing this window to
@@ -1304,13 +1414,18 @@ public interface WindowManager extends ViewManager {
          * until the finger is released. */
         public static final int FLAG_IGNORE_CHEEK_PRESSES    = 0x00008000;
 
-        /** Window flag: a special option only for use in combination with
+        /**
+         * Window flag: a special option only for use in combination with
          * {@link #FLAG_LAYOUT_IN_SCREEN}.  When requesting layout in the
          * screen your window may appear on top of or behind screen decorations
          * such as the status bar.  By also including this flag, the window
          * manager will report the inset rectangle needed to ensure your
          * content is not covered by screen decorations.  This flag is normally
-         * set for you by Window as described in {@link Window#setFlags}.*/
+         * set for you by Window as described in {@link Window#setFlags}
+         *
+         * @deprecated Insets will always be delivered to your application.
+         */
+        @Deprecated
         public static final int FLAG_LAYOUT_INSET_DECOR = 0x00010000;
 
         /** Window flag: When set, input method can't interact with the focusable window
@@ -1472,7 +1587,7 @@ public interface WindowManager extends ViewManager {
          *
          * {@sample development/samples/ApiDemos/res/layout/overscan_activity.xml complete}
          *
-         * @deprecated Overscan areas aren't set by any Android product anymore.
+         * @deprecated Overscan areas aren't set by any Android product anymore as of Android 11.
          */
         @Deprecated
         public static final int FLAG_LAYOUT_IN_OVERSCAN = 0x02000000;
@@ -1496,7 +1611,11 @@ public interface WindowManager extends ViewManager {
          *
          * <p>Note: For devices that support
          * {@link android.content.pm.PackageManager#FEATURE_AUTOMOTIVE} this flag may be ignored.
+         *
+         * @deprecated Use {@link Window#setStatusBarColor(int)} with a half-translucent color
+         * instead.
          */
+        @Deprecated
         public static final int FLAG_TRANSLUCENT_STATUS = 0x04000000;
 
         /**
@@ -1519,7 +1638,11 @@ public interface WindowManager extends ViewManager {
          * <p>Note: For devices that support
          * {@link android.content.pm.PackageManager#FEATURE_AUTOMOTIVE} this flag can be disabled
          * by the car manufacturers.
+         *
+         * @deprecated Use {@link Window#setNavigationBarColor(int)} with a half-translucent color
+         * instead.
          */
+        @Deprecated
         public static final int FLAG_TRANSLUCENT_NAVIGATION = 0x08000000;
 
         /**
@@ -1549,7 +1672,11 @@ public interface WindowManager extends ViewManager {
          * overlap with the screen decorations of the parent window such as the navigation bar. By
          * including this flag, the window manager will layout the attached window within the decor
          * frame of the parent window such that it doesn't overlap with screen decorations.
+         *
+         * @deprecated Use {@link #setFitInsetsTypes(int)} to determine whether the attached
+         * window will overlap with system bars.
          */
+        @Deprecated
         public static final int FLAG_LAYOUT_ATTACHED_IN_DECOR = 0x40000000;
 
         /**
@@ -1732,14 +1859,6 @@ public interface WindowManager extends ViewManager {
         public static final int PRIVATE_FLAG_SYSTEM_ERROR = 0x00000100;
 
         /**
-         * Flag whether the current window is a keyguard window, meaning that it will hide all other
-         * windows behind it except for windows with flag {@link #FLAG_SHOW_WHEN_LOCKED} set.
-         * Further, this can only be set by {@link LayoutParams#TYPE_STATUS_BAR}.
-         * {@hide}
-         */
-        public static final int PRIVATE_FLAG_KEYGUARD = 0x00000400;
-
-        /**
          * Flag that prevents the wallpaper behind the current window from receiving touch events.
          *
          * {@hide}
@@ -1748,12 +1867,12 @@ public interface WindowManager extends ViewManager {
 
         /**
          * Flag to force the status bar window to be visible all the time. If the bar is hidden when
-         * this flag is set it will be shown again and the bar will have a transparent background.
+         * this flag is set it will be shown again.
          * This can only be set by {@link LayoutParams#TYPE_STATUS_BAR}.
          *
          * {@hide}
          */
-        public static final int PRIVATE_FLAG_FORCE_STATUS_BAR_VISIBLE_TRANSPARENT = 0x00001000;
+        public static final int PRIVATE_FLAG_FORCE_SHOW_STATUS_BAR = 0x00001000;
 
         /**
          * Flag indicating that the x, y, width, and height members should be
@@ -1856,18 +1975,25 @@ public interface WindowManager extends ViewManager {
         public static final int PRIVATE_FLAG_USE_BLAST = 0x02000000;
 
         /**
+         * Flag to indicate that the window is controlling the appearance of system bars. So we
+         * don't need to adjust it by reading its system UI flags for compatibility.
+         * @hide
+         */
+        public static final int PRIVATE_FLAG_APPEARANCE_CONTROLLED = 0x04000000;
+
+        /**
+         * Flag to indicate that the window is controlling the behavior of system bars. So we don't
+         * need to adjust it by reading its window flags or system UI flags for compatibility.
+         * @hide
+         */
+        public static final int PRIVATE_FLAG_BEHAVIOR_CONTROLLED = 0x08000000;
+
+        /**
          * Flag to indicate that the window is controlling how it fits window insets on its own.
          * So we don't need to adjust its attributes for fitting window insets.
          * @hide
          */
-        public static final int PRIVATE_FLAG_FIT_INSETS_CONTROLLED = 0x04000000;
-
-        /**
-         * Flag to indicate that the window only draws the bottom bar background so that we don't
-         * extend it to system bar areas at other sides.
-         * @hide
-         */
-        public static final int PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND = 0x08000000;
+        public static final int PRIVATE_FLAG_FIT_INSETS_CONTROLLED = 0x10000000;
 
         /**
          * An internal annotation for flags that can be specified to {@link #softInputMode}.
@@ -1917,17 +2043,13 @@ public interface WindowManager extends ViewManager {
                         equals = PRIVATE_FLAG_SYSTEM_ERROR,
                         name = "SYSTEM_ERROR"),
                 @ViewDebug.FlagToString(
-                        mask = PRIVATE_FLAG_KEYGUARD,
-                        equals = PRIVATE_FLAG_KEYGUARD,
-                        name = "KEYGUARD"),
-                @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_DISABLE_WALLPAPER_TOUCH_EVENTS,
                         equals = PRIVATE_FLAG_DISABLE_WALLPAPER_TOUCH_EVENTS,
                         name = "DISABLE_WALLPAPER_TOUCH_EVENTS"),
                 @ViewDebug.FlagToString(
-                        mask = PRIVATE_FLAG_FORCE_STATUS_BAR_VISIBLE_TRANSPARENT,
-                        equals = PRIVATE_FLAG_FORCE_STATUS_BAR_VISIBLE_TRANSPARENT,
-                        name = "FORCE_STATUS_BAR_VISIBLE_TRANSPARENT"),
+                        mask = PRIVATE_FLAG_FORCE_SHOW_STATUS_BAR,
+                        equals = PRIVATE_FLAG_FORCE_SHOW_STATUS_BAR,
+                        name = "FORCE_STATUS_BAR_VISIBLE"),
                 @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_PRESERVE_GEOMETRY,
                         equals = PRIVATE_FLAG_PRESERVE_GEOMETRY,
@@ -1973,13 +2095,17 @@ public interface WindowManager extends ViewManager {
                         equals = PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC,
                         name = "COLOR_SPACE_AGNOSTIC"),
                 @ViewDebug.FlagToString(
+                        mask = PRIVATE_FLAG_APPEARANCE_CONTROLLED,
+                        equals = PRIVATE_FLAG_APPEARANCE_CONTROLLED,
+                        name = "APPEARANCE_CONTROLLED"),
+                @ViewDebug.FlagToString(
+                        mask = PRIVATE_FLAG_BEHAVIOR_CONTROLLED,
+                        equals = PRIVATE_FLAG_BEHAVIOR_CONTROLLED,
+                        name = "BEHAVIOR_CONTROLLED"),
+                @ViewDebug.FlagToString(
                         mask = PRIVATE_FLAG_FIT_INSETS_CONTROLLED,
                         equals = PRIVATE_FLAG_FIT_INSETS_CONTROLLED,
-                        name = "FIT_INSETS_CONTROLLED"),
-                @ViewDebug.FlagToString(
-                        mask = PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND,
-                        equals = PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND,
-                        name = "ONLY_DRAW_BOTTOM_BAR_BACKGROUND")
+                        name = "FIT_INSETS_CONTROLLED")
         })
         @TestApi
         public int privateFlags;
@@ -2079,7 +2205,12 @@ public interface WindowManager extends ViewManager {
          * layout parameter flags include {@link #FLAG_FULLSCREEN}, this
          * value for {@link #softInputMode} will be ignored; the window will
          * not resize, but will stay fullscreen.
+         *
+         * @deprecated Call {@link Window#setDecorFitsSystemWindows(boolean)} with {@code false} and
+         * install an {@link OnApplyWindowInsetsListener} on your root content view that fits insets
+         * of type {@link Type#ime()}.
          */
+        @Deprecated
         public static final int SOFT_INPUT_ADJUST_RESIZE = 0x10;
 
         /** Adjustment option for {@link #softInputMode}: set to have a window
@@ -2342,6 +2473,7 @@ public interface WindowManager extends ViewManager {
          * {@link android.content.pm.ActivityInfo#SCREEN_ORIENTATION_UNSPECIFIED}
          * will be used.
          */
+        @ActivityInfo.ScreenOrientation
         public int screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
 
         /**
@@ -2374,7 +2506,11 @@ public interface WindowManager extends ViewManager {
          *
          * @see View#STATUS_BAR_VISIBLE
          * @see View#STATUS_BAR_HIDDEN
+         *
+         * @deprecated SystemUiVisibility flags are deprecated. Use {@link WindowInsetsController}
+         * instead.
          */
+        @Deprecated
         public int systemUiVisibility;
 
         /**
@@ -2402,7 +2538,8 @@ public interface WindowManager extends ViewManager {
                 flag = true,
                 value = {LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT,
                         LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES,
-                        LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER})
+                        LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER,
+                        LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS})
         @interface LayoutInDisplayCutoutMode {}
 
         /**
@@ -2414,6 +2551,7 @@ public interface WindowManager extends ViewManager {
          * @see #LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
          * @see #LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
          * @see #LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+         * @see #LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
          * @see DisplayCutout
          * @see android.R.attr#windowLayoutInDisplayCutoutMode
          *         android:windowLayoutInDisplayCutoutMode
@@ -2445,13 +2583,6 @@ public interface WindowManager extends ViewManager {
          *         android:windowLayoutInDisplayCutoutMode
          */
         public static final int LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT = 0;
-
-        /**
-         * @deprecated use {@link #LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES}
-         * @hide
-         */
-        @Deprecated
-        public static final int LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS = 1;
 
         /**
          * The window is always allowed to extend into the {@link DisplayCutout} areas on the short
@@ -2516,6 +2647,25 @@ public interface WindowManager extends ViewManager {
          */
         public static final int LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER = 2;
 
+        /**
+         * The window is always allowed to extend into the {@link DisplayCutout} areas on the all
+         * edges of the screen.
+         *
+         * <p>
+         * The window must make sure that no important content overlaps with the
+         * {@link DisplayCutout}.
+         *
+         * <p>
+         * In this mode, the window extends under cutouts on the all edges of the display in both
+         * portrait and landscape, regardless of whether the window is hiding the system bars.
+         *
+         * @see DisplayCutout
+         * @see WindowInsets#getDisplayCutout()
+         * @see #layoutInDisplayCutoutMode
+         * @see android.R.attr#windowLayoutInDisplayCutoutMode
+         *         android:windowLayoutInDisplayCutoutMode
+         */
+        public static final int LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS = 3;
 
         /**
          * When this window has focus, disable touch pad pointer gesture processing.
@@ -2607,6 +2757,33 @@ public interface WindowManager extends ViewManager {
         public long hideTimeoutMilliseconds = -1;
 
         /**
+         * Indicates whether this window wants the connected display to do minimal post processing
+         * on the produced image or video frames. This will only be requested if the window is
+         * visible on the screen.
+         *
+         * <p>This setting should be used when low latency has a higher priority than image
+         * enhancement processing (e.g. for games or video conferencing).
+         *
+         * <p>If the Display sink is connected via HDMI, the device will begin to send infoframes
+         * with Auto Low Latency Mode enabled and Game Content Type. This will switch the connected
+         * display to a minimal image processing mode (if available), which reduces latency,
+         * improving the user experience for gaming or video conferencing applications. For more
+         * information, see HDMI 2.1 specification.
+         *
+         * <p>If the Display sink has an internal connection or uses some other protocol than HDMI,
+         * effects may be similar but implementation-defined.
+         *
+         * <p>The ability to switch to a mode with minimal post proessing may be disabled by a user
+         * setting in the system settings menu. In that case, this field is ignored and the display
+         * will remain in its current mode.
+         *
+         * @see android.content.pm.ActivityInfo#FLAG_PREFER_MINIMAL_POST_PROCESSING
+         * @see android.view.Display#isMinimalPostProcessingSupported
+         * @see android.view.Window#setPreferMinimalPostProcessing
+         */
+        public boolean preferMinimalPostProcessing = false;
+
+        /**
          * The color mode requested by this window. The target display may
          * not be able to honor the request. When the color mode is not set
          * to {@link ActivityInfo#COLOR_MODE_DEFAULT}, it might override the
@@ -2659,7 +2836,7 @@ public interface WindowManager extends ViewManager {
                         equals = WINDOW_DECOR,
                         name = "WINDOW_DECOR")
         })
-        private @InsetsType int mFitWindowInsetsTypes = Type.systemBars();
+        private @InsetsType int mFitInsetsTypes = Type.systemBars();
 
         @ViewDebug.ExportedProperty(flagMapping = {
                 @ViewDebug.FlagToString(
@@ -2679,19 +2856,18 @@ public interface WindowManager extends ViewManager {
                         equals = BOTTOM,
                         name = "BOTTOM")
         })
-        private @InsetsSide int mFitWindowInsetsSides = Side.all();
+        private @InsetsSide int mFitInsetsSides = Side.all();
 
-        private boolean mFitIgnoreVisibility = false;
+        private boolean mFitInsetsIgnoringVisibility = false;
 
         /**
          * Specifies types of insets that this window should avoid overlapping during layout.
          *
          * @param types which types of insets that this window should avoid. The initial value of
          *              this object includes all system bars.
-         * @hide pending unhide
          */
-        public void setFitWindowInsetsTypes(@InsetsType int types) {
-            mFitWindowInsetsTypes = types;
+        public void setFitInsetsTypes(@InsetsType int types) {
+            mFitInsetsTypes = types;
             privateFlags |= PRIVATE_FLAG_FIT_INSETS_CONTROLLED;
         }
 
@@ -2700,10 +2876,9 @@ public interface WindowManager extends ViewManager {
          *
          * @param sides which sides that this window should avoid overlapping with the types
          *              specified. The initial value of this object includes all sides.
-         * @hide pending unhide
          */
-        public void setFitWindowInsetsSides(@InsetsSide int sides) {
-            mFitWindowInsetsSides = sides;
+        public void setFitInsetsSides(@InsetsSide int sides) {
+            mFitInsetsSides = sides;
             privateFlags |= PRIVATE_FLAG_FIT_INSETS_CONTROLLED;
         }
 
@@ -2711,36 +2886,32 @@ public interface WindowManager extends ViewManager {
          * Specifies if this window should fit the window insets no matter they are visible or not.
          *
          * @param ignore if true, this window will fit the given types even if they are not visible.
-         * @hide pending unhide
          */
-        public void setFitIgnoreVisibility(boolean ignore) {
-            mFitIgnoreVisibility = ignore;
+        public void setFitInsetsIgnoringVisibility(boolean ignore) {
+            mFitInsetsIgnoringVisibility = ignore;
             privateFlags |= PRIVATE_FLAG_FIT_INSETS_CONTROLLED;
         }
 
         /**
          * @return the insets types that this window is avoiding overlapping.
-         * @hide pending unhide
          */
-        public @InsetsType int getFitWindowInsetsTypes() {
-            return mFitWindowInsetsTypes;
+        public @InsetsType int getFitInsetsTypes() {
+            return mFitInsetsTypes;
         }
 
         /**
          * @return the sides that this window is avoiding overlapping.
-         * @hide pending unhide
          */
-        public @InsetsSide int getFitWindowInsetsSides() {
-            return mFitWindowInsetsSides;
+        public @InsetsSide int getFitInsetsSides() {
+            return mFitInsetsSides;
         }
 
         /**
          * @return {@code true} if this window fits the window insets no matter they are visible or
          *         not.
-         * @hide pending unhide
          */
-        public boolean getFitIgnoreVisibility() {
-            return mFitIgnoreVisibility;
+        public boolean isFitInsetsIgnoringVisibility() {
+            return mFitInsetsIgnoringVisibility;
         }
 
         public LayoutParams() {
@@ -2906,9 +3077,10 @@ public interface WindowManager extends ViewManager {
             out.writeLong(hideTimeoutMilliseconds);
             out.writeInt(insetsFlags.appearance);
             out.writeInt(insetsFlags.behavior);
-            out.writeInt(mFitWindowInsetsTypes);
-            out.writeInt(mFitWindowInsetsSides);
-            out.writeBoolean(mFitIgnoreVisibility);
+            out.writeInt(mFitInsetsTypes);
+            out.writeInt(mFitInsetsSides);
+            out.writeBoolean(mFitInsetsIgnoringVisibility);
+            out.writeBoolean(preferMinimalPostProcessing);
         }
 
         public static final @android.annotation.NonNull Parcelable.Creator<LayoutParams> CREATOR
@@ -2966,9 +3138,10 @@ public interface WindowManager extends ViewManager {
             hideTimeoutMilliseconds = in.readLong();
             insetsFlags.appearance = in.readInt();
             insetsFlags.behavior = in.readInt();
-            mFitWindowInsetsTypes = in.readInt();
-            mFitWindowInsetsSides = in.readInt();
-            mFitIgnoreVisibility = in.readBoolean();
+            mFitInsetsTypes = in.readInt();
+            mFitInsetsSides = in.readInt();
+            mFitInsetsIgnoringVisibility = in.readBoolean();
+            preferMinimalPostProcessing = in.readBoolean();
         }
 
         @SuppressWarnings({"PointlessBitwiseExpression"})
@@ -3014,6 +3187,8 @@ public interface WindowManager extends ViewManager {
         public static final int COLOR_MODE_CHANGED = 1 << 26;
         /** {@hide} */
         public static final int INSET_FLAGS_CHANGED = 1 << 27;
+        /** {@hide} */
+        public static final int MINIMAL_POST_PROCESSING_PREFERENCE_CHANGED = 1 << 28;
 
         // internal buffer to backup/restore parameters under compatibility mode.
         private int[] mCompatibilityParamsBackup = null;
@@ -3194,6 +3369,11 @@ public interface WindowManager extends ViewManager {
                 changes |= COLOR_MODE_CHANGED;
             }
 
+            if (preferMinimalPostProcessing != o.preferMinimalPostProcessing) {
+                preferMinimalPostProcessing = o.preferMinimalPostProcessing;
+                changes |= MINIMAL_POST_PROCESSING_PREFERENCE_CHANGED;
+            }
+
             // This can't change, it's only set at window creation time.
             hideTimeoutMilliseconds = o.hideTimeoutMilliseconds;
 
@@ -3207,18 +3387,18 @@ public interface WindowManager extends ViewManager {
                 changes |= INSET_FLAGS_CHANGED;
             }
 
-            if (mFitWindowInsetsTypes != o.mFitWindowInsetsTypes) {
-                mFitWindowInsetsTypes = o.mFitWindowInsetsTypes;
+            if (mFitInsetsTypes != o.mFitInsetsTypes) {
+                mFitInsetsTypes = o.mFitInsetsTypes;
                 changes |= LAYOUT_CHANGED;
             }
 
-            if (mFitWindowInsetsSides != o.mFitWindowInsetsSides) {
-                mFitWindowInsetsSides = o.mFitWindowInsetsSides;
+            if (mFitInsetsSides != o.mFitInsetsSides) {
+                mFitInsetsSides = o.mFitInsetsSides;
                 changes |= LAYOUT_CHANGED;
             }
 
-            if (mFitIgnoreVisibility != o.mFitIgnoreVisibility) {
-                mFitIgnoreVisibility = o.mFitIgnoreVisibility;
+            if (mFitInsetsIgnoringVisibility != o.mFitInsetsIgnoringVisibility) {
+                mFitInsetsIgnoringVisibility = o.mFitInsetsIgnoringVisibility;
                 changes |= LAYOUT_CHANGED;
             }
 
@@ -3348,6 +3528,10 @@ public interface WindowManager extends ViewManager {
             if (mColorMode != COLOR_MODE_DEFAULT) {
                 sb.append(" colorMode=").append(ActivityInfo.colorModeToString(mColorMode));
             }
+            if (preferMinimalPostProcessing) {
+                sb.append(" preferMinimalPostProcessing=");
+                sb.append(preferMinimalPostProcessing);
+            }
             sb.append(System.lineSeparator());
             sb.append(prefix).append("  fl=").append(
                     ViewDebug.flagsToString(LayoutParams.class, "flags", flags));
@@ -3376,17 +3560,17 @@ public interface WindowManager extends ViewManager {
                 sb.append(prefix).append("  bhv=").append(ViewDebug.flagsToString(
                         InsetsFlags.class, "behavior", insetsFlags.behavior));
             }
-            if (mFitWindowInsetsTypes != 0) {
+            if (mFitInsetsTypes != 0) {
                 sb.append(System.lineSeparator());
                 sb.append(prefix).append("  fitTypes=").append(ViewDebug.flagsToString(
-                        LayoutParams.class, "mFitWindowInsetsTypes", mFitWindowInsetsTypes));
+                        LayoutParams.class, "mFitInsetsTypes", mFitInsetsTypes));
             }
-            if (mFitWindowInsetsSides != Side.all()) {
+            if (mFitInsetsSides != Side.all()) {
                 sb.append(System.lineSeparator());
                 sb.append(prefix).append("  fitSides=").append(ViewDebug.flagsToString(
-                        LayoutParams.class, "mFitWindowInsetsSides", mFitWindowInsetsSides));
+                        LayoutParams.class, "mFitInsetsSides", mFitInsetsSides));
             }
-            if (mFitIgnoreVisibility) {
+            if (mFitInsetsIgnoringVisibility) {
                 sb.append(System.lineSeparator());
                 sb.append(prefix).append("  fitIgnoreVis");
             }
@@ -3427,9 +3611,9 @@ public interface WindowManager extends ViewManager {
             proto.write(SUBTREE_SYSTEM_UI_VISIBILITY_FLAGS, subtreeSystemUiVisibility);
             proto.write(APPEARANCE, insetsFlags.appearance);
             proto.write(BEHAVIOR, insetsFlags.behavior);
-            proto.write(FIT_INSETS_TYPES, mFitWindowInsetsTypes);
-            proto.write(FIT_INSETS_SIDES, mFitWindowInsetsSides);
-            proto.write(FIT_IGNORE_VISIBILITY, mFitIgnoreVisibility);
+            proto.write(FIT_INSETS_TYPES, mFitInsetsTypes);
+            proto.write(FIT_INSETS_SIDES, mFitInsetsSides);
+            proto.write(FIT_IGNORE_VISIBILITY, mFitInsetsIgnoringVisibility);
             proto.end(token);
         }
 
@@ -3515,6 +3699,8 @@ public interface WindowManager extends ViewManager {
                     return "always";
                 case LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER:
                     return "never";
+                case LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES:
+                    return "shortEdges";
                 default:
                     return "unknown(" + mode + ")";
             }

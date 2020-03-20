@@ -16,6 +16,7 @@
 
 package com.android.server.wm;
 
+import static android.view.InsetsState.ITYPE_CAPTION_BAR;
 import static android.view.InsetsState.ITYPE_IME;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
@@ -60,6 +61,7 @@ class InsetsStateController {
             w.notifyInsetsChanged();
         }
     };
+    private final InsetsControlTarget mEmptyImeControlTarget = new InsetsControlTarget() { };
 
     InsetsStateController(DisplayContent displayContent) {
         mDisplayContent = displayContent;
@@ -87,8 +89,32 @@ class InsetsStateController {
         if (type == ITYPE_NAVIGATION_BAR) {
             state.removeSource(ITYPE_IME);
             state.removeSource(ITYPE_STATUS_BAR);
+            state.removeSource(ITYPE_CAPTION_BAR);
         }
+
+        // Status bar doesn't get influenced by caption bar
+        if (type == ITYPE_STATUS_BAR) {
+            state.removeSource(ITYPE_CAPTION_BAR);
+        }
+
+        // IME needs different frames for certain cases (e.g. navigation bar in gesture nav).
+        if (type == ITYPE_IME) {
+            for (int i = mProviders.size() - 1; i >= 0; i--) {
+                InsetsSourceProvider otherProvider = mProviders.valueAt(i);
+                if (otherProvider.overridesImeFrame()) {
+                    InsetsSource override =
+                            new InsetsSource(state.getSource(otherProvider.getSource().getType()));
+                    override.setFrame(otherProvider.getImeOverrideFrame());
+                    state.addSource(override);
+                }
+            }
+        }
+
         return state;
+    }
+
+    InsetsState getRawInsetsState() {
+        return mState;
     }
 
     @Nullable InsetsSourceControl[] getControlsForDispatch(InsetsControlTarget target) {
@@ -141,10 +167,9 @@ class InsetsStateController {
             mLastState.set(mState, true /* copySources */);
             notifyInsetsChanged();
         }
-        getImeSourceProvider().onPostInsetsDispatched();
     }
 
-    void onInsetsModified(WindowState windowState, InsetsState state) {
+    void onInsetsModified(InsetsControlTarget windowState, InsetsState state) {
         boolean changed = false;
         for (int i = state.getSourcesCount() - 1; i >= 0; i--) {
             final InsetsSource source = state.sourceAt(i);
@@ -156,6 +181,25 @@ class InsetsStateController {
         }
         if (changed) {
             notifyInsetsChanged();
+            mDisplayContent.getDisplayPolicy().updateSystemUiVisibilityLw();
+        }
+    }
+
+    /**
+     * Computes insets state of the insets provider window in the display frames.
+     *
+     * @param state The output state.
+     * @param win The owner window of insets provider.
+     * @param displayFrames The display frames to create insets source.
+     * @param windowFrames The specified frames to represent the owner window.
+     */
+    void computeSimulatedState(InsetsState state, WindowState win, DisplayFrames displayFrames,
+            WindowFrames windowFrames) {
+        for (int i = mProviders.size() - 1; i >= 0; i--) {
+            final InsetsSourceProvider provider = mProviders.valueAt(i);
+            if (provider.mWin == win) {
+                state.addSource(provider.createSimulatedSource(displayFrames, windowFrames));
+            }
         }
     }
 
@@ -163,26 +207,29 @@ class InsetsStateController {
         return mTypeFakeControlTargetMap.get(type) == target;
     }
 
-    void onImeTargetChanged(@Nullable InsetsControlTarget imeTarget) {
-        onControlChanged(ITYPE_IME, imeTarget);
+    void onImeControlTargetChanged(@Nullable InsetsControlTarget imeTarget) {
+
+        // Make sure that we always have a control target for the IME, even if the IME target is
+        // null. Otherwise there is no leash that will hide it and IME becomes "randomly" visible.
+        onControlChanged(ITYPE_IME, imeTarget != null ? imeTarget : mEmptyImeControlTarget);
         notifyPendingInsetsControlChanged();
     }
 
     /**
      * Called when the focused window that is able to control the system bars changes.
      *
-     * @param topControlling The target that is now able to control the top bar appearance
-     *                       and visibility.
+     * @param statusControlling The target that is now able to control the status bar appearance
+     *                          and visibility.
      * @param navControlling The target that is now able to control the nav bar appearance
      *                       and visibility.
      */
-    void onBarControlTargetChanged(@Nullable InsetsControlTarget topControlling,
-            @Nullable InsetsControlTarget fakeTopControlling,
+    void onBarControlTargetChanged(@Nullable InsetsControlTarget statusControlling,
+            @Nullable InsetsControlTarget fakeStatusControlling,
             @Nullable InsetsControlTarget navControlling,
             @Nullable InsetsControlTarget fakeNavControlling) {
-        onControlChanged(ITYPE_STATUS_BAR, topControlling);
+        onControlChanged(ITYPE_STATUS_BAR, statusControlling);
         onControlChanged(ITYPE_NAVIGATION_BAR, navControlling);
-        onControlFakeTargetChanged(ITYPE_STATUS_BAR, fakeTopControlling);
+        onControlFakeTargetChanged(ITYPE_STATUS_BAR, fakeStatusControlling);
         onControlFakeTargetChanged(ITYPE_NAVIGATION_BAR, fakeNavControlling);
         notifyPendingInsetsControlChanged();
     }
@@ -199,7 +246,7 @@ class InsetsStateController {
         if (target == previous) {
             return;
         }
-        final InsetsSourceProvider provider = getSourceProvider(type);
+        final InsetsSourceProvider provider = mProviders.get(type);
         if (provider == null) {
             return;
         }
@@ -207,6 +254,7 @@ class InsetsStateController {
             return;
         }
         provider.updateControlForTarget(target, false /* force */);
+        target = provider.getControlTarget();
         if (previous != null) {
             removeFromControlMaps(previous, type, false /* fake */);
             mPendingControlChanged.add(previous);
@@ -296,6 +344,9 @@ class InsetsStateController {
 
     void notifyInsetsChanged() {
         mDisplayContent.forAllWindows(mDispatchInsetsChanged, true /* traverseTopToBottom */);
+        if (mDisplayContent.mRemoteInsetsControlTarget != null) {
+            mDisplayContent.mRemoteInsetsControlTarget.notifyInsetsChanged();
+        }
     }
 
     void dump(String prefix, PrintWriter pw) {

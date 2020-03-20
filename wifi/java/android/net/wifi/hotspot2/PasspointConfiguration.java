@@ -16,7 +16,13 @@
 
 package android.net.wifi.hotspot2;
 
+import static android.net.wifi.WifiConfiguration.METERED_OVERRIDE_NONE;
+import static android.net.wifi.WifiConfiguration.MeteredOverride;
+
+import android.annotation.CurrentTimeMillisLong;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.SystemApi;
 import android.net.wifi.hotspot2.pps.Credential;
 import android.net.wifi.hotspot2.pps.HomeSp;
 import android.net.wifi.hotspot2.pps.Policy;
@@ -242,12 +248,12 @@ public final class PasspointConfiguration implements Parcelable {
      *
      * Use Long.MIN_VALUE to indicate unset value.
      */
-    private long mSubscriptionExpirationTimeInMillis = Long.MIN_VALUE;
+    private long mSubscriptionExpirationTimeMillis = Long.MIN_VALUE;
     /**
      * @hide
      */
     public void setSubscriptionExpirationTimeInMillis(long subscriptionExpirationTimeInMillis) {
-        mSubscriptionExpirationTimeInMillis = subscriptionExpirationTimeInMillis;
+        mSubscriptionExpirationTimeMillis = subscriptionExpirationTimeInMillis;
     }
     /**
      *  Utility method to get the time this subscription will expire. It is in the format of number
@@ -255,8 +261,9 @@ public final class PasspointConfiguration implements Parcelable {
      *
      *  @return The time this subscription will expire, or Long.MIN_VALUE to indicate unset value
      */
-    public long getSubscriptionExpirationTimeInMillis() {
-        return mSubscriptionExpirationTimeInMillis;
+    @CurrentTimeMillisLong
+    public long getSubscriptionExpirationTimeMillis() {
+        return mSubscriptionExpirationTimeMillis;
     }
 
     /**
@@ -423,6 +430,107 @@ public final class PasspointConfiguration implements Parcelable {
     }
 
     /**
+     * The auto-join configuration specifies whether or not the Passpoint Configuration is
+     * considered for auto-connection. If true then yes, if false then it isn't considered as part
+     * of auto-connection - but can still be manually connected to.
+     */
+    private boolean mIsAutojoinEnabled = true;
+
+    /**
+     * The mac randomization setting specifies whether a randomized or device MAC address will
+     * be used to connect to the passpoint network. If true, a randomized MAC will be used.
+     * Otherwise, the device MAC address will be used.
+     */
+    private boolean mIsMacRandomizationEnabled = true;
+
+    /**
+     * Indicates if the end user has expressed an explicit opinion about the
+     * meteredness of this network, such as through the Settings app.
+     * This value is one of {@link #METERED_OVERRIDE_NONE}, {@link #METERED_OVERRIDE_METERED},
+     * or {@link #METERED_OVERRIDE_NOT_METERED}.
+     * <p>
+     * This should always override any values from {@link WifiInfo#getMeteredHint()}.
+     *
+     * By default this field is set to {@link #METERED_OVERRIDE_NONE}.
+     */
+    private int mMeteredOverride = METERED_OVERRIDE_NONE;
+
+    /**
+     * Configures the auto-association status of this Passpoint configuration. A value of true
+     * indicates that the configuration will be considered for auto-connection, a value of false
+     * indicates that only manual connection will work - the framework will not auto-associate to
+     * this Passpoint network.
+     *
+     * @param autojoinEnabled true to be considered for framework auto-connection, false otherwise.
+     * @hide
+     */
+    public void setAutojoinEnabled(boolean autojoinEnabled) {
+        mIsAutojoinEnabled = autojoinEnabled;
+    }
+
+    /**
+     * Configures the MAC randomization setting for this Passpoint configuration.
+     * If set to true, the framework will use a randomized MAC address to connect to this Passpoint
+     * network. Otherwise, the framework will use the device MAC address.
+     *
+     * @param enabled true to use randomized MAC address, false to use device MAC address.
+     * @hide
+     */
+    public void setMacRandomizationEnabled(boolean enabled) {
+        mIsMacRandomizationEnabled = enabled;
+    }
+
+    /**
+     * Sets the metered override setting for this Passpoint configuration.
+     *
+     * @param meteredOverride One of the values in {@link MeteredOverride}
+     * @hide
+     */
+    public void setMeteredOverride(@MeteredOverride int meteredOverride) {
+        mMeteredOverride = meteredOverride;
+    }
+
+    /**
+     * Indicates whether the Passpoint configuration may be auto-connected to by the framework. A
+     * value of true indicates that auto-connection can happen, a value of false indicates that it
+     * cannot. However, even when auto-connection is not possible manual connection by the user is
+     * possible.
+     *
+     * @return the auto-join configuration: true for auto-connection (or join) enabled, false
+     * otherwise.
+     * @hide
+     */
+    @SystemApi
+    public boolean isAutojoinEnabled() {
+        return mIsAutojoinEnabled;
+    }
+
+    /**
+     * Indicates whether the user chose this configuration to be treated as metered or not.
+     *
+     * @return One of the values in {@link MeteredOverride}
+     * @hide
+     */
+    @SystemApi
+    @MeteredOverride
+    public int getMeteredOverride() {
+        return mMeteredOverride;
+    }
+
+    /**
+     * Indicates whether a randomized MAC address or device MAC address will be used for
+     * connections to this Passpoint network. If true, a randomized MAC address will be used.
+     * Otherwise, the device MAC address will be used.
+     *
+     * @return true for MAC randomization enabled. False for disabled.
+     * @hide
+     */
+    @SystemApi
+    public boolean isMacRandomizationEnabled() {
+        return mIsMacRandomizationEnabled;
+    }
+
+    /**
      * Constructor for creating PasspointConfiguration with default values.
      */
     public PasspointConfiguration() {}
@@ -455,7 +563,7 @@ public final class PasspointConfiguration implements Parcelable {
         mUpdateIdentifier = source.mUpdateIdentifier;
         mCredentialPriority = source.mCredentialPriority;
         mSubscriptionCreationTimeInMillis = source.mSubscriptionCreationTimeInMillis;
-        mSubscriptionExpirationTimeInMillis = source.mSubscriptionExpirationTimeInMillis;
+        mSubscriptionExpirationTimeMillis = source.mSubscriptionExpirationTimeMillis;
         mSubscriptionType = source.mSubscriptionType;
         mUsageLimitDataLimit = source.mUsageLimitDataLimit;
         mUsageLimitStartTimeInMillis = source.mUsageLimitStartTimeInMillis;
@@ -464,6 +572,9 @@ public final class PasspointConfiguration implements Parcelable {
         mServiceFriendlyNames = source.mServiceFriendlyNames;
         mAaaServerTrustedNames = source.mAaaServerTrustedNames;
         mCarrierId = source.mCarrierId;
+        mIsAutojoinEnabled = source.mIsAutojoinEnabled;
+        mIsMacRandomizationEnabled = source.mIsMacRandomizationEnabled;
+        mMeteredOverride = source.mMeteredOverride;
     }
 
     @Override
@@ -481,7 +592,7 @@ public final class PasspointConfiguration implements Parcelable {
         dest.writeInt(mUpdateIdentifier);
         dest.writeInt(mCredentialPriority);
         dest.writeLong(mSubscriptionCreationTimeInMillis);
-        dest.writeLong(mSubscriptionExpirationTimeInMillis);
+        dest.writeLong(mSubscriptionExpirationTimeMillis);
         dest.writeString(mSubscriptionType);
         dest.writeLong(mUsageLimitUsageTimePeriodInMinutes);
         dest.writeLong(mUsageLimitStartTimeInMillis);
@@ -493,6 +604,9 @@ public final class PasspointConfiguration implements Parcelable {
                 (HashMap<String, String>) mServiceFriendlyNames);
         dest.writeBundle(bundle);
         dest.writeInt(mCarrierId);
+        dest.writeBoolean(mIsAutojoinEnabled);
+        dest.writeBoolean(mIsMacRandomizationEnabled);
+        dest.writeInt(mMeteredOverride);
     }
 
     @Override
@@ -516,13 +630,16 @@ public final class PasspointConfiguration implements Parcelable {
                 && mUpdateIdentifier == that.mUpdateIdentifier
                 && mCredentialPriority == that.mCredentialPriority
                 && mSubscriptionCreationTimeInMillis == that.mSubscriptionCreationTimeInMillis
-                && mSubscriptionExpirationTimeInMillis == that.mSubscriptionExpirationTimeInMillis
+                && mSubscriptionExpirationTimeMillis == that.mSubscriptionExpirationTimeMillis
                 && TextUtils.equals(mSubscriptionType, that.mSubscriptionType)
                 && mUsageLimitUsageTimePeriodInMinutes == that.mUsageLimitUsageTimePeriodInMinutes
                 && mUsageLimitStartTimeInMillis == that.mUsageLimitStartTimeInMillis
                 && mUsageLimitDataLimit == that.mUsageLimitDataLimit
                 && mUsageLimitTimeLimitInMinutes == that.mUsageLimitTimeLimitInMinutes
                 && mCarrierId == that.mCarrierId
+                && mIsAutojoinEnabled == that.mIsAutojoinEnabled
+                && mIsMacRandomizationEnabled == that.mIsMacRandomizationEnabled
+                && mMeteredOverride == that.mMeteredOverride
                 && (mServiceFriendlyNames == null ? that.mServiceFriendlyNames == null
                 : mServiceFriendlyNames.equals(that.mServiceFriendlyNames));
     }
@@ -531,9 +648,10 @@ public final class PasspointConfiguration implements Parcelable {
     public int hashCode() {
         return Objects.hash(mHomeSp, mCredential, mPolicy, mSubscriptionUpdate, mTrustRootCertList,
                 mUpdateIdentifier, mCredentialPriority, mSubscriptionCreationTimeInMillis,
-                mSubscriptionExpirationTimeInMillis, mUsageLimitUsageTimePeriodInMinutes,
+                mSubscriptionExpirationTimeMillis, mUsageLimitUsageTimePeriodInMinutes,
                 mUsageLimitStartTimeInMillis, mUsageLimitDataLimit, mUsageLimitTimeLimitInMinutes,
-                mServiceFriendlyNames, mCarrierId);
+                mServiceFriendlyNames, mCarrierId, mIsAutojoinEnabled, mIsMacRandomizationEnabled,
+                mMeteredOverride);
     }
 
     @Override
@@ -545,8 +663,8 @@ public final class PasspointConfiguration implements Parcelable {
                 mSubscriptionCreationTimeInMillis != Long.MIN_VALUE
                 ? new Date(mSubscriptionCreationTimeInMillis) : "Not specified").append("\n");
         builder.append("SubscriptionExpirationTime: ").append(
-                mSubscriptionExpirationTimeInMillis != Long.MIN_VALUE
-                ? new Date(mSubscriptionExpirationTimeInMillis) : "Not specified").append("\n");
+                mSubscriptionExpirationTimeMillis != Long.MIN_VALUE
+                ? new Date(mSubscriptionExpirationTimeMillis) : "Not specified").append("\n");
         builder.append("UsageLimitStartTime: ").append(mUsageLimitStartTimeInMillis != Long.MIN_VALUE
                 ? new Date(mUsageLimitStartTimeInMillis) : "Not specified").append("\n");
         builder.append("UsageTimePeriod: ").append(mUsageLimitUsageTimePeriodInMinutes)
@@ -587,6 +705,9 @@ public final class PasspointConfiguration implements Parcelable {
             builder.append("ServiceFriendlyNames: ").append(mServiceFriendlyNames);
         }
         builder.append("CarrierId:" + mCarrierId);
+        builder.append("IsAutojoinEnabled:" + mIsAutojoinEnabled);
+        builder.append("mIsMacRandomizationEnabled:" + mIsMacRandomizationEnabled);
+        builder.append("mMeteredOverride:" + mMeteredOverride);
         return builder.toString();
     }
 
@@ -601,7 +722,7 @@ public final class PasspointConfiguration implements Parcelable {
         if (mSubscriptionUpdate != null && !mSubscriptionUpdate.validate()) {
             return false;
         }
-        return validateForCommonR1andR2(true);
+        return validateForCommonR1andR2();
     }
 
     /**
@@ -620,17 +741,17 @@ public final class PasspointConfiguration implements Parcelable {
         if (mSubscriptionUpdate == null || !mSubscriptionUpdate.validate()) {
             return false;
         }
-        return validateForCommonR1andR2(false);
+        return validateForCommonR1andR2();
     }
 
-    private boolean validateForCommonR1andR2(boolean isR1) {
+    private boolean validateForCommonR1andR2() {
         // Required: PerProviderSubscription/<X+>/HomeSP
         if (mHomeSp == null || !mHomeSp.validate()) {
             return false;
         }
 
         // Required: PerProviderSubscription/<X+>/Credential
-        if (mCredential == null || !mCredential.validate(isR1)) {
+        if (mCredential == null || !mCredential.validate()) {
             return false;
         }
 
@@ -692,6 +813,9 @@ public final class PasspointConfiguration implements Parcelable {
                         "serviceFriendlyNames");
                 config.setServiceFriendlyNames(friendlyNamesMap);
                 config.mCarrierId = in.readInt();
+                config.mIsAutojoinEnabled = in.readBoolean();
+                config.mIsMacRandomizationEnabled = in.readBoolean();
+                config.mMeteredOverride = in.readInt();
                 return config;
             }
 
@@ -773,5 +897,25 @@ public final class PasspointConfiguration implements Parcelable {
      */
     public boolean isOsuProvisioned() {
         return getUpdateIdentifier() != Integer.MIN_VALUE;
+    }
+
+    /**
+     * Get a unique identifier for a PasspointConfiguration object. The identifier depends on the
+     * configuration that identify the service provider under the HomeSp subtree, and on the
+     * credential configuration under the Credential subtree.
+     * The method throws an {@link IllegalStateException} if the configuration under HomeSp subtree
+     * or the configuration under Credential subtree are not initialized.
+     *
+     * @return A unique identifier
+     */
+    public @NonNull String getUniqueId() {
+        if (mCredential == null || mHomeSp == null || TextUtils.isEmpty(mHomeSp.getFqdn())) {
+            throw new IllegalStateException("Credential or HomeSP are not initialized");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("%s_%x%x", mHomeSp.getFqdn(), mHomeSp.getUniqueId(),
+                mCredential.getUniqueId()));
+        return sb.toString();
     }
 }

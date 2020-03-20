@@ -129,32 +129,45 @@ abstract class DisplayDevice {
      * Sets the display state, if supported.
      *
      * @param state The new display state.
-     * @param brightness The new display brightness.
+     * @param brightnessState The new display brightnessState.
      * @return A runnable containing work to be deferred until after we have
      * exited the critical section, or null if none.
      */
-    public Runnable requestDisplayStateLocked(int state, int brightness) {
+    public Runnable requestDisplayStateLocked(int state, float brightnessState) {
         return null;
     }
 
     /**
-     * Sets the refresh ranges, and display modes that the system is allowed to switch between.
-     * Display modes are roughly ordered by preference.
+     * Sets the display mode specs.
      *
      * Not all display devices will automatically switch between modes, so it's important that the
-     * most-desired modes are at the beginning of the allowed array.
-     *
-     * @param defaultModeId is used, if the device does not support multiple refresh
-     * rates, and to navigate other parameters.
+     * default modeId is set correctly.
      */
-    public void setDesiredDisplayConfigSpecs(int defaultModeId, float minRefreshRate,
-            float maxRefreshRate, int[] modes) {
-    }
+    public void setDesiredDisplayModeSpecsLocked(
+            DisplayModeDirector.DesiredDisplayModeSpecs displayModeSpecs) {}
 
     /**
      * Sets the requested color mode.
      */
     public void setRequestedColorModeLocked(int colorMode) {
+    }
+
+    /**
+     * Sends the Auto Low Latency Mode (ALLM) signal over HDMI, or requests an internal display to
+     * switch to a low-latency mode.
+     *
+     * @param on Whether to set ALLM on or off.
+     */
+    public void setAutoLowLatencyModeLocked(boolean on) {
+    }
+
+    /**
+     * Sends a ContentType=Game signal over HDMI, or requests an internal display to switch to a
+     * game mode (generally lower latency).
+     *
+     * @param on Whether to send a ContentType=Game signal or not
+     */
+    public void setGameContentTypeLocked(boolean on) {
     }
 
     public void onOverlayChangedLocked() {

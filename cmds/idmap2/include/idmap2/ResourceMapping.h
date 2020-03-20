@@ -22,12 +22,15 @@
 #include <utility>
 
 #include "androidfw/ApkAssets.h"
+#include "idmap2/LogInfo.h"
 #include "idmap2/Policies.h"
 #include "idmap2/ResourceUtils.h"
 #include "idmap2/Result.h"
 #include "idmap2/XmlParser.h"
 
 using android::idmap2::utils::OverlayManifestInfo;
+
+using PolicyBitmask = android::ResTable_overlayable_policy_header::PolicyBitmask;
 
 namespace android::idmap2 {
 
@@ -50,7 +53,7 @@ class ResourceMapping {
                                                const ApkAssets& overlay_apk_assets,
                                                const OverlayManifestInfo& overlay_info,
                                                const PolicyBitmask& fulfilled_policies,
-                                               bool enforce_overlayable);
+                                               bool enforce_overlayable, LogInfo& log_info);
 
   // Retrieves the mapping of target resource id to overlay value.
   inline TargetResourceMap GetTargetToOverlayMap() const {
@@ -100,7 +103,8 @@ class ResourceMapping {
                                                        const LoadedPackage* target_package,
                                                        const LoadedPackage* overlay_package,
                                                        size_t string_pool_offset,
-                                                       const XmlParser& overlay_parser);
+                                                       const XmlParser& overlay_parser,
+                                                       LogInfo& log_info);
 
   // Generates a ResourceMapping that maps target resources to overlay resources by name. To overlay
   // a target resource, a resource must exist in the overlay with the same type and entry name as
@@ -115,7 +119,7 @@ class ResourceMapping {
                                   const LoadedPackage* target_package,
                                   const LoadedPackage* overlay_package,
                                   const OverlayManifestInfo& overlay_info,
-                                  const PolicyBitmask& fulfilled_policies);
+                                  const PolicyBitmask& fulfilled_policies, LogInfo& log_info);
 
   TargetResourceMap target_map_;
   std::multimap<ResourceId, ResourceId> overlay_map_;

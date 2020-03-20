@@ -28,6 +28,8 @@ android_app {
         "services.core",
         "services.net",
     ],
+
+    libs: ["ike-stubs"],
 }
 
 //##################################################################
@@ -44,8 +46,10 @@ android_robolectric_test {
 
     // Include the testing libraries
     libs: [
+        "mockito-robolectric-prebuilt",
         "platform-test-annotations",
         "testng",
+        "truth-prebuilt",
     ],
 
     instrumentation_for: "BackupFrameworksServicesLib",

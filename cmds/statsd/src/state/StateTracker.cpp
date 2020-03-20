@@ -26,15 +26,27 @@ namespace os {
 namespace statsd {
 
 StateTracker::StateTracker(const int32_t atomId, const util::StateAtomFieldOptions& stateAtomInfo)
-    : mAtomId(atomId), mStateField(getSimpleMatcher(atomId, stateAtomInfo.exclusiveField)) {
+    : mAtomId(atomId),
+      mStateField(getSimpleMatcher(atomId, stateAtomInfo.exclusiveField)),
+      mNested(stateAtomInfo.nested) {
     // create matcher for each primary field
-    // TODO(tsaichristine): b/142108433 handle when primary field is first uid in chain
-    for (const auto& primary : stateAtomInfo.primaryFields) {
-        Matcher matcher = getSimpleMatcher(atomId, primary);
-        mPrimaryFields.push_back(matcher);
+    for (const auto& primaryField : stateAtomInfo.primaryFields) {
+        if (primaryField == util::FIRST_UID_IN_CHAIN) {
+            Matcher matcher = getFirstUidMatcher(atomId);
+            mPrimaryFields.push_back(matcher);
+        } else {
+            Matcher matcher = getSimpleMatcher(atomId, primaryField);
+            mPrimaryFields.push_back(matcher);
+        }
     }
 
-    // TODO(tsaichristine): b/142108433 set default state, reset state, and nesting
+    if (stateAtomInfo.defaultState != util::UNSET_VALUE) {
+        mDefaultState = stateAtomInfo.defaultState;
+    }
+
+    if (stateAtomInfo.resetState != util::UNSET_VALUE) {
+        mResetState = stateAtomInfo.resetState;
+    }
 }
 
 void StateTracker::onLogEvent(const LogEvent& event) {
@@ -56,7 +68,6 @@ void StateTracker::onLogEvent(const LogEvent& event) {
 
     // Parse event for state value.
     FieldValue stateValue;
-    int32_t state;
     if (!filterValues(mStateField, event.getValues(), &stateValue) ||
         stateValue.mValue.getType() != INT) {
         ALOGE("StateTracker error extracting state from log event. Type: %d",
@@ -64,11 +75,12 @@ void StateTracker::onLogEvent(const LogEvent& event) {
         handlePartialReset(eventTimeNs, primaryKey);
         return;
     }
-    state = stateValue.mValue.int_value;
 
+    int32_t state = stateValue.mValue.int_value;
     if (state == mResetState) {
         VLOG("StateTracker Reset state: %s", stateValue.mValue.toString().c_str());
         handleReset(eventTimeNs);
+        return;
     }
 
     // Track and update state.
@@ -109,15 +121,17 @@ bool StateTracker::getStateValue(const HashableDimensionKey& queryKey, FieldValu
             return true;
         }
     } else if (queryKey.getValues().size() > mPrimaryFields.size()) {
-        ALOGE("StateTracker query key size > primary key size is illegal");
+        ALOGE("StateTracker query key size %zu > primary key size %zu is illegal",
+              queryKey.getValues().size(), mPrimaryFields.size());
     } else {
-        ALOGE("StateTracker query key size < primary key size is not supported");
+        ALOGE("StateTracker query key size %zu < primary key size %zu is not supported",
+              queryKey.getValues().size(), mPrimaryFields.size());
     }
 
-    // Set the state value to unknown if:
+    // Set the state value to default state if:
     // - query key size is incorrect
     // - query key is not found in state map
-    output->mValue = StateTracker::kStateUnknown;
+    output->mValue = mDefaultState;
     return false;
 }
 
@@ -160,18 +174,52 @@ void StateTracker::updateState(const HashableDimensionKey& primaryKey, const int
         *oldState = mDefaultState;
     }
 
-    // update state map
-    if (eventState == mDefaultState) {
-        // remove (key, state) pair if state returns to default state
-        VLOG("\t StateTracker changed to default state")
-        mStateMap.erase(primaryKey);
-    } else {
-        mStateMap[primaryKey].state = eventState;
-        mStateMap[primaryKey].count = 1;
+    // Update state map for non-nested counting case.
+    // Every state event triggers a state overwrite.
+    if (!mNested) {
+        if (eventState == mDefaultState) {
+            // remove (key, state) pair if state returns to default state
+            VLOG("\t StateTracker changed to default state")
+            mStateMap.erase(primaryKey);
+        } else {
+            mStateMap[primaryKey].state = eventState;
+            mStateMap[primaryKey].count = 1;
+        }
+        *newState = eventState;
+        return;
     }
-    *newState = eventState;
 
-    // TODO(tsaichristine): support atoms with nested counting
+    // Update state map for nested counting case.
+    //
+    // Nested counting is only allowed for binary state events such as ON/OFF or
+    // ACQUIRE/RELEASE. For example, WakelockStateChanged might have the state
+    // events: ON, ON, OFF. The state will still be ON until we see the same
+    // number of OFF events as ON events.
+    //
+    // In atoms.proto, a state atom with nested counting enabled
+    // must only have 2 states and one of the states must be the default state.
+    it = mStateMap.find(primaryKey);
+    if (it != mStateMap.end()) {
+        *newState = it->second.state;
+        if (eventState == it->second.state) {
+            it->second.count++;
+        } else if (eventState == mDefaultState) {
+            if ((--it->second.count) == 0) {
+                mStateMap.erase(primaryKey);
+                *newState = mDefaultState;
+            }
+        } else {
+            ALOGE("StateTracker Nest counting state has a third state instead of the binary state "
+                  "limit.");
+            return;
+        }
+    } else {
+        if (eventState != mDefaultState) {
+            mStateMap[primaryKey].state = eventState;
+            mStateMap[primaryKey].count = 1;
+        }
+        *newState = eventState;
+    }
 }
 
 }  // namespace statsd

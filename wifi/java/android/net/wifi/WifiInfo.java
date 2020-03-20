@@ -17,9 +17,10 @@
 package android.net.wifi;
 
 import android.annotation.IntRange;
+import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.net.NetworkInfo.DetailedState;
 import android.net.shared.Inet4AddressUtils;
 import android.os.Build;
@@ -121,9 +122,19 @@ public class WifiInfo implements Parcelable {
     private int mTxLinkSpeed;
 
     /**
+     * Max supported Tx(transmit) link speed in Mbps
+     */
+    private int mMaxSupportedTxLinkSpeed;
+
+    /**
      * Rx(receive) Link speed in Mbps
      */
     private int mRxLinkSpeed;
+
+    /**
+     * Max supported Rx(receive) link speed in Mbps
+     */
+    private int mMaxSupportedRxLinkSpeed;
 
     /**
      * Frequency in MHz
@@ -165,7 +176,7 @@ public class WifiInfo implements Parcelable {
      * If connected to a network suggestion or specifier, store the package name of the app,
      * else null.
      */
-    private String mAppPackageName;
+    private String mRequestingPackageName;
 
     /**
      * Running total count of lost (not ACKed) transmitted unicast data packets.
@@ -188,68 +199,68 @@ public class WifiInfo implements Parcelable {
      */
     public long rxSuccess;
 
-    private double mTxBadRate;
+    private double mLostTxPacketsPerSecond;
 
     /**
      * Average rate of lost transmitted packets, in units of packets per second.
      * @hide
      */
     @SystemApi
-    public double getTxBadRate() {
-        return mTxBadRate;
+    public double getLostTxPacketsPerSecond() {
+        return mLostTxPacketsPerSecond;
     }
 
     /** @hide */
-    public void setTxBadRate(double txBadRate) {
-        mTxBadRate = txBadRate;
+    public void setLostTxPacketsPerSecond(double lostTxPacketsPerSecond) {
+        mLostTxPacketsPerSecond = lostTxPacketsPerSecond;
     }
 
-    private double mTxRetriesRate;
+    private double mTxRetriedTxPacketsPerSecond;
 
     /**
      * Average rate of transmitted retry packets, in units of packets per second.
      * @hide
      */
     @SystemApi
-    public double getTxRetriesRate() {
-        return mTxRetriesRate;
+    public double getRetriedTxPacketsPerSecond() {
+        return mTxRetriedTxPacketsPerSecond;
     }
 
     /** @hide */
-    public void setTxRetriesRate(double txRetriesRate) {
-        mTxRetriesRate = txRetriesRate;
+    public void setRetriedTxPacketsRate(double txRetriedTxPacketsPerSecond) {
+        mTxRetriedTxPacketsPerSecond = txRetriedTxPacketsPerSecond;
     }
 
-    private double mTxSuccessRate;
+    private double mSuccessfulTxPacketsPerSecond;
 
     /**
      * Average rate of successfully transmitted unicast packets, in units of packets per second.
      * @hide
      */
     @SystemApi
-    public double getTxSuccessRate() {
-        return mTxSuccessRate;
+    public double getSuccessfulTxPacketsPerSecond() {
+        return mSuccessfulTxPacketsPerSecond;
     }
 
     /** @hide */
-    public void setTxSuccessRate(double txSuccessRate) {
-        mTxSuccessRate = txSuccessRate;
+    public void setSuccessfulTxPacketsPerSecond(double successfulTxPacketsPerSecond) {
+        mSuccessfulTxPacketsPerSecond = successfulTxPacketsPerSecond;
     }
 
-    private double mRxSuccessRate;
+    private double mSuccessfulRxPacketsPerSecond;
 
     /**
      * Average rate of received unicast data packets, in units of packets per second.
      * @hide
      */
     @SystemApi
-    public double getRxSuccessRate() {
-        return mRxSuccessRate;
+    public double getSuccessfulRxPacketsPerSecond() {
+        return mSuccessfulRxPacketsPerSecond;
     }
 
     /** @hide */
-    public void setRxSuccessRate(double rxSuccessRate) {
-        mRxSuccessRate = rxSuccessRate;
+    public void setSuccessfulRxPacketsPerSecond(double successfulRxPacketsPerSecond) {
+        mSuccessfulRxPacketsPerSecond = successfulRxPacketsPerSecond;
     }
 
     /** @hide */
@@ -278,6 +289,11 @@ public class WifiInfo implements Parcelable {
      */
     private boolean mMeteredHint;
 
+    /**
+     * Passpoint unique key
+     */
+    private String mPasspointUniqueId;
+
     /** @hide */
     @UnsupportedAppUsage
     public WifiInfo() {
@@ -300,21 +316,24 @@ public class WifiInfo implements Parcelable {
         setLinkSpeed(LINK_SPEED_UNKNOWN);
         setTxLinkSpeedMbps(LINK_SPEED_UNKNOWN);
         setRxLinkSpeedMbps(LINK_SPEED_UNKNOWN);
+        setMaxSupportedTxLinkSpeedMbps(LINK_SPEED_UNKNOWN);
+        setMaxSupportedRxLinkSpeedMbps(LINK_SPEED_UNKNOWN);
         setFrequency(-1);
         setMeteredHint(false);
         setEphemeral(false);
         setOsuAp(false);
-        setAppPackageName(null);
+        setRequestingPackageName(null);
         setFQDN(null);
         setProviderFriendlyName(null);
+        setPasspointUniqueId(null);
         txBad = 0;
         txSuccess = 0;
         rxSuccess = 0;
         txRetries = 0;
-        mTxBadRate = 0;
-        mTxSuccessRate = 0;
-        mRxSuccessRate = 0;
-        mTxRetriesRate = 0;
+        mLostTxPacketsPerSecond = 0;
+        mSuccessfulTxPacketsPerSecond = 0;
+        mSuccessfulRxPacketsPerSecond = 0;
+        mTxRetriedTxPacketsPerSecond = 0;
         score = 0;
     }
 
@@ -338,8 +357,8 @@ public class WifiInfo implements Parcelable {
             mMeteredHint = source.mMeteredHint;
             mEphemeral = source.mEphemeral;
             mTrusted = source.mTrusted;
-            mAppPackageName =
-                    source.mAppPackageName;
+            mRequestingPackageName =
+                    source.mRequestingPackageName;
             mOsuAp = source.mOsuAp;
             mFqdn = source.mFqdn;
             mProviderFriendlyName = source.mProviderFriendlyName;
@@ -347,12 +366,68 @@ public class WifiInfo implements Parcelable {
             txRetries = source.txRetries;
             txSuccess = source.txSuccess;
             rxSuccess = source.rxSuccess;
-            mTxBadRate = source.mTxBadRate;
-            mTxRetriesRate = source.mTxRetriesRate;
-            mTxSuccessRate = source.mTxSuccessRate;
-            mRxSuccessRate = source.mRxSuccessRate;
+            mLostTxPacketsPerSecond = source.mLostTxPacketsPerSecond;
+            mTxRetriedTxPacketsPerSecond = source.mTxRetriedTxPacketsPerSecond;
+            mSuccessfulTxPacketsPerSecond = source.mSuccessfulTxPacketsPerSecond;
+            mSuccessfulRxPacketsPerSecond = source.mSuccessfulRxPacketsPerSecond;
             score = source.score;
             mWifiStandard = source.mWifiStandard;
+            mMaxSupportedTxLinkSpeed = source.mMaxSupportedTxLinkSpeed;
+            mMaxSupportedRxLinkSpeed = source.mMaxSupportedRxLinkSpeed;
+            mPasspointUniqueId = source.mPasspointUniqueId;
+        }
+    }
+
+    /** Builder for WifiInfo */
+    public static final class Builder {
+        private final WifiInfo mWifiInfo = new WifiInfo();
+
+        /**
+         * Set the SSID, in the form of a raw byte array.
+         * @see WifiInfo#getSSID()
+         */
+        @NonNull
+        public Builder setSsid(@NonNull byte[] ssid) {
+            mWifiInfo.setSSID(WifiSsid.createFromByteArray(ssid));
+            return this;
+        }
+
+        /**
+         * Set the BSSID.
+         * @see WifiInfo#getBSSID()
+         */
+        @NonNull
+        public Builder setBssid(@NonNull String bssid) {
+            mWifiInfo.setBSSID(bssid);
+            return this;
+        }
+
+        /**
+         * Set the RSSI, in dBm.
+         * @see WifiInfo#getRssi()
+         */
+        @NonNull
+        public Builder setRssi(int rssi) {
+            mWifiInfo.setRssi(rssi);
+            return this;
+        }
+
+        /**
+         * Set the network ID.
+         * @see WifiInfo#getNetworkId()
+         */
+        @NonNull
+        public Builder setNetworkId(int networkId) {
+            mWifiInfo.setNetworkId(networkId);
+            return this;
+        }
+
+        /**
+         * Build a WifiInfo object.
+         */
+        @NonNull
+        public WifiInfo build() {
+            return new WifiInfo(mWifiInfo);
         }
     }
 
@@ -366,9 +441,8 @@ public class WifiInfo implements Parcelable {
      * <p>
      * If the SSID can be decoded as UTF-8, it will be returned surrounded by double
      * quotation marks. Otherwise, it is returned as a string of hex digits.
-     * The SSID may be
-     * <lt>&lt;unknown ssid&gt;, if there is no network currently connected or if the caller has
-     * insufficient permissions to access the SSID.<lt>
+     * The SSID may be {@link WifiManager#UNKNOWN_SSID}, if there is no network currently connected
+     * or if the caller has insufficient permissions to access the SSID.
      * </p>
      * <p>
      * Prior to {@link android.os.Build.VERSION_CODES#JELLY_BEAN_MR1}, this method
@@ -483,11 +557,28 @@ public class WifiInfo implements Parcelable {
     }
 
     /**
+     * Returns the maximum supported transmit link speed in Mbps
+     * @return the max supported tx link speed or {@link #LINK_SPEED_UNKNOWN} if link speed is
+     * unknown. @see #LINK_SPEED_UNKNOWN
+     */
+    public int getMaxSupportedTxLinkSpeedMbps() {
+        return mMaxSupportedTxLinkSpeed;
+    }
+
+    /**
      * Update the last transmitted packet bit rate in Mbps.
      * @hide
      */
     public void setTxLinkSpeedMbps(int txLinkSpeed) {
         mTxLinkSpeed = txLinkSpeed;
+    }
+
+    /**
+     * Set the maximum supported transmit link speed in Mbps
+     * @hide
+     */
+    public void setMaxSupportedTxLinkSpeedMbps(int maxSupportedTxLinkSpeed) {
+        mMaxSupportedTxLinkSpeed = maxSupportedTxLinkSpeed;
     }
 
     /**
@@ -501,11 +592,28 @@ public class WifiInfo implements Parcelable {
     }
 
     /**
+     * Returns the maximum supported receive link speed in Mbps
+     * @return the max supported Rx link speed or {@link #LINK_SPEED_UNKNOWN} if link speed is
+     * unknown. @see #LINK_SPEED_UNKNOWN
+     */
+    public int getMaxSupportedRxLinkSpeedMbps() {
+        return mMaxSupportedRxLinkSpeed;
+    }
+
+    /**
      * Update the last received packet bit rate in Mbps.
      * @hide
      */
     public void setRxLinkSpeedMbps(int rxLinkSpeed) {
         mRxLinkSpeed = rxLinkSpeed;
+    }
+
+    /**
+     * Set the maximum supported receive link speed in Mbps
+     * @hide
+     */
+    public void setMaxSupportedRxLinkSpeedMbps(int maxSupportedRxLinkSpeed) {
+        mMaxSupportedRxLinkSpeed = maxSupportedRxLinkSpeed;
     }
 
     /**
@@ -631,6 +739,11 @@ public class WifiInfo implements Parcelable {
 
     /**
      * Returns the Fully Qualified Domain Name of the network if it is a Passpoint network.
+     * <p>
+     * The FQDN may be
+     * <lt>{@code null} if no network currently connected, currently connected network is not
+     * passpoint network or the caller has insufficient permissions to access the FQDN.</lt>
+     * </p>
      */
     public @Nullable String getPasspointFqdn() {
         return mFqdn;
@@ -643,14 +756,20 @@ public class WifiInfo implements Parcelable {
 
     /**
      * Returns the Provider Friendly Name of the network if it is a Passpoint network.
+     * <p>
+     * The Provider Friendly Name may be
+     * <lt>{@code null} if no network currently connected, currently connected network is not
+     * passpoint network or the caller has insufficient permissions to access the Provider Friendly
+     * Name. </lt>
+     * </p>
      */
     public @Nullable String getPasspointProviderFriendlyName() {
         return mProviderFriendlyName;
     }
 
     /** {@hide} */
-    public void setAppPackageName(@Nullable String packageName) {
-        mAppPackageName = packageName;
+    public void setRequestingPackageName(@Nullable String packageName) {
+        mRequestingPackageName = packageName;
     }
 
     /**
@@ -660,8 +779,8 @@ public class WifiInfo implements Parcelable {
      * @hide
      */
     @SystemApi
-    public @Nullable String getAppPackageName() {
-        return mAppPackageName;
+    public @Nullable String getRequestingPackageName() {
+        return mRequestingPackageName;
     }
 
 
@@ -761,6 +880,13 @@ public class WifiInfo implements Parcelable {
      */
     @Nullable
     @SystemApi
+    public static String sanitizeSsid(@Nullable String string) {
+        return removeDoubleQuotes(string);
+    }
+
+    /** @hide */
+    @UnsupportedAppUsage
+    @Nullable
     public static String removeDoubleQuotes(@Nullable String string) {
         if (string == null) return null;
         final int length = string.length();
@@ -784,7 +910,11 @@ public class WifiInfo implements Parcelable {
                 .append(", RSSI: ").append(mRssi)
                 .append(", Link speed: ").append(mLinkSpeed).append(LINK_SPEED_UNITS)
                 .append(", Tx Link speed: ").append(mTxLinkSpeed).append(LINK_SPEED_UNITS)
+                .append(", Max Supported Tx Link speed: ")
+                .append(mMaxSupportedTxLinkSpeed).append(LINK_SPEED_UNITS)
                 .append(", Rx Link speed: ").append(mRxLinkSpeed).append(LINK_SPEED_UNITS)
+                .append(", Max Supported Rx Link speed: ")
+                .append(mMaxSupportedRxLinkSpeed).append(LINK_SPEED_UNITS)
                 .append(", Frequency: ").append(mFrequency).append(FREQUENCY_UNITS)
                 .append(", Net ID: ").append(mNetworkId)
                 .append(", Metered hint: ").append(mMeteredHint)
@@ -824,19 +954,22 @@ public class WifiInfo implements Parcelable {
         dest.writeInt(mTrusted ? 1 : 0);
         dest.writeInt(score);
         dest.writeLong(txSuccess);
-        dest.writeDouble(mTxSuccessRate);
+        dest.writeDouble(mSuccessfulTxPacketsPerSecond);
         dest.writeLong(txRetries);
-        dest.writeDouble(mTxRetriesRate);
+        dest.writeDouble(mTxRetriedTxPacketsPerSecond);
         dest.writeLong(txBad);
-        dest.writeDouble(mTxBadRate);
+        dest.writeDouble(mLostTxPacketsPerSecond);
         dest.writeLong(rxSuccess);
-        dest.writeDouble(mRxSuccessRate);
+        dest.writeDouble(mSuccessfulRxPacketsPerSecond);
         mSupplicantState.writeToParcel(dest, flags);
         dest.writeInt(mOsuAp ? 1 : 0);
-        dest.writeString(mAppPackageName);
+        dest.writeString(mRequestingPackageName);
         dest.writeString(mFqdn);
         dest.writeString(mProviderFriendlyName);
         dest.writeInt(mWifiStandard);
+        dest.writeInt(mMaxSupportedTxLinkSpeed);
+        dest.writeInt(mMaxSupportedRxLinkSpeed);
+        dest.writeString(mPasspointUniqueId);
     }
 
     /** Implement the Parcelable interface {@hide} */
@@ -866,19 +999,22 @@ public class WifiInfo implements Parcelable {
                 info.mTrusted = in.readInt() != 0;
                 info.score = in.readInt();
                 info.txSuccess = in.readLong();
-                info.mTxSuccessRate = in.readDouble();
+                info.mSuccessfulTxPacketsPerSecond = in.readDouble();
                 info.txRetries = in.readLong();
-                info.mTxRetriesRate = in.readDouble();
+                info.mTxRetriedTxPacketsPerSecond = in.readDouble();
                 info.txBad = in.readLong();
-                info.mTxBadRate = in.readDouble();
+                info.mLostTxPacketsPerSecond = in.readDouble();
                 info.rxSuccess = in.readLong();
-                info.mRxSuccessRate = in.readDouble();
+                info.mSuccessfulRxPacketsPerSecond = in.readDouble();
                 info.mSupplicantState = SupplicantState.CREATOR.createFromParcel(in);
                 info.mOsuAp = in.readInt() != 0;
-                info.mAppPackageName = in.readString();
+                info.mRequestingPackageName = in.readString();
                 info.mFqdn = in.readString();
                 info.mProviderFriendlyName = in.readString();
                 info.mWifiStandard = in.readInt();
+                info.mMaxSupportedTxLinkSpeed = in.readInt();
+                info.mMaxSupportedRxLinkSpeed = in.readInt();
+                info.mPasspointUniqueId = in.readString();
                 return info;
             }
 
@@ -886,4 +1022,24 @@ public class WifiInfo implements Parcelable {
                 return new WifiInfo[size];
             }
         };
+
+    /**
+     * Set the Passpoint unique identifier for the current connection
+     *
+     * @param passpointUniqueId Unique identifier
+     * @hide
+     */
+    public void setPasspointUniqueId(@Nullable String passpointUniqueId) {
+        mPasspointUniqueId = passpointUniqueId;
+    }
+
+    /**
+     * Get the Passpoint unique identifier for the current connection
+     *
+     * @return Passpoint unique identifier
+     * @hide
+     */
+    public @Nullable String getPasspointUniqueId() {
+        return mPasspointUniqueId;
+    }
 }

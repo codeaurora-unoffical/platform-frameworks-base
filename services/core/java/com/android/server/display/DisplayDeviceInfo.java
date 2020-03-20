@@ -16,6 +16,7 @@
 
 package com.android.server.display;
 
+import android.hardware.display.DeviceProductInfo;
 import android.hardware.display.DisplayViewport;
 import android.util.DisplayMetrics;
 import android.view.Display;
@@ -207,6 +208,16 @@ final class DisplayDeviceInfo {
     public Display.HdrCapabilities hdrCapabilities;
 
     /**
+     * Indicates whether this display supports Auto Low Latency Mode.
+     */
+    public boolean allmSupported;
+
+    /**
+     * Indicates whether this display suppors Game content type.
+     */
+    public boolean gameContentTypeSupported;
+
+    /**
      * The nominal apparent density of the display in DPI used for layout calculations.
      * This density is sensitive to the viewing distance.  A big TV and a tablet may have
      * the same apparent density even though the pixels on the TV are much bigger than
@@ -278,6 +289,13 @@ final class DisplayDeviceInfo {
     public DisplayAddress address;
 
     /**
+     * Product-specific information about the display or the directly connected device on the
+     * display chain. For example, if the display is transitively connected, this field may contain
+     * product information about the intermediate device.
+     */
+    public DeviceProductInfo deviceProductInfo;
+
+    /**
      * Display state.
      */
     public int state = Display.STATE_ON;
@@ -337,6 +355,8 @@ final class DisplayDeviceInfo {
                 || !Arrays.equals(supportedModes, other.supportedModes)
                 || !Arrays.equals(supportedColorModes, other.supportedColorModes)
                 || !Objects.equals(hdrCapabilities, other.hdrCapabilities)
+                || allmSupported != other.allmSupported
+                || gameContentTypeSupported != other.gameContentTypeSupported
                 || densityDpi != other.densityDpi
                 || xDpi != other.xDpi
                 || yDpi != other.yDpi
@@ -348,6 +368,7 @@ final class DisplayDeviceInfo {
                 || rotation != other.rotation
                 || type != other.type
                 || !Objects.equals(address, other.address)
+                || !Objects.equals(deviceProductInfo, other.deviceProductInfo)
                 || ownerUid != other.ownerUid
                 || !Objects.equals(ownerPackageName, other.ownerPackageName)) {
             diff |= DIFF_OTHER;
@@ -371,6 +392,8 @@ final class DisplayDeviceInfo {
         colorMode = other.colorMode;
         supportedColorModes = other.supportedColorModes;
         hdrCapabilities = other.hdrCapabilities;
+        allmSupported = other.allmSupported;
+        gameContentTypeSupported = other.gameContentTypeSupported;
         densityDpi = other.densityDpi;
         xDpi = other.xDpi;
         yDpi = other.yDpi;
@@ -382,6 +405,7 @@ final class DisplayDeviceInfo {
         rotation = other.rotation;
         type = other.type;
         address = other.address;
+        deviceProductInfo = other.deviceProductInfo;
         state = other.state;
         ownerUid = other.ownerUid;
         ownerPackageName = other.ownerPackageName;
@@ -400,6 +424,8 @@ final class DisplayDeviceInfo {
         sb.append(", colorMode ").append(colorMode);
         sb.append(", supportedColorModes ").append(Arrays.toString(supportedColorModes));
         sb.append(", HdrCapabilities ").append(hdrCapabilities);
+        sb.append(", allmSupported ").append(allmSupported);
+        sb.append(", gameContentTypeSupported ").append(gameContentTypeSupported);
         sb.append(", density ").append(densityDpi);
         sb.append(", ").append(xDpi).append(" x ").append(yDpi).append(" dpi");
         sb.append(", appVsyncOff ").append(appVsyncOffsetNanos);
@@ -413,6 +439,7 @@ final class DisplayDeviceInfo {
         if (address != null) {
             sb.append(", address ").append(address);
         }
+        sb.append(", deviceProductInfo ").append(deviceProductInfo);
         sb.append(", state ").append(Display.stateToString(state));
         if (ownerUid != 0 || ownerPackageName != null) {
             sb.append(", owner ").append(ownerPackageName);

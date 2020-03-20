@@ -8,6 +8,7 @@ import static android.app.WaitResult.LAUNCH_STATE_HOT;
 import static android.app.WaitResult.LAUNCH_STATE_WARM;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
+import static android.app.WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECONDARY;
@@ -82,13 +83,13 @@ import android.util.ArrayMap;
 import android.util.EventLog;
 import android.util.Log;
 import android.util.Slog;
-import android.util.StatsLog;
 import android.util.TimeUtils;
 import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.os.BackgroundThread;
+import com.android.internal.util.FrameworkStatsLog;
 import com.android.internal.util.function.pooled.PooledLambda;
 import com.android.server.LocalServices;
 
@@ -119,6 +120,7 @@ class ActivityMetricsLogger {
     private static final int WINDOW_STATE_SIDE_BY_SIDE = 1;
     private static final int WINDOW_STATE_FREEFORM = 2;
     private static final int WINDOW_STATE_ASSISTANT = 3;
+    private static final int WINDOW_STATE_MULTI_WINDOW = 4;
     private static final int WINDOW_STATE_INVALID = -1;
 
     /**
@@ -132,7 +134,7 @@ class ActivityMetricsLogger {
     // Preallocated strings we are sending to tron, so we don't have to allocate a new one every
     // time we log.
     private static final String[] TRON_WINDOW_STATE_VARZ_STRINGS = {
-            "window_time_0", "window_time_1", "window_time_2", "window_time_3"};
+            "window_time_0", "window_time_1", "window_time_2", "window_time_3", "window_time_4"};
 
     private int mWindowState = WINDOW_STATE_STANDARD;
     private long mLastLogTimeSecs;
@@ -273,8 +275,9 @@ class ActivityMetricsLogger {
         }
 
         /** @return {@code true} if the activity matches a launched activity in this transition. */
-        boolean contains(ActivityRecord r) {
-            return r == mLastLaunchedActivity || mPendingDrawActivities.contains(r);
+        boolean contains(WindowContainer wc) {
+            final ActivityRecord r = AppTransitionController.getAppFromContainer(wc);
+            return r != null && (r == mLastLaunchedActivity || mPendingDrawActivities.contains(r));
         }
 
         /** Called when the activity is drawn or won't be drawn. */
@@ -394,7 +397,7 @@ class ActivityMetricsLogger {
 
         mWindowState = WINDOW_STATE_INVALID;
         ActivityStack stack =
-                mSupervisor.mRootActivityContainer.getTopDisplayFocusedStack();
+                mSupervisor.mRootWindowContainer.getTopDisplayFocusedStack();
         if (stack == null) {
             return;
         }
@@ -406,7 +409,7 @@ class ActivityMetricsLogger {
 
         @WindowingMode int windowingMode = stack.getWindowingMode();
         if (windowingMode == WINDOWING_MODE_PINNED) {
-            stack = mSupervisor.mRootActivityContainer.findStackBehind(stack);
+            stack = mSupervisor.mRootWindowContainer.findStackBehind(stack);
             windowingMode = stack.getWindowingMode();
         }
         switch (windowingMode) {
@@ -420,6 +423,9 @@ class ActivityMetricsLogger {
             case WINDOWING_MODE_FREEFORM:
                 mWindowState = WINDOW_STATE_FREEFORM;
                 break;
+            case WINDOWING_MODE_MULTI_WINDOW:
+                mWindowState = WINDOW_STATE_MULTI_WINDOW;
+                break;
             default:
                 if (windowingMode != WINDOWING_MODE_UNDEFINED) {
                     throw new IllegalStateException("Unknown windowing mode for stack=" + stack
@@ -430,10 +436,10 @@ class ActivityMetricsLogger {
 
     /** @return Non-null {@link TransitionInfo} if the activity is found in an active transition. */
     @Nullable
-    private TransitionInfo getActiveTransitionInfo(ActivityRecord r) {
+    private TransitionInfo getActiveTransitionInfo(WindowContainer wc) {
         for (int i = mTransitionInfoList.size() - 1; i >= 0; i--) {
             final TransitionInfo info = mTransitionInfoList.get(i);
-            if (info.contains(r)) {
+            if (info.contains(wc)) {
                 return info;
             }
         }
@@ -543,9 +549,10 @@ class ActivityMetricsLogger {
             return;
         }
 
-        if (info != null) {
-            // If we are already in an existing transition, only update the activity name, but not
-            // the other attributes.
+        if (info != null
+                && info.mLastLaunchedActivity.mDisplayContent == launchedActivity.mDisplayContent) {
+            // If we are already in an existing transition on the same display, only update the
+            // activity name, but not the other attributes.
 
             if (DEBUG_METRICS) Slog.i(TAG, "notifyActivityLaunched update launched activity");
             // Coalesce multiple (trampoline) activities from a single sequence together.
@@ -575,6 +582,9 @@ class ActivityMetricsLogger {
 
     /**
      * Notifies the tracker that all windows of the app have been drawn.
+     *
+     * @return Non-null info if the activity was pending to draw, otherwise it might have been set
+     *         to invisible (removed from active transition) or it was already drawn.
      */
     @Nullable
     TransitionInfoSnapshot notifyWindowsDrawn(@NonNull ActivityRecord r, long timestampNs) {
@@ -614,19 +624,19 @@ class ActivityMetricsLogger {
      * @param activityToReason A map from activity to a reason integer, which must be on of
      *                         ActivityTaskManagerInternal.APP_TRANSITION_* reasons.
      */
-    void notifyTransitionStarting(ArrayMap<ActivityRecord, Integer> activityToReason) {
+    void notifyTransitionStarting(ArrayMap<WindowContainer, Integer> activityToReason) {
         if (DEBUG_METRICS) Slog.i(TAG, "notifyTransitionStarting");
 
         final long timestampNs = SystemClock.elapsedRealtimeNanos();
         for (int index = activityToReason.size() - 1; index >= 0; index--) {
-            final ActivityRecord r = activityToReason.keyAt(index);
-            final TransitionInfo info = getActiveTransitionInfo(r);
+            final WindowContainer wc = activityToReason.keyAt(index);
+            final TransitionInfo info = getActiveTransitionInfo(wc);
             if (info == null || info.mLoggedTransitionStarting) {
                 // Ignore any subsequent notifyTransitionStarting.
                 continue;
             }
             if (DEBUG_METRICS) {
-                Slog.i(TAG, "notifyTransitionStarting activity=" + r + " info=" + info);
+                Slog.i(TAG, "notifyTransitionStarting activity=" + wc + " info=" + info);
             }
 
             info.mCurrentTransitionDelayMs = info.calculateDelay(timestampNs);
@@ -745,10 +755,10 @@ class ActivityMetricsLogger {
         if (abort) {
             launchObserverNotifyActivityLaunchCancelled(info);
         } else {
-            logAppTransitionFinished(info);
             if (info.isInterestingToLoggerAndObserver()) {
                 launchObserverNotifyActivityLaunchFinished(info, timestampNs);
             }
+            logAppTransitionFinished(info);
         }
         info.mPendingDrawActivities.clear();
         mTransitionInfoList.remove(info);
@@ -762,8 +772,8 @@ class ActivityMetricsLogger {
         builder.setType(type);
         builder.addTaggedData(FIELD_CLASS_NAME, activity.info.name);
         mMetricsLogger.write(builder);
-        StatsLog.write(
-                StatsLog.APP_START_CANCELED,
+        FrameworkStatsLog.write(
+                FrameworkStatsLog.APP_START_CANCELED,
                 activity.info.applicationInfo.uid,
                 activity.packageName,
                 convertAppStartTransitionType(type),
@@ -838,8 +848,8 @@ class ActivityMetricsLogger {
         builder.addTaggedData(PACKAGE_OPTIMIZATION_COMPILATION_FILTER,
                 packageOptimizationInfo.getCompilationFilter());
         mMetricsLogger.write(builder);
-        StatsLog.write(
-                StatsLog.APP_START_OCCURRED,
+        FrameworkStatsLog.write(
+                FrameworkStatsLog.APP_START_OCCURRED,
                 info.applicationInfo.uid,
                 info.packageName,
                 convertAppStartTransitionType(info.type),
@@ -889,15 +899,15 @@ class ActivityMetricsLogger {
 
     private int convertAppStartTransitionType(int tronType) {
         if (tronType == TYPE_TRANSITION_COLD_LAUNCH) {
-            return StatsLog.APP_START_OCCURRED__TYPE__COLD;
+            return FrameworkStatsLog.APP_START_OCCURRED__TYPE__COLD;
         }
         if (tronType == TYPE_TRANSITION_WARM_LAUNCH) {
-            return StatsLog.APP_START_OCCURRED__TYPE__WARM;
+            return FrameworkStatsLog.APP_START_OCCURRED__TYPE__WARM;
         }
         if (tronType == TYPE_TRANSITION_HOT_LAUNCH) {
-            return StatsLog.APP_START_OCCURRED__TYPE__HOT;
+            return FrameworkStatsLog.APP_START_OCCURRED__TYPE__HOT;
         }
-        return StatsLog.APP_START_OCCURRED__TYPE__UNKNOWN;
+        return FrameworkStatsLog.APP_START_OCCURRED__TYPE__UNKNOWN;
     }
 
     /** @return the last known window drawn delay of the given activity. */
@@ -951,13 +961,13 @@ class ActivityMetricsLogger {
         builder.addTaggedData(APP_TRANSITION_PROCESS_RUNNING,
                 info.mProcessRunning ? 1 : 0);
         mMetricsLogger.write(builder);
-        StatsLog.write(
-                StatsLog.APP_START_FULLY_DRAWN,
+        FrameworkStatsLog.write(
+                FrameworkStatsLog.APP_START_FULLY_DRAWN,
                 info.mLastLaunchedActivity.info.applicationInfo.uid,
                 info.mLastLaunchedActivity.packageName,
                 restoredFromBundle
-                        ? StatsLog.APP_START_FULLY_DRAWN__TYPE__WITH_BUNDLE
-                        : StatsLog.APP_START_FULLY_DRAWN__TYPE__WITHOUT_BUNDLE,
+                        ? FrameworkStatsLog.APP_START_FULLY_DRAWN__TYPE__WITH_BUNDLE
+                        : FrameworkStatsLog.APP_START_FULLY_DRAWN__TYPE__WITHOUT_BUNDLE,
                 info.mLastLaunchedActivity.info.name,
                 info.mProcessRunning,
                 startupTimeMs);
@@ -1062,8 +1072,8 @@ class ActivityMetricsLogger {
             return;
         }
 
-        StatsLog.write(
-                StatsLog.APP_START_MEMORY_STATE_CAPTURED,
+        FrameworkStatsLog.write(
+                FrameworkStatsLog.APP_START_MEMORY_STATE_CAPTURED,
                 uid,
                 info.processName,
                 info.launchedActivityName,
@@ -1206,7 +1216,7 @@ class ActivityMetricsLogger {
         final ProtoOutputStream protoOutputStream =
                 new ProtoOutputStream(LAUNCH_OBSERVER_ACTIVITY_RECORD_PROTO_CHUNK_SIZE);
         // Write this data out as the top-most ActivityRecordProto (i.e. it is not a sub-object).
-        record.dumpDebug(protoOutputStream);
+        record.dumpDebug(protoOutputStream, WindowTraceLogLevel.ALL);
         final byte[] bytes = protoOutputStream.getBytes();
 
         Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);

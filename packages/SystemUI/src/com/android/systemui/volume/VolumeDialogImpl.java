@@ -65,7 +65,6 @@ import android.util.Log;
 import android.util.Slog;
 import android.util.SparseBooleanArray;
 import android.view.ContextThemeWrapper;
-import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.View.AccessibilityDelegate;
@@ -160,6 +159,7 @@ public class VolumeDialogImpl implements VolumeDialog,
     private boolean mHovering = false;
     private boolean mShowActiveStreamOnly;
     private boolean mConfigChanged = false;
+    private boolean mIsAnimatingDismiss = false;
     private boolean mHasSeenODICaptionsTooltip;
     private ViewStub mODICaptionsTooltipViewStub;
     private View mODICaptionsTooltipView = null;
@@ -223,7 +223,7 @@ public class VolumeDialogImpl implements VolumeDialog,
         lp.format = PixelFormat.TRANSLUCENT;
         lp.setTitle(VolumeDialogImpl.class.getSimpleName());
         lp.windowAnimations = -1;
-        lp.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+        lp.gravity = mContext.getResources().getInteger(R.integer.volume_dialog_gravity);
         mWindow.setAttributes(lp);
         mWindow.setLayout(WRAP_CONTENT, WRAP_CONTENT);
 
@@ -693,6 +693,7 @@ public class VolumeDialogImpl implements VolumeDialog,
 
         initSettingsH();
         mShowing = true;
+        mIsAnimatingDismiss = false;
         mDialog.show();
         Events.writeEvent(Events.EVENT_SHOW_DIALOG, reason, mKeyguard.isKeyguardLocked());
         mController.notifyVisible(true);
@@ -737,6 +738,10 @@ public class VolumeDialogImpl implements VolumeDialog,
         }
         mHandler.removeMessages(H.DISMISS);
         mHandler.removeMessages(H.SHOW);
+        if (mIsAnimatingDismiss) {
+            return;
+        }
+        mIsAnimatingDismiss = true;
         mDialogView.animate().cancel();
         if (mShowing) {
             mShowing = false;
@@ -752,6 +757,7 @@ public class VolumeDialogImpl implements VolumeDialog,
                 .withEndAction(() -> mHandler.postDelayed(() -> {
                     mDialog.dismiss();
                     tryToRemoveCaptionsTooltip();
+                    mIsAnimatingDismiss = false;
                 }, 50));
         if (!isLandscape()) animator.translationX(mDialogView.getWidth() / 2.0f);
         animator.start();
@@ -818,7 +824,7 @@ public class VolumeDialogImpl implements VolumeDialog,
     }
 
     protected void updateRingerH() {
-        if (mState != null) {
+        if (mRinger != null && mState != null) {
             final StreamState ss = mState.states.get(AudioManager.STREAM_RING);
             if (ss == null) {
                 return;

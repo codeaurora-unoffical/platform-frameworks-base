@@ -16,8 +16,14 @@
 
 package com.android.systemui.pip;
 
+import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
+import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 import static android.util.TypedValue.COMPLEX_UNIT_DIP;
+import static android.view.Surface.ROTATION_0;
+import static android.view.Surface.ROTATION_180;
 
+import android.app.ActivityManager;
+import android.app.ActivityTaskManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.res.Resources;
@@ -30,13 +36,13 @@ import android.util.Size;
 import android.util.TypedValue;
 import android.view.DisplayInfo;
 import android.view.Gravity;
-import android.view.IPinnedStackController;
 import android.view.IWindowManager;
+import android.view.WindowContainerTransaction;
 import android.view.WindowManagerGlobal;
 
-import com.android.internal.policy.PipSnapAlgorithm;
-
 import java.io.PrintWriter;
+
+import javax.inject.Inject;
 
 /**
  * Handles bounds calculation for PIP on Phone and other form factors, it keeps tracking variant
@@ -51,9 +57,7 @@ public class PipBoundsHandler {
     private final IWindowManager mWindowManager;
     private final PipSnapAlgorithm mSnapAlgorithm;
     private final DisplayInfo mDisplayInfo = new DisplayInfo();
-    private final Rect mStableInsets = new Rect();
     private final Rect mTmpInsets = new Rect();
-    private final Point mTmpDisplaySize = new Point();
 
     /**
      * Tracks the destination bounds, used for any following
@@ -61,7 +65,6 @@ public class PipBoundsHandler {
      */
     private final Rect mLastDestinationBounds = new Rect();
 
-    private IPinnedStackController mPinnedStackController;
     private ComponentName mLastPipComponentName;
     private float mReentrySnapFraction = INVALID_SNAP_FRACTION;
     private Size mReentrySize = null;
@@ -75,15 +78,15 @@ public class PipBoundsHandler {
     private Point mScreenEdgeInsets;
     private int mCurrentMinSize;
 
-    private boolean mIsMinimized;
     private boolean mIsImeShowing;
     private int mImeHeight;
     private boolean mIsShelfShowing;
     private int mShelfHeight;
 
-    public PipBoundsHandler(Context context) {
+    @Inject
+    public PipBoundsHandler(Context context, PipSnapAlgorithm pipSnapAlgorithm) {
         mContext = context;
-        mSnapAlgorithm = new PipSnapAlgorithm(context);
+        mSnapAlgorithm = pipSnapAlgorithm;
         mWindowManager = WindowManagerGlobal.getWindowManagerService();
         reloadResources();
         // Initialize the aspect ratio to the default aspect ratio.  Don't do this in reload
@@ -118,10 +121,6 @@ public class PipBoundsHandler {
                 com.android.internal.R.dimen.config_pictureInPictureMaxAspectRatio);
     }
 
-    public void setPinnedStackController(IPinnedStackController controller) {
-        mPinnedStackController = controller;
-    }
-
     public void setMinEdgeSize(int minEdgeSize) {
         mCurrentMinSize = minEdgeSize;
     }
@@ -147,13 +146,6 @@ public class PipBoundsHandler {
     public void onImeVisibilityChanged(boolean imeVisible, int imeHeight) {
         mIsImeShowing = imeVisible;
         mImeHeight = imeHeight;
-    }
-
-    /**
-     * Responds to IPinnedStackListener on minimized state change.
-     */
-    public void onMinimizedStateChanged(boolean minimized) {
-        mIsMinimized = minimized;
     }
 
     /**
@@ -199,6 +191,7 @@ public class PipBoundsHandler {
         mReentrySnapFraction = INVALID_SNAP_FRACTION;
         mReentrySize = null;
         mLastPipComponentName = null;
+        mLastDestinationBounds.setEmpty();
     }
 
     public Rect getLastDestinationBounds() {
@@ -231,12 +224,13 @@ public class PipBoundsHandler {
     }
 
     /**
-     * Responds to IPinnedStackListener on preparing the pinned stack animation.
+     * @return {@link Rect} of the destination PiP window bounds.
      */
-    public void onPrepareAnimation(Rect sourceRectHint, float aspectRatio, Rect bounds) {
+    Rect getDestinationBounds(float aspectRatio, Rect bounds) {
         final Rect destinationBounds;
+        final Rect defaultBounds = getDefaultBounds(mReentrySnapFraction, mReentrySize);
         if (bounds == null) {
-            destinationBounds = getDefaultBounds(mReentrySnapFraction, mReentrySize);
+            destinationBounds = new Rect(defaultBounds);
         } else {
             destinationBounds = new Rect(bounds);
         }
@@ -245,16 +239,77 @@ public class PipBoundsHandler {
                     false /* useCurrentMinEdgeSize */);
         }
         if (destinationBounds.equals(bounds)) {
-            return;
+            return bounds;
         }
         mAspectRatio = aspectRatio;
         onResetReentryBoundsUnchecked();
+        mLastDestinationBounds.set(destinationBounds);
+        return destinationBounds;
+    }
+
+    float getDefaultAspectRatio() {
+        return mDefaultAspectRatio;
+    }
+
+    /**
+     * Updates the display info, calculating and returning the new stack and movement bounds in the
+     * new orientation of the device if necessary.
+     *
+     * @return {@code true} if internal {@link DisplayInfo} is rotated, {@code false} otherwise.
+     */
+    public boolean onDisplayRotationChanged(Rect outBounds, int displayId, int fromRotation,
+            int toRotation, WindowContainerTransaction t) {
+        // Bail early if the event is not sent to current {@link #mDisplayInfo}
+        if ((displayId != mDisplayInfo.displayId) || (fromRotation == toRotation)) {
+            return false;
+        }
+
+        // Bail early if the pinned stack is staled.
+        final ActivityManager.StackInfo pinnedStackInfo;
         try {
-            mPinnedStackController.startAnimation(destinationBounds, sourceRectHint,
-                    -1 /* animationDuration */);
-            mLastDestinationBounds.set(destinationBounds);
+            pinnedStackInfo = ActivityTaskManager.getService()
+                    .getStackInfo(WINDOWING_MODE_PINNED, ACTIVITY_TYPE_UNDEFINED);
+            if (pinnedStackInfo == null) return false;
         } catch (RemoteException e) {
-            Log.e(TAG, "Failed to start PiP animation from SysUI", e);
+            Log.e(TAG, "Failed to get StackInfo for pinned stack", e);
+            return false;
+        }
+
+        // Calculate the snap fraction of the current stack along the old movement bounds
+        final Rect postChangeStackBounds = new Rect(mLastDestinationBounds);
+        final float snapFraction = getSnapFraction(postChangeStackBounds);
+
+        // Populate the new {@link #mDisplayInfo}.
+        // The {@link DisplayInfo} queried from DisplayManager would be the one before rotation,
+        // therefore, the width/height may require a swap first.
+        // Moving forward, we should get the new dimensions after rotation from DisplayLayout.
+        mDisplayInfo.rotation = toRotation;
+        updateDisplayInfoIfNeeded();
+
+        // Calculate the stack bounds in the new orientation based on same fraction along the
+        // rotated movement bounds.
+        final Rect postChangeMovementBounds = getMovementBounds(postChangeStackBounds,
+                false /* adjustForIme */);
+        mSnapAlgorithm.applySnapFraction(postChangeStackBounds, postChangeMovementBounds,
+                snapFraction);
+
+        outBounds.set(postChangeStackBounds);
+        mLastDestinationBounds.set(outBounds);
+        t.setBounds(pinnedStackInfo.stackToken, outBounds);
+        return true;
+    }
+
+    private void updateDisplayInfoIfNeeded() {
+        final boolean updateNeeded;
+        if ((mDisplayInfo.rotation == ROTATION_0) || (mDisplayInfo.rotation == ROTATION_180)) {
+            updateNeeded = (mDisplayInfo.logicalWidth > mDisplayInfo.logicalHeight);
+        } else {
+            updateNeeded = (mDisplayInfo.logicalWidth < mDisplayInfo.logicalHeight);
+        }
+        if (updateNeeded) {
+            final int newLogicalHeight = mDisplayInfo.logicalWidth;
+            mDisplayInfo.logicalWidth = mDisplayInfo.logicalHeight;
+            mDisplayInfo.logicalHeight = newLogicalHeight;
         }
     }
 
@@ -267,6 +322,14 @@ public class PipBoundsHandler {
     }
 
     /**
+     * Sets the current bound with the currently store aspect ratio.
+     * @param stackBounds
+     */
+    public void transformBoundsToAspectRatio(Rect stackBounds) {
+        transformBoundsToAspectRatio(stackBounds, mAspectRatio, true);
+    }
+
+    /**
      * Set the current bounds (or the default bounds if there are no current bounds) with the
      * specified aspect ratio.
      */
@@ -276,17 +339,22 @@ public class PipBoundsHandler {
         // Save the snap fraction and adjust the size based on the new aspect ratio.
         final float snapFraction = mSnapAlgorithm.getSnapFraction(stackBounds,
                 getMovementBounds(stackBounds));
-        final int minEdgeSize = useCurrentMinEdgeSize ? mCurrentMinSize : mDefaultMinSize;
-        final Size size = mSnapAlgorithm.getSizeForAspectRatio(
-                new Size(stackBounds.width(), stackBounds.height()), aspectRatio, minEdgeSize);
+        final int minEdgeSize;
+        final Size size;
+        if (useCurrentMinEdgeSize) {
+            minEdgeSize = mCurrentMinSize;
+            size = mSnapAlgorithm.getSizeForAspectRatio(
+                    new Size(stackBounds.width(), stackBounds.height()), aspectRatio, minEdgeSize);
+        } else {
+            minEdgeSize = mDefaultMinSize;
+            size = mSnapAlgorithm.getSizeForAspectRatio(aspectRatio, minEdgeSize,
+                    mDisplayInfo.logicalWidth, mDisplayInfo.logicalHeight);
+        }
 
         final int left = (int) (stackBounds.centerX() - size.getWidth() / 2f);
         final int top = (int) (stackBounds.centerY() - size.getHeight() / 2f);
         stackBounds.set(left, top, left + size.getWidth(), top + size.getHeight());
         mSnapAlgorithm.applySnapFraction(stackBounds, getMovementBounds(stackBounds), snapFraction);
-        if (mIsMinimized) {
-            applyMinimizedOffset(stackBounds, getMovementBounds(stackBounds));
-        }
     }
 
     /**
@@ -350,20 +418,6 @@ public class PipBoundsHandler {
     }
 
     /**
-     * Applies the minimized offsets to the given stack bounds.
-     */
-    private void applyMinimizedOffset(Rect stackBounds, Rect movementBounds) {
-        mTmpDisplaySize.set(mDisplayInfo.logicalWidth, mDisplayInfo.logicalHeight);
-        try {
-            mWindowManager.getStableInsets(mContext.getDisplayId(), mStableInsets);
-            mSnapAlgorithm.applyMinimizedOffset(stackBounds, movementBounds, mTmpDisplaySize,
-                    mStableInsets);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Failed to get stable insets from WM", e);
-        }
-    }
-
-    /**
      * @return the default snap fraction to apply instead of the default gravity when calculating
      *         the default stack bounds when first entering PiP.
      */
@@ -400,7 +454,6 @@ public class PipBoundsHandler {
         pw.println(innerPrefix + "mMaxAspectRatio=" + mMaxAspectRatio);
         pw.println(innerPrefix + "mAspectRatio=" + mAspectRatio);
         pw.println(innerPrefix + "mDefaultStackGravity=" + mDefaultStackGravity);
-        pw.println(innerPrefix + "mIsMinimized=" + mIsMinimized);
         pw.println(innerPrefix + "mIsImeShowing=" + mIsImeShowing);
         pw.println(innerPrefix + "mImeHeight=" + mImeHeight);
         pw.println(innerPrefix + "mIsShelfShowing=" + mIsShelfShowing);

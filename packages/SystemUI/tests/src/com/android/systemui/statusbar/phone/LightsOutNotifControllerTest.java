@@ -16,9 +16,8 @@
 
 package com.android.systemui.statusbar.phone;
 
+import static android.service.notification.NotificationListenerService.REASON_CANCEL_ALL;
 import static android.view.WindowInsetsController.APPEARANCE_LOW_PROFILE_BARS;
-
-import static com.android.internal.util.Preconditions.checkNotNull;
 
 import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertTrue;
@@ -49,6 +48,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+
+import java.util.Objects;
 
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
@@ -85,11 +86,11 @@ public class LightsOutNotifControllerTest extends SysuiTestCase {
 
         // Capture the entry listener object so we can simulate events in tests below
         verify(mEntryManager).addNotificationEntryListener(mListenerCaptor.capture());
-        mEntryListener = checkNotNull(mListenerCaptor.getValue());
+        mEntryListener = Objects.requireNonNull(mListenerCaptor.getValue());
 
         // Capture the callback object so we can simulate callback events in tests below
         verify(mCommandQueue).addCallback(mCallbacksCaptor.capture());
-        mCallbacks = checkNotNull(mCallbacksCaptor.getValue());
+        mCallbacks = Objects.requireNonNull(mCallbacksCaptor.getValue());
     }
 
     @Test
@@ -205,7 +206,8 @@ public class LightsOutNotifControllerTest extends SysuiTestCase {
         // WHEN all active notifications are removed
         when(mEntryManager.hasActiveNotifications()).thenReturn(false);
         assertFalse(mLightsOutNotifController.shouldShowDot());
-        mEntryListener.onEntryRemoved(mock(NotificationEntry.class), null, false);
+        mEntryListener.onEntryRemoved(
+                mock(NotificationEntry.class), null, false, REASON_CANCEL_ALL);
 
         // THEN we shouldn't see the dot view
         assertIsShowingDot(false);

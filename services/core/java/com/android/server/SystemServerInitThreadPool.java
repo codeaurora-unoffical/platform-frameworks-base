@@ -28,6 +28,7 @@ import com.android.server.am.ActivityManagerService;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -73,7 +74,7 @@ public class SystemServerInitThreadPool {
      */
     public static @NonNull Future<?> submit(@NonNull Runnable runnable,
             @NonNull String description) {
-        Preconditions.checkNotNull(description, "description cannot be null");
+        Objects.requireNonNull(description, "description cannot be null");
 
         SystemServerInitThreadPool instance;
         synchronized (LOCK) {
@@ -174,6 +175,6 @@ public class SystemServerInitThreadPool {
         final ArrayList<Integer> pids = new ArrayList<>();
         pids.add(Process.myPid());
         ActivityManagerService.dumpStackTraces(pids, null, null,
-                Watchdog.getInterestingNativePids());
+                Watchdog.getInterestingNativePids(), null);
     }
 }

@@ -272,10 +272,11 @@ public final class PinnerService extends SystemService {
     private void handlePinOnStart() {
         final String bootImage = SystemProperties.get("dalvik.vm.boot-image", "");
         String[] filesToPin = null;
-        if (bootImage.endsWith("apex.art")) {
-            // Use the files listed for that specific boot image
+        if (bootImage.endsWith("boot-image.prof")) {
+            // Use the files listed for that specific boot image.
+            // TODO: find a better way to know we're using the JIT zygote configuration.
             filesToPin = mContext.getResources().getStringArray(
-                  com.android.internal.R.array.config_apexBootImagePinnerServiceFiles);
+                  com.android.internal.R.array.config_jitzygoteBootImagePinnerServiceFiles);
         } else {
             // Files to pin come from the overlay and can be specified per-device config
             filesToPin = mContext.getResources().getStringArray(
@@ -344,7 +345,7 @@ public final class PinnerService extends SystemService {
                 @Override
                 public void onUidCachedChanged(int uid, boolean cached) throws RemoteException {
                 }
-            }, UID_OBSERVER_GONE | UID_OBSERVER_ACTIVE, 0, "system");
+            }, UID_OBSERVER_GONE | UID_OBSERVER_ACTIVE, 0, null);
         } catch (RemoteException e) {
             Slog.e(TAG, "Failed to register uid observer", e);
         }

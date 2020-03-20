@@ -19,34 +19,49 @@ package com.android.server.media;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.ComponentName;
-import android.content.Intent;
-import android.media.MediaRoute2Info;
 import android.media.MediaRoute2ProviderInfo;
+import android.media.RouteDiscoveryPreference;
+import android.media.RoutingSessionInfo;
 import android.os.Bundle;
 
+import com.android.internal.annotations.GuardedBy;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 abstract class MediaRoute2Provider {
     final ComponentName mComponentName;
     final String mUniqueId;
+    final Object mLock = new Object();
 
     Callback mCallback;
-    private MediaRoute2ProviderInfo mProviderInfo;
+    boolean mIsSystemRouteProvider;
+    private volatile MediaRoute2ProviderInfo mProviderInfo;
+
+    @GuardedBy("mLock")
+    final List<RoutingSessionInfo> mSessionInfos = new ArrayList<>();
 
     MediaRoute2Provider(@NonNull ComponentName componentName) {
         mComponentName = Objects.requireNonNull(componentName, "Component name must not be null.");
         mUniqueId = componentName.flattenToShortString();
     }
 
-    public void setCallback(MediaRoute2ProviderProxy.Callback callback) {
+    public void setCallback(MediaRoute2ProviderServiceProxy.Callback callback) {
         mCallback = callback;
     }
 
-    public abstract void requestSelectRoute(String packageName, String routeId, int seq);
-    public abstract void unselectRoute(String packageName, String routeId);
-    public abstract void sendControlRequest(MediaRoute2Info route, Intent request);
-    public abstract void requestSetVolume(MediaRoute2Info route, int volume);
-    public abstract void requestUpdateVolume(MediaRoute2Info route, int delta);
+    public abstract void requestCreateSession(String packageName, String routeId, long requestId,
+            @Nullable Bundle sessionHints);
+    public abstract void releaseSession(String sessionId, long requestId);
+    public abstract void updateDiscoveryPreference(RouteDiscoveryPreference discoveryPreference);
+
+    public abstract void selectRoute(String sessionId, String routeId, long requestId);
+    public abstract void deselectRoute(String sessionId, String routeId, long requestId);
+    public abstract void transferToRoute(String sessionId, String routeId, long requestId);
+
+    public abstract void setRouteVolume(String routeId, int volume, long requestId);
+    public abstract void setSessionVolume(String sessionId, int volume, long requestId);
 
     @NonNull
     public String getUniqueId() {
@@ -58,18 +73,33 @@ abstract class MediaRoute2Provider {
         return mProviderInfo;
     }
 
-    void setAndNotifyProviderInfo(MediaRoute2ProviderInfo info) {
-        //TODO: check if info is not updated
-        if (info == null) {
+    @NonNull
+    public List<RoutingSessionInfo> getSessionInfos() {
+        synchronized (mLock) {
+            return mSessionInfos;
+        }
+    }
+
+    void setProviderState(MediaRoute2ProviderInfo providerInfo) {
+        if (providerInfo == null) {
             mProviderInfo = null;
         } else {
-            mProviderInfo = new MediaRoute2ProviderInfo.Builder(info)
+            mProviderInfo = new MediaRoute2ProviderInfo.Builder(providerInfo)
                     .setUniqueId(mUniqueId)
+                    .setSystemRouteProvider(mIsSystemRouteProvider)
                     .build();
         }
+    }
+
+    void notifyProviderState() {
         if (mCallback != null) {
             mCallback.onProviderStateChanged(this);
         }
+    }
+
+    void setAndNotifyProviderState(MediaRoute2ProviderInfo providerInfo) {
+        setProviderState(providerInfo);
+        notifyProviderState();
     }
 
     public boolean hasComponentName(String packageName, String className) {
@@ -79,8 +109,12 @@ abstract class MediaRoute2Provider {
 
     public interface Callback {
         void onProviderStateChanged(@Nullable MediaRoute2Provider provider);
-        void onRouteSelected(@NonNull MediaRoute2ProviderProxy provider,
-                @NonNull String clientPackageName, @NonNull MediaRoute2Info route,
-                @Nullable Bundle controlHints, int seq);
+        void onSessionCreated(@NonNull MediaRoute2Provider provider,
+                @Nullable RoutingSessionInfo sessionInfo, long requestId);
+        void onSessionUpdated(@NonNull MediaRoute2Provider provider,
+                @NonNull RoutingSessionInfo sessionInfo);
+        void onSessionReleased(@NonNull MediaRoute2Provider provider,
+                @NonNull RoutingSessionInfo sessionInfo);
+        void onRequestFailed(@NonNull MediaRoute2Provider provider, long requestId, int reason);
     }
 }

@@ -16,13 +16,15 @@
 
 package android.app;
 
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ContentProviderClient;
 import android.content.ContentResolver;
 import android.content.ContentUris;
@@ -40,11 +42,13 @@ import android.os.Environment;
 import android.os.FileUtils;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
+import android.provider.BaseColumns;
 import android.provider.Downloads;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.provider.Settings.SettingNotFoundException;
 import android.text.TextUtils;
+import android.util.LongSparseArray;
 import android.util.Pair;
 
 import java.io.File;
@@ -1069,6 +1073,37 @@ public class DownloadManager {
     }
 
     /**
+     * Notify {@link DownloadManager} that the given {@link MediaStore} items
+     * were just deleted so that {@link DownloadManager} internal data
+     * structures can be cleaned up.
+     *
+     * @param idToMime map from {@link BaseColumns#_ID} to
+     *            {@link ContentResolver#getType(Uri)}.
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.WRITE_MEDIA_STORAGE)
+    public void onMediaStoreDownloadsDeleted(@NonNull LongSparseArray<String> idToMime) {
+        try (ContentProviderClient client = mResolver
+                .acquireUnstableContentProviderClient(mBaseUri)) {
+           final Bundle callExtras = new Bundle();
+           final long[] ids = new long[idToMime.size()];
+           final String[] mimeTypes = new String[idToMime.size()];
+           for (int i = idToMime.size() - 1; i >= 0; --i) {
+               ids[i] = idToMime.keyAt(i);
+               mimeTypes[i] = idToMime.valueAt(i);
+           }
+           callExtras.putLongArray(android.provider.Downloads.EXTRA_IDS, ids);
+           callExtras.putStringArray(android.provider.Downloads.EXTRA_MIME_TYPES,
+                   mimeTypes);
+           client.call(android.provider.Downloads.CALL_MEDIASTORE_DOWNLOADS_DELETED,
+                   null, callExtras);
+        } catch (RemoteException e) {
+            // Should not happen
+        }
+    }
+
+    /**
      * Enqueue a new download.  The download will start automatically once the download manager is
      * ready to execute it and connectivity is available.
      *
@@ -1314,8 +1349,8 @@ public class DownloadManager {
 
         // TODO: DownloadProvider.update() should take care of updating corresponding
         // MediaProvider entries.
-        MediaStore.scanFile(context, before);
-        MediaStore.scanFile(context, after);
+        MediaStore.scanFile(mResolver, before);
+        MediaStore.scanFile(mResolver, after);
 
         final ContentValues values = new ContentValues();
         values.put(Downloads.Impl.COLUMN_TITLE, displayName);

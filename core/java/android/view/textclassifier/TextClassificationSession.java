@@ -16,10 +16,15 @@
 
 package android.view.textclassifier;
 
+import android.annotation.NonNull;
 import android.annotation.WorkerThread;
 import android.view.textclassifier.SelectionEvent.InvocationMethod;
 
 import com.android.internal.util.Preconditions;
+
+import java.util.Objects;
+
+import sun.misc.Cleaner;
 
 /**
  * Session-aware TextClassifier.
@@ -33,15 +38,18 @@ final class TextClassificationSession implements TextClassifier {
     private final SelectionEventHelper mEventHelper;
     private final TextClassificationSessionId mSessionId;
     private final TextClassificationContext mClassificationContext;
+    private final Cleaner mCleaner;
 
     private boolean mDestroyed;
 
     TextClassificationSession(TextClassificationContext context, TextClassifier delegate) {
-        mClassificationContext = Preconditions.checkNotNull(context);
-        mDelegate = Preconditions.checkNotNull(delegate);
+        mClassificationContext = Objects.requireNonNull(context);
+        mDelegate = Objects.requireNonNull(delegate);
         mSessionId = new TextClassificationSessionId();
         mEventHelper = new SelectionEventHelper(mSessionId, mClassificationContext);
         initializeRemoteSession();
+        // This ensures destroy() is called if the client forgot to do so.
+        mCleaner = Cleaner.create(this, new CleanerRunnable(mEventHelper, mDelegate));
     }
 
     @Override
@@ -112,8 +120,7 @@ final class TextClassificationSession implements TextClassifier {
 
     @Override
     public void destroy() {
-        mEventHelper.endSession();
-        mDelegate.destroy();
+        mCleaner.clean();
         mDestroyed = true;
     }
 
@@ -149,8 +156,8 @@ final class TextClassificationSession implements TextClassifier {
 
         SelectionEventHelper(
                 TextClassificationSessionId sessionId, TextClassificationContext context) {
-            mSessionId = Preconditions.checkNotNull(sessionId);
-            mContext = Preconditions.checkNotNull(context);
+            mSessionId = Objects.requireNonNull(sessionId);
+            mContext = Objects.requireNonNull(context);
         }
 
         /**
@@ -182,6 +189,7 @@ final class TextClassificationSession implements TextClassifier {
                     mSmartEvent = event;
                     break;
                 case SelectionEvent.ACTION_ABANDON:
+                case SelectionEvent.ACTION_OVERTYPE:
                     if (mPrevEvent != null) {
                         event.setEntityType(mPrevEvent.getEntityType());
                     }
@@ -253,6 +261,27 @@ final class TextClassificationSession implements TextClassifier {
                 default:
                     return;
             }
+        }
+    }
+
+    // We use a static nested class here to avoid retaining the object reference of the outer
+    // class. Otherwise. the Cleaner would never be triggered.
+    private static class CleanerRunnable implements Runnable {
+        @NonNull
+        private final SelectionEventHelper mEventHelper;
+        @NonNull
+        private final TextClassifier mDelegate;
+
+        CleanerRunnable(
+                @NonNull SelectionEventHelper eventHelper, @NonNull TextClassifier delegate) {
+            mEventHelper = Objects.requireNonNull(eventHelper);
+            mDelegate = Objects.requireNonNull(delegate);
+        }
+
+        @Override
+        public void run() {
+            mEventHelper.endSession();
+            mDelegate.destroy();
         }
     }
 }

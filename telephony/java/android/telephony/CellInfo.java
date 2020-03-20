@@ -16,9 +16,10 @@
 
 package android.telephony;
 
+import android.annotation.ElapsedRealtimeLong;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.hardware.radio.V1_4.CellInfo.Info;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -177,8 +178,20 @@ public abstract class CellInfo implements Parcelable {
     /**
      * Approximate time this cell information was received from the modem.
      *
-     * @return a time stamp in nanos since boot.
+     * @return a time stamp in millis since boot.
      */
+    @ElapsedRealtimeLong
+    public long getTimestampMillis() {
+        return mTimeStamp / 1000000;
+    }
+
+    /**
+     * Approximate time this cell information was received from the modem.
+     *
+     * @return a time stamp in nanos since boot.
+     * @deprecated Use {@link #getTimestampMillis} instead.
+     */
+    @Deprecated
     public long getTimeStamp() {
         return mTimeStamp;
     }

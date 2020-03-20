@@ -17,7 +17,7 @@
 package android.content;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
@@ -27,6 +27,7 @@ import android.os.IBinder;
 import android.os.ICancellationSignal;
 import android.os.IInterface;
 import android.os.ParcelFileDescriptor;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
 
 import java.io.FileNotFoundException;
@@ -42,6 +43,14 @@ public interface IContentProvider extends IInterface {
             @Nullable Bundle queryArgs, @Nullable ICancellationSignal cancellationSignal)
             throws RemoteException;
     public String getType(Uri url) throws RemoteException;
+
+    /**
+     * A oneway version of getType. The functionality is exactly the same, except that the
+     * call returns immediately, and the resulting type is returned when available via
+     * a binder callback.
+     */
+    void getTypeAsync(Uri uri, RemoteCallback callback) throws RemoteException;
+
     @Deprecated
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "Use {@link "
             + "ContentProviderClient#insert(android.net.Uri, android.content.ContentValues)} "
@@ -117,6 +126,14 @@ public interface IContentProvider extends IInterface {
     public Uri canonicalize(String callingPkg, @Nullable String featureId, Uri uri)
             throws RemoteException;
 
+    /**
+     * A oneway version of canonicalize. The functionality is exactly the same, except that the
+     * call returns immediately, and the resulting type is returned when available via
+     * a binder callback.
+     */
+    void canonicalizeAsync(String callingPkg, @Nullable String featureId, Uri uri,
+            RemoteCallback callback) throws RemoteException;
+
     public Uri uncanonicalize(String callingPkg, @Nullable String featureId, Uri uri)
             throws RemoteException;
 
@@ -152,4 +169,6 @@ public interface IContentProvider extends IInterface {
     static final int UNCANONICALIZE_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION + 25;
     static final int REFRESH_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION + 26;
     static final int CHECK_URI_PERMISSION_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION + 27;
+    int GET_TYPE_ASYNC_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION + 28;
+    int CANONICALIZE_ASYNC_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION + 29;
 }

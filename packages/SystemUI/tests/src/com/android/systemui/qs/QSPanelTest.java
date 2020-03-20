@@ -36,9 +36,13 @@ import androidx.test.filters.SmallTest;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.SysuiTestCase;
+import com.android.systemui.broadcast.BroadcastDispatcher;
+import com.android.systemui.dump.DumpManager;
 import com.android.systemui.plugins.qs.QSTileView;
 import com.android.systemui.qs.customize.QSCustomizer;
+import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
+import com.android.systemui.statusbar.NotificationMediaManager;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -50,6 +54,7 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Collections;
+import java.util.concurrent.Executor;
 
 @RunWith(AndroidTestingRunner.class)
 @RunWithLooper
@@ -65,11 +70,21 @@ public class QSPanelTest extends SysuiTestCase {
     private QSCustomizer mCustomizer;
     @Mock
     private QSTileImpl dndTile;
+    @Mock
+    private BroadcastDispatcher mBroadcastDispatcher;
+    @Mock
+    private DumpManager mDumpManager;
+    @Mock
+    private QSLogger mQSLogger;
     private ViewGroup mParentView;
     @Mock
     private QSDetail.Callback mCallback;
     @Mock
     private QSTileView mQSTileView;
+    @Mock
+    private NotificationMediaManager mNotificationMediaManager;
+    @Mock
+    private Executor mBackgroundExecutor;
 
     @Before
     public void setup() throws Exception {
@@ -78,7 +93,8 @@ public class QSPanelTest extends SysuiTestCase {
         mTestableLooper = TestableLooper.get(this);
         mTestableLooper.runWithLooper(() -> {
             mMetricsLogger = mDependency.injectMockDependency(MetricsLogger.class);
-            mQsPanel = new QSPanel(mContext, null);
+            mQsPanel = new QSPanel(mContext, null, mDumpManager, mBroadcastDispatcher,
+                    mQSLogger, mNotificationMediaManager, mBackgroundExecutor);
             // Provides a parent with non-zero size for QSPanel
             mParentView = new FrameLayout(mContext);
             mParentView.addView(mQsPanel);
@@ -97,8 +113,10 @@ public class QSPanelTest extends SysuiTestCase {
     public void testSetExpanded_Metrics() {
         mQsPanel.setExpanded(true);
         verify(mMetricsLogger).visibility(eq(MetricsEvent.QS_PANEL), eq(true));
+        verify(mQSLogger).logPanelExpanded(true, mQsPanel.getDumpableTag());
         mQsPanel.setExpanded(false);
         verify(mMetricsLogger).visibility(eq(MetricsEvent.QS_PANEL), eq(false));
+        verify(mQSLogger).logPanelExpanded(false, mQsPanel.getDumpableTag());
     }
 
     @Test
@@ -108,6 +126,14 @@ public class QSPanelTest extends SysuiTestCase {
         mTestableLooper.processAllMessages();
 
         verify(mCallback).onShowingDetail(any(), anyInt(), anyInt());
+    }
+
+    @Test
+    public void setListening() {
+        when(dndTile.getTileSpec()).thenReturn("dnd");
+
+        mQsPanel.setListening(true);
+        verify(mQSLogger).logAllTilesChangeListening(true, mQsPanel.getDumpableTag(), "dnd");
     }
 
 /*    @Test

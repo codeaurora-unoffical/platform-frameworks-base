@@ -20,8 +20,13 @@
 <!-- These resources are around just to allow their values to be customized
      for different hardware and product builds. -->
 <resources>
+    <!-- SystemUIFactory component -->
+    <string name="config_systemUIFactoryComponent" translatable="false">
+        com.android.systemui.tv.TvSystemUIFactory
+    </string>
     <!-- SystemUI Services: The classes of the stuff to start. -->
     <string-array name="config_systemUIServiceComponents" translatable="false">
+        <item>com.android.systemui.util.NotificationChannels</item>
         <item>com.android.systemui.volume.VolumeUI</item>
         <item>com.android.systemui.stackdivider.Divider</item>
         <item>com.android.systemui.statusbar.tv.TvStatusBar</item>
@@ -35,5 +40,6 @@
         <item>com.android.systemui.SliceBroadcastRelayHandler</item>
         <item>com.android.systemui.SizeCompatModeActivityController</item>
         <item>com.android.systemui.statusbar.notification.InstantAppNotifier</item>
+        <item>com.android.systemui.toast.ToastUI</item>
     </string-array>
 </resources>

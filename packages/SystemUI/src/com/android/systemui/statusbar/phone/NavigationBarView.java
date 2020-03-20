@@ -63,11 +63,9 @@ import android.widget.FrameLayout;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.systemui.Dependency;
-import com.android.systemui.DockedStackExistsListener;
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
 import com.android.systemui.assist.AssistHandleViewController;
-import com.android.systemui.assist.AssistManager;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.recents.Recents;
@@ -76,6 +74,7 @@ import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.shared.system.WindowManagerWrapper;
+import com.android.systemui.stackdivider.Divider;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.NavigationBarController;
 import com.android.systemui.statusbar.policy.DeadZone;
@@ -148,7 +147,7 @@ public class NavigationBarView extends FrameLayout implements
 
     private NavigationBarInflaterView mNavigationInflaterView;
     private RecentsOnboarding mRecentsOnboarding;
-    private NotificationPanelView mPanelView;
+    private NotificationPanelViewController mPanelView;
     private FloatingRotationButton mFloatingRotationButton;
     private RotationButtonController mRotationButtonController;
 
@@ -349,7 +348,7 @@ public class NavigationBarView extends FrameLayout implements
         return mBarTransitions.getLightTransitionsController();
     }
 
-    public void setComponents(NotificationPanelView panel, AssistManager assistManager) {
+    public void setComponents(NotificationPanelViewController panel) {
         mPanelView = panel;
         updatePanelSystemUiStateFlags();
     }
@@ -771,7 +770,14 @@ public class NavigationBarView extends FrameLayout implements
 
     public void updatePanelSystemUiStateFlags() {
         int displayId = mContext.getDisplayId();
+        if (SysUiState.DEBUG) {
+            Log.d(TAG, "Updating panel sysui state flags: panelView=" + mPanelView);
+        }
         if (mPanelView != null) {
+            if (SysUiState.DEBUG) {
+                Log.d(TAG, "Updating panel sysui state flags: fullyExpanded="
+                        + mPanelView.isFullyExpanded() + " inQs=" + mPanelView.isInSettings());
+            }
             mSysUiFlagContainer.setFlag(SYSUI_STATE_NOTIFICATION_PANEL_EXPANDED,
                     mPanelView.isFullyExpanded() && !mPanelView.isInSettings())
                     .setFlag(SYSUI_STATE_QUICK_SETTINGS_EXPANDED,
@@ -863,7 +869,8 @@ public class NavigationBarView extends FrameLayout implements
 
         getImeSwitchButton().setOnClickListener(mImeSwitcherClickListener);
 
-        DockedStackExistsListener.register(mDockedListener);
+        Divider divider = Dependency.get(Divider.class);
+        divider.registerInSplitScreenListener(mDockedListener);
         updateOrientationViews();
         reloadNavIcons();
     }

@@ -15,14 +15,18 @@
  */
 package com.android.server.notification;
 
+import static android.app.NotificationChannel.CONVERSATION_CHANNEL_ID_FORMAT;
 import static android.app.NotificationManager.IMPORTANCE_DEFAULT;
 import static android.app.NotificationManager.IMPORTANCE_HIGH;
 import static android.app.NotificationManager.IMPORTANCE_LOW;
 import static android.app.NotificationManager.IMPORTANCE_MAX;
 import static android.app.NotificationManager.IMPORTANCE_NONE;
 import static android.app.NotificationManager.IMPORTANCE_UNSPECIFIED;
+import static android.util.FeatureFlagUtils.NOTIF_CONVO_BYPASS_SHORTCUT_REQ;
 
 import static com.android.server.notification.PreferencesHelper.NOTIFICATION_CHANNEL_COUNT_LIMIT;
+
+import static com.google.common.truth.Truth.assertThat;
 
 import static junit.framework.Assert.assertNull;
 import static junit.framework.Assert.fail;
@@ -32,9 +36,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -62,6 +67,8 @@ import android.os.UserHandle;
 import android.provider.Settings;
 import android.provider.Settings.Global;
 import android.provider.Settings.Secure;
+import android.service.notification.ConversationChannelWrapper;
+import android.test.mock.MockIContentProvider;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.testing.TestableContentResolver;
 import android.util.ArrayMap;
@@ -82,6 +89,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.Spy;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlSerializer;
 
@@ -89,6 +97,7 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -102,6 +111,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
     private static final int UID_N_MR1 = 0;
     private static final UserHandle USER = UserHandle.of(0);
     private static final int UID_O = 1111;
+    private static final int UID_P = 2222;
     private static final String SYSTEM_PKG = "android";
     private static final int SYSTEM_UID = 1000;
     private static final UserHandle USER2 = UserHandle.of(10);
@@ -116,7 +126,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
     @Mock NotificationUsageStats mUsageStats;
     @Mock RankingHandler mHandler;
     @Mock PackageManager mPm;
-    @Mock IContentProvider mTestIContentProvider;
+    @Spy IContentProvider mTestIContentProvider = new MockIContentProvider();
     @Mock Context mContext;
     @Mock ZenModeHelper mMockZenModeHelper;
 
@@ -124,6 +134,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
 
     private PreferencesHelper mHelper;
     private AudioAttributes mAudioAttributes;
+    private NotificationChannelLoggerFake mLogger = new NotificationChannelLoggerFake();
 
     @Before
     public void setUp() throws Exception {
@@ -135,9 +146,11 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         upgrade.targetSdkVersion = Build.VERSION_CODES.O;
         when(mPm.getApplicationInfoAsUser(eq(PKG_N_MR1), anyInt(), anyInt())).thenReturn(legacy);
         when(mPm.getApplicationInfoAsUser(eq(PKG_O), anyInt(), anyInt())).thenReturn(upgrade);
+        when(mPm.getApplicationInfoAsUser(eq(PKG_P), anyInt(), anyInt())).thenReturn(upgrade);
         when(mPm.getApplicationInfoAsUser(eq(SYSTEM_PKG), anyInt(), anyInt())).thenReturn(upgrade);
         when(mPm.getPackageUidAsUser(eq(PKG_N_MR1), anyInt())).thenReturn(UID_N_MR1);
         when(mPm.getPackageUidAsUser(eq(PKG_O), anyInt())).thenReturn(UID_O);
+        when(mPm.getPackageUidAsUser(eq(PKG_P), anyInt())).thenReturn(UID_P);
         when(mPm.getPackageUidAsUser(eq(SYSTEM_PKG), anyInt())).thenReturn(SYSTEM_UID);
         PackageInfo info = mock(PackageInfo.class);
         info.signatures = new Signature[] {mock(Signature.class)};
@@ -161,17 +174,17 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         when(testContentProvider.getIContentProvider()).thenReturn(mTestIContentProvider);
         contentResolver.addProvider(TEST_AUTHORITY, testContentProvider);
 
-        when(mTestIContentProvider.canonicalize(any(), any(), eq(SOUND_URI)))
-                .thenReturn(CANONICAL_SOUND_URI);
-        when(mTestIContentProvider.canonicalize(any(), any(), eq(CANONICAL_SOUND_URI)))
-                .thenReturn(CANONICAL_SOUND_URI);
-        when(mTestIContentProvider.uncanonicalize(any(), any(), eq(CANONICAL_SOUND_URI)))
-                .thenReturn(SOUND_URI);
+        doReturn(CANONICAL_SOUND_URI)
+                .when(mTestIContentProvider).canonicalize(any(), any(), eq(SOUND_URI));
+        doReturn(CANONICAL_SOUND_URI)
+                .when(mTestIContentProvider).canonicalize(any(), any(), eq(CANONICAL_SOUND_URI));
+        doReturn(SOUND_URI)
+                .when(mTestIContentProvider).uncanonicalize(any(), any(), eq(CANONICAL_SOUND_URI));
 
         mTestNotificationPolicy = new NotificationManager.Policy(0, 0, 0, 0,
-                NotificationManager.Policy.STATE_CHANNELS_BYPASSING_DND);
+                NotificationManager.Policy.STATE_CHANNELS_BYPASSING_DND, 0);
         when(mMockZenModeHelper.getNotificationPolicy()).thenReturn(mTestNotificationPolicy);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         resetZenModeHelper();
 
         mAudioAttributes = new AudioAttributes.Builder()
@@ -224,6 +237,27 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         assertEquals(expected.getGroup(), actual.getGroup());
         assertEquals(expected.getAudioAttributes(), actual.getAudioAttributes());
         assertEquals(expected.getLightColor(), actual.getLightColor());
+        assertEquals(expected.getParentChannelId(), actual.getParentChannelId());
+        assertEquals(expected.getConversationId(), actual.getConversationId());
+        assertEquals(expected.isDemoted(), actual.isDemoted());
+    }
+
+    private void compareChannelsParentChild(NotificationChannel parent,
+            NotificationChannel actual, String conversationId) {
+        assertEquals(parent.getName(), actual.getName());
+        assertEquals(parent.getDescription(), actual.getDescription());
+        assertEquals(parent.shouldVibrate(), actual.shouldVibrate());
+        assertEquals(parent.shouldShowLights(), actual.shouldShowLights());
+        assertEquals(parent.getImportance(), actual.getImportance());
+        assertEquals(parent.getLockscreenVisibility(), actual.getLockscreenVisibility());
+        assertEquals(parent.getSound(), actual.getSound());
+        assertEquals(parent.canBypassDnd(), actual.canBypassDnd());
+        assertTrue(Arrays.equals(parent.getVibrationPattern(), actual.getVibrationPattern()));
+        assertEquals(parent.getGroup(), actual.getGroup());
+        assertEquals(parent.getAudioAttributes(), actual.getAudioAttributes());
+        assertEquals(parent.getLightColor(), actual.getLightColor());
+        assertEquals(parent.getId(), actual.getParentChannelId());
+        assertEquals(conversationId, actual.getConversationId());
     }
 
     private void compareGroups(NotificationChannelGroup expected, NotificationChannelGroup actual) {
@@ -333,6 +367,8 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         channel2.setGroup(ncg.getId());
         channel2.setVibrationPattern(new long[]{100, 67, 145, 156});
         channel2.setLightColor(Color.BLUE);
+        channel2.setConversationId("id1", "conversation");
+        channel2.setDemoted(true);
 
         mHelper.createNotificationChannelGroup(PKG_N_MR1, UID_N_MR1, ncg, true);
         mHelper.createNotificationChannelGroup(PKG_N_MR1, UID_N_MR1, ncg2, true);
@@ -474,12 +510,13 @@ public class PreferencesHelperTest extends UiServiceTestCase {
                 .appendQueryParameter("title", "Test")
                 .appendQueryParameter("canonical", "1")
                 .build();
-        when(mTestIContentProvider.canonicalize(any(), any(), eq(CANONICAL_SOUND_URI)))
-                .thenReturn(canonicalBasedOnLocal);
-        when(mTestIContentProvider.uncanonicalize(any(), any(), eq(CANONICAL_SOUND_URI)))
-                .thenReturn(localUri);
-        when(mTestIContentProvider.uncanonicalize(any(), any(), eq(canonicalBasedOnLocal)))
-                .thenReturn(localUri);
+        doReturn(canonicalBasedOnLocal)
+                .when(mTestIContentProvider).canonicalize(any(), any(), eq(CANONICAL_SOUND_URI));
+        doReturn(localUri)
+                .when(mTestIContentProvider).uncanonicalize(any(), any(), eq(CANONICAL_SOUND_URI));
+        doReturn(localUri)
+                .when(mTestIContentProvider).uncanonicalize(any(), any(),
+                eq(canonicalBasedOnLocal));
 
         NotificationChannel channel =
                 new NotificationChannel("id", "name", IMPORTANCE_LOW);
@@ -498,10 +535,10 @@ public class PreferencesHelperTest extends UiServiceTestCase {
     @Test
     public void testRestoreXml_withNonExistentCanonicalizedSoundUri() throws Exception {
         Thread.sleep(3000);
-        when(mTestIContentProvider.canonicalize(any(), any(), eq(CANONICAL_SOUND_URI)))
-                .thenReturn(null);
-        when(mTestIContentProvider.uncanonicalize(any(), any(), eq(CANONICAL_SOUND_URI)))
-                .thenReturn(null);
+        doReturn(null)
+                .when(mTestIContentProvider).canonicalize(any(), any(), eq(CANONICAL_SOUND_URI));
+        doReturn(null)
+                .when(mTestIContentProvider).uncanonicalize(any(), any(), eq(CANONICAL_SOUND_URI));
 
         NotificationChannel channel =
                 new NotificationChannel("id", "name", IMPORTANCE_LOW);
@@ -525,7 +562,8 @@ public class PreferencesHelperTest extends UiServiceTestCase {
     @Test
     public void testRestoreXml_withUncanonicalizedNonLocalSoundUri() throws Exception {
         // Not a local uncanonicalized uri, simulating that it fails to exist locally
-        when(mTestIContentProvider.canonicalize(any(), any(), eq(SOUND_URI))).thenReturn(null);
+        doReturn(null)
+                .when(mTestIContentProvider).canonicalize(any(), any(), eq(SOUND_URI));
         String id = "id";
         String backupWithUncanonicalizedSoundUri = "<ranking version=\"1\">\n"
                 + "<package name=\"" + PKG_N_MR1 + "\" show_badge=\"true\">\n"
@@ -1070,6 +1108,22 @@ public class PreferencesHelperTest extends UiServiceTestCase {
     }
 
     @Test
+    public void testDoubleDeleteChannel() throws Exception {
+        NotificationChannel channel = getChannel();
+        mHelper.createNotificationChannel(PKG_N_MR1, UID_N_MR1, channel, true, false);
+        mHelper.deleteNotificationChannel(PKG_N_MR1, UID_N_MR1, channel.getId());
+        mHelper.deleteNotificationChannel(PKG_N_MR1, UID_N_MR1, channel.getId());
+        assertEquals(2, mLogger.getCalls().size());
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_CREATED,
+                mLogger.get(0).event);
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_DELETED,
+                mLogger.get(1).event);
+        // No log for the second delete of the same channel.
+    }
+
+    @Test
     public void testGetDeletedChannel() throws Exception {
         NotificationChannel channel = getChannel();
         channel.setSound(new Uri.Builder().scheme("test").build(), mAudioAttributes);
@@ -1405,9 +1459,9 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         // start notification policy off with mAreChannelsBypassingDnd = true, but
         // RankingHelper should change to false
         mTestNotificationPolicy = new NotificationManager.Policy(0, 0, 0, 0,
-                NotificationManager.Policy.STATE_CHANNELS_BYPASSING_DND);
+                NotificationManager.Policy.STATE_CHANNELS_BYPASSING_DND, 0);
         when(mMockZenModeHelper.getNotificationPolicy()).thenReturn(mTestNotificationPolicy);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         assertFalse(mHelper.areChannelsBypassingDnd());
         verify(mMockZenModeHelper, times(1)).setNotificationPolicy(any());
         resetZenModeHelper();
@@ -1416,9 +1470,9 @@ public class PreferencesHelperTest extends UiServiceTestCase {
     @Test
     public void testSetupNewZenModeHelper_cannotBypass() {
         // start notification policy off with mAreChannelsBypassingDnd = false
-        mTestNotificationPolicy = new NotificationManager.Policy(0, 0, 0, 0, 0);
+        mTestNotificationPolicy = new NotificationManager.Policy(0, 0, 0, 0, 0, 0);
         when(mMockZenModeHelper.getNotificationPolicy()).thenReturn(mTestNotificationPolicy);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         assertFalse(mHelper.areChannelsBypassingDnd());
         verify(mMockZenModeHelper, never()).setNotificationPolicy(any());
         resetZenModeHelper();
@@ -1488,6 +1542,11 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         // Old settings not overridden
         compareChannels(channel,
                 mHelper.getNotificationChannel(PKG_N_MR1, UID_N_MR1, newChannel.getId(), false));
+
+        assertEquals(1, mLogger.getCalls().size());
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_CREATED,
+                mLogger.get(0).event);
     }
 
     @Test
@@ -1557,6 +1616,16 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         assertEquals(1, mHelper.getNotificationChannelGroups(PKG_N_MR1, UID_N_MR1).size());
 
         verify(mHandler, never()).requestSort();
+
+        assertEquals(7, mLogger.getCalls().size());
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_GROUP_DELETED,
+                mLogger.get(5).event);  // Next-to-last log is the deletion of the channel group.
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_DELETED,
+                mLogger.get(6).event);  // Final log is the deletion of the channel.
     }
 
     @Test
@@ -1702,6 +1771,11 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         assertEquals(ncg,
                 mHelper.getNotificationChannelGroups(PKG_N_MR1, UID_N_MR1).iterator().next());
         verify(mHandler, never()).requestSort();
+        assertEquals(1, mLogger.getCalls().size());
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_GROUP_CREATED,
+                mLogger.get(0).event);
     }
 
     @Test
@@ -1714,6 +1788,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
             fail("Created a channel with a bad group");
         } catch (IllegalArgumentException e) {
         }
+        assertEquals(0, mLogger.getCalls().size());
     }
 
     @Test
@@ -1868,6 +1943,17 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         assertEquals(IMPORTANCE_DEFAULT, actual.getImportance());
 
         verify(mHandler, times(1)).requestSort();
+        assertEquals(3, mLogger.getCalls().size());
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_GROUP_CREATED,
+                mLogger.get(0).event);
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_CREATED,
+                mLogger.get(1).event);
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_UPDATED,
+                mLogger.get(2).event);
     }
 
     @Test
@@ -2152,7 +2238,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
                 + "content_type=\"4\" flags=\"0\" show_badge=\"true\" />\n"
                 + "</package>\n"
                 + "</ranking>\n";
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadByteArrayXml(preQXml.getBytes(), true, UserHandle.USER_SYSTEM);
 
         assertEquals(PreferencesHelper.DEFAULT_HIDE_SILENT_STATUS_BAR_ICONS,
@@ -2164,7 +2250,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         mHelper.setHideSilentStatusIcons(!PreferencesHelper.DEFAULT_HIDE_SILENT_STATUS_BAR_ICONS);
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         assertEquals(!PreferencesHelper.DEFAULT_HIDE_SILENT_STATUS_BAR_ICONS,
@@ -2260,7 +2346,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         mHelper.setImportance(PKG_O, UID_O, IMPORTANCE_UNSPECIFIED);
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         assertNull(mHelper.getNotificationDelegate(PKG_O, UID_O));
@@ -2271,7 +2357,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         mHelper.setNotificationDelegate(PKG_O, UID_O, "other", 53);
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         assertEquals("other", mHelper.getNotificationDelegate(PKG_O, UID_O));
@@ -2283,7 +2369,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         mHelper.revokeNotificationDelegate(PKG_O, UID_O);
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         assertNull(mHelper.getNotificationDelegate(PKG_O, UID_O));
@@ -2295,7 +2381,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         mHelper.toggleNotificationDelegate(PKG_O, UID_O, false);
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         // appears disabled
@@ -2313,7 +2399,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         mHelper.revokeNotificationDelegate(PKG_O, UID_O);
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         // appears disabled
@@ -2331,7 +2417,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
         assertTrue(mHelper.areBubblesAllowed(PKG_O, UID_O));
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         assertTrue(mHelper.areBubblesAllowed(PKG_O, UID_O));
@@ -2346,7 +2432,7 @@ public class PreferencesHelperTest extends UiServiceTestCase {
                 mHelper.getAppLockedFields(PKG_O, UID_O));
 
         ByteArrayOutputStream baos = writeXmlAndPurge(PKG_O, UID_O, false, UserHandle.USER_ALL);
-        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper);
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
         loadStreamXml(baos, false, UserHandle.USER_ALL);
 
         assertFalse(mHelper.areBubblesAllowed(PKG_O, UID_O));
@@ -2785,5 +2871,382 @@ public class PreferencesHelperTest extends UiServiceTestCase {
                 mHelper.getNotificationChannel(pkg, uidList0[0], channelId, false).getImportance());
         assertEquals(user10Importance, mHelper.getNotificationChannel(
                 pkg, uidList10[0], channelId, false).getImportance());
+    }
+
+    @Test
+    public void testGetConversationNotificationChannel() {
+        String conversationId = "friend";
+
+        NotificationChannel parent =
+                new NotificationChannel("parent", "messages", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, parent, true, false);
+
+        NotificationChannel friend = new NotificationChannel(String.format(
+                CONVERSATION_CHANNEL_ID_FORMAT, parent.getId(), conversationId),
+                "messages", IMPORTANCE_DEFAULT);
+        friend.setConversationId(parent.getId(), conversationId);
+        mHelper.createNotificationChannel(PKG_O, UID_O, friend, true, false);
+
+        compareChannelsParentChild(parent, mHelper.getConversationNotificationChannel(
+                PKG_O, UID_O, parent.getId(), conversationId, false, false), conversationId);
+    }
+
+    @Test
+    public void testGetNotificationChannel_conversationProvidedByNotCustomizedYet() {
+        String conversationId = "friend";
+
+        NotificationChannel parent =
+                new NotificationChannel("parent", "messages", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, parent, true, false);
+
+        compareChannels(parent, mHelper.getConversationNotificationChannel(
+                PKG_O, UID_O, parent.getId(), conversationId, true, false));
+    }
+
+    @Test
+    public void testConversationNotificationChannelsRequireParents() {
+        String parentId = "does not exist";
+        String conversationId = "friend";
+
+        NotificationChannel friend = new NotificationChannel(String.format(
+                CONVERSATION_CHANNEL_ID_FORMAT, parentId, conversationId),
+                "messages", IMPORTANCE_DEFAULT);
+        friend.setConversationId(parentId, conversationId);
+
+        try {
+            mHelper.createNotificationChannel(PKG_O, UID_O, friend, true, false);
+            fail("allowed creation of conversation channel without a parent");
+        } catch (IllegalArgumentException e) {
+            // good
+        }
+    }
+
+    @Test
+    public void testPlaceholderConversationId_flagOn() throws Exception {
+        Settings.Global.putString(
+                mContext.getContentResolver(), NOTIF_CONVO_BYPASS_SHORTCUT_REQ, "true");
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
+
+        final String xml = "<ranking version=\"1\">\n"
+                + "<package name=\"" + PKG_O + "\" uid=\"" + UID_O + "\" >\n"
+                + "<channel id=\"id\" name=\"hi\" importance=\"3\" conv_id=\"foo:placeholder_id\"/>"
+                + "</package>"
+                + "</ranking>";
+        XmlPullParser parser = Xml.newPullParser();
+        parser.setInput(new BufferedInputStream(new ByteArrayInputStream(xml.getBytes())),
+                null);
+        parser.nextTag();
+        mHelper.readXml(parser, false, UserHandle.USER_ALL);
+
+        assertNotNull(mHelper.getNotificationChannel(PKG_O, UID_O, "id", true));
+    }
+
+    @Test
+    public void testPlaceholderConversationId_flagOff() throws Exception {
+        Settings.Global.putString(
+                mContext.getContentResolver(), NOTIF_CONVO_BYPASS_SHORTCUT_REQ, "false");
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
+
+        final String xml = "<ranking version=\"1\">\n"
+                + "<package name=\"" + PKG_O + "\" uid=\"" + UID_O + "\" >\n"
+                + "<channel id=\"id\" name=\"hi\" importance=\"3\" conv_id=\"foo:placeholder_id\"/>"
+                + "</package>"
+                + "</ranking>";
+        XmlPullParser parser = Xml.newPullParser();
+        parser.setInput(new BufferedInputStream(new ByteArrayInputStream(xml.getBytes())),
+                null);
+        parser.nextTag();
+        mHelper.readXml(parser, false, UserHandle.USER_ALL);
+
+        assertNull(mHelper.getNotificationChannel(PKG_O, UID_O, "id", true));
+    }
+
+    @Test
+    public void testNormalConversationId_flagOff() throws Exception {
+        Settings.Global.putString(
+                mContext.getContentResolver(), NOTIF_CONVO_BYPASS_SHORTCUT_REQ, "false");
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
+
+        final String xml = "<ranking version=\"1\">\n"
+                + "<package name=\"" + PKG_O + "\" uid=\"" + UID_O + "\" >\n"
+                + "<channel id=\"id\" name=\"hi\" importance=\"3\" conv_id=\"other\"/>"
+                + "</package>"
+                + "</ranking>";
+        XmlPullParser parser = Xml.newPullParser();
+        parser.setInput(new BufferedInputStream(new ByteArrayInputStream(xml.getBytes())),
+                null);
+        parser.nextTag();
+        mHelper.readXml(parser, false, UserHandle.USER_ALL);
+
+        assertNotNull(mHelper.getNotificationChannel(PKG_O, UID_O, "id", true));
+    }
+
+    @Test
+    public void testNoConversationId_flagOff() throws Exception {
+        Settings.Global.putString(
+                mContext.getContentResolver(), NOTIF_CONVO_BYPASS_SHORTCUT_REQ, "false");
+        mHelper = new PreferencesHelper(getContext(), mPm, mHandler, mMockZenModeHelper, mLogger);
+
+        final String xml = "<ranking version=\"1\">\n"
+                + "<package name=\"" + PKG_O + "\" uid=\"" + UID_O + "\" >\n"
+                + "<channel id=\"id\" name=\"hi\" importance=\"3\"/>"
+                + "</package>"
+                + "</ranking>";
+        XmlPullParser parser = Xml.newPullParser();
+        parser.setInput(new BufferedInputStream(new ByteArrayInputStream(xml.getBytes())),
+                null);
+        parser.nextTag();
+        mHelper.readXml(parser, false, UserHandle.USER_ALL);
+
+        assertNotNull(mHelper.getNotificationChannel(PKG_O, UID_O, "id", true));
+    }
+
+    @Test
+    public void testGetConversations_all() {
+        String convoId = "convo";
+        NotificationChannel messages =
+                new NotificationChannel("messages", "Messages", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, messages, true, false);
+        NotificationChannel calls =
+                new NotificationChannel("calls", "Calls", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, calls, true, false);
+        NotificationChannel p =
+                new NotificationChannel("p calls", "Calls", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_P, UID_P, p, true, false);
+
+        NotificationChannel channel =
+                new NotificationChannel("A person msgs", "messages from A", IMPORTANCE_DEFAULT);
+        channel.setConversationId(messages.getId(), convoId);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+
+        NotificationChannel diffConvo =
+                new NotificationChannel("B person msgs", "messages from B", IMPORTANCE_DEFAULT);
+        diffConvo.setConversationId(p.getId(), "different convo");
+        mHelper.createNotificationChannel(PKG_P, UID_P, diffConvo, true, false);
+
+        NotificationChannel channel2 =
+                new NotificationChannel("A person calls", "calls from A", IMPORTANCE_DEFAULT);
+        channel2.setConversationId(calls.getId(), convoId);
+        channel2.setImportantConversation(true);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel2, true, false);
+
+        List<ConversationChannelWrapper> convos = mHelper.getConversations(false);
+
+        assertEquals(3, convos.size());
+        assertTrue(conversationWrapperContainsChannel(convos, channel));
+        assertTrue(conversationWrapperContainsChannel(convos, diffConvo));
+        assertTrue(conversationWrapperContainsChannel(convos, channel2));
+    }
+
+    @Test
+    public void testGetConversations_onlyImportant() {
+        String convoId = "convo";
+        NotificationChannel messages =
+                new NotificationChannel("messages", "Messages", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, messages, true, false);
+        NotificationChannel calls =
+                new NotificationChannel("calls", "Calls", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, calls, true, false);
+        NotificationChannel p =
+                new NotificationChannel("p calls", "Calls", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_P, UID_P, p, true, false);
+
+        NotificationChannel channel =
+                new NotificationChannel("A person msgs", "messages from A", IMPORTANCE_DEFAULT);
+        channel.setConversationId(messages.getId(), convoId);
+        channel.setImportantConversation(true);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+
+        NotificationChannel diffConvo =
+                new NotificationChannel("B person msgs", "messages from B", IMPORTANCE_DEFAULT);
+        diffConvo.setConversationId(p.getId(), "different convo");
+        diffConvo.setImportantConversation(true);
+        mHelper.createNotificationChannel(PKG_P, UID_P, diffConvo, true, false);
+
+        NotificationChannel channel2 =
+                new NotificationChannel("A person calls", "calls from A", IMPORTANCE_DEFAULT);
+        channel2.setConversationId(calls.getId(), convoId);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel2, true, false);
+
+        List<ConversationChannelWrapper> convos = mHelper.getConversations(true);
+
+        assertEquals(2, convos.size());
+        assertTrue(conversationWrapperContainsChannel(convos, channel));
+        assertTrue(conversationWrapperContainsChannel(convos, diffConvo));
+        assertFalse(conversationWrapperContainsChannel(convos, channel2));
+    }
+
+    private boolean conversationWrapperContainsChannel(List<ConversationChannelWrapper> list,
+            NotificationChannel expected) {
+        for (ConversationChannelWrapper ccw : list) {
+            if (ccw.getNotificationChannel().equals(expected)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    @Test
+    public void testGetConversations_invalidPkg() {
+        assertThat(mHelper.getConversations("bad", 1)).isEmpty();
+    }
+
+    @Test
+    public void testGetConversations_noConversations() {
+        NotificationChannel channel =
+                new NotificationChannel("not_convo", "not_convo", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+
+        assertThat(mHelper.getConversations(PKG_O, UID_O)).isEmpty();
+    }
+
+    @Test
+    public void testGetConversations_noDisabledGroups() {
+        NotificationChannelGroup group = new NotificationChannelGroup("a", "a");
+        group.setBlocked(true);
+        mHelper.createNotificationChannelGroup(PKG_O, UID_O, group, true);
+        NotificationChannel parent = new NotificationChannel("parent", "p", 1);
+        mHelper.createNotificationChannel(PKG_O, UID_O, parent, true, false);
+
+        NotificationChannel channel =
+                new NotificationChannel("convo", "convo", IMPORTANCE_DEFAULT);
+        channel.setConversationId("parent", "convo");
+        channel.setGroup(group.getId());
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+
+        assertThat(mHelper.getConversations(PKG_O, UID_O)).isEmpty();
+    }
+
+    @Test
+    public void testGetConversations_noDeleted() {
+        NotificationChannel parent = new NotificationChannel("parent", "p", 1);
+        mHelper.createNotificationChannel(PKG_O, UID_O, parent, true, false);
+        NotificationChannel channel =
+                new NotificationChannel("convo", "convo", IMPORTANCE_DEFAULT);
+        channel.setConversationId("parent", "convo");
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+        mHelper.deleteNotificationChannel(PKG_O, UID_O, channel.getId());
+
+        assertThat(mHelper.getConversations(PKG_O, UID_O)).isEmpty();
+    }
+
+    @Test
+    public void testGetConversations() {
+        NotificationChannelGroup group = new NotificationChannelGroup("acct", "account_name");
+        mHelper.createNotificationChannelGroup(PKG_O, UID_O, group, true);
+
+        NotificationChannel messages =
+                new NotificationChannel("messages", "Messages", IMPORTANCE_DEFAULT);
+        messages.setGroup(group.getId());
+        mHelper.createNotificationChannel(PKG_O, UID_O, messages, true, false);
+        NotificationChannel calls =
+                new NotificationChannel("calls", "Calls", IMPORTANCE_HIGH);
+        mHelper.createNotificationChannel(PKG_O, UID_O, calls, true, false);
+
+        NotificationChannel channel =
+                new NotificationChannel("A person", "A lovely person", IMPORTANCE_DEFAULT);
+        channel.setGroup(group.getId());
+        channel.setConversationId(messages.getId(), channel.getName().toString());
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+
+        NotificationChannel channel2 =
+                new NotificationChannel("B person", "B fabulous person", IMPORTANCE_DEFAULT);
+        channel2.setConversationId(calls.getId(), channel2.getName().toString());
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel2, true, false);
+
+        Map<String, NotificationChannel> expected = new HashMap<>();
+        expected.put(channel.getId(), channel);
+        expected.put(channel2.getId(), channel2);
+
+        Map<String, CharSequence> expectedGroup = new HashMap<>();
+        expectedGroup.put(channel.getId(), group.getName());
+        expectedGroup.put(channel2.getId(), null);
+
+        Map<String, CharSequence> expectedParentLabel= new HashMap<>();
+        expectedParentLabel.put(channel.getId(), messages.getName());
+        expectedParentLabel.put(channel2.getId(), calls.getName());
+
+        ArrayList<ConversationChannelWrapper> convos = mHelper.getConversations(PKG_O, UID_O);
+        assertThat(convos).hasSize(2);
+
+        for (ConversationChannelWrapper convo : convos) {
+            assertThat(convo.getNotificationChannel())
+                    .isEqualTo(expected.get(convo.getNotificationChannel().getId()));
+            assertThat(convo.getParentChannelLabel())
+                    .isEqualTo(expectedParentLabel.get(convo.getNotificationChannel().getId()));
+            assertThat(convo.getGroupLabel())
+                    .isEqualTo(expectedGroup.get(convo.getNotificationChannel().getId()));
+        }
+    }
+
+    @Test
+    public void testDeleteConversation() {
+        String convoId = "convo";
+        NotificationChannel messages =
+                new NotificationChannel("messages", "Messages", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, messages, true, false);
+        NotificationChannel calls =
+                new NotificationChannel("calls", "Calls", IMPORTANCE_DEFAULT);
+        mHelper.createNotificationChannel(PKG_O, UID_O, calls, true, false);
+
+        NotificationChannel channel =
+                new NotificationChannel("A person msgs", "messages from A", IMPORTANCE_DEFAULT);
+        channel.setConversationId(messages.getId(), convoId);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel, true, false);
+
+        NotificationChannel noMatch =
+                new NotificationChannel("B person msgs", "messages from B", IMPORTANCE_DEFAULT);
+        noMatch.setConversationId(messages.getId(), "different convo");
+        mHelper.createNotificationChannel(PKG_O, UID_O, noMatch, true, false);
+
+        NotificationChannel channel2 =
+                new NotificationChannel("A person calls", "calls from A", IMPORTANCE_DEFAULT);
+        channel2.setConversationId(calls.getId(), convoId);
+        mHelper.createNotificationChannel(PKG_O, UID_O, channel2, true, false);
+
+        assertEquals(channel, mHelper.getNotificationChannel(PKG_O, UID_O, channel.getId(), false));
+        assertEquals(channel2,
+                mHelper.getNotificationChannel(PKG_O, UID_O, channel2.getId(), false));
+        assertEquals(2, mHelper.deleteConversation(PKG_O, UID_O, convoId).size());
+
+        assertEquals(messages,
+                mHelper.getNotificationChannel(PKG_O, UID_O, messages.getId(), false));
+        assertEquals(noMatch,
+                mHelper.getNotificationChannel(PKG_O, UID_O, noMatch.getId(), false));
+
+        assertNull(mHelper.getNotificationChannel(PKG_O, UID_O, channel.getId(), false));
+        assertNull(mHelper.getNotificationChannel(PKG_O, UID_O, channel2.getId(), false));
+        assertEquals(channel, mHelper.getNotificationChannel(PKG_O, UID_O, channel.getId(), true));
+        assertEquals(channel2,
+                mHelper.getNotificationChannel(PKG_O, UID_O, channel2.getId(), true));
+
+        assertEquals(7, mLogger.getCalls().size());
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_CREATED,
+                mLogger.get(0).event);  // Channel messages
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent.NOTIFICATION_CHANNEL_CREATED,
+                mLogger.get(1).event);  // Channel calls
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_CONVERSATION_CREATED,
+                mLogger.get(2).event);  // Channel channel - Conversation A person msgs
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_CONVERSATION_CREATED,
+                mLogger.get(3).event);  // Channel noMatch - Conversation B person msgs
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_CONVERSATION_CREATED,
+                mLogger.get(4).event);  // Channel channel2 - Conversation A person calls
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_CONVERSATION_DELETED,
+                mLogger.get(5).event);  // Delete Channel channel - Conversation A person msgs
+        assertEquals(
+                NotificationChannelLogger.NotificationChannelEvent
+                        .NOTIFICATION_CHANNEL_CONVERSATION_DELETED,
+                mLogger.get(6).event);  // Delete Channel channel2 - Conversation A person calls
     }
 }

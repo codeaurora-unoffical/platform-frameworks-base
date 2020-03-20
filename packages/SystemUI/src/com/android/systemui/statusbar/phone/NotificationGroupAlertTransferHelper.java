@@ -28,29 +28,26 @@ import com.android.systemui.Dependency;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController.StateListener;
 import com.android.systemui.statusbar.AlertingNotificationManager;
-import com.android.systemui.statusbar.InflationTask;
 import com.android.systemui.statusbar.notification.NotificationEntryListener;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
-import com.android.systemui.statusbar.notification.row.NotificationContentInflater.AsyncInflationTask;
-import com.android.systemui.statusbar.notification.row.NotificationContentInflater.InflationFlag;
+import com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.InflationFlag;
+import com.android.systemui.statusbar.notification.row.RowContentBindParams;
+import com.android.systemui.statusbar.notification.row.RowContentBindStage;
 import com.android.systemui.statusbar.phone.NotificationGroupManager.NotificationGroup;
 import com.android.systemui.statusbar.phone.NotificationGroupManager.OnGroupChangeListener;
+import com.android.systemui.statusbar.phone.dagger.StatusBarPhoneModule;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
 import com.android.systemui.statusbar.policy.OnHeadsUpChangedListener;
 
 import java.util.ArrayList;
 import java.util.Objects;
 
-import javax.inject.Inject;
-import javax.inject.Singleton;
-
 /**
  * A helper class dealing with the alert interactions between {@link NotificationGroupManager} and
  * {@link HeadsUpManager}. In particular, this class deals with keeping
  * the correct notification in a group alerting based off the group suppression.
  */
-@Singleton
 public class NotificationGroupAlertTransferHelper implements OnHeadsUpChangedListener,
         StateListener {
 
@@ -68,6 +65,7 @@ public class NotificationGroupAlertTransferHelper implements OnHeadsUpChangedLis
     private final ArrayMap<String, PendingAlertInfo> mPendingAlerts = new ArrayMap<>();
 
     private HeadsUpManager mHeadsUpManager;
+    private final RowContentBindStage mRowContentBindStage;
     private final NotificationGroupManager mGroupManager =
             Dependency.get(NotificationGroupManager.class);
 
@@ -75,9 +73,12 @@ public class NotificationGroupAlertTransferHelper implements OnHeadsUpChangedLis
 
     private boolean mIsDozing;
 
-    @Inject
-    public NotificationGroupAlertTransferHelper() {
+    /**
+     * Injected constructor. See {@link StatusBarPhoneModule}.
+     */
+    public NotificationGroupAlertTransferHelper(RowContentBindStage bindStage) {
         Dependency.get(StatusBarStateController.class).addCallback(this);
+        mRowContentBindStage = bindStage;
     }
 
     /** Causes the TransferHelper to register itself as a listener to the appropriate classes. */
@@ -191,26 +192,12 @@ public class NotificationGroupAlertTransferHelper implements OnHeadsUpChangedLis
             }
         }
 
-        // Called when the entry's reinflation has finished. If there is an alert pending, we
-        // then show the alert.
-        @Override
-        public void onEntryReinflated(NotificationEntry entry) {
-            PendingAlertInfo alertInfo = mPendingAlerts.remove(entry.getKey());
-            if (alertInfo != null) {
-                if (alertInfo.isStillValid()) {
-                    alertNotificationWhenPossible(entry, mHeadsUpManager);
-                } else {
-                    // The transfer is no longer valid. Free the content.
-                    entry.getRow().freeContentViewWhenSafe(mHeadsUpManager.getContentFlag());
-                }
-            }
-        }
-
         @Override
         public void onEntryRemoved(
                 @Nullable NotificationEntry entry,
                 NotificationVisibility visibility,
-                boolean removedByUser) {
+                boolean removedByUser,
+                int reason) {
             // Removes any alerts pending on this entry. Note that this will not stop any inflation
             // tasks started by a transfer, so this should only be used as clean-up for when
             // inflation is stopped and the pending alert no longer needs to happen.
@@ -393,10 +380,21 @@ public class NotificationGroupAlertTransferHelper implements OnHeadsUpChangedLis
     private void alertNotificationWhenPossible(@NonNull NotificationEntry entry,
             @NonNull AlertingNotificationManager alertManager) {
         @InflationFlag int contentFlag = alertManager.getContentFlag();
-        if (!entry.getRow().isInflationFlagSet(contentFlag)) {
+        final RowContentBindParams params = mRowContentBindStage.getStageParams(entry);
+        if ((params.getContentViews() & contentFlag) == 0) {
             mPendingAlerts.put(entry.getKey(), new PendingAlertInfo(entry));
-            entry.getRow().updateInflationFlag(contentFlag, true /* shouldInflate */);
-            entry.getRow().inflateViews();
+            params.requireContentViews(contentFlag);
+            mRowContentBindStage.requestRebind(entry, en -> {
+                PendingAlertInfo alertInfo = mPendingAlerts.remove(entry.getKey());
+                if (alertInfo != null) {
+                    if (alertInfo.isStillValid()) {
+                        alertNotificationWhenPossible(entry, mHeadsUpManager);
+                    } else {
+                        // The transfer is no longer valid. Free the content.
+                        entry.getRow().freeContentViewWhenSafe(mHeadsUpManager.getContentFlag());
+                    }
+                }
+            });
             return;
         }
         if (alertManager.isAlerting(entry.getKey())) {
@@ -427,9 +425,9 @@ public class NotificationGroupAlertTransferHelper implements OnHeadsUpChangedLis
         /**
          * The notification is still pending inflation but we've decided that we no longer need
          * the content view (e.g. suppression might have changed and we decided we need to transfer
-         * back). However, there is no way to abort just this inflation if other inflation requests
-         * have started (see {@link AsyncInflationTask#supersedeTask(InflationTask)}). So instead
-         * we just flag it as aborted and free when it's inflated.
+         * back).
+         *
+         * TODO: Replace this entire structure with {@link RowContentBindStage#requestRebind)}.
          */
         boolean mAbortOnInflation;
 

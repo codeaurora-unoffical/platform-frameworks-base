@@ -19,8 +19,8 @@ package android.os;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.AppOpsManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.util.ExceptionUtils;
 import android.util.Log;
 import android.util.Slog;
@@ -995,6 +995,18 @@ public class Binder implements IBinder {
         pw.flush();
         return 0;
     }
+
+    /** @hide */
+    @Override
+    public final native @Nullable IBinder getExtension();
+
+    /**
+     * Set the binder extension.
+     * This should be called immediately when the object is created.
+     *
+     * @hide
+     */
+    public final native void setExtension(@Nullable IBinder extension);
 
     /**
      * Default implementation rewinds the parcels and calls onTransact.  On

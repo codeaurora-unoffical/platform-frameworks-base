@@ -25,16 +25,18 @@
 #include <SkPicture.h>
 #include <SkPictureRecorder.h>
 #include <SkSerialProcs.h>
+#include <SkTypeface.h>
+#include <android-base/properties.h>
+#include <unistd.h>
+
+#include <sstream>
+
 #include "LightingInfo.h"
 #include "VectorDrawable.h"
 #include "thread/CommonPool.h"
 #include "tools/SkSharingProc.h"
-#include "utils/TraceUtils.h"
 #include "utils/String8.h"
-
-#include <unistd.h>
-
-#include <android-base/properties.h>
+#include "utils/TraceUtils.h"
 
 using namespace android::uirenderer::renderthread;
 
@@ -43,6 +45,7 @@ namespace uirenderer {
 namespace skiapipeline {
 
 SkiaPipeline::SkiaPipeline(RenderThread& thread) : mRenderThread(thread) {
+    setSurfaceColorProperties(mColorMode);
 }
 
 SkiaPipeline::~SkiaPipeline() {
@@ -264,6 +267,9 @@ bool SkiaPipeline::setupMultiFrameCapture() {
         SkSerialProcs procs;
         procs.fImageProc = SkSharingSerialContext::serializeImage;
         procs.fImageCtx = mSerialContext.get();
+        procs.fTypefaceProc = [](SkTypeface* tf, void* ctx){
+            return tf->serialize(SkTypeface::SerializeBehavior::kDoIncludeData);
+        };
         // SkDocuments don't take owership of the streams they write.
         // we need to keep it until after mMultiPic.close()
         // procs is passed as a pointer, but just as a method of having an optional default.
@@ -405,6 +411,10 @@ void SkiaPipeline::endCapture(SkSurface* surface) {
                 std::invoke(mPictureCapturedCallback, std::move(picture));
             } else {
                 // single frame skp to file
+                SkSerialProcs procs;
+                procs.fTypefaceProc = [](SkTypeface* tf, void* ctx){
+                    return tf->serialize(SkTypeface::SerializeBehavior::kDoIncludeData);
+                };
                 auto data = picture->serialize();
                 savePictureAsync(data, mCapturedFile);
                 mCaptureSequence = 0;
@@ -457,7 +467,16 @@ void SkiaPipeline::renderFrameImpl(const SkRect& clip,
                                    const Rect& contentDrawBounds, SkCanvas* canvas,
                                    const SkMatrix& preTransform) {
     SkAutoCanvasRestore saver(canvas, true);
-    canvas->androidFramework_setDeviceClipRestriction(preTransform.mapRect(clip).roundOut());
+    auto clipRestriction = preTransform.mapRect(clip).roundOut();
+    if (CC_UNLIKELY(mCaptureMode == CaptureMode::SingleFrameSKP
+         || mCaptureMode == CaptureMode::MultiFrameSKP)) {
+        canvas->drawAnnotation(SkRect::Make(clipRestriction), "AndroidDeviceClipRestriction",
+            nullptr);
+    } else {
+        // clip drawing to dirty region only when not recording SKP files (which should contain all
+        // draw ops on every frame)
+        canvas->androidFramework_setDeviceClipRestriction(clipRestriction);
+    }
     canvas->concat(preTransform);
 
     // STOPSHIP: Revert, temporary workaround to clear always F16 frame buffer for b/74976293
@@ -567,6 +586,7 @@ void SkiaPipeline::dumpResourceCacheUsage() const {
 }
 
 void SkiaPipeline::setSurfaceColorProperties(ColorMode colorMode) {
+    mColorMode = colorMode;
     if (colorMode == ColorMode::SRGB) {
         mSurfaceColorType = SkColorType::kN32_SkColorType;
         mSurfaceColorSpace = SkColorSpace::MakeSRGB();
@@ -581,27 +601,24 @@ void SkiaPipeline::setSurfaceColorProperties(ColorMode colorMode) {
 // Overdraw debugging
 
 // These colors should be kept in sync with Caches::getOverdrawColor() with a few differences.
-// This implementation:
-// (1) Requires transparent entries for "no overdraw" and "single draws".
-// (2) Requires premul colors (instead of unpremul).
-// (3) Requires RGBA colors (instead of BGRA).
-static const uint32_t kOverdrawColors[2][6] = {
-        {
-                0x00000000,
-                0x00000000,
-                0x2f2f0000,
-                0x2f002f00,
-                0x3f00003f,
-                0x7f00007f,
-        },
-        {
-                0x00000000,
-                0x00000000,
-                0x2f2f0000,
-                0x4f004f4f,
-                0x5f50335f,
-                0x7f00007f,
-        },
+// This implementation requires transparent entries for "no overdraw" and "single draws".
+static const SkColor kOverdrawColors[2][6] = {
+    {
+        0x00000000,
+        0x00000000,
+        0x2f0000ff,
+        0x2f00ff00,
+        0x3fff0000,
+        0x7fff0000,
+    },
+    {
+        0x00000000,
+        0x00000000,
+        0x2f0000ff,
+        0x4fffff00,
+        0x5fff89d7,
+        0x7fff0000,
+    },
 };
 
 void SkiaPipeline::renderOverdraw(const SkRect& clip,
@@ -623,8 +640,8 @@ void SkiaPipeline::renderOverdraw(const SkRect& clip,
 
     // Draw overdraw colors to the canvas.  The color filter will convert counts to colors.
     SkPaint paint;
-    const SkPMColor* colors = kOverdrawColors[static_cast<int>(Properties::overdrawColorSet)];
-    paint.setColorFilter(SkOverdrawColorFilter::Make(colors));
+    const SkColor* colors = kOverdrawColors[static_cast<int>(Properties::overdrawColorSet)];
+    paint.setColorFilter(SkOverdrawColorFilter::MakeWithSkColors(colors));
     surface->getCanvas()->drawImage(counts.get(), 0.0f, 0.0f, &paint);
 }
 

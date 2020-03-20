@@ -27,6 +27,7 @@ import android.platform.test.annotations.RootPermissionTest;
 
 import com.android.tradefed.device.DeviceNotAvailableException;
 import com.android.tradefed.device.ITestDevice;
+import com.android.tradefed.log.LogUtil.CLog;
 import com.android.tradefed.testtype.DeviceJUnit4ClassRunner;
 import com.android.tradefed.testtype.junit4.BaseHostJUnit4Test;
 import com.android.tradefed.util.CommandResult;
@@ -412,6 +413,7 @@ public class ApkVerityTest extends BaseHostJUnit4Test {
                         break;
                     }
                     try {
+                        CLog.d("lsof: " + expectRemoteCommandToSucceed("lsof " + apkPath));
                         Thread.sleep(1000);
                         String pid = expectRemoteCommandToSucceed("pidof system_server");
                         mDevice.executeShellV2Command("kill -10 " + pid);  // force GC
@@ -428,10 +430,9 @@ public class ApkVerityTest extends BaseHostJUnit4Test {
     private void verifyInstalledFiles(String... filenames) throws DeviceNotAvailableException {
         String apkPath = getApkPath(TARGET_PACKAGE);
         String appDir = apkPath.substring(0, apkPath.lastIndexOf("/"));
+        // Exclude directories since we only care about files.
         HashSet<String> actualFiles = new HashSet<>(Arrays.asList(
-                expectRemoteCommandToSucceed("ls " + appDir).split("\n")));
-        assertTrue(actualFiles.remove("lib"));
-        assertTrue(actualFiles.remove("oat"));
+                expectRemoteCommandToSucceed("ls -p " + appDir + " | grep -v '/'").split("\n")));
 
         HashSet<String> expectedFiles = new HashSet<>(Arrays.asList(filenames));
         assertEquals(expectedFiles, actualFiles);

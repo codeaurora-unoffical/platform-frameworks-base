@@ -16,8 +16,11 @@
 
 package com.android.internal.app;
 
+import android.annotation.Nullable;
 import android.content.Context;
+import android.os.UserHandle;
 import android.view.LayoutInflater;
+import android.view.View;
 import android.view.ViewGroup;
 
 import com.android.internal.R;
@@ -36,8 +39,10 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
     private final ChooserProfileDescriptor[] mItems;
 
     ChooserMultiProfilePagerAdapter(Context context,
-            ChooserActivity.ChooserGridAdapter adapter) {
-        super(context, /* currentPage */ 0);
+            ChooserActivity.ChooserGridAdapter adapter,
+            UserHandle personalProfileUserHandle,
+            UserHandle workProfileUserHandle) {
+        super(context, /* currentPage */ 0, personalProfileUserHandle, workProfileUserHandle);
         mItems = new ChooserProfileDescriptor[] {
                 createProfileDescriptor(adapter)
         };
@@ -46,8 +51,11 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
     ChooserMultiProfilePagerAdapter(Context context,
             ChooserActivity.ChooserGridAdapter personalAdapter,
             ChooserActivity.ChooserGridAdapter workAdapter,
-            @Profile int defaultProfile) {
-        super(context, /* currentPage */ defaultProfile);
+            @Profile int defaultProfile,
+            UserHandle personalProfileUserHandle,
+            UserHandle workProfileUserHandle) {
+        super(context, /* currentPage */ defaultProfile, personalProfileUserHandle,
+                workProfileUserHandle);
         mItems = new ChooserProfileDescriptor[] {
                 createProfileDescriptor(personalAdapter),
                 createProfileDescriptor(workAdapter)
@@ -77,8 +85,21 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
     }
 
     @Override
-    ChooserActivity.ChooserGridAdapter getAdapterForIndex(int pageIndex) {
+    @VisibleForTesting
+    public ChooserActivity.ChooserGridAdapter getAdapterForIndex(int pageIndex) {
         return mItems[pageIndex].chooserGridAdapter;
+    }
+
+    @Override
+    @Nullable
+    ChooserListAdapter getListAdapterForUserHandle(UserHandle userHandle) {
+        if (getActiveListAdapter().getUserHandle() == userHandle) {
+            return getActiveListAdapter();
+        } else if (getInactiveListAdapter() != null
+                && getInactiveListAdapter().getUserHandle() == userHandle) {
+            return getInactiveListAdapter();
+        }
+        return null;
     }
 
     @Override
@@ -86,7 +107,6 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
         final RecyclerView recyclerView = getItem(pageIndex).recyclerView;
         ChooserActivity.ChooserGridAdapter chooserGridAdapter =
                 getItem(pageIndex).chooserGridAdapter;
-        recyclerView.setAdapter(chooserGridAdapter);
         GridLayoutManager glm = (GridLayoutManager) recyclerView.getLayoutManager();
         glm.setSpanCount(chooserGridAdapter.getMaxTargetsPerRow());
         glm.setSpanSizeLookup(
@@ -116,13 +136,64 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
     }
 
     @Override
+    public ResolverListAdapter getPersonalListAdapter() {
+        return getAdapterForIndex(PROFILE_PERSONAL).getListAdapter();
+    }
+
+    @Override
+    @Nullable
+    public ResolverListAdapter getWorkListAdapter() {
+        return getAdapterForIndex(PROFILE_WORK).getListAdapter();
+    }
+
+    @Override
     ChooserActivity.ChooserGridAdapter getCurrentRootAdapter() {
         return getAdapterForIndex(getCurrentPage());
     }
 
     @Override
-    RecyclerView getCurrentAdapterView() {
+    RecyclerView getActiveAdapterView() {
         return getListViewForIndex(getCurrentPage());
+    }
+
+    @Override
+    @Nullable
+    RecyclerView getInactiveAdapterView() {
+        if (getCount() == 1) {
+            return null;
+        }
+        return getListViewForIndex(1 - getCurrentPage());
+    }
+
+    @Override
+    String getMetricsCategory() {
+        return ResolverActivity.METRICS_CATEGORY_CHOOSER;
+    }
+
+    @Override
+    protected void showWorkProfileOffEmptyState(ResolverListAdapter activeListAdapter,
+            View.OnClickListener listener) {
+        showEmptyState(activeListAdapter,
+                R.drawable.ic_work_apps_off,
+                R.string.resolver_turn_on_work_apps_share,
+                /* subtitleRes */ 0,
+                listener);
+    }
+
+    @Override
+    protected void showNoPersonalToWorkIntentsEmptyState(ResolverListAdapter activeListAdapter) {
+        showEmptyState(activeListAdapter,
+                R.drawable.ic_sharing_disabled,
+                R.string.resolver_cant_share_with_work_apps,
+                R.string.resolver_cant_share_cross_profile_explanation);
+    }
+
+    @Override
+    protected void showNoWorkToPersonalIntentsEmptyState(ResolverListAdapter activeListAdapter) {
+        showEmptyState(activeListAdapter,
+                R.drawable.ic_sharing_disabled,
+                R.string.resolver_cant_share_with_personal_apps,
+                R.string.resolver_cant_share_cross_profile_explanation);
     }
 
     class ChooserProfileDescriptor extends ProfileDescriptor {

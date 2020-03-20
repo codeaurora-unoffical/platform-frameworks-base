@@ -16,7 +16,7 @@
 
 package android.provider.settings.backup;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.provider.Settings;
 
 /** Information relating to the Secure settings which should be backed up */
@@ -37,6 +37,7 @@ public class SecureSettings {
         Settings.Secure.ACCESSIBILITY_DISPLAY_DALTONIZER_ENABLED,
         Settings.Secure.ACCESSIBILITY_DISPLAY_MAGNIFICATION_ENABLED,
         Settings.Secure.ACCESSIBILITY_DISPLAY_MAGNIFICATION_NAVBAR_ENABLED,
+        Settings.Secure.ADAPTIVE_SLEEP,
         Settings.Secure.AUTOFILL_SERVICE,
         Settings.Secure.ACCESSIBILITY_DISPLAY_MAGNIFICATION_SCALE,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
@@ -85,6 +86,7 @@ public class SecureSettings {
         Settings.Secure.TTY_MODE_ENABLED,
         Settings.Secure.RTT_CALLING_MODE,
         Settings.Secure.INCALL_POWER_BUTTON_BEHAVIOR,
+        Settings.Secure.MINIMAL_POST_PROCESSING_ALLOWED,
         Settings.Secure.NIGHT_DISPLAY_CUSTOM_START_TIME,
         Settings.Secure.NIGHT_DISPLAY_CUSTOM_END_TIME,
         Settings.Secure.NIGHT_DISPLAY_COLOR_TEMPERATURE,
@@ -142,6 +144,8 @@ public class SecureSettings {
         Settings.Secure.LOCK_SCREEN_WHEN_TRUST_LOST,
         Settings.Secure.SKIP_DIRECTION,
         Settings.Secure.THEME_CUSTOMIZATION_OVERLAY_PACKAGES,
+        Settings.Secure.BACK_GESTURE_INSET_SCALE_LEFT,
+        Settings.Secure.BACK_GESTURE_INSET_SCALE_RIGHT,
         Settings.Secure.NAVIGATION_MODE,
         Settings.Secure.SKIP_GESTURE_COUNT,
         Settings.Secure.SKIP_TOUCH_COUNT,
@@ -157,5 +161,7 @@ public class SecureSettings {
         Settings.Secure.AWARE_TAP_PAUSE_GESTURE_COUNT,
         Settings.Secure.AWARE_TAP_PAUSE_TOUCH_COUNT,
         Settings.Secure.PEOPLE_STRIP,
+        Settings.Secure.ACCESSIBILITY_MAGNIFICATION_MODE,
+        Settings.Secure.ACCESSIBILITY_BUTTON_LONG_PRESS_TARGETS,
     };
 }

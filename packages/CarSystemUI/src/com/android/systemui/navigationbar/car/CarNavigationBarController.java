@@ -37,7 +37,7 @@ public class CarNavigationBarController {
 
     private final Context mContext;
     private final NavigationBarViewFactory mNavigationBarViewFactory;
-    private final Lazy<CarFacetButtonController> mCarFacetButtonControllerLazy;
+    private final ButtonSelectionStateController mButtonSelectionStateController;
     private final Lazy<HvacController> mHvacControllerLazy;
 
     private boolean mShowBottom;
@@ -58,17 +58,41 @@ public class CarNavigationBarController {
     @Inject
     public CarNavigationBarController(Context context,
             NavigationBarViewFactory navigationBarViewFactory,
-            Lazy<CarFacetButtonController> carFacetButtonControllerLazy,
+            ButtonSelectionStateController buttonSelectionStateController,
             Lazy<HvacController> hvacControllerLazy) {
         mContext = context;
         mNavigationBarViewFactory = navigationBarViewFactory;
-        mCarFacetButtonControllerLazy = carFacetButtonControllerLazy;
+        mButtonSelectionStateController = buttonSelectionStateController;
         mHvacControllerLazy = hvacControllerLazy;
 
         // Read configuration.
         mShowBottom = mContext.getResources().getBoolean(R.bool.config_enableBottomNavigationBar);
         mShowLeft = mContext.getResources().getBoolean(R.bool.config_enableLeftNavigationBar);
         mShowRight = mContext.getResources().getBoolean(R.bool.config_enableRightNavigationBar);
+    }
+
+    /**
+     * Hides all navigation bars.
+     */
+    public void hideBars() {
+        if (mTopView != null) {
+            mTopView.setVisibility(View.GONE);
+        }
+        setBottomWindowVisibility(View.GONE);
+        setLeftWindowVisibility(View.GONE);
+        setRightWindowVisibility(View.GONE);
+    }
+
+    /**
+     * Shows all navigation bars.
+     */
+    public void showBars() {
+        if (mTopView != null) {
+            mTopView.setVisibility(View.VISIBLE);
+        }
+        setBottomWindowVisibility(View.VISIBLE);
+        setLeftWindowVisibility(View.VISIBLE);
+        setRightWindowVisibility(View.VISIBLE);
     }
 
     /** Connect to hvac service. */
@@ -175,7 +199,7 @@ public class CarNavigationBarController {
             NotificationsShadeController notifShadeController) {
         view.setStatusBarWindowTouchListener(statusBarTouchListener);
         view.setNotificationsPanelController(notifShadeController);
-        mCarFacetButtonControllerLazy.get().addAllFacetButtons(view);
+        mButtonSelectionStateController.addAllButtonsWithSelectionState(view);
         mHvacControllerLazy.get().addTemperatureViewToController(view);
     }
 

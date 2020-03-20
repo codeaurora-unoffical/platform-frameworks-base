@@ -18,8 +18,10 @@ package com.android.server;
 
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.gsi.AvbPublicKey;
 import android.gsi.GsiProgress;
 import android.gsi.IGsiService;
+import android.gsi.IGsiServiceCallback;
 import android.gsi.IGsid;
 import android.os.Environment;
 import android.os.IBinder;
@@ -44,9 +46,9 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
     private static final String TAG = "DynamicSystemService";
     private static final String NO_SERVICE_ERROR = "no gsiservice";
     private static final int GSID_ROUGH_TIMEOUT_MS = 8192;
-    private static final String PATH_DEFAULT = "/data/gsi";
+    private static final String PATH_DEFAULT = "/data/gsi/";
     private Context mContext;
-    private String mInstallPath;
+    private String mInstallPath, mDsuSlot;
     private volatile IGsiService mGsiService;
 
     DynamicSystemService(Context context) {
@@ -114,8 +116,22 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
         }
     }
 
+    class GsiServiceCallback extends IGsiServiceCallback.Stub {
+        // 0 for success
+        private int mResult = -1;
+
+        public synchronized void onResult(int result) {
+            mResult = result;
+            notify();
+        }
+
+        public int getResult() {
+            return mResult;
+        }
+    }
+
     @Override
-    public boolean startInstallation() throws RemoteException {
+    public boolean startInstallation(String dsuSlot) throws RemoteException {
         IGsiService service = getGsiService();
         // priority from high to low: sysprop -> sdcard -> /data
         String path = SystemProperties.get("os.aot.path");
@@ -129,16 +145,17 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
                 if (!Environment.MEDIA_MOUNTED.equals(volume.getState())) continue;
                 File sdCard = volume.getPathFile();
                 if (sdCard.isDirectory()) {
-                    path = sdCard.getPath();
+                    path = new File(sdCard, dsuSlot).getPath();
                     break;
                 }
             }
             if (path.isEmpty()) {
-                path = PATH_DEFAULT;
+                path = PATH_DEFAULT + dsuSlot;
             }
             Slog.i(TAG, "startInstallation -> " + path);
         }
         mInstallPath = path;
+        mDsuSlot = dsuSlot;
         if (service.openInstall(path) != 0) {
             Slog.i(TAG, "Failed to open " + path);
             return false;
@@ -179,23 +196,14 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
 
     @Override
     public boolean isInUse() throws RemoteException {
-        boolean gsidWasRunning = "running".equals(SystemProperties.get("init.svc.gsid"));
-        boolean isInUse = false;
-
-        try {
-            isInUse = getGsiService().isGsiRunning();
-        } finally {
-            if (!gsidWasRunning && !isInUse) {
-                mGsiService = null;
-            }
-        }
-
-        return isInUse;
+        return SystemProperties.getBoolean("ro.gsid.image_running", false);
     }
 
     @Override
     public boolean isInstalled() throws RemoteException {
-        return getGsiService().isGsiInstalled();
+        boolean installed = SystemProperties.getBoolean("gsid.image_installed", false);
+        Slog.i(TAG, "isInstalled(): " + installed);
+        return installed;
     }
 
     @Override
@@ -205,16 +213,37 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
 
     @Override
     public boolean remove() throws RemoteException {
-        IGsiService gsiService = getGsiService();
-        String install_dir = gsiService.getInstalledGsiImageDir();
-        return getGsiService().removeGsi();
+        try {
+            GsiServiceCallback callback = new GsiServiceCallback();
+            synchronized (callback) {
+                getGsiService().removeGsiAsync(callback);
+                callback.wait(GSID_ROUGH_TIMEOUT_MS);
+            }
+            return callback.getResult() == 0;
+        } catch (InterruptedException e) {
+            Slog.e(TAG, "remove() was interrupted");
+            return false;
+        }
     }
 
     @Override
     public boolean setEnable(boolean enable, boolean oneShot) throws RemoteException {
         IGsiService gsiService = getGsiService();
         if (enable) {
-            return gsiService.enableGsi(oneShot) == 0;
+            try {
+                if (mDsuSlot == null) {
+                    mDsuSlot = gsiService.getActiveDsuSlot();
+                }
+                GsiServiceCallback callback = new GsiServiceCallback();
+                synchronized (callback) {
+                    gsiService.enableGsiAsync(oneShot, mDsuSlot, callback);
+                    callback.wait(GSID_ROUGH_TIMEOUT_MS);
+                }
+                return callback.getResult() == 0;
+            } catch (InterruptedException e) {
+                Slog.e(TAG, "setEnable() was interrupted");
+                return false;
+            }
         } else {
             return gsiService.disableGsi();
         }
@@ -233,6 +262,15 @@ public class DynamicSystemService extends IDynamicSystemService.Stub implements 
     public boolean submitFromAshmem(long size) {
         try {
             return getGsiService().commitGsiChunkFromAshmem(size);
+        } catch (RemoteException e) {
+            throw new RuntimeException(e.toString());
+        }
+    }
+
+    @Override
+    public boolean getAvbPublicKey(AvbPublicKey dst) {
+        try {
+            return getGsiService().getAvbPublicKey(dst) == 0;
         } catch (RemoteException e) {
             throw new RuntimeException(e.toString());
         }

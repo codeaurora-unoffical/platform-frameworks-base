@@ -27,8 +27,8 @@ import static android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS;
 import static android.content.pm.PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS;
 import static android.content.pm.PackageManager.MATCH_SYSTEM_ONLY;
 
-import android.annotation.UnsupportedAppUsage;
-import android.content.pm.parsing.ComponentParseUtils;
+import android.compat.annotation.UnsupportedAppUsage;
+import android.content.pm.parsing.component.ParsedMainComponent;
 import android.os.BaseBundle;
 import android.os.Debug;
 import android.os.PersistableBundle;
@@ -46,6 +46,8 @@ import org.xmlpull.v1.XmlSerializer;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -77,7 +79,9 @@ public class PackageUserState {
     public ArraySet<String> disabledComponents;
     public ArraySet<String> enabledComponents;
 
-    public String[] overlayPaths;
+    private String[] overlayPaths;
+    private ArrayMap<String, String[]> sharedLibraryOverlayPaths; // Lib name to overlay paths
+    private String[] cachedOverlayPaths;
 
     @UnsupportedAppUsage
     public PackageUserState() {
@@ -112,7 +116,31 @@ public class PackageUserState {
         enabledComponents = ArrayUtils.cloneOrNull(o.enabledComponents);
         overlayPaths =
             o.overlayPaths == null ? null : Arrays.copyOf(o.overlayPaths, o.overlayPaths.length);
+        if (o.sharedLibraryOverlayPaths != null) {
+            sharedLibraryOverlayPaths = new ArrayMap<>(o.sharedLibraryOverlayPaths);
+        }
         harmfulAppWarning = o.harmfulAppWarning;
+    }
+
+    public String[] getOverlayPaths() {
+        return overlayPaths;
+    }
+
+    public void setOverlayPaths(String[] paths) {
+        overlayPaths = paths;
+        cachedOverlayPaths = null;
+    }
+
+    public Map<String, String[]> getSharedLibraryOverlayPaths() {
+        return sharedLibraryOverlayPaths;
+    }
+
+    public void setSharedLibraryOverlayPaths(String library, String[] paths) {
+        if (sharedLibraryOverlayPaths == null) {
+            sharedLibraryOverlayPaths = new ArrayMap<>();
+        }
+        sharedLibraryOverlayPaths.put(library, paths);
+        cachedOverlayPaths = null;
     }
 
     /**
@@ -135,7 +163,7 @@ public class PackageUserState {
     }
 
     public boolean isMatch(boolean isSystem, boolean isPackageEnabled,
-            ComponentParseUtils.ParsedComponent component, int flags) {
+            ParsedMainComponent component, int flags) {
         return isMatch(isSystem, isPackageEnabled, component.isEnabled(),
                 component.isDirectBootAware(), component.getName(), flags);
     }
@@ -189,7 +217,7 @@ public class PackageUserState {
     }
 
     public boolean isEnabled(boolean isPackageEnabled,
-            ComponentParseUtils.ParsedComponent parsedComponent, int flags) {
+            ParsedMainComponent parsedComponent, int flags) {
         return isEnabled(isPackageEnabled, parsedComponent.isEnabled(), parsedComponent.getName(),
                 flags);
     }
@@ -233,6 +261,38 @@ public class PackageUserState {
         }
 
         return isComponentEnabled;
+    }
+
+    public String[] getAllOverlayPaths() {
+        if (overlayPaths == null && sharedLibraryOverlayPaths == null) {
+            return null;
+        }
+
+        if (cachedOverlayPaths != null) {
+            return cachedOverlayPaths;
+        }
+
+        final LinkedHashSet<String> paths = new LinkedHashSet<>();
+        if (overlayPaths != null) {
+            final int N = overlayPaths.length;
+            for (int i = 0; i < N; i++) {
+                paths.add(overlayPaths[i]);
+            }
+        }
+
+        if (sharedLibraryOverlayPaths != null) {
+            for (String[] libOverlayPaths : sharedLibraryOverlayPaths.values()) {
+                if (libOverlayPaths != null) {
+                    final int N = libOverlayPaths.length;
+                    for (int i = 0; i < N; i++) {
+                        paths.add(libOverlayPaths[i]);
+                    }
+                }
+            }
+        }
+
+        cachedOverlayPaths = paths.toArray(new String[0]);
+        return cachedOverlayPaths;
     }
 
     @Override

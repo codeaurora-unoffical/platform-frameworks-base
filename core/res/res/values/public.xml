@@ -3000,15 +3000,24 @@
     <public-group type="attr" first-id="0x01010607">
       <public name="importantForContentCapture" />
       <public name="forceQueryable" />
-      <!-- @hide @SystemApi -->
       <public name="resourcesMap" />
       <public name="animatedImageDrawable"/>
       <public name="htmlDescription"/>
+      <public name="preferMinimalPostProcessing"/>
+      <public name="featureId" />
+      <public name="supportsInlineSuggestions" />
+      <public name="crossProfile" />
+      <public name="canTakeScreenshot"/>
+      <!-- @hide @SystemApi -->
+      <public name="sdkVersion" />
+      <!-- @hide @SystemApi -->
+      <public name="minExtensionVersion" />
+      <public name="allowNativeHeapPointerTagging" />
+      <public name="preserveLegacyExternalStorage" />
+      <public name="mimeGroup" />
     </public-group>
 
     <public-group type="drawable" first-id="0x010800b5">
-      <!-- @hide @SystemApi -->
-      <public name="stat_notify_wifi_in_range" />
     </public-group>
 
     <public-group type="style" first-id="0x010302e5">
@@ -3019,16 +3028,20 @@
     </public-group>
 
     <public-group type="string" first-id="0x01040025">
-      <!-- @hide @SystemApi -->
+      <!-- @hide -->
       <public name="notification_channel_network_status" />
-      <!-- @hide @SystemApi -->
+      <!-- @hide -->
       <public name="notification_channel_network_alerts" />
-      <!-- @hide @SystemApi -->
+      <!-- @hide -->
       <public name="notification_channel_network_available" />
       <!-- @hide @SystemApi -->
       <public name="config_defaultCallRedirection" />
       <!-- @hide @SystemApi -->
       <public name="config_defaultCallScreening" />
+      <!-- @hide @SystemApi @TestApi -->
+      <public name="config_systemGallery" />
+      <!-- @hide @SystemApi -->
+      <public name="low_memory" />
     </public-group>
 
     <public-group type="bool" first-id="0x01110005">
@@ -3050,6 +3063,25 @@
       <public name="accessibilitySystemActionToggleSplitScreen" />
       <public name="accessibilitySystemActionLockScreen" />
       <public name="accessibilitySystemActionTakeScreenshot" />
+      <public name="accessibilityActionImeEnter" />
+    </public-group>
+
+    <public-group type="array" first-id="0x01070006">
+      <!-- @hide @SystemApi -->
+      <public name="simColors" />
+      <!-- @hide @SystemApi -->
+      <public name="config_restrictedPreinstalledCarrierApps" />
+      <!-- @hide @SystemApi -->
+      <public name="config_sms_enabled_single_shift_tables" />
+      <!-- @hide @SystemApi -->
+      <public name="config_sms_enabled_locking_shift_tables" />
+    </public-group>
+
+    <public-group type="string" first-id="0x0104002c">
+      <!-- @hide -->
+      <public name="config_customMediaKeyDispatcher" />
+      <!-- @hide -->
+      <public name="config_customSessionPolicyProvider" />
     </public-group>
   <!-- ===============================================================
        DO NOT ADD UN-GROUPED ITEMS HERE

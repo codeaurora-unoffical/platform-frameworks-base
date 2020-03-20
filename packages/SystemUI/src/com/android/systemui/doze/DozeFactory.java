@@ -102,7 +102,8 @@ public class DozeFactory {
                 wrappedService, mDozeParameters);
 
         DozeMachine machine = new DozeMachine(wrappedService, config, wakeLock,
-                mWakefulnessLifecycle, mBatteryController, mDozeLog, mDockManager);
+                mWakefulnessLifecycle, mBatteryController, mDozeLog, mDockManager,
+                mDozeServiceHost);
         machine.setParts(new DozeMachine.Part[]{
                 new DozePauser(mHandler, machine, mAlarmManager, mDozeParameters.getPolicy()),
                 new DozeFalsingManagerAdapter(mFalsingManager),

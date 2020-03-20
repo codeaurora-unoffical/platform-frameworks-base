@@ -16,10 +16,6 @@
 
 package android.os;
 
-import android.os.IPullAtomCallback;
-import android.os.StatsDimensionsValue;
-import android.os.StatsLogEventWrapper;
-
 /**
   * Binder interface to communicate with the Java-based statistics service helper.
   * {@hide}
@@ -63,31 +59,13 @@ interface IStatsCompanionService {
     /** Cancel any alarm for the purpose of subscriber triggering. */
     oneway void cancelAlarmForSubscriberTriggering();
 
-    /** Pull the specified data. Results will be sent to statsd when complete. */
-    StatsLogEventWrapper[] pullData(int pullCode);
-
-    /** Send a broadcast to the specified PendingIntent's as IBinder that it should getData now. */
-    oneway void sendDataBroadcast(in IBinder intentSender, long lastReportTimeNs);
-
-    /**
-     * Send a broadcast to the specified PendingIntent's as IBinder notifying it that the list
-     * of active configs has changed.
-     */
-    oneway void sendActiveConfigsChangedBroadcast(in IBinder intentSender, in long[] configIds);
-
-    /**
-     * Requests StatsCompanionService to send a broadcast using the given intentSender
-     * (which should cast to an IIntentSender), along with the other information specified.
-     */
-    oneway void sendSubscriberBroadcast(in IBinder intentSender, long configUid, long configId,
-                                        long subscriptionId, long subscriptionRuleId,
-                                        in String[] cookies,
-                                        in StatsDimensionsValue dimensionsValue);
-
     /** Tells StatsCompaionService to grab the uid map snapshot and send it to statsd. */
     oneway void triggerUidSnapshot();
 
-    /** Tells StatsCompanionService to tell statsd to register a puller for the given atom id */
-    oneway void registerPullAtomCallback(int atomTag, long coolDownNs, long timeoutNs,
-            in int[] additiveFields, IPullAtomCallback pullerCallback);
+    /**
+     * Ask StatsCompanionService if the given permission is allowed for a particular process
+     * and user ID. statsd is incapable of doing this check itself because checkCallingPermission
+     * is not currently supported by libbinder_ndk.
+     */
+    boolean checkPermission(String permission, int pid, int uid);
 }

@@ -59,6 +59,7 @@
         <item><xliff:g id="id">@string/status_bar_airplane</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_battery</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_sensors_off</xliff:g></item>
+        <item><xliff:g id="id">@string/status_bar_screen_record</xliff:g></item>
     </string-array>
 
     <string translatable="false" name="status_bar_rotate">rotate</string>
@@ -94,6 +95,7 @@
     <string translatable="false" name="status_bar_camera">camera</string>
     <string translatable="false" name="status_bar_airplane">airplane</string>
     <string translatable="false" name="status_bar_sensors_off">sensors_off</string>
+    <string translatable="false" name="status_bar_screen_record">screen_record</string>
 
     <!-- Flag indicating whether the surface flinger has limited
          alpha compositing functionality in hardware.  If set, the window
@@ -146,6 +148,24 @@
     <!-- The duration (in milliseconds) of the activity open/close and fragment open/close animations. -->
     <integer name="config_activityShortDur">150</integer>
     <integer name="config_activityDefaultDur">220</integer>
+
+    <!-- Fade out time for screen rotation -->
+    <integer name="config_screen_rotation_fade_out">116</integer>
+
+    <!-- Fade in time for screen rotation -->
+    <integer name="config_screen_rotation_fade_in">233</integer>
+
+    <!-- Fade in delay time for screen rotation -->
+    <integer name="config_screen_rotation_fade_in_delay">100</integer>
+
+    <!-- Total time for 90 degree screen rotation animations -->
+    <integer name="config_screen_rotation_total_90">333</integer>
+
+    <!-- Total time for 180 degree screen rotation animation -->
+    <integer name="config_screen_rotation_total_180">433</integer>
+
+    <!-- Total time for the rotation background color transition -->
+    <integer name="config_screen_rotation_color_transition">200</integer>
 
     <!-- The duration (in milliseconds) of the tooltip show/hide animations. -->
     <integer name="config_tooltipAnimTime">150</integer>
@@ -226,7 +246,7 @@
          correctly use them when installed on your device.  Otherwise, keep this disabled
          so that applications can still use their own mechanisms. -->
     <bool name="config_enableAutoPowerModes">false</bool>
-
+ 
     <!-- Whether (if true) this is a kind of device that can be moved around (eg. phone/laptop),
          or (if false) something for which movement is either not measurable or should not count
          toward power states (eg. tv/soundbar). -->
@@ -251,6 +271,11 @@
          when there's no network connection. If the scan doesn't timeout, use zero -->
     <integer name="config_radioScanningTimeout">0</integer>
 
+    <!-- When true, Android uses the PAC implementation included in WebView to handle
+         networks with PAC scripts.
+         When false, Android's own implementation of libpac is used.-->
+    <bool name ="config_useWebViewPacProcessor">true</bool>
+
     <!-- XXXXX NOTE THE FOLLOWING RESOURCES USE THE WRONG NAMING CONVENTION.
          Please don't copy them, copy anything else. -->
 
@@ -263,6 +288,10 @@
          before automatically restore the default connection.  Set -1 if the connection
          does not require auto-restore. -->
     <!-- the 6th element indicates boot-time dependency-met value. -->
+    <!-- NOTE: The telephony module is no longer reading the configuration below for available
+         APN types.  The set of APN types and relevant settings are specified within the telephony
+         module and are non-configurable.  Whether or not data connectivity over a cellular network
+         is available at all is controlled by the flag: config_moble_data_capable. -->
     <string-array translatable="false" name="networkAttributes">
         <item>"wifi,1,1,1,-1,true"</item>
         <item>"mobile,0,0,0,-1,true"</item>
@@ -1236,32 +1265,64 @@
     -->
     <integer name="config_doubleTapOnHomeBehavior">0</integer>
 
-    <!-- Minimum screen brightness setting allowed by the power manager.
-         The user is forbidden from setting the brightness below this level. -->
+    <!-- Note: This setting is deprecated, please use
+    config_screenBrightnessSettingMinimumFloat instead -->
     <integer name="config_screenBrightnessSettingMinimum">10</integer>
 
-    <!-- Maximum screen brightness allowed by the power manager.
-         The user is forbidden from setting the brightness above this level. -->
+    <!-- Note: This setting is deprecated, please use
+    config_screenBrightnessSettingMaximumFloat instead -->
     <integer name="config_screenBrightnessSettingMaximum">255</integer>
 
-    <!-- Default screen brightness setting.
-         Must be in the range specified by minimum and maximum. -->
+    <!-- Note: This setting is deprecated, please use
+    config_screenBrightnessSettingDefaultFloat instead -->
     <integer name="config_screenBrightnessSettingDefault">102</integer>
 
-    <!-- Default screen brightness for VR setting. -->
+    <!-- Minimum screen brightness setting allowed by power manager.
+         -2 is invalid so setting will resort to int value specified above.
+         Set this to 0.0 to allow screen to go to minimal brightness.
+         The user is forbidden from setting the brightness below this level. -->
+    <item name="config_screenBrightnessSettingMinimumFloat" format="float" type="dimen">-2</item>
+
+    <!-- Maximum screen brightness allowed by the power manager.
+         -2 is invalid so setting will resort to int value specified above.
+         Set this to 1.0 for maximum brightness range.
+         The user is forbidden from setting the brightness above this level. -->
+    <item name="config_screenBrightnessSettingMaximumFloat" format="float" type="dimen">-2</item>
+
+    <!-- Default screen brightness setting set.
+         -2 is invalid so setting will resort to int value specified above.
+         Must be in the range specified by minimum and maximum. -->
+    <item name="config_screenBrightnessSettingDefaultFloat" format="float" type="dimen">-2</item>
+
+    <!-- Note: This setting is deprecated, please use
+    config_screenBrightnessSettingForVrDefaultFloat instead -->
     <integer name="config_screenBrightnessForVrSettingDefault">86</integer>
 
-    <!-- Minimum screen brightness setting allowed for VR. Device panels start increasing pulse
-         width as brightness decreases below this theshold. -->
+    <!-- Note: This setting is deprecated, please use
+    config_screenBrightnessSettingForVrMinimumFloat instead -->
     <integer name="config_screenBrightnessForVrSettingMinimum">79</integer>
 
-    <!-- Maximum screen brightness setting allowed for VR. -->
+    <!-- Note: This setting is deprecated, please use
+    config_screenBrightnessSettingForVrMaximumFloat instead -->
     <integer name="config_screenBrightnessForVrSettingMaximum">255</integer>
+
+    <!-- Default screen brightness for VR setting as a float.
+    Equivalent to 86/255-->
+    <item name="config_screenBrightnessSettingForVrDefaultFloat" format="float" type="dimen">0.33464</item>
+
+    <!-- Minimum screen brightness setting allowed for VR. Device panels start increasing pulse
+     width as brightness decreases below this threshold as float.
+     Equivalent to 79/255 -->
+    <item name="config_screenBrightnessSettingForVrMinimumFloat" format="float" type="dimen">0.307087</item>
+
+    <!-- Maximum screen brightness setting allowed for VR as float. -->
+    <item name="config_screenBrightnessSettingForVrMaximumFloat" format="float" type="dimen">1.0</item>
 
     <!-- Screen brightness used to dim the screen while dozing in a very low power state.
          May be less than the minimum allowed brightness setting
          that can be set by the user. -->
     <integer name="config_screenBrightnessDoze">1</integer>
+    <item name="config_screenBrightnessDozeFloat" format="float" type="dimen">0.0</item>
 
     <!-- Delay that allows some content to arrive at the display before switching
          from DOZE to ON. -->
@@ -1317,6 +1378,7 @@
          timeout expires.  May be less than the minimum allowed brightness setting
          that can be set by the user. -->
     <integer name="config_screenBrightnessDim">10</integer>
+    <item name="config_screenBrightnessDimFloat" format="float" type="dimen">0.05</item>
 
     <!-- Minimum allowable screen brightness to use in a very dark room.
          This value sets the floor for the darkest possible auto-brightness
@@ -1606,29 +1668,21 @@
          config_timeZoneRulesUpdateTrackingEnabled are true.] -->
     <integer name="config_timeZoneRulesCheckRetryCount">5</integer>
 
-    <!-- Whether to enable network location overlay which allows network
-         location provider to be replaced by an app at run-time. When disabled,
-         only the config_networkLocationProviderPackageName package will be
-         searched for network location provider, otherwise packages whose
-         signature matches the signatures of config_locationProviderPackageNames
-         will be searched, and the service with the highest version number will
-         be picked. Anyone who wants to disable the overlay mechanism can set it
-         to false.
-         -->
+    <!-- Whether to enable network location overlay which allows network location provider to be
+         replaced by an app at run-time. When disabled, only the
+         config_networkLocationProviderPackageName package will be searched for network location
+         provider, otherwise any system package is eligible. Anyone who wants to disable the overlay
+         mechanism can set it to false. -->
     <bool name="config_enableNetworkLocationOverlay" translatable="false">true</bool>
     <!-- Package name providing network location support. Used only when
          config_enableNetworkLocationOverlay is false. -->
     <string name="config_networkLocationProviderPackageName" translatable="false">@null</string>
 
-    <!-- Whether to enable fused location provider overlay which allows fused
-         location provider to be replaced by an app at run-time. When disabled,
-         only the config_fusedLocationProviderPackageName package will be
-         searched for fused location provider, otherwise packages whose
-         signature matches the signatures of config_locationProviderPackageNames
-         will be searched, and the service with the highest version number will
-         be picked. Anyone who wants to disable the overlay mechanism can set it
-         to false.
-         -->
+    <!-- Whether to enable fused location provider overlay which allows fused location provider to
+         be replaced by an app at run-time. When disabled, only the
+         config_fusedLocationProviderPackageName package will be searched for fused location
+         provider, otherwise any system package is eligible. Anyone who wants to disable the overlay
+         mechanism can set it to false. -->
     <bool name="config_enableFusedLocationOverlay" translatable="false">true</bool>
     <!-- Package name providing fused location support. Used only when
          config_enableFusedLocationOverlay is false. -->
@@ -1647,25 +1701,10 @@
      -->
     <string name="config_defaultNetworkRecommendationProviderPackage" translatable="false"></string>
 
-    <!-- Whether to enable Hardware FLP overlay which allows Hardware FLP to be
-         replaced by an app at run-time. When disabled, only the
-         config_hardwareFlpPackageName package will be searched for Hardware Flp,
-         otherwise packages whose signature matches the signatures of
-         config_locationProviderPackageNames will be searched, and the service
-         with the highest version number will be picked. Anyone who wants to
-         disable the overlay mechanism can set it to false.
-         -->
-    <bool name="config_enableHardwareFlpOverlay" translatable="false">true</bool>
-    <!-- Package name providing Hardware Flp. Used only when
-         config_enableHardwareFlpOverlay is false. -->
-    <string name="config_hardwareFlpPackageName" translatable="false">com.android.location.fused</string>
-
     <!-- Whether to enable geocoder overlay which allows geocoder to be replaced
          by an app at run-time. When disabled, only the
          config_geocoderProviderPackageName package will be searched for
-         geocoder, otherwise packages whose signature matches the signatures of
-         config_locationProviderPackageNames will be searched, and the service
-         with the highest version number will be picked. Anyone who wants to
+         geocoder, otherwise any system package is eligible. Anyone who wants to
          disable the overlay mechanism can set it to false.
          -->
     <bool name="config_enableGeocoderOverlay" translatable="false">true</bool>
@@ -1676,9 +1715,7 @@
     <!-- Whether to enable geofence overlay which allows geofence to be replaced
          by an app at run-time. When disabled, only the
          config_geofenceProviderPackageName package will be searched for
-         geofence implementation, otherwise packages whose signature matches the
-         signatures of config_locationProviderPackageNames will be searched, and
-         the service with the highest version number will be picked. Anyone who
+         geofence implementation, otherwise any system package is eligible. Anyone who
          wants to disable the overlay mechanism can set it to false.
          -->
     <bool name="config_enableGeofenceOverlay" translatable="false">true</bool>
@@ -1689,9 +1726,7 @@
     <!-- Whether to enable Hardware Activity-Recognition overlay which allows Hardware
          Activity-Recognition to be replaced by an app at run-time. When disabled, only the
          config_activityRecognitionHardwarePackageName package will be searched for
-         its implementation, otherwise packages whose signature matches the
-         signatures of config_locationProviderPackageNames will be searched, and
-         the service with the highest version number will be picked. Anyone who
+         its implementation, otherwise any system package is eligible. Anyone who
          wants to disable the overlay mechanism can set it to false.
          -->
     <bool name="config_enableActivityRecognitionHardwareOverlay" translatable="false">true</bool>
@@ -1699,19 +1734,8 @@
          config_enableActivityRecognitionHardwareOverlay is false. -->
     <string name="config_activityRecognitionHardwarePackageName" translatable="false">@null</string>
 
-    <!-- Package name(s) containing location provider support.
-         These packages can contain services implementing location providers,
-         such as the Geocode Provider, Network Location Provider, and
-         Fused Location Provider. They will each be searched for
-         service components implementing these providers.
-         It is strongly recommended that the packages explicitly named
-         below are on the system image, so that they will not map to
-         a 3rd party application.
-         The location framework also has support for installation
-         of new location providers at run-time. The new package does not
-         have to be explicitly listed here, however it must have a signature
-         that matches the signature of at least one package on this list.
-         -->
+    <!-- Package name(s) containing location provider support. These packages will be auto-granted
+         several permissions by the system, and should be system packages. -->
     <string-array name="config_locationProviderPackageNames" translatable="false">
         <!-- The standard AOSP fused location provider -->
         <item>com.android.location.fused</item>
@@ -1849,6 +1873,12 @@
          Note: This config is deprecated, please use config_defaultSms instead. -->
     <string name="default_sms_application" translatable="false">com.android.messaging</string>
 
+    <!-- Flag indicating whether the current device allows data.
+         If true, this means that the device supports data connectivity through
+         the telephony network.
+         This can be overridden to false for devices that support voice and/or sms . -->
+    <bool name="config_mobile_data_capable">true</bool>
+
     <!-- Default web browser.  This is the package name of the application that will
          be the default browser when the device first boots.  Afterwards the user
          can select whatever browser app they wish to use as the default.
@@ -1877,6 +1907,8 @@
     <string name="config_defaultCallRedirection" translatable="false"></string>
     <!-- The name of the package that will hold the call screening role by default. -->
     <string name="config_defaultCallScreening" translatable="false"></string>
+    <!-- The name of the package that will hold the system gallery role. -->
+    <string name="config_systemGallery" translatable="false">com.android.gallery</string>
 
     <!-- Enable/disable default bluetooth profiles:
         HSP_AG, ObexObjectPush, Audio, NAP -->
@@ -2093,9 +2125,6 @@
     <!-- Number of times to try again with the shorter interval, before backing
          off until the normal polling interval. A value < 0 indicates infinite. -->
     <integer name="config_ntpRetry">3</integer>
-    <!-- If the time difference is greater than this threshold in milliseconds,
-         then update the time. -->
-    <integer name="config_ntpThreshold">5000</integer>
     <!-- Timeout to wait for NTP server response in milliseconds. -->
     <integer name="config_ntpTimeout">5000</integer>
 
@@ -2292,6 +2321,9 @@
          movement threshold under which hover is considered "stationary". -->
     <dimen name="config_viewConfigurationHoverSlop">4dp</dimen>
 
+    <!-- Multiplier for gesture thresholds when a MotionEvent classification is ambiguous. -->
+    <item name="config_ambiguousGestureMultiplier" format="float" type="dimen">2.0</item>
+
     <!-- Minimum velocity to initiate a fling, as measured in dips per second. -->
     <dimen name="config_viewMinFlingVelocity">50dp</dimen>
 
@@ -2357,15 +2389,22 @@
 
     <!-- Whether to only install system packages on a user if they're whitelisted for that user
          type. These are flags and can be freely combined.
-         0 (0b000) - disable whitelist (install all system packages; no logging)
-         1 (0b001) - enforce (only install system packages if they are whitelisted)
-         2 (0b010) - log (log when a non-whitelisted package is run)
-         4 (0b100) - treat any package not mentioned in the whitelist file as implicitly whitelisted
-         8 (0b1000) - ignore OTAs (don't install system packages during OTAs)
+         0  - disable whitelist (install all system packages; no logging)
+         1  - enforce (only install system packages if they are whitelisted)
+         2  - log (log non-whitelisted packages)
+         4  - any package not mentioned in the whitelist file is implicitly whitelisted on all users
+         8  - same as 4, but just for the SYSTEM user
+         16 - ignore OTAs (don't install system packages during OTAs)
+         Common scenarios:
+          - to enable feature (fully enforced) for a complete whitelist: 1
+          - to enable feature for an incomplete whitelist (so use implicit whitelist mode): 5
+          - to enable feature but implicitly whitelist for SYSTEM user to ease local development: 9
+          - to disable feature completely if it had never been enabled: 16
+          - to henceforth disable feature and try to undo its previous effects: 0
         Note: This list must be kept current with PACKAGE_WHITELIST_MODE_PROP in
         frameworks/base/services/core/java/com/android/server/pm/UserSystemPackageInstaller.java -->
-    <integer name="config_userTypePackageWhitelistMode">13</integer> <!-- 0b1101 -->
-    <!-- TODO(b/143200798): Change to value 5, i.e. 0b0101, when b/143200798 is resolved. -->
+    <integer name="config_userTypePackageWhitelistMode">29</integer> <!-- 1+4+8+16 -->
+    <!-- TODO(b/143200798): Change to value 13, i.e. 1+4+8, when b/143200798 is resolved. -->
 
     <!-- Whether UI for multi user should be shown -->
     <bool name="config_enableMultiUserUI">false</bool>
@@ -2421,6 +2460,12 @@
     <!-- Configure ethernet tcp buffersizes in the form:
          rmem_min,rmem_def,rmem_max,wmem_min,wmem_def,wmem_max -->
     <string name="config_ethernet_tcp_buffers" translatable="false">524288,1048576,3145728,524288,1048576,2097152</string>
+
+    <!-- What source to use to estimate link upstream and downstream bandwidth capacities.
+         Default is carrier_config, but it should be set to modem if the modem is returning
+         predictive (instead of instantaneous) bandwidth estimate.
+         Values are carrier_config and modem. -->
+    <string name="config_bandwidthEstimateSource">carrier_config</string>
 
     <!-- Whether WiFi display is supported by this device.
          There are many prerequisites for this feature to work correctly.
@@ -2544,7 +2589,45 @@
     <string name="config_customAdbPublicKeyConfirmationSecondaryUserComponent"
             >com.android.systemui/com.android.systemui.usb.UsbDebuggingSecondaryUserActivity</string>
 
-    <!-- Name of the dialog that is used to request the user's consent to VPN connection -->
+    <!-- Name of the activity or service that prompts the user to reject, accept, or whitelist
+         a wireless network for wireless debugging.
+         Can be customized for other product types -->
+    <string name="config_customAdbWifiNetworkConfirmationComponent"
+            >com.android.systemui/com.android.systemui.wifi.WifiDebuggingActivity</string>
+
+    <!-- Name of the activity that prompts the secondary user to acknowledge she/he needs to
+         switch to the primary user to enable wireless debugging.
+         Can be customized for other product types -->
+    <string name="config_customAdbWifiNetworkConfirmationSecondaryUserComponent"
+            >com.android.systemui/com.android.systemui.wifi.WifiDebuggingSecondaryUserActivity</string>
+
+    <!-- Component name of the activity that shows the usb containment status. -->
+    <string name="config_usbContaminantActivity" translatable="false"
+            >com.android.systemui/com.android.systemui.usb.UsbContaminantActivity</string>
+
+    <!-- Component name of the activity that shows the request for access to a usb device. -->
+    <string name="config_usbPermissionActivity" translatable="false"
+            >com.android.systemui/com.android.systemui.usb.UsbPermissionActivity</string>
+
+    <!-- Component name of the activity that shows more information about a usb accessory. -->
+    <string name="config_usbAccessoryUriActivity" translatable="false"
+            >com.android.systemui/com.android.systemui.usb.UsbAccessoryUriActivity</string>
+
+    <!-- Component name of the activity that confirms the activity to start when a usb device is
+         plugged in. -->
+    <string name="config_usbConfirmActivity" translatable="false"
+            >com.android.systemui/com.android.systemui.usb.UsbConfirmActivity</string>
+
+    <!-- Component name of the activity to select the activity to start when a usb device is plugged
+         in. -->
+    <string name="config_usbResolverActivity" translatable="false"
+            >com.android.systemui/com.android.systemui.usb.UsbResolverActivity</string>
+
+    <!-- Name of the dialog that is used to request the user's consent for a Platform VPN -->
+    <string name="config_platformVpnConfirmDialogComponent" translatable="false"
+            >com.android.vpndialogs/com.android.vpndialogs.PlatformVpnConfirmDialog</string>
+
+    <!-- Name of the dialog that is used to request the user's consent for a VpnService VPN -->
     <string name="config_customVpnConfirmDialogComponent" translatable="false"
             >com.android.vpndialogs/com.android.vpndialogs.ConfirmDialog</string>
 
@@ -2665,7 +2748,14 @@
     <string name="config_defaultNetworkScorerPackageName"></string>
 
     <!-- The amount to scale fullscreen snapshots for Overview and snapshot starting windows. -->
-    <item name="config_fullTaskSnapshotScale" format="float" type="dimen">1.0</item>
+    <item name="config_highResTaskSnapshotScale" format="float" type="dimen">1.0</item>
+
+    <!-- The amount to scale reduced scale snapshots for Overview and snapshot starting windows.
+         Reduced scale snapshots are loaded before full screen snapshots to improve load times and
+         minimize the chance the user will see an empty task card. If set to 0, reduced scale
+         snapshots are disabled, and snapshots will only be stored at config_highResTaskSnapshotScale
+         -->
+    <item name="config_lowResTaskSnapshotScale" format="float" type="dimen">0.5</item>
 
     <!-- Feature flag to store TaskSnapshot in 16 bit pixel format to save memory. -->
     <bool name="config_use16BitTaskSnapshotPixelFormat">false</bool>
@@ -2674,11 +2764,45 @@
          property. If this is false, then the following recents config flags are ignored. -->
     <bool name="config_hasRecents">true</bool>
 
-    <!-- Component name for the activity that will be presenting the Recents UI, which will receive special permissions for API related
-          to fetching and presenting recent tasks. The default configuration uses Launcehr3QuickStep as default launcher and points to
-          the corresponding recents component. When using a different default launcher, change this appropriately or use the default
-          systemui implementation: com.android.systemui/.recents.RecentsActivity -->
-    <string name="config_recentsComponentName" translatable="false">com.android.launcher3/com.android.quickstep.RecentsActivity</string>
+    <!-- Component name for the activity that will be presenting the Recents UI, which will receive
+         special permissions for API related to fetching and presenting recent tasks. The default
+         configuration uses Launcehr3QuickStep as default launcher and points to the corresponding
+         recents component. When using a different default launcher, change this appropriately or
+         use the default systemui implementation: com.android.systemui/.recents.RecentsActivity -->
+    <string name="config_recentsComponentName" translatable="false"
+            >com.android.launcher3/com.android.quickstep.RecentsActivity</string>
+
+    <!-- SystemUi service component -->
+    <string name="config_systemUIServiceComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.SystemUIService</string>
+
+    <!-- Keyguard component -->
+    <string name="config_keyguardComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.keyguard.KeyguardService</string>
+
+    <!-- Screen record dialog component -->
+    <string name="config_screenRecorderComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.screenrecord.ScreenRecordDialog</string>
+
+    <!-- The component name of a special dock app that merely launches a dream.
+         We don't want to launch this app when docked because it causes an unnecessary
+         activity transition.  We just want to start the dream. -->
+    <string name="config_somnambulatorComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.Somnambulator</string>
+
+    <!-- The component name of a special dock app that merely launches a dream.
+         We don't want to launch this app when docked because it causes an unnecessary
+         activity transition.  We just want to start the dream.. -->
+    <string name="config_screenshotServiceComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.screenshot.TakeScreenshotService</string>
+
+    <!-- The component notified when there is an error while taking a screenshot. -->
+    <string name="config_screenshotErrorReceiverComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.screenshot.ScreenshotServiceErrorReceiver</string>
+
+    <!-- The component for the activity shown to grant permissions for a slice. -->
+    <string name="config_slicePermissionComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.SlicePermissionActivity</string>
 
     <!-- The minimum number of visible recent tasks to be presented to the user through the
          SystemUI. Can be -1 if there is no minimum limit. -->
@@ -2729,13 +2853,13 @@
          "logout" =  Logout the current user
          -->
     <string-array translatable="false" name="config_globalActionsList">
+        <item>emergency</item>
         <item>power</item>
         <item>restart</item>
         <item>lockdown</item>
         <item>logout</item>
         <item>bugreport</item>
         <item>screenshot</item>
-        <item>emergency</item>
     </string-array>
 
     <!-- Number of milliseconds to hold a wake lock to ensure that drawing is fully
@@ -2850,10 +2974,6 @@
 
     <!-- Whether to use voip audio mode for ims call -->
     <bool name="config_use_voip_mode_for_ims">false</bool>
-
-    <!-- ImsService package name to bind to by default. If none is specified in an overlay, an
-         empty string is passed in -->
-    <string name="config_ims_package"/>
 
     <!-- String array containing numbers that shouldn't be logged. Country-specific. -->
     <string-array name="unloggable_phone_numbers" />
@@ -3032,9 +3152,6 @@
     <!-- Specifies the maximum burn-in offset vertically. -->
     <integer name="config_burnInProtectionMaxVerticalOffset">0</integer>
 
-    <!-- Keyguard component -->
-    <string name="config_keyguardComponent" translatable="false">com.android.systemui/com.android.systemui.keyguard.KeyguardService</string>
-
     <!-- Limit for the number of face templates per user -->
     <integer name="config_faceMaxTemplatesPerUser">1</integer>
 
@@ -3073,7 +3190,9 @@
 
          The path is assumed to be specified in display coordinates with pixel units and in
          the display's native orientation, with the origin of the coordinate system at the
-         center top of the display.
+         center top of the display. Optionally, you can append either `@left` or `@right` to the
+         end of the path string, in order to change the path origin to either the top left,
+         or top right of the display.
 
          To facilitate writing device-independent emulation overlays, the marker `@dp` can be
          appended after the path string to interpret coordinates in dp instead of px units.
@@ -3244,16 +3363,6 @@
          ratio larger than this is considered to wide and short to be usable. Currently 2.39:1. -->
     <item name="config_pictureInPictureMaxAspectRatio" format="float" type="dimen">2.39</item>
 
-    <!-- The snap mode to use for picture-in-picture. These values correspond to constants defined
-         in PipSnapAlgorithm and should not be changed independently.
-             0 - Snap to the four corners
-             1 - Snap to the four corners and the mid-points on the long edge in each orientation
-             2 - Snap anywhere along the edge of the screen
-             3 - Snap anywhere along the edge of the screen and magnet to corners
-             4 - Snap to the long edges in each orientation and magnet to corners
-    -->
-    <integer name="config_pictureInPictureSnapMode">4</integer>
-
     <!-- Controls the snap mode for the docked stack divider
              0 - 3 snap targets: left/top has 16:9 ratio, 1:1, and right/bottom has 16:9 ratio
              1 - 3 snap targets: fixed ratio, 1:1, (1 - fixed ratio)
@@ -3343,8 +3452,8 @@
     <!-- True if assistant app should be pinned via Pinner Service -->
     <bool name="config_pinnerAssistantApp">false</bool>
 
-    <!-- List of files pinned by the Pinner Service with the apex boot image b/119800099 -->
-    <string-array translatable="false" name="config_apexBootImagePinnerServiceFiles">
+    <!-- List of files pinned by the Pinner Service with the JIT Zygote boot image b/119800099 -->
+    <string-array translatable="false" name="config_jitzygoteBootImagePinnerServiceFiles">
     </string-array>
 
     <!-- Number of days preloaded file cache should be preserved on a device before it can be
@@ -3434,10 +3543,9 @@
      mode -->
     <string-array translatable="false" name="config_priorityOnlyDndExemptPackages">
         <item>com.android.dialer</item>
+        <item>com.android.systemui</item>
+        <item>android</item>
     </string-array>
-
-    <!-- An array of packages which can listen for notifications on low ram devices. -->
-    <string-array translatable="false" name="config_allowedManagedServicesOnLowRamDevices" />
 
     <!-- The default value for transition animation scale found in developer settings.
          1.0 corresponds to 1x animator scale, 0 means that there will be no transition
@@ -3488,6 +3596,12 @@
     <!-- Whether the device supports quick settings and its associated APIs -->
     <bool name="config_quickSettingsSupported">true</bool>
 
+    <!-- Comma separated list of extra quick settings tiles to be added to the default set as
+         defined in SystemUi (com.android.systemui.R.string.quick_settings_tiles_default).
+         Custom tiles (TileService) must be specified as "custom(pkg_name/class_in_package)"
+         (without the quotes, both absolute and relative class works). -->
+    <string name="config_defaultExtraQuickSettingsTiles" translatable="false"></string>
+
     <!-- The component name, flattened to a string, for the default autofill service
          to  enabled for an user. This service must be trusted, as it can be activated
          without explicit consent of the user. If no autofill service with the
@@ -3495,24 +3609,23 @@
     -->
     <string name="config_defaultAutofillService" translatable="false"></string>
 
-    <!-- The package name for the default system textclassifier service.
+    <!-- The package name for the OEM custom system textclassifier service.
          This service must be trusted, as it can be activated without explicit consent of the user.
          Example: "com.android.textclassifier"
-         If no textclassifier service with the specified name exists on the device (or if this is
-         set to empty string), a default textclassifier will be loaded in the calling app's process.
+         If this is empty, the default textclassifier service (i.e. config_servicesExtensionPackage)
+         will be used.
+
          See android.view.textclassifier.TextClassificationManager.
     -->
     <string name="config_defaultTextClassifierPackage" translatable="false"></string>
 
-    <!-- A list of the default system textclassifier service package name. Only one of the packages
-         will be activated and the fist package is the default system textclassifier service. OS
-         only tries to bind the first trusted service and the others can be selected via device
-         config. These services must be trusted, as they can be activated without explicit consent
-         of the user. Example: "com.android.textclassifier"
+
+    <!-- The package name for the system companion device manager service.
+         This service must be trusted, as it can be activated without explicit consent of the user.
+         Example: "com.android.companiondevicemanager"
+         See android.companion.CompanionDeviceManager.
     -->
-    <string-array name="config_defaultTextClassifierPackages" translatable="false">
-        <item>android.ext.services</item>
-    </string-array>
+    <string name="config_companionDeviceManagerPackage" translatable="false"></string>
 
     <!-- The package name for the default wellbeing app.
          This package must be trusted, as it has the permissions to control other applications
@@ -3521,7 +3634,6 @@
      -->
     <string name="config_defaultWellbeingPackage" translatable="false"></string>
 
-
     <!-- The package name for the system telephony apps.
          This package must be trusted, as it will be granted with permissions with special telephony
          protection level. Note, framework by default support multiple telephony apps, each package
@@ -3529,7 +3641,7 @@
          Example: "com.android.phone,com.android.stk,com.android.providers.telephony"
          (Note: shell is included for testing purposes)
      -->
-    <string name="config_telephonyPackages" translatable="false">"com.android.phone,com.android.stk,com.android.providers.telephony,com.android.ons,com.android.cellbroadcastservice,com.android.cellbroadcastreceiver,com.android.shell"</string>
+    <string name="config_telephonyPackages" translatable="false">"com.android.phone,com.android.stk,com.android.providers.telephony,com.android.ons"</string>
 
     <!-- The component name for the default system attention service.
          This service must be trusted, as it can be activated without explicit consent of the user.
@@ -3588,6 +3700,19 @@
          Example: "com.android.contentsuggestions/.ContentSuggestionsService"
     -->
     <string name="config_defaultContentSuggestionsService" translatable="false"></string>
+
+    <!-- The package name for the default retail demo app.
+         This package must be trusted, as it has the permissions to query the usage stats on the
+         device.
+         Example: "com.google.android.retaildemo"
+     -->
+    <string name="config_retailDemoPackage" translatable="false"></string>
+
+    <!-- The package signature hash for the default retail demo app.
+         This package must be trusted, as it has the permissions to query the usage stats on the
+         device.
+     -->
+    <string name="config_retailDemoPackageSignature" translatable="false"></string>
 
     <!-- Whether the device uses the default focus highlight when focus state isn't specified. -->
     <bool name="config_useDefaultFocusHighlight">true</bool>
@@ -3716,6 +3841,10 @@
          or empty if the default should be used. -->
     <string translatable="false" name="config_deviceSpecificAudioService"></string>
 
+    <!-- Class name of the device specific implementation of DisplayAreaPolicy.Provider
+         or empty if the default should be used. -->
+    <string translatable="false" name="config_deviceSpecificDisplayAreaPolicyProvider"></string>
+
     <!-- Component name of media projection permission dialog -->
     <string name="config_mediaProjectionPermissionDialogComponent" translatable="false">com.android.systemui/com.android.systemui.media.MediaProjectionPermissionActivity</string>
 
@@ -3820,14 +3949,14 @@
     <!-- Component name for the default module metadata provider on this device -->
     <string name="config_defaultModuleMetadataProvider" translatable="false">com.android.modulemetadata</string>
 
-    <!-- This is the default launcher component to use on secondary displays that support system
-         decorations.
-         This launcher activity must support multiple instances and have corresponding launch mode
-         set in AndroidManifest.
+    <!-- This is the default launcher package with an activity to use on secondary displays that
+         support system decorations.
+         This launcher package must have an activity that supports multiple instances and has
+         corresponding launch mode set in AndroidManifest.
          {@see android.view.Display#FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS} -->
-    <string name="config_secondaryHomeComponent" translatable="false">com.android.launcher3/com.android.launcher3.SecondaryDisplayLauncher</string>
+    <string name="config_secondaryHomePackage" translatable="false">com.android.launcher3</string>
 
-    <!-- Force secondary home launcher specified in config_secondaryHomeComponent always. If this is
+    <!-- Force secondary home launcher specified in config_secondaryHomePackage always. If this is
          not set, secondary home launcher can be replaced by user. -->
     <bool name ="config_useSystemProvidedLauncherForSecondary">false</bool>
 
@@ -4112,7 +4241,7 @@
          where: IDs are unique per device, Modality as defined in BiometricAuthenticator.java,
          and Strength as defined in Authenticators.java -->
     <string-array name="config_biometric_sensors" translatable="false" >
-        <item>0:2:15</item> <!-- ID0:Fingerprint:Strong -->
+        <!-- <item>0:2:15</item>  ID0:Fingerprint:Strong -->
     </string-array>
 
     <!-- Messages that should not be shown to the user during face auth enrollment. This should be
@@ -4195,6 +4324,10 @@
         <!-- Add packages here -->
     </string-array>
 
+    <!-- Whether or not wcg (wide color gamut) should be enabled on this device,
+         we only enabled it while the device has ability of mixed color spaces composition -->
+    <bool name="config_enableWcgMode">false</bool>
+
     <!-- When true, enables the whitelisted app to handle bug reports from power menu short press. -->
     <bool name="config_bugReportHandlerEnabled">false</bool>
 
@@ -4214,4 +4347,72 @@
          value is left empty.  When this is non-empty then config_rawContactsLocalAccountName
          should also be non-empty.-->
     <string name="config_rawContactsLocalAccountType" translatable="false"></string>
+
+    <!-- Whether or not to use assistant stream volume separately from music volume -->
+    <bool name="config_useAssistantVolume">false</bool>
+
+    <!-- Whether to use a custom Bugreport handling. When true, ACTION_CUSTOM_BUGREPORT_REQUESTED
+         intent is broadcasted on bugreporting chord (instead of the default full bugreport
+         generation). -->
+    <bool name="config_customBugreport">false</bool>
+
+    <!-- Names of packages that should not be suspended when personal use is blocked by policy. -->
+    <string-array name="config_packagesExemptFromSuspension" translatable="false">
+        <!-- Add packages here, example: -->
+        <!-- <item>com.android.settings</item> -->
+    </string-array>
+
+
+    <!-- Class name of the custom country detector to be used. -->
+    <string name="config_customCountryDetector" translatable="false">com.android.server.location.ComprehensiveCountryDetector</string>
+
+    <!-- Package name of the required service extension package. -->
+    <string name="config_servicesExtensionPackage" translatable="false">android.ext.services</string>
+
+    <!-- Retention policy: number of records to kept for the historical exit info per package. -->
+    <integer name="config_app_exit_info_history_list_size">16</integer>
+
+    <!-- Packages that can't be killed even if it's requested to be killed on imperceptible -->
+    <string-array name="config_defaultImperceptibleKillingExemptionPkgs" translatable="false" />
+
+    <!-- Proc States that can't be killed even if it's requested to be killed on imperceptible -->
+    <integer-array name="config_defaultImperceptibleKillingExemptionProcStates">
+      <item>0</item> <!-- PROCESS_STATE_PERSISTENT -->
+      <item>1</item> <!-- PROCESS_STATE_PERSISTENT_UI -->
+      <item>2</item> <!-- PROCESS_STATE_TOP -->
+      <item>4</item> <!-- PROCESS_STATE_FOREGROUND_SERVICE -->
+      <item>12</item> <!-- PROCESS_STATE_TOP_SLEEPING -->
+    </integer-array>
+
+    <!-- Component name that accepts ACTION_SEND intents for nearby (proximity-based) sharing.
+         Used by ChooserActivity. -->
+    <string translatable="false" name="config_defaultNearbySharingComponent"></string>
+
+    <!-- Boolean indicating whether frameworks needs to reset cell broadcast geo-fencing
+         check after reboot or airplane mode toggling -->
+    <bool translatable="false" name="reset_geo_fencing_check_after_boot_or_apm">false</bool>
+
+    <!-- Screen Wake Keys
+         Determines whether the specified key groups can be used to wake up the device. -->
+    <bool name="config_wakeOnDpadKeyPress">true</bool>
+    <bool name="config_wakeOnAssistKeyPress">true</bool>
+    <bool name="config_wakeOnBackKeyPress">true</bool>
+
+    <!-- Whether to default to an expanded list of users on the lock screen user switcher. -->
+    <bool name="config_expandLockScreenUserSwitcher">false</bool>
+
+    <!-- Toasts posted from these packages will be shown to the current user, regardless of the user
+         the process belongs to. This is useful for packages that run under a single user but serve
+         multiple users, e.g. the system.
+         These packages MUST be able to add flag SYSTEM_FLAG_SHOW_FOR_ALL_USERS to a window. -->
+    <string-array name="config_toastCrossUserPackages" translatable="false">
+        <item>android</item>
+        <item>com.android.systemui</item>
+    </string-array>
+
+    <!-- Package name of custom media key dispatcher class used by MediaSessionService. -->
+    <string name="config_customMediaKeyDispatcher"></string>
+
+    <!-- Package name of custom session policy provider class used by MediaSessionService. -->
+    <string name="config_customSessionPolicyProvider"></string>
 </resources>

@@ -18,222 +18,79 @@
 <com.android.systemui.statusbar.notification.stack.PeopleHubView
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="105dp">
-
-    <com.android.systemui.statusbar.notification.row.NotificationBackgroundView
-        android:id="@+id/backgroundNormal"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <com.android.systemui.statusbar.notification.row.NotificationBackgroundView
-        android:id="@+id/backgroundDimmed"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+    android:layout_height="@dimen/notification_section_header_height"
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp"
+    android:focusable="true"
+    android:clickable="true"
+>
 
     <LinearLayout
         android:id="@+id/people_list"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:paddingTop="12dp"
-        android:paddingBottom="12dp"
-        android:gravity="center"
-        android:orientation="horizontal">
+        android:layout_marginEnd="8dp"
+        android:gravity="bottom"
+        android:orientation="horizontal"
+        android:forceHasOverlappingRendering="false"
+        android:clipChildren="false">
 
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
+        <FrameLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="start|center_vertical"
             android:layout_weight="1"
-        />
-
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:visibility="invisible">
-
-            <ImageView
-                android:id="@+id/person_icon"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:scaleType="fitCenter"
-            />
+            android:forceHasOverlappingRendering="false">
 
             <TextView
-                android:id="@+id/person_name"
-                android:layout_width="match_parent"
+                style="@style/TextAppearance.NotificationSectionHeaderButton"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:textAlignment="center"
+                android:text="@string/notification_section_header_conversations"
             />
 
-        </LinearLayout>
+        </FrameLayout>
 
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:forceHasOverlappingRendering="false"
         />
 
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:forceHasOverlappingRendering="false"
         />
 
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:visibility="invisible">
-
-            <ImageView
-                android:id="@+id/person_icon"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:scaleType="fitCenter"
-            />
-
-            <TextView
-                android:id="@+id/person_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:textAlignment="center"
-            />
-
-        </LinearLayout>
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:forceHasOverlappingRendering="false"
         />
 
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:forceHasOverlappingRendering="false"
         />
 
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:visibility="invisible">
-
-            <ImageView
-                android:id="@+id/person_icon"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:scaleType="fitCenter"
-            />
-
-            <TextView
-                android:id="@+id/person_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:textAlignment="center"
-            />
-
-        </LinearLayout>
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-        />
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-        />
-
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:visibility="invisible">
-
-            <ImageView
-                android:id="@+id/person_icon"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:scaleType="fitCenter"
-            />
-
-            <TextView
-                android:id="@+id/person_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:textAlignment="center"
-            />
-
-        </LinearLayout>
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-        />
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-        />
-
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:visibility="invisible">
-
-            <ImageView
-                android:id="@+id/person_icon"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:scaleType="fitCenter"
-            />
-
-            <TextView
-                android:id="@+id/person_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:textAlignment="center"
-            />
-
-        </LinearLayout>
-
-        <View
-            android:layout_width="8dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:forceHasOverlappingRendering="false"
         />
 
     </LinearLayout>
-
-    <com.android.systemui.statusbar.notification.FakeShadowView
-        android:id="@+id/fake_shadow"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
 
 </com.android.systemui.statusbar.notification.stack.PeopleHubView>

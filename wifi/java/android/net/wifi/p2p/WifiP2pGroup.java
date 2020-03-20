@@ -17,7 +17,7 @@
 package android.net.wifi.p2p;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -39,20 +39,25 @@ public class WifiP2pGroup implements Parcelable {
 
     /**
      * The temporary network id.
+     * @see #getNetworkId()
+     */
+    public static final int NETWORK_ID_TEMPORARY = -1;
+
+    /**
+     * The temporary network id.
      *
      * @hide
      */
     @UnsupportedAppUsage
-    public static final int TEMPORARY_NET_ID = -1;
+    public static final int TEMPORARY_NET_ID = NETWORK_ID_TEMPORARY;
 
     /**
      * The persistent network id.
      * If a matching persistent profile is found, use it.
      * Otherwise, create a new persistent profile.
-     *
-     * @hide
+     * @see #getNetworkId()
      */
-    public static final int PERSISTENT_NET_ID = -2;
+    public static final int NETWORK_ID_PERSISTENT = -2;
 
     /** The network name */
     private String mNetworkName;
@@ -133,13 +138,13 @@ public class WifiP2pGroup implements Parcelable {
             mPassphrase = match.group(4);
             mOwner = new WifiP2pDevice(match.group(5));
             if (match.group(6) != null) {
-                mNetId = PERSISTENT_NET_ID;
+                mNetId = NETWORK_ID_PERSISTENT;
             } else {
-                mNetId = TEMPORARY_NET_ID;
+                mNetId = NETWORK_ID_TEMPORARY;
             }
         } else if (tokens[0].equals("P2P-INVITATION-RECEIVED")) {
             String sa = null;
-            mNetId = PERSISTENT_NET_ID;
+            mNetId = NETWORK_ID_PERSISTENT;
             for (String token : tokens) {
                 String[] nameValue = token.split("=");
                 if (nameValue.length != 2) continue;

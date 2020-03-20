@@ -54,7 +54,6 @@ import android.util.Slog;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.backup.IBackupTransport;
-import com.android.internal.util.Preconditions;
 import com.android.server.AppWidgetBackupBridge;
 import com.android.server.EventLogTags;
 import com.android.server.LocalServices;
@@ -78,7 +77,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public class PerformUnifiedRestoreTask implements BackupRestoreTask {
@@ -154,8 +153,6 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
     // When finished call listener
     private final OnTaskFinishedListener mListener;
 
-    private final Map<String, Set<String>> mExcludedKeys;
-
     // Key/value: bookkeeping about staged data and files for agent access
     private File mBackupDataName;
     private File mStageName;
@@ -167,14 +164,14 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
     private final BackupAgentTimeoutParameters mAgentTimeoutParameters;
 
     @VisibleForTesting
-    PerformUnifiedRestoreTask(Map<String, Set<String>> excludedKeys) {
-        mExcludedKeys = excludedKeys;
+    PerformUnifiedRestoreTask(UserBackupManagerService backupManagerService) {
         mListener = null;
         mAgentTimeoutParameters = null;
         mTransportClient = null;
         mTransportManager = null;
         mEphemeralOpToken = 0;
         mUserId = 0;
+        this.backupManagerService = backupManagerService;
     }
 
     // This task can assume that the wakelock is properly held for it and doesn't have to worry
@@ -189,8 +186,7 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
             int pmToken,
             boolean isFullSystemRestore,
             @Nullable String[] filterSet,
-            OnTaskFinishedListener listener,
-            Map<String, Set<String>> excludedKeys) {
+            OnTaskFinishedListener listener) {
         this.backupManagerService = backupManagerService;
         mUserId = backupManagerService.getUserId();
         mTransportManager = backupManagerService.getTransportManager();
@@ -208,11 +204,9 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
         mFinished = false;
         mDidLaunch = false;
         mListener = listener;
-        mAgentTimeoutParameters = Preconditions.checkNotNull(
+        mAgentTimeoutParameters = Objects.requireNonNull(
                 backupManagerService.getAgentTimeoutParameters(),
                 "Timeout parameters cannot be null");
-
-        mExcludedKeys = excludedKeys;
 
         if (targetPackage != null) {
             // Single package restore
@@ -697,11 +691,7 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
         mStageName = new File(backupManagerService.getDataDir(), packageName + ".stage");
         mNewStateName = new File(mStateDir, packageName + ".new");
 
-        // don't stage the 'android' package where the wallpaper data lives.  this is
-        // an optimization: we know there's no widget data hosted/published by that
-        // package, and this way we avoid doing a spurious copy of MB-sized wallpaper
-        // data following the download.
-        boolean staging = !packageName.equals(PLATFORM_PACKAGE_NAME);
+        boolean staging = shouldStageBackupData(packageName);
         ParcelFileDescriptor stage;
         File downloadFile = (staging) ? mStageName : mBackupDataName;
         boolean startedAgentRestore = false;
@@ -768,8 +758,7 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
             startedAgentRestore = true;
             mAgent.doRestoreWithExcludedKeys(mBackupData, appVersionCode, mNewState,
                     mEphemeralOpToken, backupManagerService.getBackupManagerBinder(),
-                    mExcludedKeys.containsKey(packageName)
-                            ? new ArrayList<>(mExcludedKeys.get(packageName)) : null);
+                    new ArrayList<>(getExcludedKeysForPackage(packageName)));
         } catch (Exception e) {
             Slog.e(TAG, "Unable to call app for restore: " + packageName, e);
             EventLog.writeEvent(EventLogTags.RESTORE_AGENT_FAILURE,
@@ -785,9 +774,25 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
     }
 
     @VisibleForTesting
+    boolean shouldStageBackupData(String packageName) {
+        // Backup data is staged for 2 reasons:
+        // 1. We might need to exclude keys from the data before passing it to the agent
+        // 2. Widget metadata needs to be separated from the rest to be handled separately
+        // But 'android' package doesn't contain widget metadata so we want to skip staging for it
+        // when there are no keys to be excluded either.
+        return !packageName.equals(PLATFORM_PACKAGE_NAME) ||
+                !getExcludedKeysForPackage(PLATFORM_PACKAGE_NAME).isEmpty();
+    }
+
+    @VisibleForTesting
+    Set<String> getExcludedKeysForPackage(String packageName) {
+        return backupManagerService.getExcludedRestoreKeys(packageName);
+    }
+
+    @VisibleForTesting
     void filterExcludedKeys(String packageName, BackupDataInput in, BackupDataOutput out)
             throws Exception {
-        Set<String> excludedKeysForPackage = mExcludedKeys.get(packageName);
+        Set<String> excludedKeysForPackage = getExcludedKeysForPackage(packageName);
 
         byte[] buffer = new byte[8192]; // will grow when needed
         while (in.readNextHeader()) {
@@ -795,6 +800,7 @@ public class PerformUnifiedRestoreTask implements BackupRestoreTask {
             final int size = in.getDataSize();
 
             if (excludedKeysForPackage != null && excludedKeysForPackage.contains(key)) {
+                Slog.i(TAG, "Skipping blocked key " + key);
                 in.skipEntityData();
                 continue;
             }

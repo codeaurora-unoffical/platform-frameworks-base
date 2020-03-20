@@ -159,6 +159,7 @@ public class StatusBarIconView extends AnimatedImageView implements StatusIconDi
     private boolean mDismissed;
     private Runnable mOnDismissListener;
     private boolean mIncreasedSize;
+    private boolean mTintIcons = true;
 
     public StatusBarIconView(Context context, String slot, StatusBarNotification sbn) {
         this(context, slot, sbn, false);
@@ -307,6 +308,7 @@ public class StatusBarIconView extends AnimatedImageView implements StatusIconDi
             case Icon.TYPE_RESOURCE:
                 return a.getResPackage().equals(b.getResPackage()) && a.getResId() == b.getResId();
             case Icon.TYPE_URI:
+            case Icon.TYPE_URI_ADAPTIVE_BITMAP:
                 return a.getUriString().equals(b.getUriString());
             default:
                 return false;
@@ -611,6 +613,11 @@ public class StatusBarIconView extends AnimatedImageView implements StatusIconDi
     }
 
     private void updateIconColor() {
+        if (!mTintIcons) {
+            setColorFilter(null);
+            return;
+        }
+
         if (mCurrentSetColor != NO_COLOR) {
             if (mMatrixColorFilter == null) {
                 mMatrix = new float[4 * 5];
@@ -950,6 +957,19 @@ public class StatusBarIconView extends AnimatedImageView implements StatusIconDi
     public void setIncreasedSize(boolean increasedSize) {
         mIncreasedSize = increasedSize;
         maybeUpdateIconScaleDimens();
+    }
+
+    /**
+     * Sets whether the icon should be tinted. If the state differs from the supplied setting, this
+     * will update the icon colors.
+     *
+     * @param shouldTint Whether the icon should be tinted.
+     */
+    public void setTintIcons(boolean shouldTint) {
+        if (mTintIcons != shouldTint) {
+            mTintIcons = shouldTint;
+            updateIconColor();
+        }
     }
 
     public interface OnVisibilityChangedListener {

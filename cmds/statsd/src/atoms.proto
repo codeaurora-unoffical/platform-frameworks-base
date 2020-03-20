@@ -53,6 +53,7 @@ import "frameworks/base/core/proto/android/stats/mediametrics/mediametrics.proto
 import "frameworks/base/core/proto/android/stats/mediaprovider/mediaprovider_enums.proto";
 import "frameworks/base/core/proto/android/stats/storage/storage_enums.proto";
 import "frameworks/base/core/proto/android/stats/style/style_enums.proto";
+import "frameworks/base/core/proto/android/stats/sysui/notification_enums.proto";
 import "frameworks/base/core/proto/android/telecomm/enums.proto";
 import "frameworks/base/core/proto/android/telephony/enums.proto";
 import "frameworks/base/core/proto/android/view/enums.proto";
@@ -77,217 +78,242 @@ message Atom {
     // Pushed atoms start at 2.
     oneof pushed {
         // For StatsLog reasons, 1 is illegal and will not work. Must start at 2.
-        BleScanStateChanged ble_scan_state_changed = 2;
-        ProcessStateChanged process_state_changed = 3;
-        BleScanResultReceived ble_scan_result_received = 4;
-        SensorStateChanged sensor_state_changed = 5;
-        GpsScanStateChanged gps_scan_state_changed = 6;
-        SyncStateChanged sync_state_changed = 7;
-        ScheduledJobStateChanged scheduled_job_state_changed = 8;
-        ScreenBrightnessChanged screen_brightness_changed = 9;
-        WakelockStateChanged wakelock_state_changed = 10;
-        LongPartialWakelockStateChanged long_partial_wakelock_state_changed = 11;
-        MobileRadioPowerStateChanged mobile_radio_power_state_changed = 12;
-        WifiRadioPowerStateChanged wifi_radio_power_state_changed = 13;
-        ActivityManagerSleepStateChanged activity_manager_sleep_state_changed = 14;
-        MemoryFactorStateChanged memory_factor_state_changed = 15;
-        ExcessiveCpuUsageReported excessive_cpu_usage_reported = 16;
-        CachedKillReported cached_kill_reported = 17;
-        ProcessMemoryStatReported process_memory_stat_reported = 18;
-        LauncherUIChanged launcher_event = 19;
-        BatterySaverModeStateChanged battery_saver_mode_state_changed = 20;
-        DeviceIdleModeStateChanged device_idle_mode_state_changed = 21;
-        DeviceIdlingModeStateChanged device_idling_mode_state_changed = 22;
-        AudioStateChanged audio_state_changed = 23;
-        MediaCodecStateChanged media_codec_state_changed = 24;
-        CameraStateChanged camera_state_changed = 25;
-        FlashlightStateChanged flashlight_state_changed = 26;
-        UidProcessStateChanged uid_process_state_changed = 27;
-        ProcessLifeCycleStateChanged process_life_cycle_state_changed = 28;
-        ScreenStateChanged screen_state_changed = 29;
-        BatteryLevelChanged battery_level_changed = 30;
-        ChargingStateChanged charging_state_changed = 31;
-        PluggedStateChanged plugged_state_changed = 32;
-        InteractiveStateChanged interactive_state_changed = 33;
+        BleScanStateChanged ble_scan_state_changed = 2 [(module) = "bluetooth"];
+        ProcessStateChanged process_state_changed = 3 [(module) = "framework"];
+        BleScanResultReceived ble_scan_result_received = 4 [(module) = "bluetooth"];
+        SensorStateChanged sensor_state_changed = 5 [(module) = "framework"];
+        GpsScanStateChanged gps_scan_state_changed = 6 [(module) = "framework"];
+        SyncStateChanged sync_state_changed = 7 [(module) = "framework"];
+        ScheduledJobStateChanged scheduled_job_state_changed = 8 [(module) = "framework"];
+        ScreenBrightnessChanged screen_brightness_changed = 9 [(module) = "framework"];
+        WakelockStateChanged wakelock_state_changed = 10 [(module) = "framework"];
+        LongPartialWakelockStateChanged long_partial_wakelock_state_changed =
+                11 [(module) = "framework"];
+        MobileRadioPowerStateChanged mobile_radio_power_state_changed = 12 [(module) = "framework"];
+        WifiRadioPowerStateChanged wifi_radio_power_state_changed = 13 [(module) = "framework"];
+        ActivityManagerSleepStateChanged activity_manager_sleep_state_changed =
+                14 [(module) = "framework"];
+        MemoryFactorStateChanged memory_factor_state_changed = 15 [(module) = "framework"];
+        ExcessiveCpuUsageReported excessive_cpu_usage_reported = 16 [(module) = "framework"];
+        CachedKillReported cached_kill_reported = 17 [(module) = "framework"];
+        ProcessMemoryStatReported process_memory_stat_reported = 18 [(module) = "framework"];
+        LauncherUIChanged launcher_event = 19 [(module) = "sysui"];
+        BatterySaverModeStateChanged battery_saver_mode_state_changed = 20 [(module) = "framework"];
+        DeviceIdleModeStateChanged device_idle_mode_state_changed = 21 [(module) = "framework"];
+        DeviceIdlingModeStateChanged device_idling_mode_state_changed = 22 [(module) = "framework"];
+        AudioStateChanged audio_state_changed = 23 [(module) = "framework"];
+        MediaCodecStateChanged media_codec_state_changed = 24 [(module) = "framework"];
+        CameraStateChanged camera_state_changed = 25 [(module) = "framework"];
+        FlashlightStateChanged flashlight_state_changed = 26 [(module) = "framework"];
+        UidProcessStateChanged uid_process_state_changed = 27 [(module) = "framework"];
+        ProcessLifeCycleStateChanged process_life_cycle_state_changed = 28 [(module) = "framework"];
+        ScreenStateChanged screen_state_changed = 29 [(module) = "framework"];
+        BatteryLevelChanged battery_level_changed = 30 [(module) = "framework"];
+        ChargingStateChanged charging_state_changed = 31 [(module) = "framework"];
+        PluggedStateChanged plugged_state_changed = 32 [(module) = "framework"];
+        InteractiveStateChanged interactive_state_changed = 33 [(module) = "framework"];
         TouchEventReported touch_event_reported = 34;
-        WakeupAlarmOccurred wakeup_alarm_occurred = 35;
-        KernelWakeupReported kernel_wakeup_reported = 36;
-        WifiLockStateChanged wifi_lock_state_changed = 37 [(log_from_module) = "wifi"];
-        WifiSignalStrengthChanged wifi_signal_strength_changed = 38 [(log_from_module) = "wifi"];
-        WifiScanStateChanged wifi_scan_state_changed = 39 [(log_from_module) = "wifi"];
-        PhoneSignalStrengthChanged phone_signal_strength_changed = 40;
-        SettingChanged setting_changed = 41;
-        ActivityForegroundStateChanged activity_foreground_state_changed = 42;
-        IsolatedUidChanged isolated_uid_changed = 43;
-        PacketWakeupOccurred packet_wakeup_occurred = 44;
-        WallClockTimeShifted wall_clock_time_shifted = 45;
+        WakeupAlarmOccurred wakeup_alarm_occurred = 35 [(module) = "framework"];
+        KernelWakeupReported kernel_wakeup_reported = 36 [(module) = "framework"];
+        WifiLockStateChanged wifi_lock_state_changed = 37 [(module) = "wifi"];
+        WifiSignalStrengthChanged wifi_signal_strength_changed = 38 [(module) = "wifi"];
+        WifiScanStateChanged wifi_scan_state_changed = 39 [(module) = "wifi"];
+        PhoneSignalStrengthChanged phone_signal_strength_changed = 40 [(module) = "framework"];
+        SettingChanged setting_changed = 41 [(module) = "framework"];
+        ActivityForegroundStateChanged activity_foreground_state_changed =
+                42 [(module) = "framework"];
+        IsolatedUidChanged isolated_uid_changed = 43 [(module) = "framework"];
+        PacketWakeupOccurred packet_wakeup_occurred = 44 [(module) = "framework"];
+        WallClockTimeShifted wall_clock_time_shifted = 45 [(module) = "framework"];
         AnomalyDetected anomaly_detected = 46;
-        AppBreadcrumbReported app_breadcrumb_reported = 47 [(allow_from_any_uid) = true];
-        AppStartOccurred app_start_occurred = 48;
-        AppStartCanceled app_start_canceled = 49;
-        AppStartFullyDrawn app_start_fully_drawn = 50;
-        LmkKillOccurred lmk_kill_occurred = 51;
-        PictureInPictureStateChanged picture_in_picture_state_changed = 52;
-        WifiMulticastLockStateChanged wifi_multicast_lock_state_changed = 53 [(log_from_module) = "wifi"];
-        LmkStateChanged lmk_state_changed = 54;
-        AppStartMemoryStateCaptured app_start_memory_state_captured = 55;
-        ShutdownSequenceReported shutdown_sequence_reported = 56;
+        AppBreadcrumbReported app_breadcrumb_reported =
+                47 [(allow_from_any_uid) = true, (module) = "statsd"];
+        AppStartOccurred app_start_occurred = 48 [(module) = "framework"];
+        AppStartCanceled app_start_canceled = 49 [(module) = "framework"];
+        AppStartFullyDrawn app_start_fully_drawn = 50 [(module) = "framework"];
+        LmkKillOccurred lmk_kill_occurred = 51 [(module) = "lmkd"];
+        PictureInPictureStateChanged picture_in_picture_state_changed = 52 [(module) = "framework"];
+        WifiMulticastLockStateChanged wifi_multicast_lock_state_changed = 53 [(module) = "wifi"];
+        LmkStateChanged lmk_state_changed = 54 [(module) = "lmkd"];
+        AppStartMemoryStateCaptured app_start_memory_state_captured = 55 [(module) = "framework"];
+        ShutdownSequenceReported shutdown_sequence_reported = 56 [(module) = "framework"];
         BootSequenceReported boot_sequence_reported = 57;
         DaveyOccurred davey_occurred = 58 [(allow_from_any_uid) = true];
-        OverlayStateChanged overlay_state_changed = 59;
-        ForegroundServiceStateChanged foreground_service_state_changed = 60;
-        CallStateChanged call_state_changed = 61;
-        KeyguardStateChanged keyguard_state_changed = 62;
-        KeyguardBouncerStateChanged keyguard_bouncer_state_changed = 63;
-        KeyguardBouncerPasswordEntered keyguard_bouncer_password_entered = 64;
-        AppDied app_died = 65;
-        ResourceConfigurationChanged resource_configuration_changed = 66;
-        BluetoothEnabledStateChanged bluetooth_enabled_state_changed = 67;
-        BluetoothConnectionStateChanged bluetooth_connection_state_changed = 68;
-        GpsSignalQualityChanged gps_signal_quality_changed = 69;
-        UsbConnectorStateChanged usb_connector_state_changed = 70;
+        OverlayStateChanged overlay_state_changed = 59 [(module) = "framework"];
+        ForegroundServiceStateChanged foreground_service_state_changed
+                = 60 [(module) = "framework"];
+        CallStateChanged call_state_changed = 61 [(module) = "telecom"];
+        KeyguardStateChanged keyguard_state_changed = 62 [(module) = "sysui"];
+        KeyguardBouncerStateChanged keyguard_bouncer_state_changed = 63 [(module) = "sysui"];
+        KeyguardBouncerPasswordEntered keyguard_bouncer_password_entered = 64 [(module) = "sysui"];
+        AppDied app_died = 65 [(module) = "framework"];
+        ResourceConfigurationChanged resource_configuration_changed = 66 [(module) = "framework"];
+        BluetoothEnabledStateChanged bluetooth_enabled_state_changed = 67 [(module) = "framework"];
+        BluetoothConnectionStateChanged bluetooth_connection_state_changed =
+                68 [(module) = "bluetooth"];
+        GpsSignalQualityChanged gps_signal_quality_changed = 69 [(module) = "framework"];
+        UsbConnectorStateChanged usb_connector_state_changed = 70 [(module) = "framework"];
         SpeakerImpedanceReported speaker_impedance_reported = 71;
         HardwareFailed hardware_failed = 72;
         PhysicalDropDetected physical_drop_detected = 73;
         ChargeCyclesReported charge_cycles_reported = 74;
-        MobileConnectionStateChanged mobile_connection_state_changed = 75;
-        MobileRadioTechnologyChanged mobile_radio_technology_changed = 76;
-        UsbDeviceAttached usb_device_attached = 77;
-        AppCrashOccurred app_crash_occurred = 78;
-        ANROccurred anr_occurred = 79;
-        WTFOccurred wtf_occurred = 80;
-        LowMemReported low_mem_reported = 81;
+        MobileConnectionStateChanged mobile_connection_state_changed = 75 [(module) = "telephony"];
+        MobileRadioTechnologyChanged mobile_radio_technology_changed = 76 [(module) = "telephony"];
+        UsbDeviceAttached usb_device_attached = 77 [(module) = "framework"];
+        AppCrashOccurred app_crash_occurred = 78 [(module) = "framework"];
+        ANROccurred anr_occurred = 79 [(module) = "framework"];
+        WTFOccurred wtf_occurred = 80 [(module) = "framework"];
+        LowMemReported low_mem_reported = 81 [(module) = "framework"];
         GenericAtom generic_atom = 82;
-        KeyValuePairsAtom key_value_pairs_atom = 83 [(allow_from_any_uid) = true];
-        VibratorStateChanged vibrator_state_changed = 84;
-        DeferredJobStatsReported deferred_job_stats_reported = 85;
+        KeyValuePairsAtom key_value_pairs_atom =
+                83 [(allow_from_any_uid) = true, (module) = "framework"];
+        VibratorStateChanged vibrator_state_changed = 84 [(module) = "framework"];
+        DeferredJobStatsReported deferred_job_stats_reported = 85 [(module) = "framework"];
         ThermalThrottlingStateChanged thermal_throttling = 86 [deprecated=true];
-        BiometricAcquired biometric_acquired = 87;
-        BiometricAuthenticated biometric_authenticated = 88;
-        BiometricErrorOccurred biometric_error_occurred = 89;
-        UiEventReported ui_event_reported = 90;
+        BiometricAcquired biometric_acquired = 87 [(module) = "framework"];
+        BiometricAuthenticated biometric_authenticated = 88 [(module) = "framework"];
+        BiometricErrorOccurred biometric_error_occurred = 89 [(module) = "framework"];
+        UiEventReported ui_event_reported = 90 [(module) = "framework"];
         BatteryHealthSnapshot battery_health_snapshot = 91;
         SlowIo slow_io = 92;
         BatteryCausedShutdown battery_caused_shutdown = 93;
-        PhoneServiceStateChanged phone_service_state_changed = 94;
-        PhoneStateChanged phone_state_changed = 95;
+        PhoneServiceStateChanged phone_service_state_changed = 94 [(module) = "framework"];
+        PhoneStateChanged phone_state_changed = 95 [(module) = "framework"];
         UserRestrictionChanged user_restriction_changed = 96;
-        SettingsUIChanged settings_ui_changed = 97;
-        ConnectivityStateChanged connectivity_state_changed = 98;
+        SettingsUIChanged settings_ui_changed = 97 [(module) = "settings"];
+        ConnectivityStateChanged connectivity_state_changed = 98 [(module) = "framework"];
         // TODO: service state change is very noisy shortly after boot, as well
         // as at other transitions - coming out of doze, device plugged in, etc.
         // Consider removing this if it becomes a problem
-        ServiceStateChanged service_state_changed = 99;
-        ServiceLaunchReported service_launch_reported = 100;
-        FlagFlipUpdateOccurred flag_flip_update_occurred = 101;
-        BinaryPushStateChanged binary_push_state_changed = 102;
-        DevicePolicyEvent device_policy_event = 103;
-        DocsUIFileOperationCanceledReported docs_ui_file_op_canceled =
-            104 [(log_from_module) = "docsui"];
-        DocsUIFileOperationCopyMoveModeReported
-            docs_ui_file_op_copy_move_mode_reported =
-            105 [(log_from_module) = "docsui"];
-        DocsUIFileOperationFailureReported docs_ui_file_op_failure =
-            106 [(log_from_module) = "docsui"];
-        DocsUIFileOperationReported docs_ui_provider_file_op =
-            107 [(log_from_module) = "docsui"];
-        DocsUIInvalidScopedAccessRequestReported
-            docs_ui_invalid_scoped_access_request =
-            108 [(log_from_module) = "docsui"];
-        DocsUILaunchReported docs_ui_launch_reported =
-            109 [(log_from_module) = "docsui"];
-        DocsUIRootVisitedReported docs_ui_root_visited =
-            110 [(log_from_module) = "docsui"];
-        DocsUIStartupMsReported docs_ui_startup_ms =
-            111 [(log_from_module) = "docsui"];
-        DocsUIUserActionReported docs_ui_user_action_reported =
-            112 [(log_from_module) = "docsui"];
-        WifiEnabledStateChanged wifi_enabled_state_changed = 113;
-        WifiRunningStateChanged wifi_running_state_changed = 114;
-        AppCompacted app_compacted = 115;
-        NetworkDnsEventReported network_dns_event_reported = 116 [(log_from_module) = "resolv"];
+        ServiceStateChanged service_state_changed = 99 [(module) = "framework"];
+        ServiceLaunchReported service_launch_reported = 100 [(module) = "framework"];
+        FlagFlipUpdateOccurred flag_flip_update_occurred = 101 [(module) = "framework"];
+        BinaryPushStateChanged binary_push_state_changed = 102 [(module) = "statsd"];
+        DevicePolicyEvent device_policy_event = 103 [(module) = "framework"];
+        DocsUIFileOperationCanceledReported docs_ui_file_op_canceled = 104 [(module) = "docsui"];
+        DocsUIFileOperationCopyMoveModeReported docs_ui_file_op_copy_move_mode_reported =
+            105 [(module) = "docsui"];
+        DocsUIFileOperationFailureReported docs_ui_file_op_failure = 106 [(module) = "docsui"];
+        DocsUIFileOperationReported docs_ui_provider_file_op = 107 [(module) = "docsui"];
+        DocsUIInvalidScopedAccessRequestReported docs_ui_invalid_scoped_access_request =
+            108 [(module) = "docsui"];
+        DocsUILaunchReported docs_ui_launch_reported = 109 [(module) = "docsui"];
+        DocsUIRootVisitedReported docs_ui_root_visited = 110 [(module) = "docsui"];
+        DocsUIStartupMsReported docs_ui_startup_ms = 111 [(module) = "docsui"];
+        DocsUIUserActionReported docs_ui_user_action_reported = 112 [(module) = "docsui"];
+        WifiEnabledStateChanged wifi_enabled_state_changed = 113 [(module) = "framework"];
+        WifiRunningStateChanged wifi_running_state_changed = 114
+                [(module) = "framework", deprecated = true];
+        AppCompacted app_compacted = 115 [(module) = "framework"];
+        NetworkDnsEventReported network_dns_event_reported = 116 [(module) = "resolv"];
         DocsUIPickerLaunchedFromReported docs_ui_picker_launched_from_reported =
-            117 [(log_from_module) = "docsui"];
-        DocsUIPickResultReported docs_ui_pick_result_reported =
-            118 [(log_from_module) = "docsui"];
-        DocsUISearchModeReported docs_ui_search_mode_reported =
-            119 [(log_from_module) = "docsui"];
-        DocsUISearchTypeReported docs_ui_search_type_reported =
-            120 [(log_from_module) = "docsui"];
-        DataStallEvent data_stall_event = 121 [(log_from_module) = "network_stack"];
-        RescuePartyResetReported rescue_party_reset_reported = 122;
-        SignedConfigReported signed_config_reported = 123;
-        GnssNiEventReported gnss_ni_event_reported = 124;
-        BluetoothLinkLayerConnectionEvent bluetooth_link_layer_connection_event = 125;
-        BluetoothAclConnectionStateChanged bluetooth_acl_connection_state_changed = 126;
-        BluetoothScoConnectionStateChanged bluetooth_sco_connection_state_changed = 127;
-        AppDowngraded app_downgraded = 128;
+            117 [(module) = "docsui"];
+        DocsUIPickResultReported docs_ui_pick_result_reported = 118 [(module) = "docsui"];
+        DocsUISearchModeReported docs_ui_search_mode_reported = 119 [(module) = "docsui"];
+        DocsUISearchTypeReported docs_ui_search_type_reported = 120 [(module) = "docsui"];
+        DataStallEvent data_stall_event = 121 [(module) = "network_stack"];
+        RescuePartyResetReported rescue_party_reset_reported = 122 [(module) = "framework"];
+        SignedConfigReported signed_config_reported = 123 [(module) = "framework"];
+        GnssNiEventReported gnss_ni_event_reported = 124 [(module) = "framework"];
+        BluetoothLinkLayerConnectionEvent bluetooth_link_layer_connection_event =
+                125 [(module) = "bluetooth"];
+        BluetoothAclConnectionStateChanged bluetooth_acl_connection_state_changed =
+                126 [(module) = "bluetooth"];
+        BluetoothScoConnectionStateChanged bluetooth_sco_connection_state_changed =
+                127 [(module) = "bluetooth"];
+        AppDowngraded app_downgraded = 128 [(module) = "framework"];
         AppOptimizedAfterDowngraded app_optimized_after_downgraded = 129;
-        LowStorageStateChanged low_storage_state_changed = 130;
-        GnssNfwNotificationReported gnss_nfw_notification_reported = 131;
-        GnssConfigurationReported gnss_configuration_reported = 132;
+        LowStorageStateChanged low_storage_state_changed = 130 [(module) = "framework"];
+        GnssNfwNotificationReported gnss_nfw_notification_reported = 131 [(module) = "framework"];
+        GnssConfigurationReported gnss_configuration_reported = 132 [(module) = "framework"];
         UsbPortOverheatEvent usb_port_overheat_event_reported = 133;
-        NfcErrorOccurred nfc_error_occurred = 134;
-        NfcStateChanged nfc_state_changed = 135;
-        NfcBeamOccurred nfc_beam_occurred = 136;
-        NfcCardemulationOccurred nfc_cardemulation_occurred = 137;
-        NfcTagOccurred nfc_tag_occurred = 138;
-        NfcHceTransactionOccurred nfc_hce_transaction_occurred = 139;
-        SeStateChanged se_state_changed = 140;
-        SeOmapiReported se_omapi_reported = 141;
-        BroadcastDispatchLatencyReported broadcast_dispatch_latency_reported = 142;
-        AttentionManagerServiceResultReported attention_manager_service_result_reported = 143;
-        AdbConnectionChanged adb_connection_changed = 144;
+        NfcErrorOccurred nfc_error_occurred = 134 [(module) = "nfc"];
+        NfcStateChanged nfc_state_changed = 135 [(module) = "nfc"];
+        NfcBeamOccurred nfc_beam_occurred = 136 [(module) = "nfc"];
+        NfcCardemulationOccurred nfc_cardemulation_occurred = 137 [(module) = "nfc"];
+        NfcTagOccurred nfc_tag_occurred = 138 [(module) = "nfc"];
+        NfcHceTransactionOccurred nfc_hce_transaction_occurred = 139 [(module) = "nfc"];
+        SeStateChanged se_state_changed = 140 [(module) = "secure_element"];
+        SeOmapiReported se_omapi_reported = 141 [(module) = "secure_element"];
+        BroadcastDispatchLatencyReported broadcast_dispatch_latency_reported =
+                142 [(module) = "framework"];
+        AttentionManagerServiceResultReported attention_manager_service_result_reported =
+                143 [(module) = "framework"];
+        AdbConnectionChanged adb_connection_changed = 144 [(module) = "framework"];
         SpeechDspStatReported speech_dsp_stat_reported = 145;
-        UsbContaminantReported usb_contaminant_reported = 146;
-        WatchdogRollbackOccurred watchdog_rollback_occurred = 147;
-        BiometricSystemHealthIssueDetected biometric_system_health_issue_detected = 148;
-        BubbleUIChanged bubble_ui_changed = 149;
-        ScheduledJobConstraintChanged scheduled_job_constraint_changed = 150;
-        BluetoothActiveDeviceChanged bluetooth_active_device_changed = 151;
-        BluetoothA2dpPlaybackStateChanged bluetooth_a2dp_playback_state_changed = 152;
-        BluetoothA2dpCodecConfigChanged bluetooth_a2dp_codec_config_changed = 153;
-        BluetoothA2dpCodecCapabilityChanged bluetooth_a2dp_codec_capability_changed = 154;
-        BluetoothA2dpAudioUnderrunReported bluetooth_a2dp_audio_underrun_reported = 155;
-        BluetoothA2dpAudioOverrunReported bluetooth_a2dp_audio_overrun_reported = 156;
-        BluetoothDeviceRssiReported bluetooth_device_rssi_reported = 157;
-        BluetoothDeviceFailedContactCounterReported bluetooth_device_failed_contact_counter_reported = 158;
-        BluetoothDeviceTxPowerLevelReported bluetooth_device_tx_power_level_reported = 159;
-        BluetoothHciTimeoutReported bluetooth_hci_timeout_reported = 160;
-        BluetoothQualityReportReported bluetooth_quality_report_reported = 161;
-        BluetoothDeviceInfoReported bluetooth_device_info_reported = 162;
-        BluetoothRemoteVersionInfoReported bluetooth_remote_version_info_reported = 163;
-        BluetoothSdpAttributeReported bluetooth_sdp_attribute_reported = 164;
-        BluetoothBondStateChanged bluetooth_bond_state_changed = 165;
-        BluetoothClassicPairingEventReported bluetooth_classic_pairing_event_reported = 166;
-        BluetoothSmpPairingEventReported bluetooth_smp_pairing_event_reported = 167;
-        ScreenTimeoutExtensionReported screen_timeout_extension_reported = 168;
-        ProcessStartTime process_start_time = 169;
+        UsbContaminantReported usb_contaminant_reported = 146 [(module) = "framework"];
+        WatchdogRollbackOccurred watchdog_rollback_occurred = 147 [(module) = "framework"];
+        BiometricSystemHealthIssueDetected biometric_system_health_issue_detected =
+                148 [(module) = "framework"];
+        BubbleUIChanged bubble_ui_changed = 149 [(module) = "sysui"];
+        ScheduledJobConstraintChanged scheduled_job_constraint_changed =
+                150 [(module) = "framework"];
+        BluetoothActiveDeviceChanged bluetooth_active_device_changed =
+                151 [(module) = "bluetooth"];
+        BluetoothA2dpPlaybackStateChanged bluetooth_a2dp_playback_state_changed =
+                152 [(module) = "bluetooth"];
+        BluetoothA2dpCodecConfigChanged bluetooth_a2dp_codec_config_changed =
+                153 [(module) = "bluetooth"];
+        BluetoothA2dpCodecCapabilityChanged bluetooth_a2dp_codec_capability_changed =
+                154 [(module) = "bluetooth"];
+        BluetoothA2dpAudioUnderrunReported bluetooth_a2dp_audio_underrun_reported =
+                155 [(module) = "bluetooth"];
+        BluetoothA2dpAudioOverrunReported bluetooth_a2dp_audio_overrun_reported =
+                156 [(module) = "bluetooth"];
+        BluetoothDeviceRssiReported bluetooth_device_rssi_reported =
+                157 [(module) = "bluetooth"];
+        BluetoothDeviceFailedContactCounterReported
+                bluetooth_device_failed_contact_counter_reported = 158 [(module) = "bluetooth"];
+        BluetoothDeviceTxPowerLevelReported bluetooth_device_tx_power_level_reported =
+                159 [(module) = "bluetooth"];
+        BluetoothHciTimeoutReported bluetooth_hci_timeout_reported =
+                160 [(module) = "bluetooth"];
+        BluetoothQualityReportReported bluetooth_quality_report_reported =
+                161 [(module) = "bluetooth"];
+        BluetoothDeviceInfoReported bluetooth_device_info_reported =
+                162 [(module) = "bluetooth"];
+        BluetoothRemoteVersionInfoReported bluetooth_remote_version_info_reported =
+                163 [(module) = "bluetooth"];
+        BluetoothSdpAttributeReported bluetooth_sdp_attribute_reported =
+                164 [(module) = "bluetooth"];
+        BluetoothBondStateChanged bluetooth_bond_state_changed =
+                165 [(module) = "bluetooth"];
+        BluetoothClassicPairingEventReported bluetooth_classic_pairing_event_reported =
+                166 [(module) = "bluetooth"];
+        BluetoothSmpPairingEventReported bluetooth_smp_pairing_event_reported =
+                167 [(module) = "bluetooth"];
+        ScreenTimeoutExtensionReported screen_timeout_extension_reported =
+                168 [(module) = "framework"];
+        ProcessStartTime process_start_time = 169 [(module) = "framework"];
         PermissionGrantRequestResultReported permission_grant_request_result_reported =
-            170 [(log_from_module) = "permissioncontroller"];
+                170 [(module) = "permissioncontroller"];
         BluetoothSocketConnectionStateChanged bluetooth_socket_connection_state_changed = 171;
-        DeviceIdentifierAccessDenied device_identifier_access_denied = 172;
-        BubbleDeveloperErrorReported bubble_developer_error_reported = 173;
-        AssistGestureStageReported assist_gesture_stage_reported = 174;
-        AssistGestureFeedbackReported assist_gesture_feedback_reported = 175;
-        AssistGestureProgressReported assist_gesture_progress_reported = 176;
-        TouchGestureClassified touch_gesture_classified = 177;
-        HiddenApiUsed hidden_api_used = 178 [(allow_from_any_uid) = true];
-        StyleUIChanged style_ui_changed = 179 [(log_from_module) = "style"];
+        DeviceIdentifierAccessDenied device_identifier_access_denied =
+                172 [(module) = "telephony_common"];
+        BubbleDeveloperErrorReported bubble_developer_error_reported = 173 [(module) = "framework"];
+        AssistGestureStageReported assist_gesture_stage_reported = 174 [(module) = "sysui"];
+        AssistGestureFeedbackReported assist_gesture_feedback_reported = 175 [(module) = "sysui"];
+        AssistGestureProgressReported assist_gesture_progress_reported = 176 [(module) = "sysui"];
+        TouchGestureClassified touch_gesture_classified = 177 [(module) = "framework"];
+        HiddenApiUsed hidden_api_used = 178 [(allow_from_any_uid) = true, (module) = "framework"];
+        StyleUIChanged style_ui_changed = 179 [(module) = "sysui"];
         PrivacyIndicatorsInteracted privacy_indicators_interacted =
-            180 [(log_from_module) = "permissioncontroller"];
-        AppInstallOnExternalStorageReported app_install_on_external_storage_reported = 181;
-        NetworkStackReported network_stack_reported = 182 [(log_from_module) = "network_stack"];
-        AppMovedStorageReported app_moved_storage_reported = 183;
-        BiometricEnrolled biometric_enrolled = 184;
-        SystemServerWatchdogOccurred system_server_watchdog_occurred = 185;
-        TombStoneOccurred tomb_stone_occurred = 186;
-        BluetoothClassOfDeviceReported bluetooth_class_of_device_reported = 187;
+                180 [(module) = "permissioncontroller"];
+        AppInstallOnExternalStorageReported app_install_on_external_storage_reported =
+                181 [(module) = "framework"];
+        NetworkStackReported network_stack_reported = 182 [(module) = "network_stack"];
+        AppMovedStorageReported app_moved_storage_reported = 183 [(module) = "framework"];
+        BiometricEnrolled biometric_enrolled = 184 [(module) = "framework"];
+        SystemServerWatchdogOccurred system_server_watchdog_occurred = 185 [(module) = "framework"];
+        TombStoneOccurred tomb_stone_occurred = 186 [(module) = "framework"];
+        BluetoothClassOfDeviceReported bluetooth_class_of_device_reported =
+                187 [(module) = "bluetooth"];
         IntelligenceEventReported intelligence_event_reported =
-            188 [(log_from_module) = "intelligence"];
-        ThermalThrottlingSeverityStateChanged thermal_throttling_severity_state_changed = 189;
+                188 [(module) = "intelligence"];
+        ThermalThrottlingSeverityStateChanged thermal_throttling_severity_state_changed =
+                189 [(module) = "framework"];
         RoleRequestResultReported role_request_result_reported =
-            190 [(log_from_module) = "permissioncontroller"];
+                190 [(module) = "permissioncontroller"];
         MediametricsAudiopolicyReported mediametrics_audiopolicy_reported = 191;
         MediametricsAudiorecordReported mediametrics_audiorecord_reported = 192;
         MediametricsAudiothreadReported mediametrics_audiothread_reported = 193;
@@ -299,131 +325,165 @@ message Atom {
         MediametricsNuPlayerReported mediametrics_nuplayer_reported = 199;
         MediametricsRecorderReported mediametrics_recorder_reported = 200;
         MediametricsDrmManagerReported mediametrics_drmmanager_reported = 201;
-        CarPowerStateChanged car_power_state_changed = 203;
-        GarageModeInfo garage_mode_info = 204;
-        TestAtomReported test_atom_reported = 205 [(log_from_module) = "cts"];
-        ContentCaptureCallerMismatchReported content_capture_caller_mismatch_reported = 206;
-        ContentCaptureServiceEvents content_capture_service_events = 207;
-        ContentCaptureSessionEvents content_capture_session_events = 208;
-        ContentCaptureFlushed content_capture_flushed = 209;
-        LocationManagerApiUsageReported location_manager_api_usage_reported = 210;
+        CarPowerStateChanged car_power_state_changed = 203 [(module) = "car"];
+        GarageModeInfo garage_mode_info = 204 [(module) = "car"];
+        TestAtomReported test_atom_reported = 205 [(module) = "cts"];
+        ContentCaptureCallerMismatchReported content_capture_caller_mismatch_reported =
+                206 [(module) = "framework"];
+        ContentCaptureServiceEvents content_capture_service_events = 207 [(module) = "framework"];
+        ContentCaptureSessionEvents content_capture_session_events = 208 [(module) = "framework"];
+        ContentCaptureFlushed content_capture_flushed = 209 [(module) = "framework"];
+        LocationManagerApiUsageReported location_manager_api_usage_reported =
+                210 [(module) = "framework"];
         ReviewPermissionsFragmentResultReported review_permissions_fragment_result_reported =
-            211 [(log_from_module) = "permissioncontroller"];
+                211 [(module) = "permissioncontroller"];
         RuntimePermissionsUpgradeResult runtime_permissions_upgrade_result =
-            212 [(log_from_module) = "permissioncontroller"];
+                212 [(module) = "permissioncontroller"];
         GrantPermissionsActivityButtonActions grant_permissions_activity_button_actions =
-            213 [(log_from_module) = "permissioncontroller"];
+                213 [(module) = "permissioncontroller"];
         LocationAccessCheckNotificationAction location_access_check_notification_action =
-            214 [(log_from_module) = "permissioncontroller"];
+                214 [(module) = "permissioncontroller"];
         AppPermissionFragmentActionReported app_permission_fragment_action_reported =
-            215 [(log_from_module) = "permissioncontroller"];
+                215 [(module) = "permissioncontroller"];
         AppPermissionFragmentViewed app_permission_fragment_viewed =
-            216 [(log_from_module) = "permissioncontroller"];
+                216 [(module) = "permissioncontroller"];
         AppPermissionsFragmentViewed app_permissions_fragment_viewed =
-            217 [(log_from_module) = "permissioncontroller"];
+                217 [(module) = "permissioncontroller"];
         PermissionAppsFragmentViewed permission_apps_fragment_viewed =
-            218  [(log_from_module) = "permissioncontroller"];
-        TextSelectionEvent text_selection_event =
-            219  [(log_from_module) = "textclassifier"];
-        TextLinkifyEvent text_linkify_event =
-            220  [(log_from_module) = "textclassifier"];
-        ConversationActionsEvent conversation_actions_event =
-            221  [(log_from_module) = "textclassifier"];
-        LanguageDetectionEvent language_detection_event =
-            222  [(log_from_module) = "textclassifier"];
-        ExclusionRectStateChanged exclusion_rect_state_changed = 223;
-        BackGesture back_gesture_reported_reported = 224;
+                218  [(module) = "permissioncontroller"];
+        TextSelectionEvent text_selection_event = 219  [(module) = "textclassifier"];
+        TextLinkifyEvent text_linkify_event = 220  [(module) = "textclassifier"];
+        ConversationActionsEvent conversation_actions_event = 221  [(module) = "textclassifier"];
+        LanguageDetectionEvent language_detection_event = 222  [(module) = "textclassifier"];
+        ExclusionRectStateChanged exclusion_rect_state_changed = 223 [(module) = "framework"];
+        BackGesture back_gesture_reported_reported = 224 [(module) = "sysui"];
         UpdateEngineUpdateAttemptReported update_engine_update_attempt_reported = 225;
         UpdateEngineSuccessfulUpdateReported update_engine_successful_update_reported = 226;
-        CameraActionEvent camera_action_event = 227;
+        CameraActionEvent camera_action_event = 227 [(module) = "framework"];
         AppCompatibilityChangeReported app_compatibility_change_reported =
-            228 [(allow_from_any_uid) = true];
-        PerfettoUploaded perfetto_uploaded =
-            229 [(log_from_module) = "perfetto"];
-        VmsClientConnectionStateChanged vms_client_connection_state_changed = 230;
-        GpsLocationStatusReported gps_location_status_reported = 231;
-        GpsTimeToFirstFixReported gps_time_to_first_fix_reported = 232;
-        MediaProviderScanEvent media_provider_scan_event =
-            233 [(log_from_module) = "mediaprovider"];
-        MediaProviderDeletionEvent media_provider_deletion_event =
-            234 [(log_from_module) = "mediaprovider"];
+            228 [(allow_from_any_uid) = true, (module) = "framework"];
+        PerfettoUploaded perfetto_uploaded = 229 [(module) = "perfetto"];
+        VmsClientConnectionStateChanged vms_client_connection_state_changed =
+                230 [(module) = "car"];
+        MediaProviderScanEvent media_provider_scan_event = 233 [(module) = "mediaprovider"];
+        MediaProviderDeletionEvent media_provider_deletion_event = 234 [(module) = "mediaprovider"];
         MediaProviderPermissionEvent media_provider_permission_event =
-            235 [(log_from_module) = "mediaprovider"];
-        MediaProviderSchemaChange media_provider_schema_change =
-            236 [(log_from_module) = "mediaprovider"];
+            235 [(module) = "mediaprovider"];
+        MediaProviderSchemaChange media_provider_schema_change = 236 [(module) = "mediaprovider"];
         MediaProviderIdleMaintenance media_provider_idle_maintenance =
-            237 [(log_from_module) = "mediaprovider"];
+            237 [(module) = "mediaprovider"];
+        RebootEscrowRecoveryReported reboot_escrow_recovery_reported = 238 [(module) = "framework"];
+        BootTimeEventDuration boot_time_event_duration_reported = 239 [(module) = "framework"];
+        BootTimeEventElapsedTime boot_time_event_elapsed_time_reported =
+                240 [(module) = "framework"];
+        BootTimeEventUtcTime boot_time_event_utc_time_reported = 241;
+        BootTimeEventErrorCode boot_time_event_error_code_reported = 242 [(module) = "framework"];
+        UserspaceRebootReported userspace_reboot_reported = 243 [(module) = "framework"];
+        NotificationReported notification_reported = 244 [(module) = "framework"];
+        NotificationPanelReported notification_panel_reported = 245 [(module) = "sysui"];
+        NotificationChannelModified notification_channel_modified = 246 [(module) = "framework"];
+        IntegrityCheckResultReported integrity_check_result_reported = 247 [(module) = "framework"];
+        IntegrityRulesPushed integrity_rules_pushed = 248 [(module) = "framework"];
+        CellBroadcastMessageReported cb_message_reported =
+            249 [(module) = "cellbroadcast"];
+        CellBroadcastMessageError cb_message_error =
+            250 [(module) = "cellbroadcast"];
+        WifiHealthStatReported wifi_health_stat_reported = 251 [(module) = "wifi"];
+        WifiFailureStatReported wifi_failure_stat_reported = 252 [(module) = "wifi"];
+        WifiConnectionResultReported wifi_connection_result_reported = 253 [(module) = "wifi"];
+        AppFreezeChanged app_freeze_changed = 254 [(module) = "framework"];
+        SnapshotMergeReported snapshot_merge_reported = 255;
+        ForegroundServiceAppOpSessionEnded foreground_service_app_op_session_ended =
+            256  [(module) = "framework"];
+        DisplayJankReported display_jank_reported = 257;
+        AppStandbyBucketChanged app_standby_bucket_changed = 258 [(module) = "framework"];
+        SdkExtensionStatus sdk_extension_status = 354;
     }
 
     // Pulled events will start at field 10000.
-    // Next: 10067
+    // Next: 10076
     oneof pulled {
-        WifiBytesTransfer wifi_bytes_transfer = 10000;
-        WifiBytesTransferByFgBg wifi_bytes_transfer_by_fg_bg = 10001;
-        MobileBytesTransfer mobile_bytes_transfer = 10002;
-        MobileBytesTransferByFgBg mobile_bytes_transfer_by_fg_bg = 10003;
-        BluetoothBytesTransfer bluetooth_bytes_transfer = 10006;
-        KernelWakelock kernel_wakelock = 10004;
+        WifiBytesTransfer wifi_bytes_transfer = 10000 [(module) = "framework"];
+        WifiBytesTransferByFgBg wifi_bytes_transfer_by_fg_bg = 10001 [(module) = "framework"];
+        MobileBytesTransfer mobile_bytes_transfer = 10002 [(module) = "framework"];
+        MobileBytesTransferByFgBg mobile_bytes_transfer_by_fg_bg = 10003 [(module) = "framework"];
+        BluetoothBytesTransfer bluetooth_bytes_transfer = 10006 [(module) = "framework"];
+        KernelWakelock kernel_wakelock = 10004 [(module) = "framework"];
         SubsystemSleepState subsystem_sleep_state = 10005;
-        CpuTimePerFreq cpu_time_per_freq = 10008;
-        CpuTimePerUid cpu_time_per_uid = 10009;
-        CpuTimePerUidFreq cpu_time_per_uid_freq = 10010;
-        WifiActivityInfo wifi_activity_info = 10011;
-        ModemActivityInfo modem_activity_info = 10012;
-        BluetoothActivityInfo bluetooth_activity_info = 10007;
-        ProcessMemoryState process_memory_state = 10013;
-        SystemElapsedRealtime system_elapsed_realtime = 10014;
-        SystemUptime system_uptime = 10015;
-        CpuActiveTime cpu_active_time = 10016;
-        CpuClusterTime cpu_cluster_time = 10017;
+        CpuTimePerFreq cpu_time_per_freq = 10008 [(module) = "framework"];
+        CpuTimePerUid cpu_time_per_uid = 10009 [(module) = "framework"];
+        CpuTimePerUidFreq cpu_time_per_uid_freq = 10010 [(module) = "framework"];
+        WifiActivityInfo wifi_activity_info = 10011 [(module) = "framework"];
+        ModemActivityInfo modem_activity_info = 10012 [(module) = "framework"];
+        BluetoothActivityInfo bluetooth_activity_info = 10007 [(module) = "framework"];
+        ProcessMemoryState process_memory_state = 10013 [(module) = "framework"];
+        SystemElapsedRealtime system_elapsed_realtime = 10014 [(module) = "framework"];
+        SystemUptime system_uptime = 10015 [(module) = "framework"];
+        CpuActiveTime cpu_active_time = 10016 [(module) = "framework"];
+        CpuClusterTime cpu_cluster_time = 10017 [(module) = "framework"];
         DiskSpace disk_space = 10018 [deprecated=true];
-        RemainingBatteryCapacity remaining_battery_capacity = 10019;
-        FullBatteryCapacity full_battery_capacity = 10020;
-        Temperature temperature = 10021;
-        BinderCalls binder_calls = 10022;
-        BinderCallsExceptions binder_calls_exceptions = 10023;
-        LooperStats looper_stats = 10024;
-        DiskStats disk_stats = 10025;
-        DirectoryUsage directory_usage = 10026;
-        AppSize app_size = 10027;
-        CategorySize category_size = 10028;
-        ProcStats proc_stats = 10029;
-        BatteryVoltage battery_voltage = 10030;
-        NumFingerprintsEnrolled num_fingerprints_enrolled = 10031;
-        DiskIo disk_io = 10032;
-        PowerProfile power_profile = 10033;
-        ProcStatsPkgProc proc_stats_pkg_proc = 10034;
-        ProcessCpuTime process_cpu_time = 10035;
-        CpuTimePerThreadFreq cpu_time_per_thread_freq = 10037;
+        RemainingBatteryCapacity remaining_battery_capacity = 10019 [(module) = "framework"];
+        FullBatteryCapacity full_battery_capacity = 10020 [(module) = "framework"];
+        Temperature temperature = 10021 [(module) = "framework"];
+        BinderCalls binder_calls = 10022 [(module) = "framework"];
+        BinderCallsExceptions binder_calls_exceptions = 10023 [(module) = "framework"];
+        LooperStats looper_stats = 10024 [(module) = "framework"];
+        DiskStats disk_stats = 10025 [(module) = "framework"];
+        DirectoryUsage directory_usage = 10026 [(module) = "framework"];
+        AppSize app_size = 10027 [(module) = "framework"];
+        CategorySize category_size = 10028 [(module) = "framework"];
+        ProcStats proc_stats = 10029 [(module) = "framework"];
+        BatteryVoltage battery_voltage = 10030 [(module) = "framework"];
+        NumFingerprintsEnrolled num_fingerprints_enrolled = 10031 [(module) = "framework"];
+        DiskIo disk_io = 10032 [(module) = "framework"];
+        PowerProfile power_profile = 10033 [(module) = "framework"];
+        ProcStatsPkgProc proc_stats_pkg_proc = 10034 [(module) = "framework"];
+        ProcessCpuTime process_cpu_time = 10035 [(module) = "framework"];
+        CpuTimePerThreadFreq cpu_time_per_thread_freq = 10037 [(module) = "framework"];
         OnDevicePowerMeasurement on_device_power_measurement = 10038;
-        DeviceCalculatedPowerUse device_calculated_power_use = 10039;
-        DeviceCalculatedPowerBlameUid device_calculated_power_blame_uid = 10040;
-        DeviceCalculatedPowerBlameOther device_calculated_power_blame_other = 10041;
-        ProcessMemoryHighWaterMark process_memory_high_water_mark = 10042;
-        BatteryLevel battery_level = 10043;
-        BuildInformation build_information = 10044;
-        BatteryCycleCount battery_cycle_count = 10045;
-        DebugElapsedClock debug_elapsed_clock = 10046;
-        DebugFailingElapsedClock debug_failing_elapsed_clock = 10047;
-        NumFacesEnrolled num_faces_enrolled = 10048;
-        RoleHolder role_holder = 10049;
-        DangerousPermissionState dangerous_permission_state = 10050;
+        DeviceCalculatedPowerUse device_calculated_power_use = 10039 [(module) = "framework"];
+        DeviceCalculatedPowerBlameUid device_calculated_power_blame_uid =
+                10040 [(module) = "framework"];
+        DeviceCalculatedPowerBlameOther device_calculated_power_blame_other =
+                10041 [(module) = "framework"];
+        ProcessMemoryHighWaterMark process_memory_high_water_mark = 10042 [(module) = "framework"];
+        BatteryLevel battery_level = 10043 [(module) = "framework"];
+        BuildInformation build_information = 10044 [(module) = "framework"];
+        BatteryCycleCount battery_cycle_count = 10045 [(module) = "framework"];
+        DebugElapsedClock debug_elapsed_clock = 10046 [(module) = "framework"];
+        DebugFailingElapsedClock debug_failing_elapsed_clock = 10047 [(module) = "framework"];
+        NumFacesEnrolled num_faces_enrolled = 10048 [(module) = "framework"];
+        RoleHolder role_holder = 10049 [(module) = "framework"];
+        DangerousPermissionState dangerous_permission_state = 10050 [(module) = "framework"];
         TrainInfo train_info = 10051;
-        TimeZoneDataInfo time_zone_data_info = 10052;
-        ExternalStorageInfo external_storage_info = 10053;
+        TimeZoneDataInfo time_zone_data_info = 10052 [(module) = "framework"];
+        ExternalStorageInfo external_storage_info = 10053 [(module) = "framework"];
         GpuStatsGlobalInfo gpu_stats_global_info = 10054;
         GpuStatsAppInfo gpu_stats_app_info = 10055;
-        SystemIonHeapSize system_ion_heap_size = 10056;
-        AppsOnExternalStorageInfo apps_on_external_storage_info = 10057;
-        FaceSettings face_settings = 10058;
-        CoolingDevice cooling_device = 10059;
-        AppOps app_ops = 10060;
-        ProcessSystemIonHeapSize process_system_ion_heap_size = 10061;
+        SystemIonHeapSize system_ion_heap_size = 10056 [deprecated = true, (module) = "framework"];
+        AppsOnExternalStorageInfo apps_on_external_storage_info = 10057 [(module) = "framework"];
+        FaceSettings face_settings = 10058 [(module) = "framework"];
+        CoolingDevice cooling_device = 10059 [(module) = "framework"];
+        AppOps app_ops = 10060 [(module) = "framework"];
+        ProcessSystemIonHeapSize process_system_ion_heap_size = 10061 [(module) = "framework"];
         SurfaceflingerStatsGlobalInfo surfaceflinger_stats_global_info = 10062;
         SurfaceflingerStatsLayerInfo surfaceflinger_stats_layer_info = 10063;
-        ProcessMemorySnapshot process_memory_snapshot = 10064;
-        VmsClientStats vms_client_stats = 10065;
-        NotificationRemoteViews notification_remote_views = 10066;
+        ProcessMemorySnapshot process_memory_snapshot = 10064 [(module) = "framework"];
+        VmsClientStats vms_client_stats = 10065 [(module) = "car"];
+        NotificationRemoteViews notification_remote_views = 10066 [(module) = "framework"];
+        DangerousPermissionStateSampled dangerous_permission_state_sampled =
+                10067 [(module) = "framework"];
+        GraphicsStats graphics_stats = 10068;
+        RuntimeAppOpAccess runtime_app_op_access = 10069 [(module) = "framework"];
+        IonHeapSize ion_heap_size = 10070 [(module) = "framework"];
+        PackageNotificationPreferences package_notification_preferences =
+                10071 [(module) = "framework"];
+        PackageNotificationChannelPreferences package_notification_channel_preferences =
+                10072 [(module) = "framework"];
+        PackageNotificationChannelGroupPreferences package_notification_channel_group_preferences =
+                10073 [(module) = "framework"];
+        GnssStats gnss_stats = 10074 [(module) = "framework"];
+        AppFeaturesOps app_features_ops = 10075 [(module) = "framework"];
     }
 
     // DO NOT USE field numbers above 100,000 in AOSP.
@@ -519,7 +579,8 @@ message ThermalThrottlingStateChanged {
  */
 message ScreenStateChanged {
     // New screen state, from frameworks/base/core/proto/android/view/enums.proto.
-    optional android.view.DisplayStateEnum state = 1 [(state_field_option).option = EXCLUSIVE];
+    optional android.view.DisplayStateEnum state = 1
+            [(state_field_option).option = EXCLUSIVE_STATE, (state_field_option).nested = false];
 }
 
 /**
@@ -530,10 +591,11 @@ message ScreenStateChanged {
  *   frameworks/base/services/core/java/com/android/server/am/BatteryStatsService.java
  */
 message UidProcessStateChanged {
-    optional int32 uid = 1 [(state_field_option).option = PRIMARY, (is_uid) = true];
+    optional int32 uid = 1 [(state_field_option).option = PRIMARY_FIELD, (is_uid) = true];
 
     // The state, from frameworks/base/core/proto/android/app/enums.proto.
-    optional android.app.ProcessStateEnum state = 2 [(state_field_option).option = EXCLUSIVE];
+    optional android.app.ProcessStateEnum state = 2
+            [(state_field_option).option = EXCLUSIVE_STATE, (state_field_option).nested = false];
 }
 
 /**
@@ -565,7 +627,7 @@ message ActivityManagerSleepStateChanged {
         ASLEEP = 1;
         AWAKE = 2;
     }
-    optional State state = 1 [(state_field_option).option = EXCLUSIVE];
+    optional State state = 1 [(state_field_option).option = EXCLUSIVE_STATE];
 }
 
 /**
@@ -584,7 +646,7 @@ message MemoryFactorStateChanged {
         CRITICAL = 4;   // critical memory.
 
     }
-    optional State factor = 1 [(state_field_option).option = EXCLUSIVE];
+    optional State factor = 1 [(state_field_option).option = EXCLUSIVE_STATE];
 }
 
 /**
@@ -614,6 +676,96 @@ message CachedKillReported {
     // TODO: remove this when validation is done
     optional int64 version = 5;
     optional int64 pss = 4;
+}
+
+/**
+ * Logs the change in wifi health.
+ *
+ * Logged from:
+ *   frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiDataStall.java
+ */
+message WifiHealthStatReported {
+    enum Band {
+        UNKNOWN = 0;
+        // All of 2.4GHz band
+        BAND_2G = 1;
+        // Frequencies in the range of [5150, 5250) GHz
+        BAND_5G_LOW = 2;
+        // Frequencies in the range of [5250, 5725) GHz
+        BAND_5G_MIDDLE = 3;
+        // Frequencies in the range of [5725, 5850) GHz
+        BAND_5G_HIGH = 4;
+        // Frequencies in the range of [5925, 6425) GHz
+        BAND_6G_LOW = 5;
+        // Frequencies in the range of [6425, 6875) GHz
+        BAND_6G_MIDDLE = 6;
+        // Frequencies in the range of [6875, 7125) GHz
+        BAND_6G_HIGH = 7;
+    }
+    // duration this stat is obtained over in milliseconds
+    optional int32 duration_millis = 1;
+    // whether wifi is classified as sufficient for the user's data traffic, determined
+    // by whether the calculated throughput exceeds the average demand within |duration_millis|
+    optional bool is_sufficient = 2;
+    // whether cellular data is available
+    optional bool is_cell_data_available = 3;
+    // the Band bucket the connected network is on
+    optional Band band = 4;
+}
+
+/**
+ * Logged when wifi detects a significant change in connection failure rate.
+ *
+ * Logged from: frameworks/opt/net/wifi/service/java/com/android/server/wifi/WifiHealthMonitor.java
+ *
+ */
+message WifiFailureStatReported {
+    enum AbnormalityType {
+        UNKNOWN = 0;
+        SIGNIFICANT_INCREASE = 1;
+        SIGNIFICANT_DECREASE = 2;
+        SIMPLY_HIGH = 3;
+    }
+    enum FailureType {
+        FAILURE_UNKNOWN = 0;
+        FAILURE_CONNECTION = 1;
+        FAILURE_ASSOCIATION_REJECTION = 2;
+        FAILURE_ASSOCIATION_TIMEOUT = 3;
+        FAILURE_AUTHENTICATION = 4;
+        FAILURE_NON_LOCAL_DISCONNECTION = 5;
+        FAILURE_SHORT_CONNECTION_DUE_TO_NON_LOCAL_DISCONNECTION = 6;
+    }
+    // Reason for uploading this stat
+    optional AbnormalityType abnormality_type = 1;
+    // The particular type of failure
+    optional FailureType failure_type = 2;
+    // How many times we have encountered this combination of AbnormalityType and FailureType
+    optional int32 failure_count = 3;
+}
+
+/**
+ * Logs whether a wifi connection is successful and reasons for failure if it isn't.
+ *
+ * Logged from:
+ *   frameworks/opt/net/wifi/service/java/com/android/server/wifi/ClientModeImpl.java
+ */
+message WifiConnectionResultReported {
+    enum FailureCode {
+        FAILURE_UNKNOWN = 0;
+        FAILURE_ASSOCIATION_TIMEOUT = 1;
+        FAILURE_ASSOCIATION_REJECTION = 2;
+        FAILURE_AUTHENTICATION_GENERAL = 3;
+        FAILURE_AUTHENTICATION_EAP = 4;
+        FAILURE_DHCP = 5;
+        FAILURE_NETWORK_DISCONNECTION = 6;
+        FAILURE_ROAM_TIMEOUT = 7;
+    }
+    // true represents a successful connection
+    optional bool connection_result = 1;
+    // reason for the connection failure
+    optional FailureCode failure_code = 2;
+    // scan rssi before the connection attempt
+    optional int32 rssi = 3;
 }
 
 /**
@@ -671,7 +823,8 @@ message ProcessLifeCycleStateChanged {
  *   packages/apps/Bluetooth/src/com/android/bluetooth/gatt/AppScanStats.java
  */
 message BleScanStateChanged {
-    repeated AttributionNode attribution_node = 1;
+    repeated AttributionNode attribution_node = 1
+            [(state_field_option).option = PRIMARY_FIELD_FIRST_UID];
 
     enum State {
         OFF = 0;
@@ -679,14 +832,19 @@ message BleScanStateChanged {
         // RESET indicates all ble stopped. Used when it (re)starts (e.g. after it crashes).
         RESET = 2;
     }
-    optional State state = 2;
+    optional State state = 2 [
+        (state_field_option).option = EXCLUSIVE_STATE,
+        (state_field_option).default_state_value = 0 /* State.OFF */,
+        (state_field_option).reset_state_value = 2 /* State.RESET */,
+        (state_field_option).nested = true
+    ];
 
     // Does the scan have a filter.
-    optional bool is_filtered = 3;
+    optional bool is_filtered = 3 [(state_field_option).option = PRIMARY_FIELD];
     // Whether the scan is a CALLBACK_TYPE_FIRST_MATCH scan. Called 'background' scan internally.
-    optional bool is_first_match = 4;
+    optional bool is_first_match = 4 [(state_field_option).option = PRIMARY_FIELD];
     // Whether the scan set to piggy-back off the results of other scans (SCAN_MODE_OPPORTUNISTIC).
-    optional bool is_opportunistic = 5;
+    optional bool is_opportunistic = 5 [(state_field_option).option = PRIMARY_FIELD];
 }
 
 /**
@@ -748,27 +906,6 @@ message GpsSignalQualityChanged {
     optional android.server.location.GpsSignalQualityEnum level = 1;
 }
 
-/**
- * Gps location status report
- *
- * Logged from:
- *   /frameworks/base/location/java/com/android/internal/location/gnssmetrics/GnssMetrics.java
- */
-message GpsLocationStatusReported {
-    // Boolean stating if location was acquired
-    optional bool location_success = 1;
-}
-
-/**
- * Gps log time to first fix report
- *
- * Logged from:
- *   /frameworks/base/location/java/com/android/internal/location/gnssmetrics/GnssMetrics.java
- */
-message GpsTimeToFirstFixReported {
-    // int32 reporting the time to first fix in milliseconds
-    optional int32 time_to_first_fix_millis = 1;
-}
 
 /**
  * Logs when a sync manager sync state changes.
@@ -839,11 +976,23 @@ message ScheduledJobStateChanged {
         FREQUENT = 2;
         RARE = 3;
         NEVER = 4;
+        RESTRICTED = 5;
     }
     optional Bucket standby_bucket = 5 [default = UNKNOWN];
 
     // The job id (as assigned by the app).
     optional int32 job_id = 6;
+
+    // One flag for each of the API constraints defined by Jobscheduler. Does not include implcit
+    // constraints as they are always assumed to be set.
+    optional bool has_charging_constraint = 7;
+    optional bool has_battery_not_low_constraint = 8;
+    optional bool has_storage_not_low_constraint = 9;
+    optional bool has_timing_delay_constraint = 10;
+    optional bool has_deadline_constraint = 11;
+    optional bool has_idle_constraint = 12;
+    optional bool has_connectivity_constraint = 13;
+    optional bool has_content_trigger_constraint = 14;
 }
 
 /**
@@ -925,14 +1074,16 @@ message CameraStateChanged {
  *   TODO
  */
 message WakelockStateChanged {
-    repeated AttributionNode attribution_node = 1;
+    repeated AttributionNode attribution_node = 1
+            [(state_field_option).option = PRIMARY_FIELD_FIRST_UID];
 
     // The type (level) of the wakelock; e.g. a partial wakelock or a full wakelock.
     // From frameworks/base/core/proto/android/os/enums.proto.
-    optional android.os.WakeLockLevelEnum type = 2;
+    optional android.os.WakeLockLevelEnum type = 2 [(state_field_option).option = PRIMARY_FIELD];
+    ;
 
     // The wakelock tag (Called tag in the Java API, sometimes name elsewhere).
-    optional string tag = 3;
+    optional string tag = 3 [(state_field_option).option = PRIMARY_FIELD];
 
     enum State {
         RELEASE = 0;
@@ -940,7 +1091,11 @@ message WakelockStateChanged {
         CHANGE_RELEASE = 2;
         CHANGE_ACQUIRE = 3;
     }
-    optional State state = 4;
+    optional State state = 4 [
+        (state_field_option).option = EXCLUSIVE_STATE,
+        (state_field_option).default_state_value = 0,
+        (state_field_option).nested = true
+    ];
 }
 
 /**
@@ -1073,18 +1228,8 @@ message WakeupAlarmOccurred {
     // Name of source package (for historical reasons, since BatteryStats tracked it).
     optional string package_name = 3;
 
-    // These enum values match the STANDBY_BUCKET_XXX constants defined in UsageStatsManager.java.
-    enum Bucket {
-        UNKNOWN = 0;
-        EXEMPTED = 5;
-        ACTIVE = 10;
-        WORKING_SET = 20;
-        FREQUENT = 30;
-        RARE = 40;
-        NEVER = 50;
-    }
     // The App Standby bucket of the app that scheduled the alarm at the time the alarm fired.
-    optional Bucket app_standby_bucket = 4;
+    optional AppStandbyBucketChanged.Bucket app_standby_bucket = 4;
 }
 
 /**
@@ -1145,6 +1290,8 @@ message WifiEnabledStateChanged {
 }
 
 /**
+ * This atom is deprecated starting in R.
+ *
  * Logs when an app causes Wifi to run. In this context, 'to run' means to use Wifi Client Mode.
  * TODO: Include support for Hotspot, perhaps by using an extra field to denote 'mode'.
  * Note that Wifi Scanning is monitored separately in WifiScanStateChanged.
@@ -1750,12 +1897,15 @@ message WatchdogRollbackOccurred {
         REASON_EXPLICIT_HEALTH_CHECK = 2;
         REASON_APP_CRASH = 3;
         REASON_APP_NOT_RESPONDING = 4;
+        REASON_NATIVE_CRASH_DURING_BOOT = 5;
     }
     optional RollbackReasonType rollback_reason = 4;
 
     // Set by RollbackPackageHealthObserver to be the package that is failing when a rollback
     // is initiated. Empty if the package is unknown.
     optional string failing_package_name = 5;
+
+    optional TrainExperimentIds experiment_ids = 6 [(log_mode) = MODE_BYTES];
 }
 
 /**
@@ -3123,9 +3273,9 @@ message PictureInPictureStateChanged {
  *     services/core/java/com/android/server/wm/Session.java
  */
 message OverlayStateChanged {
-    optional int32 uid = 1 [(state_field_option).option = PRIMARY, (is_uid) = true];
+    optional int32 uid = 1 [(state_field_option).option = PRIMARY_FIELD, (is_uid) = true];
 
-    optional string package_name = 2 [(state_field_option).option = PRIMARY];
+    optional string package_name = 2 [(state_field_option).option = PRIMARY_FIELD];
 
     optional bool using_alert_window = 3;
 
@@ -3133,15 +3283,19 @@ message OverlayStateChanged {
         ENTERED = 1;
         EXITED = 2;
     }
-    optional State state = 4 [(state_field_option).option = EXCLUSIVE];
+    optional State state = 4 [
+        (state_field_option).option = EXCLUSIVE_STATE,
+        (state_field_option).nested = false,
+        (state_field_option).default_state_value = 2
+    ];
 }
 
-/*
+/**
  * Logs foreground service starts and stops.
  * Note that this is not when a service starts or stops, but when it is
  * considered foreground.
  * Logged from
- *     //frameworks/base/services/core/java/com/android/server/am/ActiveServices.java
+ *     frameworks/base/services/core/java/com/android/server/am/ActiveServices.java
  */
 message ForegroundServiceStateChanged {
     optional int32 uid = 1 [(is_uid) = true];
@@ -3153,6 +3307,49 @@ message ForegroundServiceStateChanged {
         EXIT = 2;
     }
     optional State state = 3;
+
+    // Whether the fgs is allowed while-in-use permissions, i.e. is considered 'in-use' to the user.
+    // (If the fgs was started while the app wasn't TOP it usually will be denied these permissions)
+    optional bool allow_while_in_use_permission = 4;
+}
+
+/**
+ * Logs the number of times a uid accesses a sensitive AppOp during a foreground service session.
+ * A foreground service session is any continuous period during which the uid holds at least one
+ * foreground service; the atom will be pushed when the uid no longer holds any foreground services.
+ * Accesses initiated while the uid is in the TOP state are ignored.
+ * Sessions with no attempted accesses are not logged.
+ * Logged from
+ *     frameworks/base/services/core/java/com/android/server/am/ActiveServices.java
+ */
+message ForegroundServiceAppOpSessionEnded {
+    optional int32 uid = 1 [(is_uid) = true];
+
+    // The operation's name.
+    // To the extent possible, preserve the mapping from AppOpsManager.OP_ constants.
+    // Only these named ops are actually logged.
+    enum AppOpName {
+        OP_NONE = -1; // Also represents UNKNOWN.
+        OP_COARSE_LOCATION = 0;
+        OP_FINE_LOCATION = 1;
+        OP_CAMERA = 26;
+        OP_RECORD_AUDIO = 27;
+    }
+    optional AppOpName app_op_name = 2 [default = OP_NONE];
+
+    // The uid's permission mode for accessing the AppOp during this fgs session.
+    enum Mode {
+        MODE_UNKNOWN = 0;
+        MODE_ALLOWED = 1; // Always allowed
+        MODE_IGNORED = 2; // Denied
+        MODE_FOREGROUND = 3; // Allow-while-in-use (or allowed-one-time)
+    }
+    optional Mode app_op_mode = 3;
+
+    // Number of times this AppOp was requested and allowed.
+    optional int32 count_ops_accepted = 4;
+    // Number of times this AppOp was requested but denied.
+    optional int32 count_ops_rejected = 5;
 }
 
 /**
@@ -3299,7 +3496,7 @@ message LmkKillOccurred {
  */
 message AppDied {
     // timestamp(elapsedRealtime) of record creation
-    optional uint64 timestamp_millis = 1 [(state_field_option).option = EXCLUSIVE];
+    optional uint64 timestamp_millis = 1 [(state_field_option).option = EXCLUSIVE_STATE];
 }
 
 /**
@@ -3318,6 +3515,10 @@ message GenericAtom {
  * this button" or "this dialog was displayed".
  * Keep the UI event stream clean: don't use for system or background events.
  * Log using the UiEventLogger wrapper - don't write with the StatsLog API directly.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/
+ *   frameworks/base/packages/SystemUI/src/com/android/systemui/
  */
 message UiEventReported {
     // The event_id.
@@ -3326,7 +3527,125 @@ message UiEventReported {
     // For example, the package posting a notification, or the destination package of a share.
     optional int32 uid = 2 [(is_uid) = true];
     optional string package_name = 3;
+    // An identifier used to disambiguate which logs refer to a particular instance of some
+    // UI element. Useful when there might be multiple instances simultaneously active.
+    optional int32 instance_id = 4;
 }
+
+/**
+ * Reports a notification was created or updated.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/notification/
+ */
+message NotificationReported {
+    // The event_id (as for UiEventReported).
+    optional int32 event_id = 1;
+    // The notifying app's uid and package.
+    optional int32 uid = 2 [(is_uid) = true];
+    optional string package_name = 3;
+    // A small system-assigned identifier for the notification.
+    // Locally probably-unique, but expect collisions across users and/or days.
+    optional int32 instance_id = 4;
+    optional int32 notification_id_hash = 5;  // Small hash of the app-assigned notif ID + tag
+    optional int32 channel_id_hash = 6;  // Small hash of app-assigned channel ID
+
+    // Grouping information
+    optional int32 group_id_hash = 7;  // Small hash of the group ID of the notification
+    optional int32 group_instance_id = 8;  // Instance_id of the group-summary notification
+    optional bool is_group_summary = 9;  // Tags the group-summary notification
+
+    // Attributes
+    optional string category = 10;   // App-assigned notification category (API-defined strings)
+    optional int32 style = 11;       // App-assigned notification style
+    optional int32 num_people = 12;  // Number of Person records attached to the notification
+
+    // Ordering, importance and interruptiveness
+
+    optional int32 position = 13;    // Position in NotificationManager's list
+
+    optional android.stats.sysui.NotificationImportance importance = 14;
+    optional int32 alerting = 15;    // Bitfield, 1=buzz 2=beep 4=blink
+
+    enum NotificationImportanceExplanation {
+        IMPORTANCE_EXPLANATION_UNKNOWN = 0;
+        IMPORTANCE_EXPLANATION_APP = 1;     // App-specified channel importance.
+        IMPORTANCE_EXPLANATION_USER = 2;    // User-specified channel importance.
+        IMPORTANCE_EXPLANATION_ASST = 3;    // Notification Assistant override.
+        IMPORTANCE_EXPLANATION_SYSTEM = 4;  // System override.
+        // Like _APP, but based on pre-channels priority signal.
+        IMPORTANCE_EXPLANATION_APP_PRE_CHANNELS = 5;
+    }
+
+    optional NotificationImportanceExplanation importance_source = 16;
+    optional android.stats.sysui.NotificationImportance importance_initial = 17;
+    optional NotificationImportanceExplanation importance_initial_source = 18;
+    optional android.stats.sysui.NotificationImportance importance_asst = 19;
+    optional int32 assistant_hash = 20;
+    optional float assistant_ranking_score = 21;
+}
+
+message Notification {
+    // The notifying app's uid and package.
+    optional int32 uid = 1 [(is_uid) = true];
+    optional string package_name = 2;
+    // A small system-assigned identifier for the notification.
+    optional int32 instance_id = 3;
+
+    // Grouping information.
+    optional int32 group_instance_id = 4;
+    optional bool is_group_summary = 5;
+
+    // The section of the shade that the notification is in.
+    // See NotificationSectionsManager.PriorityBucket.
+    enum NotificationSection {
+        SECTION_UNKNOWN = 0;
+        SECTION_HEADS_UP = 1;
+        SECTION_PEOPLE = 2;
+        SECTION_ALERTING = 3;
+        SECTION_SILENT = 4;
+    }
+    optional NotificationSection section = 6;
+}
+
+message NotificationList {
+    repeated Notification notifications = 1;  // An ordered sequence of notifications.
+}
+
+/**
+ * Reports a notification panel was displayed, e.g. from the lockscreen or status bar.
+ *
+ * Logged from:
+ *   frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/notification/
+ */
+message NotificationPanelReported {
+    // The event_id (as for UiEventReported).
+    optional int32 event_id = 1;
+    optional int32 num_notifications = 2;
+    // The notifications in the panel, in the order that they appear there.
+    optional NotificationList notifications = 3 [(log_mode) = MODE_BYTES];
+}
+
+/**
+ * Reports a notification channel, or channel group, was created, updated, or deleted.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/notification/
+ */
+message NotificationChannelModified {
+    // The event_id (as for UiEventReported).
+    optional int32 event_id = 1;
+    // The notifying app's uid and package.
+    optional int32 uid = 2 [(is_uid) = true];
+    optional string package_name = 3;
+    // Hash of app-assigned notification channel ID or channel-group ID
+    optional int32 channel_id_hash = 4;
+    // Previous importance setting, if applicable
+    optional android.stats.sysui.NotificationImportance old_importance = 5;
+    // New importance setting
+    optional android.stats.sysui.NotificationImportance importance = 6;
+}
+
 
 /**
  * Logs when a biometric acquire event occurs.
@@ -3465,6 +3784,7 @@ message FlagFlipUpdateOccurred {
 
 /**
  * Potential experiment ids that goes with a train install.
+ * Should be kept in sync with experiment_ids.proto.
  */
 message TrainExperimentIds {
     repeated int64 experiment_id = 1;
@@ -3516,12 +3836,16 @@ message BinaryPushStateChanged {
         INSTALL_FAILURE_DOWNLOAD = 23;
         INSTALL_FAILURE_STATE_MISMATCH = 24;
         INSTALL_FAILURE_COMMIT = 25;
+        REBOOT_TRIGGERED = 26;
     }
     optional State state = 6;
     // Possible experiment ids for monitoring this push.
     optional TrainExperimentIds experiment_ids = 7 [(log_mode) = MODE_BYTES];
     // user id
     optional int32 user_id = 8;
+    optional int32 reason = 9;
+    // Whether or not this is a rollback event
+    optional bool is_rollback = 10;
 }
 
 /* Test atom, is not logged anywhere */
@@ -3694,7 +4018,7 @@ message PrivacyIndicatorsInteracted {
         DIALOG_LINE_ITEM = 5;
     }
 
-    optional Type type = 1 [(state_field_option).option = EXCLUSIVE];
+    optional Type type = 1 [(state_field_option).option = EXCLUSIVE_STATE];
 
     // Used if the type is LINE_ITEM
     optional string package_name = 2;
@@ -3940,6 +4264,256 @@ message MediaProviderIdleMaintenance {
     optional float normalized_stale_thumbnails = 4;
     // Number of items found to be expired, normalized per file
     optional float normalized_expired_media = 5;
+}
+
+/**
+ * Represents boot time event with duration in ms.
+ *
+ * Logged from: bootstat and various system server components. Check each enums for details.
+ */
+message BootTimeEventDuration {
+    enum DurationEvent {
+        UNKNOWN = 0;
+        // Bootloader time excluding BOOTLOADER_UI_WAIT + boot complete time. Logged from bootstat.
+        ABSOLUTE_BOOT_TIME = 1;
+        // Bootloader's 1st stage execution time.
+        // Logged from bootstat.
+        BOOTLOADER_FIRST_STAGE_EXEC = 2;
+        // Bootloader's 1st stage loading time.
+        // Logged from bootstat.
+        BOOTLOADER_FIRST_STAGE_LOAD = 3;
+        // Bootloader's kernel loading time.
+        // Logged from bootstat.
+        BOOTLOADER_KERNEL_LOAD = 4;
+        // Bootloader's 2nd stage execution time.
+        // Logged from bootstat.
+        BOOTLOADER_SECOND_STAGE_EXEC = 5;
+        // Bootloader's 2nd stage loading time.
+        // Logged from bootstat.
+        BOOTLOADER_SECOND_STAGE_LOAD = 6;
+        // Duration for Bootloader to show unlocked device's warning UI. This should not happen
+        // for locked device.
+        // Logged from bootstat.
+        BOOTLOADER_UI_WAIT = 7;
+        // Total time spend in bootloader. This is the sum of all BOOTLOADER_* listed above.
+        // Logged from bootstat.
+        BOOTLOADER_TOTAL = 8;
+        // Shutdown duration inside init for the reboot before the current boot up.
+        // Logged from f/b/services/.../BootReceiver.java.
+        SHUTDOWN_DURATION = 9;
+        // Total time for mounting of disk devices during bootup.
+        // Logged from f/b/services/.../BootReceiver.java.
+        MOUNT_DEFAULT_DURATION = 10;
+        // Total time for early stage mounting of disk devices during bootup.
+        // Logged from f/b/services/.../BootReceiver.java.
+        MOUNT_EARLY_DURATION = 11;
+        // Total time for late stage mounting of disk devices during bootup.
+        // Logged from f/b/services/.../BootReceiver.java.
+        MOUNT_LATE_DURATION = 12;
+        // Average time to scan non-system app after OTA
+        // Logged from f/b/services/.../PackageManagerService.java
+        OTA_PACKAGE_MANAGER_INIT_TIME = 13;
+        // Time to initialize Package manager after OTA
+        // Logged from f/b/services/.../PackageManagerService.java
+        OTA_PACKAGE_MANAGER_DATA_APP_AVG_SCAN_TIME = 14;
+        // Time to scan all system app from Package manager after OTA
+        // Logged from f/b/services/.../PackageManagerService.java
+        OTA_PACKAGE_MANAGER_SYSTEM_APP_AVG_SCAN_TIME = 15;
+        // Init's total time for cold boot stage.
+        // Logged from bootstat.
+        COLDBOOT_WAIT = 16;
+        // Init's total time for initializing selinux.
+        // Logged from bootstat.
+        SELINUX_INIT = 17;
+        // Time since last factory reset.
+        // Logged from bootstat.
+        FACTORY_RESET_TIME_SINCE_RESET = 18;
+        // Init's total time spent for completing the 1st stage.
+        // Logged from bootstat.
+        ANDROID_INIT_STAGE_1 = 19;
+    }
+
+    // Type of the event.
+    optional DurationEvent event = 1;
+    // Duration of the event in ms.
+    optional int64 duration_millis = 2;
+}
+
+/**
+ * Represents the start of specific boot time event during bootup in ms. This is usually a time
+ * since boot-up.
+ *
+ * Logged from: bootstat and various system server components. Check each enums for details.
+ */
+message BootTimeEventElapsedTime {
+    enum ElapsedTimeEvent {
+        UNKNOWN = 0;
+        // Time when init starts 1st stage. Logged from bootstat.
+        ANDROID_INIT_STAGE_1 = 1;
+        // Time when sys.boot_completed prop is set.
+        // Logged from bootstat.
+        BOOT_COMPLETE = 2;
+        // BOOT_COMPLETE for encrypted device.
+        BOOT_COMPLETE_ENCRYPTION = 3;
+        // BOOT_COMPLETE for device with no encryption.
+        BOOT_COMPLETE_NO_ENCRYPTION = 4;
+        // Adjusted BOOT_COMPLETE for encrypted device extracting decryption time.
+        BOOT_COMPLETE_POST_DECRYPT = 5;
+        // BOOT_COMPLETE after factory reset.
+        FACTORY_RESET_BOOT_COMPLETE = 6;
+        // BOOT_COMPLETE_NO_ENCRYPTION after factory reset.
+        FACTORY_RESET_BOOT_COMPLETE_NO_ENCRYPTION = 7;
+        // BOOT_COMPLETE_POST_DECRYPT after factory reset.
+        FACTORY_RESET_BOOT_COMPLETE_POST_DECRYPT = 8;
+        // BOOT_COMPLETE after OTA.
+        OTA_BOOT_COMPLETE = 9;
+        // BOOT_COMPLETE_NO_ENCRYPTION after OTA.
+        OTA_BOOT_COMPLETE_NO_ENCRYPTION = 10;
+        // BOOT_COMPLETE_POST_DECRYPT after OTA.
+        OTA_BOOT_COMPLETE_POST_DECRYPT = 11;
+        // Time when the system starts sending LOCKED_BOOT_COMPLETED broadcast.
+        // Logged from  f/b/services/.../UserController.java
+        FRAMEWORK_LOCKED_BOOT_COMPLETED = 12;
+        // Time when the system starts sending BOOT_COMPLETED broadcast.
+        // Logged from  f/b/services/.../UserController.java
+        FRAMEWORK_BOOT_COMPLETED = 13;
+        // Time when the package manager starts init.
+        // Logged from f/b/services/.../SystemServer.java
+        PACKAGE_MANAGER_INIT_START = 14;
+        // Time when package manager is ready
+        // Logged from f/b/services/.../SystemServer.java
+        PACKAGE_MANAGER_INIT_READY = 15;
+        // Represents the time when user has entered unlock credential for system with user pin.
+        // Logged from bootstat.
+        POST_DECRYPT = 16;
+        // Represents the start of zygote's init.
+        // Logged from zygote itself.
+        ZYGOTE_INIT_START = 17;
+        // Represents the start of secondary zygote's init.
+        // TODO: add logging to zygote
+        SECONDARY_ZYGOTE_INIT_START = 18;
+        // Represents the start of system server's init.
+        // Logged from f/b/services/.../SystemServer.java
+        SYSTEM_SERVER_INIT_START = 19;
+        // Represents the completion of system server's init.
+        // Logged from f/b/services/.../SystemServer.java
+        SYSTEM_SERVER_READY = 20;
+        // Represents the start of launcher during boot-up.
+        // TODO: add logging
+        LAUNCHER_START = 21;
+        // Represents the completion of launcher's initial rendering. User can use other apps from
+        // launcher from this point.
+        // TODO: add logging
+        LAUNCHER_SHOWN = 22;
+    }
+
+    // Type of the event.
+    optional ElapsedTimeEvent event = 1;
+    // Time since bootup for the event.
+    // It should be acquired from SystemClock elapsedRealtime() call or equivalent.
+    optional int64 time_millis = 2;
+}
+
+/**
+ * Boot time events with UTC time.
+ *
+ * Logged from: bootstat and various system server components. Check each enums for details.
+ */
+message BootTimeEventUtcTime {
+    enum UtcTimeEvent {
+        UNKNOWN = 0;
+        // Time of the bootstat's marking of 1st boot after the last factory reset.
+        // Logged from bootstat.
+        FACTORY_RESET_RESET_TIME = 1;
+        // The time when bootstat records FACTORY_RESET_* events. This is close to
+        // BOOT_COMPLETE time for the current bootup.
+        // Logged from bootstat.
+        FACTORY_RESET_CURRENT_TIME = 2;
+        // DUplicate of FACTORY_RESET_RESET_TIME added for debugging purpose.
+        // Logged from bootstat.
+        FACTORY_RESET_RECORD_VALUE = 3;
+    }
+
+    // Type of the event.
+    optional UtcTimeEvent event = 1;
+    // UTC time for the event.
+    optional int64 utc_time_secs = 2;
+}
+
+/**
+ * Boot time events representing specific error code during bootup.
+ * Meaning of error code can be different per each event type.
+ *
+ * Logged from: bootstat and various system server components. Check each enums for details.
+ */
+message BootTimeEventErrorCode {
+    enum ErrorCodeEvent {
+        UNKNOWN = 0;
+        // Linux error code for time() call to get the current UTC time.
+        // Logged from bootstat.
+        FACTORY_RESET_CURRENT_TIME_FAILURE = 1;
+        // Represents UmountStat before the reboot for the current boot up. Error codes defined
+        // as UMOUNT_STAT_* from init/reboot.cpp.
+        // Logged from f/b/services/.../BootReceiver.java.
+        SHUTDOWN_UMOUNT_STAT = 2;
+        // Reprepsents fie system mounting error code of /data partition for the current boot.
+        // Error codes defined as combination of FsStatFlags from system/core/fs_mgr/fs_mgr.cpp.
+        // Logged from f/b/services/.../BootReceiver.java.
+        FS_MGR_FS_STAT_DATA_PARTITION = 3;
+    }
+
+    // Type of the event.
+    optional ErrorCodeEvent event = 1;
+    // error code defined per each event type.
+    // For example, this can have a value of FsStatFlags.FS_STAT_FULL_MOUNT_FAILED for the event of
+    // FS_MGR_FS_STAT.
+    optional int32 error_code = 2;
+}
+
+/**
+ * Collects Virtual A/B statistics related to the use of dm-snapshot performed
+ * after an OTA.
+ *
+ * Logged from:
+ *  - system/core/fs_mgr/libsnapshot/snapshot.cpp
+ *  - system/core/fs_mgr/libsnapshot/snapshotctl.cpp
+ */
+message SnapshotMergeReported {
+    // Keep in sync with
+    // system/core/fs_mgr/libsnapshot/android/snapshot/snapshot.proto
+    enum UpdateState {
+        // No update or merge is in progress.
+        NONE = 0;
+        // An update is applying; snapshots may already exist.
+        INITIATED = 1;
+        // An update is pending, but has not been successfully booted yet.
+        UNVERIFIED = 2;
+        // The kernel is merging in the background.
+        MERGING = 3;
+        // Post-merge cleanup steps could not be completed due to a transient
+        // error, but the next reboot will finish any pending operations.
+        MERGE_NEEDS_REBOOT = 4;
+        // Merging is complete, and needs to be acknowledged.
+        MERGE_COMPLETED = 5;
+        // Merging failed due to an unrecoverable error.
+        MERGE_FAILED = 6;
+        // The update was implicitly cancelled, either by a rollback or a flash
+        // operation via fastboot. This state can only be returned by WaitForMerge.
+        CANCELLED = 7;
+    };
+
+    // Status of the update after the merge attempts.
+    optional UpdateState final_state = 1;
+
+    // Time to complete a merge operation in milliseconds.
+    // A negative value corresponds to the case in which the merge operation
+    // was interrupted and resumed (e.g. in case of a system reboot during the
+    // merge).
+    optional int64 duration_millis = 2;
+
+    // Number of reboots that occurred after issuing and before completing the
+    // merge of all the snapshot devices.
+    optional int32 intermediate_reboots = 3;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -4742,36 +5316,69 @@ message RoleHolder {
 }
 
 message AggStats {
-    optional int64 min = 1;
+    // These are all in byte resolution.
+    optional int64 min = 1 [deprecated = true];
+    optional int64 average = 2 [deprecated = true];
+    optional int64 max = 3 [deprecated = true];
 
-    optional int64 average = 2;
-
-    optional int64 max = 3;
+    // These are all in kilobyte resolution. Can fit in int32, so smaller on the wire than the above
+    // int64 fields.
+    optional int32 mean_kb = 4;
+    optional int32 max_kb = 5;
 }
 
+// A reduced subset of process states; reducing the number of possible states allows more
+// aggressive device-side aggregation of statistics and hence reduces metric upload size.
+enum ProcessStateAggregated {
+    PROCESS_STATE_UNKNOWN = 0;
+    // Persistent system process.
+    PROCESS_STATE_PERSISTENT = 1;
+    // Top activity; actually any visible activity.
+    PROCESS_STATE_TOP = 2;
+    // Process binding to top or a foreground service.
+    PROCESS_STATE_BOUND_TOP_OR_FGS = 3;
+    // Processing running a foreground service.
+    PROCESS_STATE_FGS = 4;
+    // Important foreground process (ime, wallpaper, etc).
+    PROCESS_STATE_IMPORTANT_FOREGROUND = 5;
+    // Important background process.
+    PROCESS_STATE_BACKGROUND = 6;
+    // Process running a receiver.
+    PROCESS_STATE_RECEIVER = 7;
+    // All kinds of cached processes.
+    PROCESS_STATE_CACHED = 8;
+}
+
+// Next tag: 13
 message ProcessStatsStateProto {
     optional android.service.procstats.ScreenState screen_state = 1;
 
-    optional android.service.procstats.MemoryState memory_state = 2;
+    optional android.service.procstats.MemoryState memory_state = 2 [deprecated = true];
 
     // this enum list is from frameworks/base/core/java/com/android/internal/app/procstats/ProcessStats.java
     // and not frameworks/base/core/java/android/app/ActivityManager.java
-    optional android.service.procstats.ProcessState process_state = 3;
+    optional android.service.procstats.ProcessState process_state = 3 [deprecated = true];
+
+    optional ProcessStateAggregated process_state_aggregated = 10;
 
     // Millisecond uptime duration spent in this state
-    optional int64 duration_millis = 4;
+    optional int64 duration_millis = 4 [deprecated = true];
+    // Same as above, but with minute resolution so it fits into an int32.
+    optional int32 duration_minutes = 11;
 
     // Millisecond elapsed realtime duration spent in this state
-    optional int64 realtime_duration_millis = 9;
+    optional int64 realtime_duration_millis = 9 [deprecated = true];
+    // Same as above, but with minute resolution so it fits into an int32.
+    optional int32 realtime_duration_minutes = 12;
 
     // # of samples taken
     optional int32 sample_size = 5;
 
     // PSS is memory reserved for this process
-    optional AggStats pss = 6;
+    optional AggStats pss = 6 [deprecated = true];
 
     // USS is memory shared between processes, divided evenly for accounting
-    optional AggStats uss = 7;
+    optional AggStats uss = 7 [deprecated = true];
 
     // RSS is memory resident for this process
     optional AggStats rss = 8;
@@ -4796,7 +5403,7 @@ message ProcessStatsProto {
         // PSS stats during cached kill
         optional AggStats cached_pss = 3;
     }
-    optional Kill kill = 3;
+    optional Kill kill = 3 [deprecated = true];
 
     // Time and memory spent in various states.
     repeated ProcessStatsStateProto states = 5;
@@ -4977,6 +5584,65 @@ message NotificationRemoteViewsProto {
  */
 message NotificationRemoteViews {
     optional NotificationRemoteViewsProto notification_remote_views = 1;
+}
+
+/**
+ * Atom that contains a list of a package's preferences, pulled from NotificationManagerService.java
+ */
+message PackageNotificationPreferences {
+    // Uid under which the package is installed.
+    optional int32 uid = 1;
+    // Notification importance, which specifies when and how a notification is displayed.
+    // Specified under core/java/android/app/NotificationManager.java.
+    optional int32 importance = 2;
+    // Lockscreen visibility as set by the user.
+    optional int32 visibility = 3;
+    // Bitfield mask indicating what fields were locked by the user (see LockableAppfields in
+    // PreferencesHelper.java)
+    optional int32 user_locked_fields = 4;
+}
+
+/**
+ * Atom that contains a list of a package's channel preferences, pulled from
+ * NotificationManagerService.java.
+ */
+message PackageNotificationChannelPreferences {
+    // Uid under which the package is installed.
+    optional int32 uid = 1;
+    // Channel's ID. Should always be available.
+    optional string channel_id = 2;
+    // Channel's name. Should always be available.
+    optional string channel_name = 3;
+    // Channel's description. Optionally set by the channel creator.
+    optional string description = 4;
+    // Notification importance, which specifies when and how a notification is displayed. Specified
+    // under core/java/android/app/NotificationManager.java.
+    optional int32 importance = 5;
+    // Bitmask representing which fields have been set by the user. See field bitmask descriptions
+    // at core/java/android/app/NotificationChannel.java
+    optional int32 user_locked_fields = 6;
+    // Indicates if the channel was deleted by the app.
+    optional bool is_deleted = 7;
+}
+
+/**
+ * Atom that contains a list of a package's channel group preferences, pulled from
+ * NotificationManagerService.java.
+ */
+message PackageNotificationChannelGroupPreferences {
+    // Uid under which the package is installed.
+    optional int32 uid = 1;
+    // Channel Group's ID. Should always be available.
+    optional string group_id = 2;
+    // Channel Group's name. Should always be available.
+    optional string group_name = 3;
+    // Channel Group's description. Optionally set by group creator.
+    optional string description = 4;
+    // Indicates if notifications from this channel group are blocked.
+    optional bool is_blocked = 5;
+    // Bitmask representing which fields have been set by the user. See field bitmask descriptions
+    // at core/java/android/app/NotificationChannelGroup.java
+    optional int32 user_locked_fields = 6;
 }
 
 message PowerProfileProto {
@@ -5994,6 +6660,16 @@ message PermissionGrantRequestResultReported {
         USER_GRANTED_ONE_TIME = 10;
         // user ignored request by leaving the request screen without choosing any option
         USER_IGNORED = 11;
+        // user granted the permission after being linked to settings
+        USER_GRANTED_IN_SETTINGS = 12;
+        // user denied the permission after being linked to settings
+        USER_DENIED_IN_SETTINGS = 13;
+        // user denied the permission with prejudice after being linked to settings
+        USER_DENIED_WITH_PREJUDICE_IN_SETTINGS = 14;
+        // permission was automatically revoked after one-time permission expired
+        AUTO_ONE_TIME_PERMISSION_REVOKED = 15;
+        // permission was automatically revoked for unused app
+        AUTO_UNUSED_APP_PERMISSION_REVOKED = 16;
     }
     // The result of the permission grant
     optional Result result = 6;
@@ -6486,11 +7162,26 @@ message MediametricsDrmManagerReported {
     optional string description = 6;
     optional Method method = 7;
     optional string mime_types = 8;
+
+    optional int64 get_constraints_count =  9;
+    optional int64 get_metadata_count = 10;
+    optional int64 can_handle_count = 11;
+    optional int64 process_drm_info_count = 12;
+    optional int64 acquire_drm_info_count = 13;
+    optional int64 save_rights_count = 14;
+    optional int64 get_original_mime_type_count = 15;
+    optional int64 get_drm_object_type_count = 16;
+    optional int64 check_rights_status_count = 17;
+    optional int64 remove_rights_count = 18;
+    optional int64 remove_all_rights_count = 19;
+    optional int64 open_convert_session_count = 20;
+    optional int64 open_decrypt_session_count = 21;
 }
 
 /**
  * State of a dangerous permission requested by a package
- */
+ * Pulled from: StatsCompanionService
+*/
 message DangerousPermissionState {
     // Name of the permission
     optional string permission_name = 1;
@@ -6522,7 +7213,8 @@ message DeviceIdentifierAccessDenied {
     optional string method_name = 2;
 
     // True if the package is preinstalled.
-    optional bool is_preinstalled = 3;
+    // Starting from Android 11, this boolean is not set and will always be false.
+    optional bool is_preinstalled = 3 [deprecated = true];
 
     // True if the package is privileged.
     // Starting from Android 11, this boolean is not set and will always be false.
@@ -6570,6 +7262,7 @@ message TrainInfo {
         INSTALL_FAILURE_DOWNLOAD = 23;
         INSTALL_FAILURE_STATE_MISMATCH = 24;
         INSTALL_FAILURE_COMMIT = 25;
+        REBOOT_TRIGGERED = 26;
     }
     optional Status status = 4;
 }
@@ -6701,6 +7394,9 @@ message GpuStatsAppInfo {
 
     // App is not doing pre-rotation correctly.
     optional bool false_prerotation = 7;
+
+    // App creates GLESv1 context.
+    optional bool gles_1_in_use = 8;
 }
 
 /*
@@ -6709,8 +7405,24 @@ message GpuStatsAppInfo {
  * Pulled from StatsCompanionService.
  */
 message SystemIonHeapSize {
+    // Deprecated due to limited support of ion stats in debugfs.
+    // Use `IonHeapSize` instead.
+    option deprecated = true;
+
     // Size of the system ion heap in bytes.
+    // Read from debugfs.
     optional int64 size_in_bytes = 1;
+}
+
+/*
+ * Logs the total size of the ion heap.
+ *
+ * Pulled from StatsCompanionService.
+ */
+message IonHeapSize {
+    // Total size of all ion heaps in kilobytes.
+    // Read from: /sys/kernel/ion/total_heaps_kb.
+    optional int32 total_size_kb = 1;
 }
 
 /*
@@ -6851,7 +7563,7 @@ message AppOps {
     // Uid of the package requesting the op
     optional int32 uid = 1 [(is_uid) = true];
 
-    // Nmae of the package performing the op
+    // Name of the package performing the op
     optional string package_name = 2;
 
     // operation id; maps to the OP_* constants in AppOpsManager.java
@@ -6883,6 +7595,51 @@ message AppOps {
 
     // Whether AppOps is guarded by Runtime permission
     optional bool is_runtime_permission = 10;
+}
+
+/**
+ * Historical app ops data per package and features.
+ */
+message AppFeaturesOps {
+    // Uid of the package requesting the op
+    optional int32 uid = 1 [(is_uid) = true];
+
+    // Name of the package performing the op
+    optional string package_name = 2;
+
+    // feature id; provided by developer when accessing related API, limited at 50 chars by API.
+    // Features must be provided through manifest using <feature> tag available in R and above.
+    optional string feature_id = 3;
+
+    // operation id; maps to the OPSTR_* constants in AppOpsManager.java
+    optional string op = 4;
+
+    // The number of times the op was granted while the app was in the
+    // foreground (only for trusted requests)
+    optional int64 trusted_foreground_granted_count = 5;
+
+    // The number of times the op was granted while the app was in the
+    // background (only for trusted requests)
+    optional int64 trusted_background_granted_count = 6;
+
+    // The number of times the op was rejected while the app was in the
+    // foreground (only for trusted requests)
+    optional int64 trusted_foreground_rejected_count = 7;
+
+    // The number of times the op was rejected while the app was in the
+    // background (only for trusted requests)
+    optional int64 trusted_background_rejected_count = 8;
+
+    // For long-running operations, total duration of the operation
+    // while the app was in the foreground (only for trusted requests)
+    optional int64 trusted_foreground_duration_millis = 9;
+
+    // For long-running operations, total duration of the operation
+    // while the app was in the background (only for trusted requests)
+    optional int64 trusted_background_duration_millis = 10;
+
+    // Whether AppOps is guarded by Runtime permission
+    optional bool is_runtime_permission = 11;
 }
 
 /**
@@ -6997,6 +7754,9 @@ message GrantPermissionsActivityButtonActions {
 
     // Button clicked by user - same as bit flags in buttons_presented with only single bit set
     optional int32 button_clicked = 5;
+
+    // id which identifies single session of user interacting with permission controller
+    optional int64 session_id = 6;
 }
 
 /**
@@ -7049,6 +7809,28 @@ message AppPermissionFragmentActionReported {
 
     // The result of the permission grant
     optional bool permission_granted = 6;
+
+    // State of Permission Flags after grant as per android.content.pm.PermissionFlags
+    optional int32 permission_flags = 7;
+
+    enum Button {
+        UNDEFINED = 0;
+        // Allow button
+        ALLOW = 1;
+        // Deny button
+        DENY = 2;
+        // Ask every time button
+        ASK_EVERY_TIME = 3;
+        // Allow all the time button
+        ALLOW_ALWAYS = 4;
+        // Allow only while using the app button
+        ALLOW_FOREGROUND = 5;
+        // Same is Deny button but shown in while in use dialog
+        DENY_FOREGROUND = 6;
+    }
+
+    // Button pressed in the dialog
+    optional Button button_pressed = 8;
 }
 
 /**
@@ -7345,6 +8127,17 @@ message UpdateEngineSuccessfulUpdateReported {
 }
 
 /**
+ * Reported when the RebootEscrow HAL has attempted to recover the escrowed
+ * key to indicate whether it was successful or not.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/locksettings/RebootEscrowManager.java
+ */
+message RebootEscrowRecoveryReported {
+    optional bool successful = 1;
+}
+
+/**
  * Global display pipeline metrics reported by SurfaceFlinger.
  * Pulled from:
  *    frameworks/native/services/surfaceflinger/TimeStats/TimeStats.cpp
@@ -7361,6 +8154,22 @@ message SurfaceflingerStatsGlobalInfo {
     // Total time that was spent performing animations.
     // This is derived from the present-to-present layer histogram
     optional int64 animation_millis = 5;
+    // Total number of event connections tracked by SurfaceFlinger at the time
+    // of this pull. If this number grows prohibitively large, then this can
+    // cause jank due to resource contention.
+    optional int32 event_connection_count = 6;
+    // Set of timings measured from when SurfaceFlinger began compositing a
+    // frame, until the frame was requested to be presented to the display. This
+    // measures SurfaceFlinger's total CPU walltime on the critical path per
+    // frame.
+    optional FrameTimingHistogram frame_duration = 7
+        [(android.os.statsd.log_mode) = MODE_BYTES];
+    // Set of timings measured from when SurfaceFlinger first began using the
+    // GPU to composite a frame, until the GPU has finished compositing that
+    // frame. This measures the total additional time SurfaceFlinger needed to
+    // perform due to falling back into GPU composition.
+    optional FrameTimingHistogram render_engine_timing = 8
+        [(android.os.statsd.log_mode) = MODE_BYTES];
 }
 
 /**
@@ -7402,6 +8211,10 @@ message SurfaceflingerStatsLayerInfo {
     // presentation, until the buffer was ready to be presented.
     optional FrameTimingHistogram post_to_acquire = 9
         [(android.os.statsd.log_mode) = MODE_BYTES];
+    // Frames missed latch because the acquire fence didn't fire
+    optional int64 late_acquire_frames = 10;
+    // Frames latched early because the desired present time was bad
+    optional int64 bad_desired_present_frames = 11;
 }
 
 /**
@@ -7419,13 +8232,29 @@ message FrameTimingHistogram {
 }
 
 /**
+ * Janky event as reported by SurfaceFlinger.
+ * This event is intended to be consumed by a Perfetto subscriber for
+ * automated trace collection.
+ *
+ * Logged from:
+ *    frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp
+ */
+message DisplayJankReported {
+    // Informational field for how long the janky event lasted in milliseconds
+    optional int64 event_duration_millis = 1;
+    // Number of frame deadlines missed, where SurfaceFlinger failed to update
+    // the display on time.
+    optional int32 present_deadlines_missed = 2;
+}
+
+/**
  * Information about camera facing and API level usage.
  * Logged from:
  *   frameworks/base/services/core/java/com/android/server/camera/CameraServiceProxy.java
  */
 message CameraActionEvent {
     // Camera session duration
-    optional int64 duration = 1;
+    optional int64 duration_millis = 1;
 
     // Camera API level used
     optional int32 api_level = 2;
@@ -7540,4 +8369,392 @@ message VmsClientStats {
     // Bytes and packets dropped due to client error
     optional int64 dropped_bytes = 9;
     optional int64 dropped_packets = 10;
+}
+
+/**
+ * State of a dangerous permission requested by a package - sampled
+ * Pulled from: StatsCompanionService.java with data obtained from PackageManager API
+*/
+message DangerousPermissionStateSampled {
+    // Name of the permission
+    optional string permission_name = 1;
+
+    // Uid of the package
+    optional int32 uid = 2 [(is_uid) = true];
+
+    // If the permission is granted to the uid
+    optional bool is_granted = 3;
+
+    // Permission flags as per android.content.pm.PermissionFlags
+    optional int32 permission_flags = 4;
+}
+
+/**
+ * HWUI stats for a given app.
+ */
+message GraphicsStats {
+    // The package name of the app
+    optional string package_name = 1;
+
+    // The version code of the app
+    optional int64 version_code = 2;
+
+    // The start & end timestamps in UTC as
+    // milliseconds since January 1, 1970
+    // Compatible with java.util.Date#setTime()
+    optional int64 start_millis = 3;
+
+    optional int64 end_millis = 4;
+
+    // HWUI renders pipeline type: GL (1) or Vulkan (2).
+    enum PipelineType {
+        UNKNOWN = 0;
+        GL = 1;
+        VULKAN = 2;
+    }
+
+    // HWUI renders pipeline type: GL or Vulkan.
+    optional PipelineType pipeline = 5;
+
+    // Distinct frame count.
+    optional int32 total_frames = 6;
+
+    // Number of "missed vsync" events.
+    optional int32 missed_vsync_count = 7;
+
+    // Number of frames in triple-buffering scenario (high input latency)
+    optional int32 high_input_latency_count = 8;
+
+    // Number of "slow UI thread" events.
+    optional int32 slow_ui_thread_count = 9;
+
+    // Number of "slow bitmap upload" events.
+    optional int32 slow_bitmap_upload_count = 10;
+
+    // Number of "slow draw" events.
+    optional int32 slow_draw_count = 11;
+
+    // Number of frames that missed their deadline (aka, visibly janked)
+    optional int32 missed_deadline_count = 12;
+
+    // The frame time histogram for the package
+    optional FrameTimingHistogram cpu_histogram = 13
+    [(android.os.statsd.log_mode) = MODE_BYTES];
+
+    // The gpu frame time histogram for the package
+    optional FrameTimingHistogram gpu_histogram = 14
+    [(android.os.statsd.log_mode) = MODE_BYTES];
+
+    // UI mainline module version.
+    optional int64 version_ui_module = 15;
+
+    // If true, these are HWUI stats for up to a 24h period for a given app from today.
+    // If false, these are HWUI stats for a 24h period for a given app from the last complete
+    // day (yesterday). Stats from yesterday stay constant, while stats from today may change as
+    // more apps are running / rendering.
+    optional bool is_today = 16;
+}
+
+/**
+ * Message related to dangerous (runtime) app ops access
+ */
+message RuntimeAppOpAccess {
+    // Uid of the package accessing app op
+    optional int32 uid = 1 [(is_uid) = true];
+
+    // Name of the package accessing app op
+    optional string package_name = 2;
+
+    // operation string id per OPSTR_ constants in AppOpsManager.java
+    optional string op = 3;
+
+    // feature id; provided by developer when accessing related API, limited at 50 chars by API.
+    // Features must be provided through manifest using <feature> tag available in R and above.
+    optional string feature_id = 4;
+
+    // message related to app op access, limited to 600 chars by API
+    optional string message = 5;
+
+    enum SamplingStrategy {
+        DEFAULT = 0;
+        UNIFORM = 1;
+        RARELY_USED = 2;
+    }
+
+    // sampling strategy used to collect this message
+    optional SamplingStrategy sampling_strategy = 6;
+}
+
+/*
+ * Logs userspace reboot outcome and duration.
+ *
+ * Logged from:
+ *   frameworks/base/core/java/com/android/server/BootReceiver.java
+ */
+message UserspaceRebootReported {
+    // Possible outcomes of userspace reboot.
+    enum Outcome {
+        // Default value in case platform failed to determine the outcome.
+        OUTCOME_UNKNOWN = 0;
+        // Userspace reboot succeeded (i.e. boot completed without a fall back to hard reboot).
+        SUCCESS = 1;
+        // Userspace reboot shutdown sequence was aborted.
+        FAILED_SHUTDOWN_SEQUENCE_ABORTED = 2;
+        // Remounting userdata into checkpointing mode failed.
+        FAILED_USERDATA_REMOUNT = 3;
+        // Device didn't finish booting before timeout and userspace reboot watchdog issued a hard
+        // reboot.
+        FAILED_USERSPACE_REBOOT_WATCHDOG_TRIGGERED = 4;
+    }
+    // Outcome of userspace reboot. Always set.
+    optional Outcome outcome = 1;
+    // Duration of userspace reboot in case it has a successful outcome.
+    // Duration is measured as time between userspace reboot was initiated and until boot completed
+    // (e.g. sys.boot_completed=1).
+    optional int64 duration_millis = 2;
+    // State of primary user's (user0) credential encryption storage.
+    enum UserEncryptionState {
+        // Default value.
+        USER_ENCRYPTION_STATE_UNKNOWN = 0;
+        // Credential encrypted storage is unlocked.
+        UNLOCKED = 1;
+        // Credential encrypted storage is locked.
+        LOCKED = 2;
+    }
+    // State of primary user's encryption storage at the moment boot completed. Always set.
+    optional UserEncryptionState user_encryption_state = 3;
+}
+
+/*
+ * Logs integrity check information during each install.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/integrity/AppIntegrityManagerServiceImpl.java
+ */
+message IntegrityCheckResultReported {
+    optional string package_name = 1;
+    optional string app_certificate_hash = 2;
+    optional int64 version_code = 3;
+    optional string installer_package_name = 4;
+    enum Response {
+        UNKNOWN = 0;
+        ALLOWED = 1;
+        REJECTED = 2;
+        FORCE_ALLOWED = 3;
+    }
+    optional Response response = 5;
+    // An estimate on the cause of the response. This will only be populated for
+    // REJECTED and FORCE_ALLOWED
+    optional bool caused_by_app_cert_rule = 6;
+    optional bool caused_by_installer_rule = 7;
+}
+
+/**
+ * Logs the information about the rules and the provider whenever rules are
+ * pushed into AppIntegrityManager.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/integrity/AppIntegrityManagerServiceImpl.java
+ */
+message IntegrityRulesPushed {
+    optional bool success = 1;
+    // Package name of the app that pushed the rules.
+    optional string rule_provider = 2;
+    // Version string of arbitrary format provided by the rule provider to
+    // identify the rules.
+    optional string rule_version = 3;
+}
+
+/**
+ * Logs when a cell broadcast message is received on the device.
+ *
+ * Logged from CellBroadcastService module:
+ *   packages/modules/CellBroadcastService/src/com/android/cellbroadcastservice/
+ */
+message CellBroadcastMessageReported {
+    // The type of Cell Broadcast message
+    enum CbType {
+        UNKNOWN_TYPE = 0;
+        GSM = 1;
+        CDMA = 2;
+        CDMA_SPC = 3;
+    }
+
+    // GSM, CDMA, CDMA-SCP
+    optional CbType type = 1;
+}
+
+/**
+ * Logs when an error occurs while handling a cell broadcast message;
+ *
+ * Logged from CellBroadcastService module:
+ *   packages/modules/CellBroadcastService/src/com/android/cellbroadcastservice/
+ */
+message CellBroadcastMessageError {
+    // The type of error raised when trying to handle a cell broadcast message
+    enum ErrorType {
+        UNKNOWN_TYPE = 0;
+        CDMA_DECODING_ERROR = 1;
+        CDMA_SCP_EMPTY = 2;
+        CDMA_SCP_HANDLING_ERROR = 3;
+        GSM_INVALID_HEADER_LENGTH = 4;
+        GSM_UNSUPPORTED_HEADER_MESSAGE_TYPE = 5;
+        GSM_UNSUPPORTED_HEADER_DATA_CODING_SCHEME = 6;
+        GSM_INVALID_PDU = 7;
+        GSM_INVALID_GEO_FENCING_DATA = 8;
+        GSM_UMTS_INVALID_WAC = 9;
+        FAILED_TO_INSERT_TO_DB = 10;
+        UNEXPECTED_GEOMETRY_FROM_FWK = 11;
+        UNEXPECTED_GSM_MESSAGE_TYPE_FROM_FWK = 12;
+        UNEXPECTED_CDMA_MESSAGE_TYPE_FROM_FWK = 13;
+        UNEXPECTED_CDMA_SCP_MESSAGE_TYPE_FROM_FWK = 14;
+    }
+
+    // What kind of error occurred
+    optional ErrorType type = 1;
+
+    // Exception message (or log message) associated with the error (max 1000 chars)
+    optional string exception_message = 2;
+}
+
+/**
+ * Logs when the SDK Extensions test app has polled the current version.
+ * This is atom ID 354.
+ *
+ * Logged from:
+ *   vendor/google_testing/integration/packages/apps/SdkExtensionsTestApp/
+ */
+message SdkExtensionStatus {
+    enum ApiCallStatus {
+        CALL_NOT_ATTEMPTED = 0;
+        CALL_SUCCESSFUL = 1;
+        CALL_FAILED = 2;
+    }
+
+    optional ApiCallStatus result = 1;
+
+    // The R extension version, i.e. android.os.ext.SdkExtension.getExtensionVersion(R).
+    optional int32 r_extension_version = 2;
+
+    // A number identifying which particular symbol's call failed, if any. 0 means no missing symbol.
+    // "Failed" here can mean a symbol that wasn't meant to be visible was, or the other way around.
+    optional int32 failed_call_symbol = 3;
+}
+
+/**
+ * Logs when an app is frozen or unfrozen.
+ *
+ * Logged from:
+ *   frameworks/base/services/core/java/com/android/server/am/CachedAppOptimizer.java
+ */
+message AppFreezeChanged {
+    // The type of event.
+    enum Action {
+        UNKNOWN = 0;
+        FREEZE_APP = 1;
+        UNFREEZE_APP = 2;
+    }
+    optional Action action = 1;
+
+    // Pid of the process being frozen.
+    optional int32 pid = 2;
+
+    // Name of the process being frozen.
+    optional string process_name = 3;
+
+    // Time since last unfrozen.
+    optional int64 time_unfrozen_millis = 4;
+}
+
+/**
+ * Logs gnss stats from location service provider
+ *
+ * Pulled from:
+ *  frameworks/base/location/java/com/android/internal/location/gnssmetrics/GnssMetrics.java
+ */
+
+message GnssStats {
+    // Number of location reports since boot
+    optional int64 location_reports = 1;
+
+    // Total pulled reports of Location failures since boot
+    optional int64 location_failure_reports = 2;
+
+    // Number of time to first fix reports since boot
+    optional int64 time_to_first_fix_reports = 3;
+
+    // Total pulled reported time to first fix (in milli-seconds) since boot
+    optional int64 time_to_first_fix_milli_s = 4;
+
+    // Number of position accuracy reports since boot
+    optional int64 position_accuracy_reports = 5;
+
+    // Total pulled reported position accuracy (in meters) since boot
+    optional int64 position_accuracy_meters = 6;
+
+    // Number of top 4 average CN0 reports since boot
+    optional int64 top_four_average_cn0_reports = 7;
+
+    // Total pulled reported of top 4 average CN0 (dB-mHz) since boot
+    optional int64 top_four_average_cn0_db_mhz = 8;
+
+    // Number of l5 top 4 average CN0 reports since boot
+    optional int64 l5_top_four_average_cn0_reports = 9;
+
+    // Total pulled reported of l5 top 4 average CN0 (dB-mHz) since boot
+    optional int64 l5_top_four_average_cn0_db_mhz = 10;
+
+    // Total number of sv status messages reports since boot
+    optional int64 sv_status_reports = 11;
+
+    // Total number of sv status messages reports, where sv is used in fix since boot
+    optional int64 sv_status_reports_used_in_fix = 12;
+
+    // Total number of L5 sv status messages reports since boot
+    optional int64 l5_sv_status_reports = 13;
+
+    // Total number of L5 sv status messages reports, where sv is used in fix since boot
+    optional int64 l5_sv_status_reports_used_in_fix = 14;
+}
+
+/**
+ * Logs when an app is moved to a different standby bucket.
+ *
+ * Logged from:
+ *   frameworks/base/apex/jobscheduler/service/java/com/android/server/usage/AppIdleHistory.java
+ */
+message AppStandbyBucketChanged {
+    optional string package_name = 1;
+
+    // Should be 0, 10, 11, 12, etc. where 0 is the owner. See UserHandle for more documentation.
+    optional int32 user_id = 2;
+
+    // These enum values match the constants defined in UsageStatsManager.java.
+    enum Bucket {
+        BUCKET_UNKNOWN = 0;
+        BUCKET_EXEMPTED = 5;
+        BUCKET_ACTIVE = 10;
+        BUCKET_WORKING_SET = 20;
+        BUCKET_FREQUENT = 30;
+        BUCKET_RARE = 40;
+        BUCKET_RESTRICTED = 45;
+        BUCKET_NEVER = 50;
+    }
+    optional Bucket bucket = 3;
+
+    enum MainReason {
+        MAIN_UNKNOWN = 0;
+        MAIN_DEFAULT = 0x0100;
+        MAIN_TIMEOUT = 0x0200;
+        MAIN_USAGE = 0x0300;
+        MAIN_FORCED_BY_USER = 0x0400;
+        MAIN_PREDICTED = 0x0500;
+        MAIN_FORCED_BY_SYSTEM = 0x0600;
+    }
+    optional MainReason main_reason = 4;
+
+    // A more detailed reason for the standby bucket change. The sub reason name is dependent on
+    // the main reason. Values are one of the REASON_SUB_XXX constants defined in
+    // UsageStatsManager.java.
+    optional int32 sub_reason = 5;
 }

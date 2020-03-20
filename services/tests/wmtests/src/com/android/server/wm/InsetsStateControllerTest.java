@@ -20,6 +20,7 @@ import static android.view.InsetsState.ITYPE_IME;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_FULL;
+import static android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION;
 
 import static org.junit.Assert.assertEquals;
@@ -27,6 +28,7 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
+import android.graphics.Rect;
 import android.platform.test.annotations.Presubmit;
 import android.view.InsetsSource;
 import android.view.InsetsSourceControl;
@@ -65,7 +67,7 @@ public class InsetsStateControllerTest extends WindowTestsBase {
     public void testStripForDispatch_notOwn() {
         final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null);
+        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null, null);
         statusBar.setControllableInsetProvider(getController().getSourceProvider(ITYPE_STATUS_BAR));
         assertNotNull(getController().getInsetsForDispatch(app).getSource(ITYPE_STATUS_BAR));
     }
@@ -74,7 +76,7 @@ public class InsetsStateControllerTest extends WindowTestsBase {
     public void testStripForDispatch_own() {
         final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
         mDisplayContent.getInsetsStateController().getSourceProvider(ITYPE_STATUS_BAR)
-                .setWindow(statusBar, null);
+                .setWindow(statusBar, null, null);
         statusBar.setControllableInsetProvider(getController().getSourceProvider(ITYPE_STATUS_BAR));
         final InsetsState state = getController().getInsetsForDispatch(statusBar);
         for (int i = state.getSourcesCount() - 1; i >= 0; i--) {
@@ -88,10 +90,35 @@ public class InsetsStateControllerTest extends WindowTestsBase {
         final WindowState navBar = createWindow(null, TYPE_APPLICATION, "navBar");
         final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
         final WindowState ime = createWindow(null, TYPE_APPLICATION, "ime");
-        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null);
-        getController().getSourceProvider(ITYPE_NAVIGATION_BAR).setWindow(navBar, null);
-        getController().getSourceProvider(ITYPE_IME).setWindow(ime, null);
+
+        // IME cannot be the IME target.
+        ime.mAttrs.flags |= FLAG_NOT_FOCUSABLE;
+
+        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null, null);
+        getController().getSourceProvider(ITYPE_NAVIGATION_BAR).setWindow(navBar, null, null);
+        getController().getSourceProvider(ITYPE_IME).setWindow(ime, null, null);
         assertEquals(0, getController().getInsetsForDispatch(navBar).getSourcesCount());
+    }
+
+    @Test
+    public void testImeForDispatch() {
+        final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
+        final WindowState ime = createWindow(null, TYPE_APPLICATION, "ime");
+
+        // IME cannot be the IME target.
+        ime.mAttrs.flags |= FLAG_NOT_FOCUSABLE;
+
+        InsetsSourceProvider statusBarProvider =
+                getController().getSourceProvider(ITYPE_STATUS_BAR);
+        statusBarProvider.setWindow(statusBar, null, ((displayFrames, windowState, rect) ->
+                        rect.set(0, 1, 2, 3)));
+        getController().getSourceProvider(ITYPE_IME).setWindow(ime, null, null);
+        statusBar.setControllableInsetProvider(statusBarProvider);
+
+        statusBarProvider.onPostLayout();
+
+        final InsetsState state = getController().getInsetsForDispatch(ime);
+        assertEquals(new Rect(0, 1, 2, 3), state.getSource(ITYPE_STATUS_BAR).getFrame());
     }
 
     @Test
@@ -99,8 +126,8 @@ public class InsetsStateControllerTest extends WindowTestsBase {
         final WindowState navBar = createWindow(null, TYPE_APPLICATION, "navBar");
         final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null);
-        getController().getSourceProvider(ITYPE_NAVIGATION_BAR).setWindow(navBar, null);
+        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null, null);
+        getController().getSourceProvider(ITYPE_NAVIGATION_BAR).setWindow(navBar, null, null);
         getController().onBarControlTargetChanged(app, null, app, null);
         InsetsSourceControl[] controls = getController().getControlsForDispatch(app);
         assertEquals(2, controls.length);
@@ -110,7 +137,7 @@ public class InsetsStateControllerTest extends WindowTestsBase {
     public void testControlRevoked() {
         final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null);
+        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null, null);
         getController().onBarControlTargetChanged(app, null, null, null);
         assertNotNull(getController().getControlsForDispatch(app));
         getController().onBarControlTargetChanged(null, null, null, null);
@@ -122,7 +149,7 @@ public class InsetsStateControllerTest extends WindowTestsBase {
     public void testControlRevoked_animation() {
         final WindowState statusBar = createWindow(null, TYPE_APPLICATION, "statusBar");
         final WindowState app = createWindow(null, TYPE_APPLICATION, "app");
-        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null);
+        getController().getSourceProvider(ITYPE_STATUS_BAR).setWindow(statusBar, null, null);
         getController().onBarControlTargetChanged(app, null, null, null);
         assertNotNull(getController().getControlsForDispatch(app));
         statusBar.cancelAnimation();

@@ -23,6 +23,7 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
+import android.database.DatabaseUtils;
 import android.database.MatrixCursor;
 import android.database.MatrixCursor.RowBuilder;
 import android.graphics.Point;
@@ -38,6 +39,7 @@ import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 import android.provider.DocumentsProvider;
 import android.provider.MediaStore;
+import android.provider.MediaStore.Files.FileColumns;
 import android.provider.MetadataReader;
 import android.system.Int64Ref;
 import android.text.TextUtils;
@@ -66,6 +68,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
 
 /**
  * A helper class for {@link android.provider.DocumentsProvider} to perform file operations on local
@@ -259,7 +262,7 @@ public abstract class FileSystemProvider extends DocumentsProvider {
                 throw new IllegalStateException("Failed to touch " + file + ": " + e);
             }
         }
-        MediaStore.scanFile(getContext(), file);
+        MediaStore.scanFile(getContext().getContentResolver(), file);
 
         return childId;
     }
@@ -316,10 +319,10 @@ public abstract class FileSystemProvider extends DocumentsProvider {
 
     private void moveInMediaStore(@Nullable File oldVisibleFile, @Nullable File newVisibleFile) {
         if (oldVisibleFile != null) {
-            MediaStore.scanFile(getContext(), oldVisibleFile);
+            MediaStore.scanFile(getContext().getContentResolver(), oldVisibleFile);
         }
         if (newVisibleFile != null) {
-            MediaStore.scanFile(getContext(), newVisibleFile);
+            MediaStore.scanFile(getContext().getContentResolver(), newVisibleFile);
         }
     }
 
@@ -332,15 +335,17 @@ public abstract class FileSystemProvider extends DocumentsProvider {
         if (isDirectory) {
             FileUtils.deleteContents(file);
         }
-        if (!file.delete()) {
+        // We could be deleting pending media which doesn't have any content yet, so only throw
+        // if the file exists and we fail to delete it.
+        if (file.exists() && !file.delete()) {
             throw new IllegalStateException("Failed to delete " + file);
         }
 
         onDocIdChanged(docId);
-        removeFromMediaStore(visibleFile, isDirectory);
+        removeFromMediaStore(visibleFile);
     }
 
-    private void removeFromMediaStore(@Nullable File visibleFile, boolean isFolder)
+    private void removeFromMediaStore(@Nullable File visibleFile)
             throws FileNotFoundException {
         // visibleFolder is null if we're removing a document from external thumb drive or SD card.
         if (visibleFile != null) {
@@ -349,21 +354,19 @@ public abstract class FileSystemProvider extends DocumentsProvider {
             try {
                 final ContentResolver resolver = getContext().getContentResolver();
                 final Uri externalUri = MediaStore.Files.getContentUri("external");
+                final Bundle queryArgs = new Bundle();
+                queryArgs.putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE);
 
-                // Remove media store entries for any files inside this directory, using
-                // path prefix match. Logic borrowed from MtpDatabase.
-                if (isFolder) {
-                    final String path = visibleFile.getAbsolutePath() + "/";
-                    resolver.delete(externalUri,
-                            "_data LIKE ?1 AND lower(substr(_data,1,?2))=lower(?3)",
-                            new String[]{path + "%", Integer.toString(path.length()), path});
-                }
-
-                // Remove media store entry for this exact file.
-                final String path = visibleFile.getAbsolutePath();
-                resolver.delete(externalUri,
-                        "_data LIKE ?1 AND lower(_data)=lower(?2)",
-                        new String[]{path, path});
+                // Remove the media store entry corresponding to visibleFile and if it is a
+                // directory, also remove media store entries for any files inside this directory.
+                // Logic borrowed from com.android.providers.media.scan.ModernMediaScanner.
+                final String pathEscapedForLike = DatabaseUtils.escapeForLike(
+                        visibleFile.getAbsolutePath());
+                ContentResolver.includeSqlSelectionArgs(queryArgs,
+                        FileColumns.DATA + " LIKE ? ESCAPE '\\' OR "
+                                + FileColumns.DATA + " LIKE ? ESCAPE '\\'",
+                        new String[] {pathEscapedForLike + "/%", pathEscapedForLike});
+                resolver.delete(externalUri, queryArgs);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -388,7 +391,9 @@ public abstract class FileSystemProvider extends DocumentsProvider {
                 resolveProjection(projection), parentDocumentId, parent);
         if (parent.isDirectory()) {
             for (File file : FileUtils.listFilesOrEmpty(parent)) {
-                includeFile(result, null, file);
+                if (!shouldHide(file)) {
+                    includeFile(result, null, file);
+                }
             }
         } else {
             Log.w(TAG, "parentDocumentId '" + parentDocumentId + "' is not Directory");
@@ -422,6 +427,8 @@ public abstract class FileSystemProvider extends DocumentsProvider {
         pending.add(folder);
         while (!pending.isEmpty() && result.getCount() < 24) {
             final File file = pending.removeFirst();
+            if (shouldHide(file)) continue;
+
             if (file.isDirectory()) {
                 for (File child : file.listFiles()) {
                     pending.add(child);
@@ -540,6 +547,7 @@ public abstract class FileSystemProvider extends DocumentsProvider {
         } else {
             file = getFileForDocId(docId);
         }
+
         final String mimeType = getDocumentType(docId, file);
         row.add(Document.COLUMN_DOCUMENT_ID, docId);
         row.add(Document.COLUMN_MIME_TYPE, mimeType);
@@ -555,7 +563,7 @@ public abstract class FileSystemProvider extends DocumentsProvider {
                     flags |= Document.FLAG_SUPPORTS_MOVE;
 
                     if (shouldBlockFromTree(docId)) {
-                        flags |= Document.FLAG_DIR_BLOCKS_TREE;
+                        flags |= Document.FLAG_DIR_BLOCKS_OPEN_DOCUMENT_TREE;
                     }
 
                 } else {
@@ -596,6 +604,17 @@ public abstract class FileSystemProvider extends DocumentsProvider {
 
         // Return the row builder just in case any subclass want to add more stuff to it.
         return row;
+    }
+
+    private static final Pattern PATTERN_HIDDEN_PATH = Pattern.compile(
+            "(?i)^/storage/[^/]+/(?:[0-9]+/)?Android/(?:data|obb|sandbox)$");
+
+    /**
+     * In a scoped storage world, access to "Android/data" style directories are
+     * hidden for privacy reasons.
+     */
+    protected boolean shouldHide(@NonNull File file) {
+        return (PATTERN_HIDDEN_PATH.matcher(file.getAbsolutePath()).matches());
     }
 
     protected boolean shouldBlockFromTree(@NonNull String docId) {

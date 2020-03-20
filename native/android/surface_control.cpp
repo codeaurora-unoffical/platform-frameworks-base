@@ -294,7 +294,7 @@ void ASurfaceTransaction_setOnComplete(ASurfaceTransaction* aSurfaceTransaction,
 
         auto& aSurfaceControlStats = aSurfaceTransactionStats.aSurfaceControlStats;
 
-        for (const auto& [surfaceControl, acquireTime, previousReleaseFence, transformHint] : surfaceControlStats) {
+        for (const auto& [surfaceControl, latchTime, acquireTime, presentFence, previousReleaseFence, transformHint, frameEvents] : surfaceControlStats) {
             ASurfaceControl* aSurfaceControl = reinterpret_cast<ASurfaceControl*>(surfaceControl.get());
             aSurfaceControlStats[aSurfaceControl].acquireTime = acquireTime;
             aSurfaceControlStats[aSurfaceControl].previousReleaseFence = previousReleaseFence;
@@ -544,4 +544,14 @@ void ASurfaceTransaction_setColor(ASurfaceTransaction* aSurfaceTransaction,
     color.b = b;
 
     transaction->setBackgroundColor(surfaceControl, color, alpha, static_cast<ui::Dataspace>(dataspace));
+}
+
+void ASurfaceTransaction_setFrameRate(ASurfaceTransaction* aSurfaceTransaction,
+                                      ASurfaceControl* aSurfaceControl, float frameRate,
+                                      int8_t compatibility) {
+    CHECK_NOT_NULL(aSurfaceTransaction);
+    CHECK_NOT_NULL(aSurfaceControl);
+    Transaction* transaction = ASurfaceTransaction_to_Transaction(aSurfaceTransaction);
+    sp<SurfaceControl> surfaceControl = ASurfaceControl_to_SurfaceControl(aSurfaceControl);
+    transaction->setFrameRate(surfaceControl, frameRate, compatibility);
 }

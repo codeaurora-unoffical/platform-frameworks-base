@@ -40,18 +40,20 @@ AtomDecl::AtomDecl()
 {
 }
 
-AtomDecl::AtomDecl(const AtomDecl& that)
-    : code(that.code),
-      name(that.name),
-      message(that.message),
-      fields(that.fields),
-      primaryFields(that.primaryFields),
-      exclusiveField(that.exclusiveField),
-      uidField(that.uidField),
-      whitelisted(that.whitelisted),
-      binaryFields(that.binaryFields),
-      hasModule(that.hasModule),
-      moduleName(that.moduleName) {}
+AtomDecl::AtomDecl(const AtomDecl &that)
+      : code(that.code),
+        name(that.name),
+        message(that.message),
+        fields(that.fields),
+        primaryFields(that.primaryFields),
+        exclusiveField(that.exclusiveField),
+        defaultState(that.defaultState),
+        resetState(that.resetState),
+        nested(that.nested),
+        uidField(that.uidField),
+        whitelisted(that.whitelisted),
+        binaryFields(that.binaryFields),
+        moduleNames(that.moduleNames) {}
 
 AtomDecl::AtomDecl(int c, const string& n, const string& m)
     :code(c),
@@ -234,6 +236,16 @@ int collate_atom(const Descriptor *atom, AtomDecl *atomDecl,
         errorCount++;
         continue;
     }
+
+    if (field->is_repeated() &&
+        !(javaType == JAVA_TYPE_ATTRIBUTION_CHAIN || javaType == JAVA_TYPE_KEY_VALUE_PAIR)) {
+        print_error(field,
+                    "Repeated fields are not supported in atoms. Please make field %s not "
+                    "repeated.\n",
+                    field->name().c_str());
+        errorCount++;
+        continue;
+    }
   }
 
   // Check that if there's an attribution chain, it's at position 1.
@@ -281,7 +293,7 @@ int collate_atom(const Descriptor *atom, AtomDecl *atomDecl,
     atomDecl->fields.push_back(atField);
 
     if (field->options().GetExtension(os::statsd::state_field_option).option() ==
-        os::statsd::StateField::PRIMARY) {
+        os::statsd::StateField::PRIMARY_FIELD) {
         if (javaType == JAVA_TYPE_UNKNOWN ||
             javaType == JAVA_TYPE_ATTRIBUTION_CHAIN ||
             javaType == JAVA_TYPE_OBJECT || javaType == JAVA_TYPE_BYTE_ARRAY) {
@@ -291,7 +303,16 @@ int collate_atom(const Descriptor *atom, AtomDecl *atomDecl,
     }
 
     if (field->options().GetExtension(os::statsd::state_field_option).option() ==
-        os::statsd::StateField::EXCLUSIVE) {
+        os::statsd::StateField::PRIMARY_FIELD_FIRST_UID) {
+        if (javaType != JAVA_TYPE_ATTRIBUTION_CHAIN) {
+            errorCount++;
+        } else {
+            atomDecl->primaryFields.push_back(FIRST_UID_IN_CHAIN_ID);
+        }
+    }
+
+    if (field->options().GetExtension(os::statsd::state_field_option).option() ==
+        os::statsd::StateField::EXCLUSIVE_STATE) {
         if (javaType == JAVA_TYPE_UNKNOWN ||
             javaType == JAVA_TYPE_ATTRIBUTION_CHAIN ||
             javaType == JAVA_TYPE_OBJECT || javaType == JAVA_TYPE_BYTE_ARRAY) {
@@ -303,6 +324,21 @@ int collate_atom(const Descriptor *atom, AtomDecl *atomDecl,
         } else {
             errorCount++;
         }
+
+        if (field->options()
+                    .GetExtension(os::statsd::state_field_option)
+                    .has_default_state_value()) {
+            atomDecl->defaultState = field->options()
+                                             .GetExtension(os::statsd::state_field_option)
+                                             .default_state_value();
+        }
+
+        if (field->options().GetExtension(os::statsd::state_field_option).has_reset_state_value()) {
+            atomDecl->resetState = field->options()
+                                           .GetExtension(os::statsd::state_field_option)
+                                           .reset_state_value();
+        }
+        atomDecl->nested = field->options().GetExtension(os::statsd::state_field_option).nested();
     }
 
     if (field->options().GetExtension(os::statsd::is_uid) == true) {
@@ -379,6 +415,7 @@ int collate_atoms(const Descriptor *descriptor, Atoms *atoms) {
   int errorCount = 0;
   const bool dbg = false;
 
+  int maxPushedAtomId = 2;
   for (int i = 0; i < descriptor->field_count(); i++) {
     const FieldDescriptor *atomField = descriptor->field(i);
 
@@ -404,9 +441,9 @@ int collate_atoms(const Descriptor *descriptor, Atoms *atoms) {
         atomDecl.whitelisted = true;
     }
 
-    if (atomField->options().HasExtension(os::statsd::log_from_module)) {
-        atomDecl.hasModule = true;
-        atomDecl.moduleName = atomField->options().GetExtension(os::statsd::log_from_module);
+    for (int j = 0; j < atomField->options().ExtensionSize(os::statsd::module); ++j) {
+        const string moduleName = atomField->options().GetExtension(os::statsd::module, j);
+        atomDecl.moduleNames.insert(moduleName);
     }
 
     vector<java_type_t> signature;
@@ -415,39 +452,24 @@ int collate_atoms(const Descriptor *descriptor, Atoms *atoms) {
         errorCount++;
     }
 
-    // Add the signature if does not already exist.
-    auto signature_to_modules_it = atoms->signatures_to_modules.find(signature);
-    if (signature_to_modules_it == atoms->signatures_to_modules.end()) {
-        set<string> modules;
-        if (atomDecl.hasModule) {
-            modules.insert(atomDecl.moduleName);
-        }
-        atoms->signatures_to_modules[signature] = modules;
-    } else {
-        if (atomDecl.hasModule) {
-            signature_to_modules_it->second.insert(atomDecl.moduleName);
-        }
-    }
+    atoms->signatures_to_modules[signature].insert(
+            atomDecl.moduleNames.begin(), atomDecl.moduleNames.end());
     atoms->decls.insert(atomDecl);
 
     AtomDecl nonChainedAtomDecl(atomField->number(), atomField->name(), atom->name());
     vector<java_type_t> nonChainedSignature;
     if (get_non_chained_node(atom, &nonChainedAtomDecl, &nonChainedSignature)) {
-        auto it = atoms->non_chained_signatures_to_modules.find(signature);
-        if (it == atoms->non_chained_signatures_to_modules.end()) {
-            set<string> modules_non_chained;
-            if (atomDecl.hasModule) {
-                modules_non_chained.insert(atomDecl.moduleName);
-            }
-            atoms->non_chained_signatures_to_modules[nonChainedSignature] = modules_non_chained;
-        } else {
-            if (atomDecl.hasModule) {
-                it->second.insert(atomDecl.moduleName);
-            }
-        }
+        atoms->non_chained_signatures_to_modules[nonChainedSignature].insert(
+            atomDecl.moduleNames.begin(), atomDecl.moduleNames.end());
         atoms->non_chained_decls.insert(nonChainedAtomDecl);
     }
+
+    if (atomDecl.code < PULL_ATOM_START_ID && atomDecl.code > maxPushedAtomId) {
+        maxPushedAtomId = atomDecl.code;
+    }
   }
+
+  atoms->maxPushedAtomId = maxPushedAtomId;
 
   if (dbg) {
     printf("signatures = [\n");

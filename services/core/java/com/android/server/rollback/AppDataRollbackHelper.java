@@ -16,6 +16,7 @@
 
 package com.android.server.rollback;
 
+import android.content.pm.PackageManager;
 import android.content.rollback.PackageRollbackInfo;
 import android.content.rollback.PackageRollbackInfo.RestoreInfo;
 import android.os.storage.StorageManager;
@@ -25,6 +26,7 @@ import android.util.SparseLongArray;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.server.pm.ApexManager;
 import com.android.server.pm.Installer;
 import com.android.server.pm.Installer.InstallerException;
 
@@ -41,9 +43,17 @@ public class AppDataRollbackHelper {
     private static final String TAG = "RollbackManager";
 
     private final Installer mInstaller;
+    private final ApexManager mApexManager;
 
     public AppDataRollbackHelper(Installer installer) {
         mInstaller = installer;
+        mApexManager = ApexManager.getInstance();
+    }
+
+    @VisibleForTesting
+    AppDataRollbackHelper(Installer installer, ApexManager apexManager) {
+        mInstaller = installer;
+        mApexManager = apexManager;
     }
 
     /**
@@ -54,7 +64,7 @@ public class AppDataRollbackHelper {
     @GuardedBy("rollback.mLock")
     // TODO(b/136241838): Move into Rollback and synchronize there.
     public void snapshotAppData(
-            int snapshotId, PackageRollbackInfo packageRollbackInfo, int[] userIds) {
+            int rollbackId, PackageRollbackInfo packageRollbackInfo, int[] userIds) {
         for (int user : userIds) {
             final int storageFlags;
             if (isUserCredentialLocked(user)) {
@@ -67,16 +77,7 @@ public class AppDataRollbackHelper {
                 storageFlags = Installer.FLAG_STORAGE_CE | Installer.FLAG_STORAGE_DE;
             }
 
-            try {
-                long ceSnapshotInode = mInstaller.snapshotAppData(
-                        packageRollbackInfo.getPackageName(), user, snapshotId, storageFlags);
-                if ((storageFlags & Installer.FLAG_STORAGE_CE) != 0) {
-                    packageRollbackInfo.putCeSnapshotInode(user, ceSnapshotInode);
-                }
-            } catch (InstallerException ie) {
-                Slog.e(TAG, "Unable to create app data snapshot for: "
-                        + packageRollbackInfo.getPackageName() + ", userId: " + user, ie);
-            }
+            doSnapshot(packageRollbackInfo, user, rollbackId, storageFlags);
         }
     }
 
@@ -118,15 +119,82 @@ public class AppDataRollbackHelper {
             }
         }
 
-        try {
-            mInstaller.restoreAppDataSnapshot(packageRollbackInfo.getPackageName(), appId, seInfo,
-                    userId, rollbackId, storageFlags);
-        } catch (InstallerException ie) {
-            Slog.e(TAG, "Unable to restore app data snapshot: "
-                        + packageRollbackInfo.getPackageName(), ie);
-        }
+        doRestoreOrWipe(packageRollbackInfo, userId, rollbackId, appId, seInfo, storageFlags);
 
         return changedRollback;
+    }
+
+    private boolean doSnapshot(
+            PackageRollbackInfo packageRollbackInfo, int userId, int rollbackId, int flags) {
+        if (packageRollbackInfo.isApex()) {
+            // For APEX, only snapshot CE here
+            if ((flags & Installer.FLAG_STORAGE_CE) != 0) {
+                long ceSnapshotInode = mApexManager.snapshotCeData(
+                        userId, rollbackId, packageRollbackInfo.getPackageName());
+                if (ceSnapshotInode > 0) {
+                    packageRollbackInfo.putCeSnapshotInode(userId, ceSnapshotInode);
+                } else {
+                    return false;
+                }
+            }
+        } else {
+            // APK
+            try {
+                long ceSnapshotInode = mInstaller.snapshotAppData(
+                        packageRollbackInfo.getPackageName(), userId, rollbackId, flags);
+                if ((flags & Installer.FLAG_STORAGE_CE) != 0) {
+                    packageRollbackInfo.putCeSnapshotInode(userId, ceSnapshotInode);
+                }
+            } catch (InstallerException ie) {
+                Slog.e(TAG, "Unable to create app data snapshot for: "
+                        + packageRollbackInfo.getPackageName() + ", userId: " + userId, ie);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean doRestoreOrWipe(PackageRollbackInfo packageRollbackInfo, int userId,
+            int rollbackId, int appId, String seInfo, int flags) {
+        if (packageRollbackInfo.isApex()) {
+            switch (packageRollbackInfo.getRollbackDataPolicy()) {
+                case PackageManager.RollbackDataPolicy.WIPE:
+                    // TODO: Implement WIPE for apex CE data
+                    break;
+                case PackageManager.RollbackDataPolicy.RESTORE:
+                    // For APEX, only restore of CE may be done here.
+                    if ((flags & Installer.FLAG_STORAGE_CE) != 0) {
+                        mApexManager.restoreCeData(
+                                userId, rollbackId, packageRollbackInfo.getPackageName());
+                    }
+                    break;
+                default:
+                    break;
+            }
+        } else {
+            // APK
+            try {
+                switch (packageRollbackInfo.getRollbackDataPolicy()) {
+                    case PackageManager.RollbackDataPolicy.WIPE:
+                        mInstaller.clearAppData(null, packageRollbackInfo.getPackageName(),
+                                userId, flags, 0);
+                        break;
+                    case PackageManager.RollbackDataPolicy.RESTORE:
+
+                        mInstaller.restoreAppDataSnapshot(packageRollbackInfo.getPackageName(),
+                                appId, seInfo, userId, rollbackId, flags);
+                        break;
+                    default:
+                        break;
+                }
+            } catch (InstallerException ie) {
+                Slog.e(TAG, "Unable to restore/wipe app data: "
+                        + packageRollbackInfo.getPackageName() + " policy="
+                        + packageRollbackInfo.getRollbackDataPolicy(), ie);
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -153,6 +221,13 @@ public class AppDataRollbackHelper {
             Slog.e(TAG, "Unable to delete app data snapshot for "
                         + packageRollbackInfo.getPackageName(), ie);
         }
+    }
+
+    /**
+     * Deletes all device-encrypted apex data snapshots for the given rollback id.
+     */
+    public void destroyApexDeSnapshots(int rollbackId) {
+        mApexManager.destroyDeSnapshots(rollbackId);
     }
 
     /**
@@ -192,29 +267,15 @@ public class AppDataRollbackHelper {
 
             if (hasPendingBackup) {
                 int idx = pendingBackupUsers.indexOf(userId);
-                try {
-                    long ceSnapshotInode = mInstaller.snapshotAppData(info.getPackageName(),
-                            userId, rollback.info.getRollbackId(),
-                            Installer.FLAG_STORAGE_CE);
-                    info.putCeSnapshotInode(userId, ceSnapshotInode);
+                if (doSnapshot(
+                        info, userId, rollback.info.getRollbackId(), Installer.FLAG_STORAGE_CE)) {
                     pendingBackupUsers.remove(idx);
-                } catch (InstallerException ie) {
-                    Slog.e(TAG,
-                            "Unable to create app data snapshot for: "
-                                    + info.getPackageName() + ", userId: " + userId, ie);
                 }
             }
 
-            if (hasPendingRestore) {
-                try {
-                    mInstaller.restoreAppDataSnapshot(info.getPackageName(), ri.appId,
-                            ri.seInfo, userId, rollback.info.getRollbackId(),
-                            Installer.FLAG_STORAGE_CE);
-                    info.removeRestoreInfo(ri);
-                } catch (InstallerException ie) {
-                    Slog.e(TAG, "Unable to restore app data snapshot for: "
-                            + info.getPackageName(), ie);
-                }
+            if (hasPendingRestore && doRestoreOrWipe(info, userId, rollback.info.getRollbackId(),
+                    ri.appId, ri.seInfo, Installer.FLAG_STORAGE_CE)) {
+                info.removeRestoreInfo(ri);
             }
         }
         return foundBackupOrRestore;

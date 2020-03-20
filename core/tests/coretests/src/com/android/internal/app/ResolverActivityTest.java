@@ -18,21 +18,28 @@ package com.android.internal.app;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.action.ViewActions.swipeUp;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.ViewMatchers.isCompletelyDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.isEnabled;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static com.android.internal.app.MatcherUtils.first;
 import static com.android.internal.app.ResolverDataProvider.createPackageManagerMockedInfo;
 import static com.android.internal.app.ResolverWrapperActivity.sOverrides;
 
+import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
+import android.os.UserHandle;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.RelativeLayout;
@@ -212,15 +219,16 @@ public class ResolverActivityTest {
 
     @Test
     public void hasOtherProfileOneOption() throws Exception {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(2, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        markWorkProfileUserAvailable();
+
+        ResolveInfo toChoose = personalResolvedComponentInfos.get(1).getResolveInfoAt(0);
         Intent sendIntent = createSendImageIntent();
-        List<ResolvedComponentInfo> resolvedComponentInfos =
-                createResolvedComponentsForTestWithOtherProfile(2);
-        ResolveInfo toChoose = resolvedComponentInfos.get(1).getResolveInfoAt(0);
-
-        when(sOverrides.resolverListController.getResolversForIntent(Mockito.anyBoolean(),
-                Mockito.anyBoolean(),
-                Mockito.isA(List.class))).thenReturn(resolvedComponentInfos);
-
         final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
         Espresso.registerIdlingResources(activity.getAdapter().getLabelIdlingResource());
         waitForIdle();
@@ -233,14 +241,11 @@ public class ResolverActivityTest {
             chosen[0] = targetInfo.getResolveInfo();
             return true;
         };
-
         // Make a stable copy of the components as the original list may be modified
         List<ResolvedComponentInfo> stableCopy =
-                createResolvedComponentsForTestWithOtherProfile(2);
-        // Check that the "Other Profile" activity is put in the right spot
-        onView(withId(R.id.profile_button)).check(matches(
-                withText(stableCopy.get(0).getResolveInfoAt(0).activityInfo.name)));
-        onView(withText(stableCopy.get(1).getResolveInfoAt(0).activityInfo.name))
+                createResolvedComponentsForTestWithOtherProfile(2, /* userId= */ 10);
+        // We pick the first one as there is another one in the work profile side
+        onView(first(withText(stableCopy.get(1).getResolveInfoAt(0).activityInfo.name)))
                 .perform(click());
         onView(withId(R.id.button_once))
                 .perform(click());
@@ -250,6 +255,9 @@ public class ResolverActivityTest {
 
     @Test
     public void hasOtherProfileTwoOptionsAndUserSelectsOne() throws Exception {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+
         Intent sendIntent = createSendImageIntent();
         List<ResolvedComponentInfo> resolvedComponentInfos =
                 createResolvedComponentsForTestWithOtherProfile(3);
@@ -279,9 +287,6 @@ public class ResolverActivityTest {
         List<ResolvedComponentInfo> stableCopy =
                 createResolvedComponentsForTestWithOtherProfile(2);
 
-        // Check that the "Other Profile" activity is put in the right spot
-        onView(withId(R.id.profile_button)).check(matches(
-                withText(stableCopy.get(0).getResolveInfoAt(0).activityInfo.name)));
         onView(withText(stableCopy.get(1).getResolveInfoAt(0).activityInfo.name))
                 .perform(click());
         onView(withId(R.id.button_once)).perform(click());
@@ -292,6 +297,9 @@ public class ResolverActivityTest {
 
     @Test
     public void hasLastChosenActivityAndOtherProfile() throws Exception {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+
         // In this case we prefer the other profile and don't display anything about the last
         // chosen activity.
         Intent sendIntent = createSendImageIntent();
@@ -325,9 +333,6 @@ public class ResolverActivityTest {
         List<ResolvedComponentInfo> stableCopy =
                 createResolvedComponentsForTestWithOtherProfile(2);
 
-        // Check that the "Other Profile" activity is put in the right spot
-        onView(withId(R.id.profile_button)).check(matches(
-                withText(stableCopy.get(0).getResolveInfoAt(0).activityInfo.name)));
         onView(withText(stableCopy.get(1).getResolveInfoAt(0).activityInfo.name))
                 .perform(click());
         onView(withId(R.id.button_once)).perform(click());
@@ -379,6 +384,274 @@ public class ResolverActivityTest {
                 TextUtils.isEmpty(pg.getSubLabel()));
     }
 
+    @Test
+    public void testWorkTab_displayedWhenWorkProfileUserAvailable() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        Intent sendIntent = createSendImageIntent();
+        markWorkProfileUserAvailable();
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+
+        onView(withId(R.id.tabs)).check(matches(isDisplayed()));
+    }
+
+    @Test
+    public void testWorkTab_hiddenWhenWorkProfileUserNotAvailable() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        Intent sendIntent = createSendImageIntent();
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+
+        onView(withId(R.id.tabs)).check(matches(not(isDisplayed())));
+    }
+
+    @Test
+    public void testWorkTab_workTabListPopulatedBeforeGoingToTab() throws InterruptedException {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId = */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos,
+                new ArrayList<>(workResolvedComponentInfos));
+        Intent sendIntent = createSendImageIntent();
+        markWorkProfileUserAvailable();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+
+        assertThat(activity.getCurrentUserHandle().getIdentifier(), is(0));
+        // The work list adapter must be populated in advance before tapping the other tab
+        assertThat(activity.getWorkListAdapter().getCount(), is(4));
+    }
+
+    @Test
+    public void testWorkTab_workTabUsesExpectedAdapter() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        markWorkProfileUserAvailable();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withText(R.string.resolver_work_tab)).perform(click());
+
+        assertThat(activity.getCurrentUserHandle().getIdentifier(), is(10));
+        assertThat(activity.getWorkListAdapter().getCount(), is(4));
+    }
+
+    @Test
+    public void testWorkTab_personalTabUsesExpectedAdapter() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        markWorkProfileUserAvailable();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withText(R.string.resolver_work_tab)).perform(click());
+
+        assertThat(activity.getCurrentUserHandle().getIdentifier(), is(10));
+        assertThat(activity.getPersonalListAdapter().getCount(), is(2));
+    }
+
+    @Test
+    public void testWorkTab_workProfileHasExpectedNumberOfTargets() throws InterruptedException {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+
+        onView(withText(R.string.resolver_work_tab))
+                .perform(click());
+        waitForIdle();
+        assertThat(activity.getWorkListAdapter().getCount(), is(4));
+    }
+
+    @Test
+    public void testWorkTab_selectingWorkTabAppOpensAppInWorkProfile() throws InterruptedException {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        ResolveInfo[] chosen = new ResolveInfo[1];
+        sOverrides.onSafelyStartCallback = targetInfo -> {
+            chosen[0] = targetInfo.getResolveInfo();
+            return true;
+        };
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withText(R.string.resolver_work_tab))
+                .perform(click());
+        waitForIdle();
+        // wait for the share sheet to expand
+        Thread.sleep(ChooserActivity.LIST_VIEW_UPDATE_INTERVAL_IN_MILLIS);
+        onView(first(allOf(withText(workResolvedComponentInfos.get(0)
+                .getResolveInfoAt(0).activityInfo.applicationInfo.name), isCompletelyDisplayed())))
+                .perform(click());
+        onView(withId(R.id.button_once))
+                .perform(click());
+
+        waitForIdle();
+        assertThat(chosen[0], is(workResolvedComponentInfos.get(0).getResolveInfoAt(0)));
+    }
+
+    @Test
+    public void testWorkTab_noPersonalApps_workTabHasExpectedNumberOfTargets()
+            throws InterruptedException {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(1);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withText(R.string.resolver_work_tab))
+                .perform(click());
+
+        waitForIdle();
+        assertThat(activity.getWorkListAdapter().getCount(), is(4));
+    }
+
+    @Ignore // b/148156663
+    @Test
+    public void testWorkTab_noPersonalApps_canStartWorkApps()
+            throws InterruptedException {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId= */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        ResolveInfo[] chosen = new ResolveInfo[1];
+        sOverrides.onSafelyStartCallback = targetInfo -> {
+            chosen[0] = targetInfo.getResolveInfo();
+            return true;
+        };
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withText(R.string.resolver_work_tab))
+                .perform(click());
+        waitForIdle();
+        // wait for the share sheet to expand
+        Thread.sleep(ChooserActivity.LIST_VIEW_UPDATE_INTERVAL_IN_MILLIS);
+        onView(first(allOf(withText(workResolvedComponentInfos.get(0)
+                .getResolveInfoAt(0).activityInfo.applicationInfo.name), isCompletelyDisplayed())))
+                .perform(click());
+        onView(withId(R.id.button_once))
+                .perform(click());
+        waitForIdle();
+
+        assertThat(chosen[0], is(workResolvedComponentInfos.get(0).getResolveInfoAt(0)));
+    }
+
+    @Test
+    public void testWorkTab_crossProfileIntentsDisabled_personalToWork_emptyStateShown() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        int workProfileTargets = 4;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos =
+                createResolvedComponentsForTest(workProfileTargets);
+        sOverrides.hasCrossProfileIntents = false;
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        sendIntent.setType("TestType");
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withText(R.string.resolver_work_tab)).perform(click());
+        waitForIdle();
+        onView(withId(R.id.contentPanel))
+                .perform(swipeUp());
+
+        onView(withText(R.string.resolver_cant_share_with_work_apps))
+                .check(matches(isDisplayed()));
+    }
+
+    @Test
+    public void testWorkTab_workProfileDisabled_emptyStateShown() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        int workProfileTargets = 4;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(3, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos =
+                createResolvedComponentsForTest(workProfileTargets);
+        sOverrides.isQuietModeEnabled = true;
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        sendIntent.setType("TestType");
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withId(R.id.contentPanel))
+                .perform(swipeUp());
+        onView(withText(R.string.resolver_work_tab)).perform(click());
+        waitForIdle();
+
+        onView(withText(R.string.resolver_turn_on_work_apps_view))
+                .check(matches(isDisplayed()));
+    }
+
+    @Test
+    public void testWorkTab_noWorkTargets_emptyStateShown() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTest(3);
+        List<ResolvedComponentInfo> workResolvedComponentInfos =
+                createResolvedComponentsForTest(0);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        sendIntent.setType("TestType");
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        onView(withId(R.id.contentPanel))
+                .perform(swipeUp());
+        onView(withText(R.string.resolver_work_tab)).perform(click());
+        waitForIdle();
+
+        onView(withText(R.string.resolver_no_apps_available))
+                .check(matches(isDisplayed()));
+    }
+
     private Intent createSendImageIntent() {
         Intent sendIntent = new Intent();
         sendIntent.setAction(Intent.ACTION_SEND);
@@ -408,7 +681,42 @@ public class ResolverActivityTest {
         return infoList;
     }
 
+    private List<ResolvedComponentInfo> createResolvedComponentsForTestWithOtherProfile(
+            int numberOfResults, int userId) {
+        List<ResolvedComponentInfo> infoList = new ArrayList<>(numberOfResults);
+        for (int i = 0; i < numberOfResults; i++) {
+            if (i == 0) {
+                infoList.add(
+                        ResolverDataProvider.createResolvedComponentInfoWithOtherId(i, userId));
+            } else {
+                infoList.add(ResolverDataProvider.createResolvedComponentInfo(i));
+            }
+        }
+        return infoList;
+    }
+
     private void waitForIdle() {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+    private void markWorkProfileUserAvailable() {
+        ResolverWrapperActivity.sOverrides.workProfileUserHandle = UserHandle.of(10);
+    }
+
+    private void setupResolverControllers(
+            List<ResolvedComponentInfo> personalResolvedComponentInfos,
+            List<ResolvedComponentInfo> workResolvedComponentInfos) {
+        when(sOverrides.resolverListController.getResolversForIntent(Mockito.anyBoolean(),
+                Mockito.anyBoolean(),
+                Mockito.isA(List.class)))
+                .thenReturn(new ArrayList<>(personalResolvedComponentInfos));
+        when(sOverrides.workResolverListController.getResolversForIntent(Mockito.anyBoolean(),
+                Mockito.anyBoolean(),
+                Mockito.isA(List.class))).thenReturn(workResolvedComponentInfos);
+        when(sOverrides.workResolverListController.getResolversForIntentAsUser(Mockito.anyBoolean(),
+                Mockito.anyBoolean(),
+                Mockito.isA(List.class),
+                eq(UserHandle.SYSTEM)))
+                .thenReturn(new ArrayList<>(personalResolvedComponentInfos));
     }
 }

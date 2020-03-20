@@ -16,9 +16,12 @@
 
 package android.view;
 
+import static android.system.OsConstants.EINVAL;
+
+import android.annotation.FloatRange;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.CompatibilityInfo.Translator;
 import android.graphics.Canvas;
 import android.graphics.ColorSpace;
@@ -87,6 +90,9 @@ public class Surface implements Parcelable {
 
     private static native int nativeSetSharedBufferModeEnabled(long nativeObject, boolean enabled);
     private static native int nativeSetAutoRefreshEnabled(long nativeObject, boolean enabled);
+
+    private static native int nativeSetFrameRate(
+            long nativeObject, float frameRate, int compatibility);
 
     public static final @android.annotation.NonNull Parcelable.Creator<Surface> CREATOR =
             new Parcelable.Creator<Surface>() {
@@ -181,6 +187,28 @@ public class Surface implements Parcelable {
      */
     public static final int ROTATION_270 = 3;
 
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = {"FRAME_RATE_COMPATIBILITY_"},
+            value = {FRAME_RATE_COMPATIBILITY_DEFAULT, FRAME_RATE_COMPATIBILITY_FIXED_SOURCE})
+    public @interface FrameRateCompatibility {}
+
+    // From native_window.h. Keep these in sync.
+    /**
+     * There are no inherent restrictions on the frame rate of this surface.
+     */
+    public static final int FRAME_RATE_COMPATIBILITY_DEFAULT = 0;
+
+    /**
+     * This surface is being used to display content with an inherently fixed frame rate,
+     * e.g. a video that has a specific frame rate. When the system selects a frame rate
+     * other than what the app requested, the app will need to do pull down or use some
+     * other technique to adapt to the system's frame rate. The user experience is likely
+     * to be worse (e.g. more frame stuttering) than it would be if the system had chosen
+     * the app's requested frame rate.
+     */
+    public static final int FRAME_RATE_COMPATIBILITY_FIXED_SOURCE = 1;
+
     /**
      * Create an empty surface, which will later be filled in by readFromParcel().
      * @hide
@@ -255,13 +283,13 @@ public class Surface implements Parcelable {
      */
     public void release() {
         synchronized (mLock) {
-            if (mNativeObject != 0) {
-                nativeRelease(mNativeObject);
-                setNativeObjectLocked(0);
-            }
             if (mHwuiContext != null) {
                 mHwuiContext.destroy();
                 mHwuiContext = null;
+            }
+            if (mNativeObject != 0) {
+                nativeRelease(mNativeObject);
+                setNativeObjectLocked(0);
             }
         }
     }
@@ -838,6 +866,47 @@ public class Surface implements Parcelable {
      */
     public boolean isAutoRefreshEnabled() {
         return mIsAutoRefreshEnabled;
+    }
+
+    /**
+     * Sets the intended frame rate for this surface.
+     *
+     * On devices that are capable of running the display at different refresh rates, the
+     * system may choose a display refresh rate to better match this surface's frame
+     * rate. Usage of this API won't introduce frame rate throttling, or affect other
+     * aspects of the application's frame production pipeline. However, because the system
+     * may change the display refresh rate, calls to this function may result in changes
+     * to Choreographer callback timings, and changes to the time interval at which the
+     * system releases buffers back to the application.
+     *
+     * Note that this only has an effect for surfaces presented on the display. If this
+     * surface is consumed by something other than the system compositor, e.g. a media
+     * codec, this call has no effect.
+     *
+     * @param frameRate The intended frame rate of this surface, in frames per second. 0
+     * is a special value that indicates the app will accept the system's choice for the
+     * display frame rate, which is the default behavior if this function isn't
+     * called. The frameRate param does *not* need to be a valid refresh rate for this
+     * device's display - e.g., it's fine to pass 30fps to a device that can only run the
+     * display at 60fps.
+     *
+     * @param compatibility The frame rate compatibility of this surface. The
+     * compatibility value may influence the system's choice of display frame rate. See
+     * the FRAME_RATE_COMPATIBILITY_* values for more info.
+     *
+     * @throws IllegalArgumentException If frameRate or compatibility are invalid.
+     */
+    public void setFrameRate(
+            @FloatRange(from = 0.0) float frameRate, @FrameRateCompatibility int compatibility) {
+        synchronized (mLock) {
+            checkNotReleasedLocked();
+            int error = nativeSetFrameRate(mNativeObject, frameRate, compatibility);
+            if (error == -EINVAL) {
+                throw new IllegalArgumentException("Invalid argument to Surface.setFrameRate()");
+            } else if (error != 0) {
+                throw new RuntimeException("Failed to set frame rate on Surface");
+            }
+        }
     }
 
     /**

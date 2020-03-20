@@ -26,7 +26,7 @@ import android.annotation.NonNull;
  * A simple example: <pre>   {@code
  *   class Foo {
  *
- *       private final CloseGuard guard = CloseGuard.get();
+ *       private final CloseGuard guard = new CloseGuard();
  *
  *       ...
  *
@@ -38,6 +38,11 @@ import android.annotation.NonNull;
  *       public void cleanup() {
  *          guard.close();
  *          ...;
+ *          if (Build.VERSION.SDK_INT >= 28) {
+ *              Reference.reachabilityFence(this);
+ *          }
+ *          // For full correctness in the absence of a close() call, other methods may also need
+ *          // reachabilityFence() calls.
  *       }
  *
  *       protected void finalize() throws Throwable {
@@ -59,7 +64,7 @@ import android.annotation.NonNull;
  * be deferred. For example: <pre>   {@code
  *   class Bar {
  *
- *       private final CloseGuard guard = CloseGuard.get();
+ *       private final CloseGuard guard = new CloseGuard();
  *
  *       ...
  *
@@ -75,7 +80,9 @@ import android.annotation.NonNull;
  *       public void cleanup() {
  *          guard.close();
  *          ...;
- *          Reference.reachabilityFence(this);
+ *          if (Build.VERSION.SDK_INT >= 28) {
+ *              Reference.reachabilityFence(this);
+ *          }
  *          // For full correctness in the absence of a close() call, other methods may also need
  *          // reachabilityFence() calls.
  *       }

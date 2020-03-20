@@ -17,7 +17,6 @@
 package com.android.server.am;
 
 import android.app.ActivityManager;
-import android.app.job.JobProtoEnums;
 import android.bluetooth.BluetoothActivityEnergyInfo;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -53,7 +52,6 @@ import android.telephony.ModemActivityInfo;
 import android.telephony.SignalStrength;
 import android.telephony.TelephonyManager;
 import android.util.Slog;
-import android.util.StatsLog;
 
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.os.BatteryStatsHelper;
@@ -62,6 +60,7 @@ import com.android.internal.os.PowerProfile;
 import com.android.internal.os.RailStats;
 import com.android.internal.os.RpmStats;
 import com.android.internal.util.DumpUtils;
+import com.android.internal.util.FrameworkStatsLog;
 import com.android.internal.util.ParseUtils;
 import com.android.server.LocalServices;
 
@@ -347,16 +346,16 @@ public final class BatteryStatsService extends IBatteryStats.Stub
     void noteProcessStart(String name, int uid) {
         synchronized (mStats) {
             mStats.noteProcessStartLocked(name, uid);
-            StatsLog.write(StatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED, uid, name,
-                    StatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED__STATE__STARTED);
+            FrameworkStatsLog.write(FrameworkStatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED, uid, name,
+                    FrameworkStatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED__STATE__STARTED);
         }
     }
 
     void noteProcessCrash(String name, int uid) {
         synchronized (mStats) {
             mStats.noteProcessCrashLocked(name, uid);
-            StatsLog.write(StatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED, uid, name,
-                    StatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED__STATE__CRASHED);
+            FrameworkStatsLog.write(FrameworkStatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED, uid, name,
+                    FrameworkStatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED__STATE__CRASHED);
         }
     }
 
@@ -369,15 +368,15 @@ public final class BatteryStatsService extends IBatteryStats.Stub
     void noteProcessFinish(String name, int uid) {
         synchronized (mStats) {
             mStats.noteProcessFinishLocked(name, uid);
-            StatsLog.write(StatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED, uid, name,
-                    StatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED__STATE__FINISHED);
+            FrameworkStatsLog.write(FrameworkStatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED, uid, name,
+                    FrameworkStatsLog.PROCESS_LIFE_CYCLE_STATE_CHANGED__STATE__FINISHED);
         }
     }
 
     /** @param state Process state from ActivityManager.java. */
     void noteUidProcessState(int uid, int state) {
         synchronized (mStats) {
-            StatsLog.write(StatsLog.UID_PROCESS_STATE_CHANGED, uid,
+            FrameworkStatsLog.write(FrameworkStatsLog.UID_PROCESS_STATE_CHANGED, uid,
                     ActivityManager.processStateAmToProto(state));
 
             mStats.noteUidProcessStateLocked(uid, state);
@@ -402,7 +401,7 @@ public final class BatteryStatsService extends IBatteryStats.Stub
     }
 
     public ParcelFileDescriptor getStatisticsStream() {
-        mContext.enforceCallingPermission(
+        mContext.enforceCallingOrSelfPermission(
                 android.Manifest.permission.BATTERY_STATS, null);
         //Slog.i("foo", "SENDING BATTERY INFO:");
         //mStats.dumpLocked(new LogPrinter(Log.INFO, "foo", Log.LOG_ID_SYSTEM));
@@ -453,8 +452,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteSyncStartLocked(name, uid);
-            StatsLog.write_non_chained(StatsLog.SYNC_STATE_CHANGED, uid, null, name,
-                    StatsLog.SYNC_STATE_CHANGED__STATE__ON);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.SYNC_STATE_CHANGED, uid, null,
+                    name, FrameworkStatsLog.SYNC_STATE_CHANGED__STATE__ON);
         }
     }
 
@@ -462,30 +461,24 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteSyncFinishLocked(name, uid);
-            StatsLog.write_non_chained(StatsLog.SYNC_STATE_CHANGED, uid, null, name,
-                    StatsLog.SYNC_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.SYNC_STATE_CHANGED, uid, null,
+                    name, FrameworkStatsLog.SYNC_STATE_CHANGED__STATE__OFF);
         }
     }
 
     /** A scheduled job was started. */
-    public void noteJobStart(String name, int uid, int standbyBucket, int jobid) {
+    public void noteJobStart(String name, int uid) {
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteJobStartLocked(name, uid);
-            StatsLog.write_non_chained(StatsLog.SCHEDULED_JOB_STATE_CHANGED, uid, null,
-                    name, StatsLog.SCHEDULED_JOB_STATE_CHANGED__STATE__STARTED,
-                    JobProtoEnums.STOP_REASON_UNKNOWN, standbyBucket, jobid);
         }
     }
 
     /** A scheduled job was finished. */
-    public void noteJobFinish(String name, int uid, int stopReason, int standbyBucket, int jobid) {
+    public void noteJobFinish(String name, int uid, int stopReason) {
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteJobFinishLocked(name, uid, stopReason);
-            StatsLog.write_non_chained(StatsLog.SCHEDULED_JOB_STATE_CHANGED, uid, null,
-                    name, StatsLog.SCHEDULED_JOB_STATE_CHANGED__STATE__FINISHED,
-                    stopReason, standbyBucket, jobid);
         }
     }
 
@@ -600,8 +593,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteStartSensorLocked(uid, sensor);
-            StatsLog.write_non_chained(StatsLog.SENSOR_STATE_CHANGED, uid, null, sensor,
-                    StatsLog.SENSOR_STATE_CHANGED__STATE__ON);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.SENSOR_STATE_CHANGED, uid, null,
+                    sensor, FrameworkStatsLog.SENSOR_STATE_CHANGED__STATE__ON);
         }
     }
 
@@ -609,8 +602,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteStopSensorLocked(uid, sensor);
-            StatsLog.write_non_chained(StatsLog.SENSOR_STATE_CHANGED, uid, null,
-                    sensor, StatsLog.SENSOR_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.SENSOR_STATE_CHANGED, uid, null,
+                    sensor, FrameworkStatsLog.SENSOR_STATE_CHANGED__STATE__OFF);
         }
     }
 
@@ -646,7 +639,7 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         if (DBG) Slog.d(TAG, "begin noteScreenState");
         synchronized (mStats) {
-            StatsLog.write(StatsLog.SCREEN_STATE_CHANGED, state);
+            FrameworkStatsLog.write(FrameworkStatsLog.SCREEN_STATE_CHANGED, state);
 
             mStats.noteScreenStateLocked(state);
         }
@@ -656,7 +649,7 @@ public final class BatteryStatsService extends IBatteryStats.Stub
     public void noteScreenBrightness(int brightness) {
         enforceCallingPermission();
         synchronized (mStats) {
-            StatsLog.write(StatsLog.SCREEN_BRIGHTNESS_CHANGED, brightness);
+            FrameworkStatsLog.write(FrameworkStatsLog.SCREEN_BRIGHTNESS_CHANGED, brightness);
             mStats.noteScreenBrightnessLocked(brightness);
         }
     }
@@ -742,8 +735,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         synchronized (mStats) {
             mStats.noteWifiOnLocked();
         }
-        StatsLog.write(StatsLog.WIFI_ENABLED_STATE_CHANGED,
-                StatsLog.WIFI_ENABLED_STATE_CHANGED__STATE__ON);
+        FrameworkStatsLog.write(FrameworkStatsLog.WIFI_ENABLED_STATE_CHANGED,
+                FrameworkStatsLog.WIFI_ENABLED_STATE_CHANGED__STATE__ON);
     }
 
     public void noteWifiOff() {
@@ -751,16 +744,16 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         synchronized (mStats) {
             mStats.noteWifiOffLocked();
         }
-        StatsLog.write(StatsLog.WIFI_ENABLED_STATE_CHANGED,
-                StatsLog.WIFI_ENABLED_STATE_CHANGED__STATE__OFF);
+        FrameworkStatsLog.write(FrameworkStatsLog.WIFI_ENABLED_STATE_CHANGED,
+                FrameworkStatsLog.WIFI_ENABLED_STATE_CHANGED__STATE__OFF);
     }
 
     public void noteStartAudio(int uid) {
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteAudioOnLocked(uid);
-            StatsLog.write_non_chained(StatsLog.AUDIO_STATE_CHANGED, uid, null,
-                    StatsLog.AUDIO_STATE_CHANGED__STATE__ON);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.AUDIO_STATE_CHANGED, uid, null,
+                    FrameworkStatsLog.AUDIO_STATE_CHANGED__STATE__ON);
         }
     }
 
@@ -768,8 +761,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteAudioOffLocked(uid);
-            StatsLog.write_non_chained(StatsLog.AUDIO_STATE_CHANGED, uid, null,
-                    StatsLog.AUDIO_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.AUDIO_STATE_CHANGED, uid, null,
+                    FrameworkStatsLog.AUDIO_STATE_CHANGED__STATE__OFF);
         }
     }
 
@@ -777,8 +770,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteVideoOnLocked(uid);
-            StatsLog.write_non_chained(StatsLog.MEDIA_CODEC_STATE_CHANGED, uid, null,
-                    StatsLog.MEDIA_CODEC_STATE_CHANGED__STATE__ON);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.MEDIA_CODEC_STATE_CHANGED, uid,
+                    null, FrameworkStatsLog.MEDIA_CODEC_STATE_CHANGED__STATE__ON);
         }
     }
 
@@ -786,8 +779,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteVideoOffLocked(uid);
-            StatsLog.write_non_chained(StatsLog.MEDIA_CODEC_STATE_CHANGED, uid,
-                    null, StatsLog.MEDIA_CODEC_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.MEDIA_CODEC_STATE_CHANGED, uid,
+                    null, FrameworkStatsLog.MEDIA_CODEC_STATE_CHANGED__STATE__OFF);
         }
     }
 
@@ -795,8 +788,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteResetAudioLocked();
-            StatsLog.write_non_chained(StatsLog.AUDIO_STATE_CHANGED, -1, null,
-                    StatsLog.AUDIO_STATE_CHANGED__STATE__RESET);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.AUDIO_STATE_CHANGED, -1, null,
+                    FrameworkStatsLog.AUDIO_STATE_CHANGED__STATE__RESET);
         }
     }
 
@@ -804,8 +797,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteResetVideoLocked();
-            StatsLog.write_non_chained(StatsLog.MEDIA_CODEC_STATE_CHANGED, -1, null,
-                    StatsLog.MEDIA_CODEC_STATE_CHANGED__STATE__RESET);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.MEDIA_CODEC_STATE_CHANGED, -1,
+                    null, FrameworkStatsLog.MEDIA_CODEC_STATE_CHANGED__STATE__RESET);
         }
     }
 
@@ -813,8 +806,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteFlashlightOnLocked(uid);
-            StatsLog.write_non_chained(StatsLog.FLASHLIGHT_STATE_CHANGED, uid, null,
-                    StatsLog.FLASHLIGHT_STATE_CHANGED__STATE__ON);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.FLASHLIGHT_STATE_CHANGED, uid,
+                    null, FrameworkStatsLog.FLASHLIGHT_STATE_CHANGED__STATE__ON);
         }
     }
 
@@ -822,8 +815,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteFlashlightOffLocked(uid);
-            StatsLog.write_non_chained(StatsLog.FLASHLIGHT_STATE_CHANGED, uid, null,
-                    StatsLog.FLASHLIGHT_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.FLASHLIGHT_STATE_CHANGED, uid,
+                    null, FrameworkStatsLog.FLASHLIGHT_STATE_CHANGED__STATE__OFF);
         }
     }
 
@@ -832,8 +825,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         if (DBG) Slog.d(TAG, "begin noteStartCamera");
         synchronized (mStats) {
             mStats.noteCameraOnLocked(uid);
-            StatsLog.write_non_chained(StatsLog.CAMERA_STATE_CHANGED, uid, null,
-                    StatsLog.CAMERA_STATE_CHANGED__STATE__ON);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.CAMERA_STATE_CHANGED, uid, null,
+                    FrameworkStatsLog.CAMERA_STATE_CHANGED__STATE__ON);
         }
         if (DBG) Slog.d(TAG, "end noteStartCamera");
     }
@@ -842,8 +835,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteCameraOffLocked(uid);
-            StatsLog.write_non_chained(StatsLog.CAMERA_STATE_CHANGED, uid, null,
-                    StatsLog.CAMERA_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.CAMERA_STATE_CHANGED, uid, null,
+                    FrameworkStatsLog.CAMERA_STATE_CHANGED__STATE__OFF);
         }
     }
 
@@ -851,8 +844,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteResetCameraLocked();
-            StatsLog.write_non_chained(StatsLog.CAMERA_STATE_CHANGED, -1, null,
-                    StatsLog.CAMERA_STATE_CHANGED__STATE__RESET);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.CAMERA_STATE_CHANGED, -1, null,
+                    FrameworkStatsLog.CAMERA_STATE_CHANGED__STATE__RESET);
         }
     }
 
@@ -860,8 +853,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         enforceCallingPermission();
         synchronized (mStats) {
             mStats.noteResetFlashlightLocked();
-            StatsLog.write_non_chained(StatsLog.FLASHLIGHT_STATE_CHANGED, -1, null,
-                    StatsLog.FLASHLIGHT_STATE_CHANGED__STATE__RESET);
+            FrameworkStatsLog.write_non_chained(FrameworkStatsLog.FLASHLIGHT_STATE_CHANGED, -1,
+                    null, FrameworkStatsLog.FLASHLIGHT_STATE_CHANGED__STATE__RESET);
         }
     }
 
@@ -888,8 +881,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
             mStats.noteWifiRunningLocked(ws);
         }
         // TODO: Log WIFI_RUNNING_STATE_CHANGED in a better spot to include Hotspot too.
-        StatsLog.write(StatsLog.WIFI_RUNNING_STATE_CHANGED,
-                ws, StatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__ON);
+        FrameworkStatsLog.write(FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED,
+                ws, FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__ON);
     }
 
     public void noteWifiRunningChanged(WorkSource oldWs, WorkSource newWs) {
@@ -897,10 +890,10 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         synchronized (mStats) {
             mStats.noteWifiRunningChangedLocked(oldWs, newWs);
         }
-        StatsLog.write(StatsLog.WIFI_RUNNING_STATE_CHANGED,
-                newWs, StatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__ON);
-        StatsLog.write(StatsLog.WIFI_RUNNING_STATE_CHANGED,
-                oldWs, StatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__OFF);
+        FrameworkStatsLog.write(FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED,
+                newWs, FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__ON);
+        FrameworkStatsLog.write(FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED,
+                oldWs, FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__OFF);
     }
 
     public void noteWifiStopped(WorkSource ws) {
@@ -908,8 +901,8 @@ public final class BatteryStatsService extends IBatteryStats.Stub
         synchronized (mStats) {
             mStats.noteWifiStoppedLocked(ws);
         }
-        StatsLog.write(StatsLog.WIFI_RUNNING_STATE_CHANGED,
-                ws, StatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__OFF);
+        FrameworkStatsLog.write(FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED,
+                ws, FrameworkStatsLog.WIFI_RUNNING_STATE_CHANGED__STATE__OFF);
     }
 
     public void noteWifiState(int wifiState, String accessPoint) {
@@ -1133,7 +1126,7 @@ public final class BatteryStatsService extends IBatteryStats.Stub
     @Override
     public void setBatteryState(final int status, final int health, final int plugType,
             final int level, final int temp, final int volt, final int chargeUAh,
-            final int chargeFullUAh) {
+            final int chargeFullUAh, final long chargeTimeToFullSeconds) {
         enforceCallingPermission();
 
         // BatteryService calls us here and we may update external state. It would be wrong
@@ -1145,7 +1138,7 @@ public final class BatteryStatsService extends IBatteryStats.Stub
                     // The battery state has not changed, so we don't need to sync external
                     // stats immediately.
                     mStats.setBatteryStateLocked(status, health, plugType, level, temp, volt,
-                            chargeUAh, chargeFullUAh);
+                            chargeUAh, chargeFullUAh, chargeTimeToFullSeconds);
                     return;
                 }
             }
@@ -1158,7 +1151,7 @@ public final class BatteryStatsService extends IBatteryStats.Stub
             mWorker.scheduleRunnable(() -> {
                 synchronized (mStats) {
                     mStats.setBatteryStateLocked(status, health, plugType, level, temp, volt,
-                            chargeUAh, chargeFullUAh);
+                            chargeUAh, chargeFullUAh, chargeTimeToFullSeconds);
                 }
             });
         });

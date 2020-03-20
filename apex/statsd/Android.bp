@@ -19,15 +19,20 @@ apex {
 }
 
 apex_defaults {
-    // libc.so and libcutils.so are included in the apex
-    // native_shared_libs: ["libc", "libcutils"],
-    // binaries: ["vold"],
+    native_shared_libs: [
+        "libstats_jni",
+        "libstatspull",
+        "libstatssocket",
+    ],
+    binaries: ["statsd"],
     java_libs: [
         "framework-statsd",
         "service-statsd",
     ],
-    // prebuilts: ["my_prebuilt"],
+    compile_multilib: "both",
+    prebuilts: ["com.android.os.statsd.init.rc"],
     name: "com.android.os.statsd-defaults",
+    updatable: true,
     key: "com.android.os.statsd.key",
     certificate: ":com.android.os.statsd.certificate",
 }
@@ -43,4 +48,34 @@ android_app_certificate {
     // This will use com.android.os.statsd.x509.pem (the cert) and
     // com.android.os.statsd.pk8 (the private key)
     certificate: "com.android.os.statsd",
+}
+
+prebuilt_etc {
+    name: "com.android.os.statsd.init.rc",
+    src: "statsd.rc",
+    filename: "init.rc",
+    installable: false,
+}
+
+// JNI library for StatsLog.write
+cc_library_shared {
+    name: "libstats_jni",
+    srcs: ["jni/**/*.cpp"],
+    shared_libs: [
+        "libnativehelper", // Has stable abi - should not be copied into apex.
+        "liblog",  // Has a stable abi - should not be copied into apex.
+        "libstatssocket",
+    ],
+    //TODO: is libc++_static correct?
+    stl: "libc++_static",
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-Wno-unused-parameter",
+    ],
+    apex_available: [
+        "com.android.os.statsd",
+        "test_com.android.os.statsd",
+    ],
 }

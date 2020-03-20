@@ -17,7 +17,7 @@
 package android.content;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.res.AssetFileDescriptor;
 import android.database.BulkCursorDescriptor;
 import android.database.BulkCursorToCursorAdaptor;
@@ -33,6 +33,7 @@ import android.os.ICancellationSignal;
 import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.Parcelable;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
 
 import java.io.FileNotFoundException;
@@ -143,6 +144,14 @@ abstract public class ContentProviderNative extends Binder implements IContentPr
                     reply.writeNoException();
                     reply.writeString(type);
 
+                    return true;
+                }
+
+                case GET_TYPE_ASYNC_TRANSACTION: {
+                    data.enforceInterface(IContentProvider.descriptor);
+                    Uri url = Uri.CREATOR.createFromParcel(data);
+                    RemoteCallback callback = RemoteCallback.CREATOR.createFromParcel(data);
+                    getTypeAsync(url, callback);
                     return true;
                 }
 
@@ -350,6 +359,16 @@ abstract public class ContentProviderNative extends Binder implements IContentPr
                     return true;
                 }
 
+                case CANONICALIZE_ASYNC_TRANSACTION: {
+                    data.enforceInterface(IContentProvider.descriptor);
+                    String callingPkg = data.readString();
+                    String featureId = data.readString();
+                    Uri uri = Uri.CREATOR.createFromParcel(data);
+                    RemoteCallback callback = RemoteCallback.CREATOR.createFromParcel(data);
+                    canonicalizeAsync(callingPkg, featureId, uri, callback);
+                    return true;
+                }
+
                 case UNCANONICALIZE_TRANSACTION:
                 {
                     data.enforceInterface(IContentProvider.descriptor);
@@ -491,6 +510,22 @@ final class ContentProviderProxy implements IContentProvider
         } finally {
             data.recycle();
             reply.recycle();
+        }
+    }
+
+    @Override
+    /* oneway */ public void getTypeAsync(Uri uri, RemoteCallback callback) throws RemoteException {
+        Parcel data = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(IContentProvider.descriptor);
+
+            uri.writeToParcel(data, 0);
+            callback.writeToParcel(data, 0);
+
+            mRemote.transact(IContentProvider.GET_TYPE_ASYNC_TRANSACTION, data, null,
+                    IBinder.FLAG_ONEWAY);
+        } finally {
+            data.recycle();
         }
     }
 
@@ -794,6 +829,25 @@ final class ContentProviderProxy implements IContentProvider
         } finally {
             data.recycle();
             reply.recycle();
+        }
+    }
+
+    @Override
+    /* oneway */ public void canonicalizeAsync(String callingPkg, @Nullable String featureId,
+            Uri uri, RemoteCallback callback) throws RemoteException {
+        Parcel data = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(IContentProvider.descriptor);
+
+            data.writeString(callingPkg);
+            data.writeString(featureId);
+            uri.writeToParcel(data, 0);
+            callback.writeToParcel(data, 0);
+
+            mRemote.transact(IContentProvider.CANONICALIZE_ASYNC_TRANSACTION, data, null,
+                    Binder.FLAG_ONEWAY);
+        } finally {
+            data.recycle();
         }
     }
 

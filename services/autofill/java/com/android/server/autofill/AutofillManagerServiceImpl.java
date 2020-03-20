@@ -57,6 +57,7 @@ import android.service.autofill.FillEventHistory;
 import android.service.autofill.FillEventHistory.Event;
 import android.service.autofill.FillResponse;
 import android.service.autofill.IAutoFillService;
+import android.service.autofill.InlineSuggestionRenderService;
 import android.service.autofill.SaveInfo;
 import android.service.autofill.UserData;
 import android.util.ArrayMap;
@@ -81,7 +82,9 @@ import com.android.server.LocalServices;
 import com.android.server.autofill.AutofillManagerService.AutofillCompatState;
 import com.android.server.autofill.RemoteAugmentedAutofillService.RemoteAugmentedAutofillServiceCallbacks;
 import com.android.server.autofill.ui.AutoFillUI;
+import com.android.server.contentcapture.ContentCaptureManagerInternal;
 import com.android.server.infra.AbstractPerUserSystemService;
+import com.android.server.inputmethod.InputMethodManagerInternal;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -117,6 +120,10 @@ final class AutofillManagerServiceImpl
     private final LocalLog mWtfHistory;
     private final FieldClassificationStrategy mFieldClassificationStrategy;
 
+    @GuardedBy("mLock")
+    @Nullable
+    private RemoteInlineSuggestionRenderService mRemoteInlineSuggestionRenderService;
+
     /**
      * Apps disabled by the service; key is package name, value is when they will be enabled again.
      */
@@ -151,6 +158,13 @@ final class AutofillManagerServiceImpl
     @GuardedBy("mLock")
     private FillEventHistory mEventHistory;
 
+    /**
+     * The last inline augmented autofill selection. Note that we don't log the selection from the
+     * dropdown UI since the service owns the UI in that case.
+     */
+    @GuardedBy("mLock")
+    private FillEventHistory mAugmentedAutofillEventHistory;
+
     /** Shared instance, doesn't need to be logged */
     private final AutofillCompatState mAutofillCompatState;
 
@@ -168,6 +182,10 @@ final class AutofillManagerServiceImpl
     @Nullable
     private ServiceInfo mRemoteAugmentedAutofillServiceInfo;
 
+    private final InputMethodManagerInternal mInputMethodManagerInternal;
+
+    private final ContentCaptureManagerInternal mContentCaptureManagerInternal;
+
     AutofillManagerServiceImpl(AutofillManagerService master, Object lock,
             LocalLog uiLatencyHistory, LocalLog wtfHistory, int userId, AutoFillUI ui,
             AutofillCompatState autofillCompatState,
@@ -179,8 +197,21 @@ final class AutofillManagerServiceImpl
         mUi = ui;
         mFieldClassificationStrategy = new FieldClassificationStrategy(getContext(), userId);
         mAutofillCompatState = autofillCompatState;
+        mInputMethodManagerInternal = LocalServices.getService(InputMethodManagerInternal.class);
+        mContentCaptureManagerInternal = LocalServices.getService(
+                ContentCaptureManagerInternal.class);
 
         updateLocked(disabled);
+    }
+
+    boolean sendActivityAssistDataToContentCapture(@NonNull IBinder activityToken,
+            @NonNull Bundle data) {
+        if (mContentCaptureManagerInternal != null) {
+            mContentCaptureManagerInternal.sendActivityAssistData(getUserId(), activityToken, data);
+            return true;
+        }
+
+        return false;
     }
 
     @GuardedBy("mLock")
@@ -208,6 +239,8 @@ final class AutofillManagerServiceImpl
             sendStateToClients(/* resetClient= */ false);
         }
         updateRemoteAugmentedAutofillService();
+        updateRemoteInlineSuggestionRenderServiceLocked();
+
         return enabledChanged;
     }
 
@@ -493,7 +526,7 @@ final class AutofillManagerServiceImpl
                 sessionId, taskId, uid, activityToken, appCallbackToken, hasCallback,
                 mUiLatencyHistory, mWtfHistory, serviceComponentName,
                 componentName, compatMode, bindInstantServiceAllowed, forAugmentedAutofillOnly,
-                flags);
+                flags, mInputMethodManagerInternal);
         mSessions.put(newSession.id, newSession);
 
         return newSession;
@@ -690,12 +723,25 @@ final class AutofillManagerServiceImpl
         }
     }
 
+    void setLastAugmentedAutofillResponse(int sessionId) {
+        synchronized (mLock) {
+            mAugmentedAutofillEventHistory = new FillEventHistory(sessionId, /* clientState= */
+                    null);
+        }
+    }
+
     /**
      * Resets the last fill selection.
      */
     void resetLastResponse() {
         synchronized (mLock) {
             mEventHistory = null;
+        }
+    }
+
+    void resetLastAugmentedAutofillResponse() {
+        synchronized (mLock) {
+            mAugmentedAutofillEventHistory = null;
         }
     }
 
@@ -778,6 +824,31 @@ final class AutofillManagerServiceImpl
                         new Event(Event.TYPE_DATASETS_SHOWN, null, clientState, null, null, null,
                                 null, null, null, null, null));
             }
+        }
+    }
+
+    void logAugmentedAutofillSelected(int sessionId, @Nullable String suggestionId) {
+        synchronized (mLock) {
+            if (mAugmentedAutofillEventHistory == null
+                    || mAugmentedAutofillEventHistory.getSessionId() != sessionId) {
+                return;
+            }
+            mAugmentedAutofillEventHistory.addEvent(
+                    new Event(Event.TYPE_DATASET_SELECTED, suggestionId, null, null, null,
+                            null, null, null, null, null, null));
+        }
+    }
+
+    void logAugmentedAutofillShown(int sessionId) {
+        synchronized (mLock) {
+            if (mAugmentedAutofillEventHistory == null
+                    || mAugmentedAutofillEventHistory.getSessionId() != sessionId) {
+                return;
+            }
+            mAugmentedAutofillEventHistory.addEvent(
+                    new Event(Event.TYPE_DATASETS_SHOWN, null, null, null, null, null,
+                            null, null, null, null, null));
+
         }
     }
 
@@ -864,14 +935,18 @@ final class AutofillManagerServiceImpl
      * Gets the fill event history.
      *
      * @param callingUid The calling uid
-     *
-     * @return The history or {@code null} if there is none.
+     * @return The history for the autofill or the augmented autofill events depending on the {@code
+     * callingUid}, or {@code null} if there is none.
      */
     FillEventHistory getFillEventHistory(int callingUid) {
         synchronized (mLock) {
             if (mEventHistory != null
                     && isCalledByServiceLocked("getFillEventHistory", callingUid)) {
                 return mEventHistory;
+            }
+            if (mAugmentedAutofillEventHistory != null && isCalledByAugmentedAutofillServiceLocked(
+                    "getFillEventHistory", callingUid)) {
+                return mAugmentedAutofillEventHistory;
             }
         }
         return null;
@@ -966,6 +1041,8 @@ final class AutofillManagerServiceImpl
         } else {
             pw.println(compatPkgs);
         }
+        pw.print(prefix); pw.print("Inline Suggestions Enabled: ");
+        pw.println(isInlineSuggestionsEnabled());
         pw.print(prefix); pw.print("Last prune: "); pw.println(mLastPrune);
 
         pw.print(prefix); pw.print("Disabled apps: ");
@@ -1116,6 +1193,14 @@ final class AutofillManagerServiceImpl
     }
 
     @GuardedBy("mLock")
+    boolean isInlineSuggestionsEnabled() {
+        if (mInfo != null) {
+            return mInfo.isInlineSuggestionsEnabled();
+        }
+        return false;
+    }
+
+    @GuardedBy("mLock")
     @Nullable RemoteAugmentedAutofillService getRemoteAugmentedAutofillServiceLocked() {
         if (mRemoteAugmentedAutofillService == null) {
             final String serviceName = mMaster.mAugmentedAutofillResolver.getServiceName(mUserId);
@@ -1136,8 +1221,31 @@ final class AutofillManagerServiceImpl
                 Slog.v(TAG, "getRemoteAugmentedAutofillServiceLocked(): " + componentName);
             }
 
-            mRemoteAugmentedAutofillService = new RemoteAugmentedAutofillService(getContext(),
-                    componentName, mUserId, new RemoteAugmentedAutofillServiceCallbacks() {
+            final RemoteAugmentedAutofillServiceCallbacks callbacks =
+                    new RemoteAugmentedAutofillServiceCallbacks() {
+                        @Override
+                        public void resetLastResponse() {
+                            AutofillManagerServiceImpl.this.resetLastAugmentedAutofillResponse();
+                        }
+
+                        @Override
+                        public void setLastResponse(int sessionId) {
+                            AutofillManagerServiceImpl.this.setLastAugmentedAutofillResponse(
+                                    sessionId);
+                        }
+
+                        @Override
+                        public void logAugmentedAutofillShown(int sessionId) {
+                            AutofillManagerServiceImpl.this.logAugmentedAutofillShown(sessionId);
+                        }
+
+                        @Override
+                        public void logAugmentedAutofillSelected(int sessionId,
+                                String suggestionId) {
+                            AutofillManagerServiceImpl.this.logAugmentedAutofillSelected(sessionId,
+                                    suggestionId);
+                        }
+
                         @Override
                         public void onServiceDied(@NonNull RemoteAugmentedAutofillService service) {
                             Slog.w(TAG, "remote augmented autofill service died");
@@ -1148,8 +1256,10 @@ final class AutofillManagerServiceImpl
                             }
                             mRemoteAugmentedAutofillService = null;
                         }
-                    }, mMaster.isInstantServiceAllowed(), mMaster.verbose,
-                    mMaster.mAugmentedServiceIdleUnbindTimeoutMs,
+                    };
+            mRemoteAugmentedAutofillService = new RemoteAugmentedAutofillService(getContext(),
+                    componentName, mUserId, callbacks, mMaster.isInstantServiceAllowed(),
+                    mMaster.verbose, mMaster.mAugmentedServiceIdleUnbindTimeoutMs,
                     mMaster.mAugmentedServiceRequestTimeoutMs);
         }
 
@@ -1526,6 +1636,47 @@ final class AutofillManagerServiceImpl
             }
         }
         return mFieldClassificationStrategy.getDefaultAlgorithm();
+    }
+
+    private void updateRemoteInlineSuggestionRenderServiceLocked() {
+        if (mRemoteInlineSuggestionRenderService != null) {
+            if (sVerbose) {
+                Slog.v(TAG, "updateRemoteInlineSuggestionRenderService(): "
+                        + "destroying old remote service");
+            }
+            mRemoteInlineSuggestionRenderService = null;
+        }
+
+        mRemoteInlineSuggestionRenderService = getRemoteInlineSuggestionRenderServiceLocked();
+    }
+
+    @Nullable RemoteInlineSuggestionRenderService getRemoteInlineSuggestionRenderServiceLocked() {
+        if (mRemoteInlineSuggestionRenderService == null) {
+            final ComponentName componentName = RemoteInlineSuggestionRenderService
+                .getServiceComponentName(getContext(), mUserId);
+            if (componentName == null) {
+                Slog.w(TAG, "No valid component found for InlineSuggestionRenderService");
+                return null;
+            }
+
+            mRemoteInlineSuggestionRenderService = new RemoteInlineSuggestionRenderService(
+                    getContext(), componentName, InlineSuggestionRenderService.SERVICE_INTERFACE,
+                    mUserId, new InlineSuggestionRenderCallbacksImpl(),
+                    mMaster.isBindInstantServiceAllowed(), mMaster.verbose);
+        }
+
+        return mRemoteInlineSuggestionRenderService;
+    }
+
+    private class InlineSuggestionRenderCallbacksImpl implements
+            RemoteInlineSuggestionRenderService.InlineSuggestionRenderCallbacks {
+
+        @Override // from InlineSuggestionRenderCallbacksImpl
+        public void onServiceDied(@NonNull RemoteInlineSuggestionRenderService service) {
+            // Don't do anything; eventually the system will bind to it again...
+            Slog.w(TAG, "remote service died: " + service);
+            mRemoteInlineSuggestionRenderService = null;
+        }
     }
 
     @Override

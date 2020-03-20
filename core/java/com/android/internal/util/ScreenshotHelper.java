@@ -6,7 +6,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.graphics.Bitmap;
+import android.graphics.Insets;
+import android.graphics.Rect;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
@@ -14,17 +18,12 @@ import android.os.Messenger;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.util.Log;
+import android.view.WindowManager;
 
 import java.util.function.Consumer;
 
 public class ScreenshotHelper {
     private static final String TAG = "ScreenshotHelper";
-
-    private static final String SYSUI_PACKAGE = "com.android.systemui";
-    private static final String SYSUI_SCREENSHOT_SERVICE =
-            "com.android.systemui.screenshot.TakeScreenshotService";
-    private static final String SYSUI_SCREENSHOT_ERROR_RECEIVER =
-            "com.android.systemui.screenshot.ScreenshotServiceErrorReceiver";
 
     // Time until we give up on the screenshot & show an error instead.
     private final int SCREENSHOT_TIMEOUT_MS = 10000;
@@ -44,9 +43,9 @@ public class ScreenshotHelper {
      * is recommended for general use.
      *
      * @param screenshotType     The type of screenshot, for example either
-     *                           {@link android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN}
+     *                           {@link android.view.WindowManager#TAKE_SCREENSHOT_FULLSCREEN}
      *                           or
-     *                           {@link android.view.WindowManager.TAKE_SCREENSHOT_SELECTED_REGION}
+     *                           {@link android.view.WindowManager#TAKE_SCREENSHOT_SELECTED_REGION}
      * @param hasStatus          {@code true} if the status bar is currently showing. {@code false}
      *                           if
      *                           not.
@@ -71,9 +70,9 @@ public class ScreenshotHelper {
      * is recommended for general use.
      *
      * @param screenshotType     The type of screenshot, for example either
-     *                           {@link android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN}
+     *                           {@link android.view.WindowManager#TAKE_SCREENSHOT_FULLSCREEN}
      *                           or
-     *                           {@link android.view.WindowManager.TAKE_SCREENSHOT_SELECTED_REGION}
+     *                           {@link android.view.WindowManager#TAKE_SCREENSHOT_SELECTED_REGION}
      * @param hasStatus          {@code true} if the status bar is currently showing. {@code false}
      *                           if
      *                           not.
@@ -90,12 +89,47 @@ public class ScreenshotHelper {
     public void takeScreenshot(final int screenshotType, final boolean hasStatus,
             final boolean hasNav, long timeoutMs, @NonNull Handler handler,
             @Nullable Consumer<Uri> completionConsumer) {
+        takeScreenshot(screenshotType, hasStatus, hasNav, timeoutMs, handler, null,
+                completionConsumer
+        );
+    }
+
+    /**
+     * Request that provided image be handled as if it was a screenshot.
+     *
+     * @param screenshot         The bitmap to treat as the screen shot.
+     * @param boundsInScreen     The bounds in screen coordinates that the bitmap orginated from.
+     * @param insets             The insets that the image was shown with, inside the screenbounds.
+     * @param taskId             The taskId of the task that the screen shot was taken of.
+     * @param handler            A handler used in case the screenshot times out
+     * @param completionConsumer Consumes `false` if a screenshot was not taken, and `true` if the
+     *                           screenshot was taken.
+     */
+    public void provideScreenshot(@NonNull Bitmap screenshot, @NonNull Rect boundsInScreen,
+            @NonNull Insets insets, int taskId, @NonNull Handler handler,
+            @Nullable Consumer<Uri> completionConsumer) {
+        Bundle imageBundle = new Bundle();
+        imageBundle.putParcelable(WindowManager.PARCEL_KEY_SCREENSHOT_BITMAP, screenshot);
+        imageBundle.putParcelable(WindowManager.PARCEL_KEY_SCREENSHOT_BOUNDS, boundsInScreen);
+        imageBundle.putParcelable(WindowManager.PARCEL_KEY_SCREENSHOT_INSETS, insets);
+        imageBundle.putInt(WindowManager.PARCEL_KEY_SCREENSHOT_TASK_ID, taskId);
+
+        takeScreenshot(
+                WindowManager.TAKE_SCREENSHOT_PROVIDED_IMAGE,
+                false, false, // ignored when image bundle is set
+                SCREENSHOT_TIMEOUT_MS, handler, imageBundle, completionConsumer);
+    }
+
+    private void takeScreenshot(final int screenshotType, final boolean hasStatus,
+            final boolean hasNav, long timeoutMs, @NonNull Handler handler,
+            @Nullable Bundle providedImage, @Nullable Consumer<Uri> completionConsumer) {
         synchronized (mScreenshotLock) {
             if (mScreenshotConnection != null) {
                 return;
             }
-            final ComponentName serviceComponent = new ComponentName(SYSUI_PACKAGE,
-                    SYSUI_SCREENSHOT_SERVICE);
+            final ComponentName serviceComponent = ComponentName.unflattenFromString(
+                    mContext.getResources().getString(
+                            com.android.internal.R.string.config_screenshotServiceComponent));
             final Intent serviceIntent = new Intent();
 
             final Runnable mScreenshotTimeout = new Runnable() {
@@ -144,6 +178,10 @@ public class ScreenshotHelper {
                         msg.arg1 = hasStatus ? 1 : 0;
                         msg.arg2 = hasNav ? 1 : 0;
 
+                        if (screenshotType == WindowManager.TAKE_SCREENSHOT_PROVIDED_IMAGE) {
+                            msg.setData(providedImage);
+                        }
+
                         try {
                             messenger.send(msg);
                         } catch (RemoteException e) {
@@ -181,8 +219,9 @@ public class ScreenshotHelper {
      */
     private void notifyScreenshotError() {
         // If the service process is killed, then ask it to clean up after itself
-        final ComponentName errorComponent = new ComponentName(SYSUI_PACKAGE,
-                SYSUI_SCREENSHOT_ERROR_RECEIVER);
+        final ComponentName errorComponent = ComponentName.unflattenFromString(
+                mContext.getResources().getString(
+                        com.android.internal.R.string.config_screenshotErrorReceiverComponent));
         // Broadcast needs to have a valid action.  We'll just pick
         // a generic one, since the receiver here doesn't care.
         Intent errorIntent = new Intent(Intent.ACTION_USER_PRESENT);

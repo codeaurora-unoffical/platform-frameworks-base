@@ -18,6 +18,7 @@
 package android.view;
 
 import android.content.ClipData;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.os.Bundle;
@@ -90,6 +91,10 @@ interface IWindowSession {
      * since it was last displayed.
      * @param outSurface Object in which is placed the new display surface.
      * @param insetsState The current insets state in the system.
+     * @param outSurfaceSize The width and height of the surface control
+     * @param outBlastSurfaceControl A BLAST SurfaceControl allocated by the WindowManager
+     * the SurfaceControl willl be managed by the client side, but the WindowManager
+     * may use it as a deferTransaction barrier.
      *
      * @return int Result flags: {@link WindowManagerGlobal#RELAYOUT_SHOW_FOCUS},
      * {@link WindowManagerGlobal#RELAYOUT_FIRST_TIME}.
@@ -101,7 +106,8 @@ interface IWindowSession {
             out Rect outBackdropFrame,
             out DisplayCutout.ParcelableWrapper displayCutout,
             out MergedConfiguration outMergedConfiguration, out SurfaceControl outSurfaceControl,
-            out InsetsState insetsState);
+            out InsetsState insetsState, out Point outSurfaceSize,
+            out SurfaceControl outBlastSurfaceControl);
 
     /*
      * Notify the window manager that an application is relaunching and
@@ -293,7 +299,7 @@ interface IWindowSession {
      * will neither be dispatched to this window nor change the focus to this window. Passing an
      * invalid region will remove the area from the exclude region of this window.
      */
-    void updateTapExcludeRegion(IWindow window, int regionId, in Region region);
+    void updateTapExcludeRegion(IWindow window, in Region region);
 
     /**
      * Called when the client has changed the local insets state, and now the server should reflect
@@ -312,5 +318,11 @@ interface IWindowSession {
     * an input channel where the client can receive input.
     */
     void grantInputChannel(int displayId, in SurfaceControl surface, in IWindow window,
-            in IBinder hostInputToken, out InputChannel outInputChannel);
+            in IBinder hostInputToken, int flags, out InputChannel outInputChannel);
+
+    /**
+     * Update the flags on an input channel associated with a particular surface.
+     */
+    void updateInputChannel(in IBinder channelToken, int displayId, in SurfaceControl surface,
+            int flags);
 }

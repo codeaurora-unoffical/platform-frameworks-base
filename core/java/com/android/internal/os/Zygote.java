@@ -24,7 +24,6 @@ import android.content.pm.ApplicationInfo;
 import android.net.Credentials;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
-import android.os.Build;
 import android.os.FactoryTest;
 import android.os.IVold;
 import android.os.Process;
@@ -35,6 +34,7 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
 
+import dalvik.annotation.optimization.FastNative;
 import dalvik.system.ZygoteHooks;
 
 import libcore.io.IoUtils;
@@ -121,6 +121,25 @@ public final class Zygote {
      */
     public static final int DISABLE_TEST_API_ENFORCEMENT_POLICY = 1 << 18;
 
+    public static final int MEMORY_TAG_LEVEL_MASK = (1 << 19) | (1 << 20);
+    /**
+     * Enable pointer tagging in this process.
+     * Tags are checked during memory deallocation, but not on access.
+     * TBI stands for Top-Byte-Ignore, an ARM CPU feature.
+     * {@link https://developer.arm.com/docs/den0024/latest/the-memory-management-unit/translation-table-configuration/virtual-address-tagging}
+     */
+    public static final int MEMORY_TAG_LEVEL_TBI = 1 << 19;
+
+    /**
+     * Enable asynchronous memory tag checks in this process.
+     */
+    public static final int MEMORY_TAG_LEVEL_ASYNC = 2 << 19;
+
+    /**
+     * Enable synchronous memory tag checks in this process.
+     */
+    public static final int MEMORY_TAG_LEVEL_SYNC = 3 << 19;
+
     /** No external storage should be mounted. */
     public static final int MOUNT_EXTERNAL_NONE = IVold.REMOUNT_MODE_NONE;
     /** Default external storage should be mounted. */
@@ -145,11 +164,19 @@ public final class Zygote {
     /** The lower file system should be bind mounted directly on external storage */
     public static final int MOUNT_EXTERNAL_PASS_THROUGH = IVold.REMOUNT_MODE_PASS_THROUGH;
 
+    /** Use the regular scoped storage filesystem, but Android/ should be writable.
+     * Used to support the applications hosting DownloadManager and the MTP server.
+     */
+    public static final int MOUNT_EXTERNAL_ANDROID_WRITABLE = IVold.REMOUNT_MODE_ANDROID_WRITABLE;
+
     /** Number of bytes sent to the Zygote over USAP pipes or the pool event FD */
     static final int USAP_MANAGEMENT_MESSAGE_BYTES = 8;
 
     /** Make the new process have top application priority. */
     public static final String START_AS_TOP_APP_ARG = "--is-top-app";
+
+    /** List of packages with the same uid, and its app data info: volume uuid and inode. */
+    public static final String PKG_DATA_INFO_MAP = "--pkg-data-info-map";
 
     /**
      * An extraArg passed when a zygote process is forking a child-zygote, specifying a name
@@ -254,6 +281,8 @@ public final class Zygote {
      * @param instructionSet null-ok the instruction set to use.
      * @param appDataDir null-ok the data directory of the app.
      * @param isTopApp true if the process is for top (high priority) application.
+     * @param pkgDataInfoList A list that stores related packages and its app data
+     * info: volume uuid and inode.
      *
      * @return 0 if this is the child, pid of the child
      * if this is the parent, or -1 on error.
@@ -261,17 +290,14 @@ public final class Zygote {
     static int forkAndSpecialize(int uid, int gid, int[] gids, int runtimeFlags,
             int[][] rlimits, int mountExternal, String seInfo, String niceName, int[] fdsToClose,
             int[] fdsToIgnore, boolean startChildZygote, String instructionSet, String appDataDir,
-            int targetSdkVersion, boolean isTopApp) {
+            boolean isTopApp, String[] pkgDataInfoList) {
         ZygoteHooks.preFork();
 
         int pid = nativeForkAndSpecialize(
                 uid, gid, gids, runtimeFlags, rlimits, mountExternal, seInfo, niceName, fdsToClose,
-                fdsToIgnore, startChildZygote, instructionSet, appDataDir, isTopApp);
-        // Enable tracing as soon as possible for the child process.
+                fdsToIgnore, startChildZygote, instructionSet, appDataDir, isTopApp,
+                pkgDataInfoList);
         if (pid == 0) {
-            Zygote.disableExecuteOnly(targetSdkVersion);
-            Trace.setTracingEnabled(true, runtimeFlags);
-
             // Note that this event ends at the end of handleChildProc,
             Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "PostFork");
         }
@@ -286,7 +312,7 @@ public final class Zygote {
     private static native int nativeForkAndSpecialize(int uid, int gid, int[] gids,
             int runtimeFlags, int[][] rlimits, int mountExternal, String seInfo, String niceName,
             int[] fdsToClose, int[] fdsToIgnore, boolean startChildZygote, String instructionSet,
-            String appDataDir, boolean isTopApp);
+            String appDataDir, boolean isTopApp, String[] pkgDataInfoList);
 
     /**
      * Specialize an unspecialized app process.  The current VM must have been started
@@ -309,15 +335,18 @@ public final class Zygote {
      * @param instructionSet null-ok  The instruction set to use.
      * @param appDataDir null-ok  The data directory of the app.
      * @param isTopApp  True if the process is for top (high priority) application.
+     * @param pkgDataInfoList A list that stores related packages and its app data
+     * volume uuid and CE dir inode. For example, pkgDataInfoList = [app_a_pkg_name,
+     * app_a_data_volume_uuid, app_a_ce_inode, app_b_pkg_name, app_b_data_volume_uuid,
+     * app_b_ce_inode, ...];
      */
     private static void specializeAppProcess(int uid, int gid, int[] gids, int runtimeFlags,
             int[][] rlimits, int mountExternal, String seInfo, String niceName,
-            boolean startChildZygote, String instructionSet, String appDataDir, boolean isTopApp) {
+            boolean startChildZygote, String instructionSet, String appDataDir, boolean isTopApp,
+            String[] pkgDataInfoList) {
         nativeSpecializeAppProcess(uid, gid, gids, runtimeFlags, rlimits, mountExternal, seInfo,
-                niceName, startChildZygote, instructionSet, appDataDir, isTopApp);
-
-        // Enable tracing as soon as possible for the child process.
-        Trace.setTracingEnabled(true, runtimeFlags);
+                niceName, startChildZygote, instructionSet, appDataDir, isTopApp,
+                pkgDataInfoList);
 
         // Note that this event ends at the end of handleChildProc.
         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "PostFork");
@@ -336,7 +365,8 @@ public final class Zygote {
 
     private static native void nativeSpecializeAppProcess(int uid, int gid, int[] gids,
             int runtimeFlags, int[][] rlimits, int mountExternal, String seInfo, String niceName,
-            boolean startChildZygote, String instructionSet, String appDataDir, boolean isTopApp);
+            boolean startChildZygote, String instructionSet, String appDataDir, boolean isTopApp,
+            String[] pkgDataInfoList);
 
     /**
      * Called to do any initialization before starting an application.
@@ -373,11 +403,6 @@ public final class Zygote {
         int pid = nativeForkSystemServer(
                 uid, gid, gids, runtimeFlags, rlimits,
                 permittedCapabilities, effectiveCapabilities);
-
-        // Enable tracing as soon as we enter the system_server.
-        if (pid == 0) {
-            Trace.setTracingEnabled(true, runtimeFlags);
-        }
 
         // Set the Java Language thread priority to the default value for new apps.
         Thread.currentThread().setPriority(Thread.NORM_PRIORITY);
@@ -665,9 +690,8 @@ public final class Zygote {
             specializeAppProcess(args.mUid, args.mGid, args.mGids,
                                  args.mRuntimeFlags, rlimits, args.mMountExternal,
                                  args.mSeInfo, args.mNiceName, args.mStartChildZygote,
-                                 args.mInstructionSet, args.mAppDataDir, args.mIsTopApp);
-
-            disableExecuteOnly(args.mTargetSdkVersion);
+                                 args.mInstructionSet, args.mAppDataDir, args.mIsTopApp,
+                                 args.mPkgDataInfoList);
 
             Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
 
@@ -746,17 +770,6 @@ public final class Zygote {
                 + ", effective=0x" + Long.toHexString(args.mEffectiveCapabilities));
         }
     }
-
-    /**
-     * Mark execute-only segments of libraries read+execute for apps with targetSdkVersion<Q.
-     */
-    private static void disableExecuteOnly(int targetSdkVersion) {
-        if ((targetSdkVersion < Build.VERSION_CODES.Q) && !nativeDisableExecuteOnly()) {
-            Log.e("Zygote", "Failed to set libraries to read+execute.");
-        }
-    }
-
-    private static native boolean nativeDisableExecuteOnly();
 
     /**
      * @return  Raw file descriptors for the read-end of USAP reporting pipes.
@@ -999,4 +1012,19 @@ public final class Zygote {
             command.append(" '").append(arg.replace("'", "'\\''")).append("'");
         }
     }
+
+    /**
+     * Parse the given unsolicited zygote message as type SIGCHLD,
+     * extract the payload information into the given output buffer.
+     *
+     * @param in The unsolicited zygote message to be parsed
+     * @param length The number of bytes in the message
+     * @param out The output buffer where the payload information will be placed
+     * @return Number of elements being place into output buffer, or -1 if
+     *         either the message is malformed or not the type as expected here.
+     *
+     * @hide
+     */
+    @FastNative
+    public static native int nativeParseSigChld(byte[] in, int length, int[] out);
 }

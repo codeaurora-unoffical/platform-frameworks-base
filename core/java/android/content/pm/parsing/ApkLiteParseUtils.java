@@ -18,7 +18,7 @@ package android.content.pm.parsing;
 
 import static android.os.Trace.TRACE_TAG_PACKAGE_MANAGER;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageParser;
@@ -50,7 +50,7 @@ import java.util.List;
 /** @hide */
 public class ApkLiteParseUtils {
 
-    private static final String TAG = ApkParseUtils.TAG;
+    private static final String TAG = ParsingPackageUtils.TAG;
 
     // TODO(b/135203078): Consolidate constants
     private static final int DEFAULT_MIN_SDK_VERSION = 1;
@@ -96,6 +96,10 @@ public class ApkLiteParseUtils {
         if (ArrayUtils.isEmpty(files)) {
             throw new PackageParser.PackageParserException(
                     PackageManager.INSTALL_PARSE_FAILED_NOT_APK, "No packages found in split");
+        }
+        // Apk directory is directly nested under the current directory
+        if (files.length == 1 && files[0].isDirectory()) {
+            return parseClusterPackageLite(files[0], flags);
         }
 
         String packageName = null;
@@ -231,9 +235,9 @@ public class ApkLiteParseUtils {
                 final boolean skipVerify = (flags & PackageParser.PARSE_IS_SYSTEM_DIR) != 0;
                 Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "collectCertificates");
                 try {
-                    signingDetails =
-                            ApkParseUtils.collectCertificates(apkFile.getAbsolutePath(), skipVerify,
-                                    false, PackageParser.SigningDetails.UNKNOWN);
+                    signingDetails = ParsingPackageUtils.collectCertificates(apkFile.getAbsolutePath(),
+                            skipVerify, false, PackageParser.SigningDetails.UNKNOWN,
+                            DEFAULT_TARGET_SDK_VERSION);
                 } finally {
                     Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
                 }
@@ -285,6 +289,12 @@ public class ApkLiteParseUtils {
         boolean useEmbeddedDex = false;
         String configForSplit = null;
         String usesSplitName = null;
+        String targetPackage = null;
+        boolean overlayIsStatic = false;
+        int overlayPriority = 0;
+
+        String requiredSystemPropertyName = null;
+        String requiredSystemPropertyValue = null;
 
         for (int i = 0; i < attrs.getAttributeCount(); i++) {
             final String attr = attrs.getAttributeName(i);
@@ -361,6 +371,21 @@ public class ApkLiteParseUtils {
                             break;
                     }
                 }
+            } else if (PackageParser.TAG_OVERLAY.equals(parser.getName())) {
+                for (int i = 0; i < attrs.getAttributeCount(); ++i) {
+                    final String attr = attrs.getAttributeName(i);
+                    if ("requiredSystemPropertyName".equals(attr)) {
+                        requiredSystemPropertyName = attrs.getAttributeValue(i);
+                    } else if ("requiredSystemPropertyValue".equals(attr)) {
+                        requiredSystemPropertyValue = attrs.getAttributeValue(i);
+                    } else if ("targetPackage".equals(attr)) {
+                        targetPackage = attrs.getAttributeValue(i);;
+                    } else if ("isStatic".equals(attr)) {
+                        overlayIsStatic = attrs.getAttributeBooleanValue(i, false);
+                    } else if ("priority".equals(attr)) {
+                        overlayPriority = attrs.getAttributeIntValue(i, 0);
+                    }
+                }
             } else if (PackageParser.TAG_USES_SPLIT.equals(parser.getName())) {
                 if (usesSplitName != null) {
                     Slog.w(TAG, "Only one <uses-split> permitted. Ignoring others.");
@@ -387,11 +412,23 @@ public class ApkLiteParseUtils {
             }
         }
 
+        // Check to see if overlay should be excluded based on system property condition
+        if (!PackageParser.checkRequiredSystemProperty(requiredSystemPropertyName,
+                requiredSystemPropertyValue)) {
+            Slog.i(TAG, "Skipping target and overlay pair " + targetPackage + " and "
+                    + codePath + ": overlay ignored due to required system property: "
+                    + requiredSystemPropertyName + " with value: " + requiredSystemPropertyValue);
+            targetPackage = null;
+            overlayIsStatic = false;
+            overlayPriority = 0;
+        }
+
         return new PackageParser.ApkLite(codePath, packageSplit.first, packageSplit.second,
                 isFeatureSplit, configForSplit, usesSplitName, isSplitRequired, versionCode,
                 versionCodeMajor, revisionCode, installLocation, verifiers, signingDetails,
                 coreApp, debuggable, multiArch, use32bitAbi, useEmbeddedDex, extractNativeLibs,
-                isolatedSplits, minSdkVersion, targetSdkVersion);
+                isolatedSplits, targetPackage, overlayIsStatic, overlayPriority, minSdkVersion,
+                targetSdkVersion);
     }
 
     public static VerifierInfo parseVerifier(AttributeSet attrs) {

@@ -114,6 +114,7 @@ public class CornerHandleView extends View {
      * appropriately. Intention is to match the home handle color.
      */
     public void updateDarkness(float darkIntensity) {
+        // Handle color is same as home handle color.
         int color = (int) ArgbEvaluator.getInstance().evaluate(darkIntensity,
                 mLightColor, mDarkColor);
         if (mPaint.getColor() != color) {

@@ -17,41 +17,56 @@
 package android.accessibilityservice;
 
 import android.accessibilityservice.GestureDescription.MotionEventGenerator;
+import android.annotation.CallbackExecutor;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.TestApi;
 import android.app.Service;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ParceledListSlice;
+import android.graphics.Bitmap;
+import android.graphics.ColorSpace;
+import android.graphics.ParcelableColorSpace;
 import android.graphics.Region;
+import android.hardware.HardwareBuffer;
+import android.os.Binder;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.ArrayMap;
 import android.util.Log;
 import android.util.Slog;
 import android.util.SparseArray;
 import android.view.Display;
 import android.view.KeyEvent;
+import android.view.SurfaceView;
 import android.view.WindowManager;
 import android.view.WindowManagerImpl;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityInteractionClient;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
 import android.view.accessibility.AccessibilityWindowInfo;
 
 import com.android.internal.os.HandlerCaller;
 import com.android.internal.os.SomeArgs;
+import com.android.internal.util.Preconditions;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 /**
  * Accessibility services should only be used to assist users with disabilities in using
@@ -300,6 +315,116 @@ public abstract class AccessibilityService extends Service {
     public static final int GESTURE_SWIPE_DOWN_AND_RIGHT = 16;
 
     /**
+     * The user has performed a double tap gesture on the touch screen.
+     */
+    public static final int GESTURE_DOUBLE_TAP = 17;
+
+    /**
+     * The user has performed a double tap and hold gesture on the touch screen.
+     */
+    public static final int GESTURE_DOUBLE_TAP_AND_HOLD = 18;
+
+    /**
+     * The user has performed a two-finger single tap gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_SINGLE_TAP = 19;
+
+    /**
+     * The user has performed a two-finger double tap gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_DOUBLE_TAP = 20;
+
+    /**
+     * The user has performed a two-finger triple tap gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_TRIPLE_TAP = 21;
+
+    /**
+     * The user has performed a three-finger single tap gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_SINGLE_TAP = 22;
+
+    /**
+     * The user has performed a three-finger double tap gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_DOUBLE_TAP = 23;
+
+    /**
+     * The user has performed a three-finger triple tap gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_TRIPLE_TAP = 24;
+
+    /**
+     * The user has performed a two-finger swipe up gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_SWIPE_UP = 25;
+
+    /**
+     * The user has performed a two-finger swipe down gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_SWIPE_DOWN = 26;
+
+    /**
+     * The user has performed a two-finger swipe left gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_SWIPE_LEFT = 27;
+
+    /**
+     * The user has performed a two-finger swipe right gesture on the touch screen.
+     */
+    public static final int GESTURE_2_FINGER_SWIPE_RIGHT = 28;
+
+    /**
+     * The user has performed a three-finger swipe up gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_SWIPE_UP = 29;
+
+    /**
+     * The user has performed a three-finger swipe down gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_SWIPE_DOWN = 30;
+
+    /**
+     * The user has performed a three-finger swipe left gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_SWIPE_LEFT = 31;
+
+    /**
+     * The user has performed a three-finger swipe right gesture on the touch screen.
+     */
+    public static final int GESTURE_3_FINGER_SWIPE_RIGHT = 32;
+
+    /** The user has performed a four-finger swipe up gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_SWIPE_UP = 33;
+
+    /** The user has performed a four-finger swipe down gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_SWIPE_DOWN = 34;
+
+    /** The user has performed a four-finger swipe left gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_SWIPE_LEFT = 35;
+
+    /** The user has performed a four-finger swipe right gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_SWIPE_RIGHT = 36;
+
+    /** The user has performed a four-finger single tap gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_SINGLE_TAP = 37;
+
+    /** The user has performed a four-finger double tap gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_DOUBLE_TAP = 38;
+
+    /** The user has performed a four-finger triple tap gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_TRIPLE_TAP = 39;
+
+    /** The user has performed a two-finger double tap and hold gesture on the touch screen. */
+    public static final int GESTURE_2_FINGER_DOUBLE_TAP_AND_HOLD = 40;
+
+    /** The user has performed a three-finger double tap and hold gesture on the touch screen. */
+    public static final int GESTURE_3_FINGER_DOUBLE_TAP_AND_HOLD = 41;
+
+    /** The user has performed a two-finger double tap and hold gesture on the touch screen. */
+    public static final int GESTURE_4_FINGER_DOUBLE_TAP_AND_HOLD = 42;
+
+    /**
      * The {@link Intent} that must be declared as handled by the service.
      */
     public static final String SERVICE_INTERFACE =
@@ -373,7 +498,8 @@ public abstract class AccessibilityService extends Service {
     private static final String LOG_TAG = "AccessibilityService";
 
     /**
-     * Interface used by IAccessibilityServiceWrapper to call the service from its main thread.
+     * Interface used by IAccessibilityServiceClientWrapper to call the service from its main
+     * thread.
      * @hide
      */
     public interface Callbacks {
@@ -394,6 +520,8 @@ public abstract class AccessibilityService extends Service {
         /** Accessbility button clicked callbacks for different displays */
         void onAccessibilityButtonClicked(int displayId);
         void onAccessibilityButtonAvailabilityChanged(boolean available);
+        /** This is called when the system action list is changed. */
+        void onSystemActionsChanged();
     }
 
     /**
@@ -446,6 +574,26 @@ public abstract class AccessibilityService extends Service {
      */
     public static final int SHOW_MODE_HARD_KEYBOARD_OVERRIDDEN = 0x40000000;
 
+    /**
+     * The interval time of calling
+     * {@link AccessibilityService#takeScreenshot(int, Executor, Consumer)} API.
+     * @hide
+     */
+    @TestApi
+    public static final int ACCESSIBILITY_TAKE_SCREENSHOT_REQUEST_INTERVAL_TIMES_MS = 1000;
+
+    /** @hide */
+    public static final String KEY_ACCESSIBILITY_SCREENSHOT_HARDWAREBUFFER =
+            "screenshot_hardwareBuffer";
+
+    /** @hide */
+    public static final String KEY_ACCESSIBILITY_SCREENSHOT_COLORSPACE =
+            "screenshot_colorSpace";
+
+    /** @hide */
+    public static final String KEY_ACCESSIBILITY_SCREENSHOT_TIMESTAMP =
+            "screenshot_timestamp";
+
     private int mConnectionId = AccessibilityInteractionClient.NO_ID;
 
     @UnsupportedAppUsage
@@ -470,6 +618,7 @@ public abstract class AccessibilityService extends Service {
     private final Object mLock = new Object();
 
     private FingerprintGestureController mFingerprintGestureController;
+
 
     /**
      * Callback for {@link android.view.accessibility.AccessibilityEvent}s.
@@ -822,7 +971,7 @@ public abstract class AccessibilityService extends Service {
             return false;
         }
         List<GestureDescription.GestureStep> steps =
-                MotionEventGenerator.getGestureStepsFromGestureDescription(gesture, 100);
+                MotionEventGenerator.getGestureStepsFromGestureDescription(gesture, 16);
         try {
             synchronized (mLock) {
                 mGestureStatusCallbackSequence++;
@@ -1535,6 +1684,34 @@ public abstract class AccessibilityService extends Service {
             void onShowModeChanged(@NonNull SoftKeyboardController controller,
                     @SoftKeyboardShowMode int showMode);
         }
+
+        /**
+         * Switches the current IME for the user for whom the service is enabled. The change will
+         * persist until the current IME is explicitly changed again, and may persist beyond the
+         * life cycle of the requesting service.
+         *
+         * @param imeId The ID of the input method to make current. This IME must be installed and
+         *              enabled.
+         * @return {@code true} if the current input method was successfully switched to the input
+         *         method by {@code imeId},
+         *         {@code false} if the input method specified is not installed, not enabled, or
+         *         otherwise not available to become the current IME
+         *
+         * @see android.view.inputmethod.InputMethodInfo#getId()
+         */
+        public boolean switchToInputMethod(@NonNull String imeId) {
+            final IAccessibilityServiceConnection connection =
+                    AccessibilityInteractionClient.getInstance().getConnection(
+                            mService.mConnectionId);
+            if (connection != null) {
+                try {
+                    return connection.switchToInputMethod(imeId);
+                } catch (RemoteException re) {
+                    throw new RuntimeException(re);
+                }
+            }
+            return false;
+        }
     }
 
     /**
@@ -1593,6 +1770,29 @@ public abstract class AccessibilityService extends Service {
                 available);
     }
 
+    /** This is called when the system action list is changed. */
+    public void onSystemActionsChanged() {
+    }
+
+    /**
+     * Returns a list of system actions available in the system right now.
+     *
+     * @return A list of available system actions.
+     */
+    public final @NonNull List<AccessibilityAction> getSystemActions() {
+        IAccessibilityServiceConnection connection =
+                AccessibilityInteractionClient.getInstance().getConnection(mConnectionId);
+        if (connection != null) {
+            try {
+                return connection.getSystemActions();
+            } catch (RemoteException re) {
+                Log.w(LOG_TAG, "Error while calling getSystemActions", re);
+                re.rethrowFromSystemServer();
+            }
+        }
+        return Collections.emptyList();
+    }
+
     /**
      * Performs a global action. Such an action can be performed
      * at any moment regardless of the current application or user
@@ -1632,6 +1832,14 @@ public abstract class AccessibilityService extends Service {
      * Also the service has to opt-in to retrieve the interactive windows by
      * setting the {@link AccessibilityServiceInfo#FLAG_RETRIEVE_INTERACTIVE_WINDOWS}
      * flag. Otherwise, the search will be performed only in the active window.
+     * </p>
+     * <p>
+     * <strong>Note:</strong> If the view with {@link AccessibilityNodeInfo#FOCUS_INPUT}
+     * is on an embedded view hierarchy which is embedded in a {@link SurfaceView} via
+     * {@link SurfaceView#setChildSurfacePackage}, there is a limitation that this API
+     * won't be able to find the node for the view. It's because views don't know about
+     * the embedded hierarchies. Instead, you could traverse all the nodes to find the
+     * focus.
      * </p>
      *
      * @param focus The focus to find. One of {@link AccessibilityNodeInfo#FOCUS_INPUT} or
@@ -1721,6 +1929,53 @@ public abstract class AccessibilityService extends Service {
     }
 
     /**
+     * Takes a screenshot of the specified display and returns it via an
+     * {@link AccessibilityService.ScreenshotResult}. You can use {@link Bitmap#wrapHardwareBuffer}
+     * to construct the bitmap from the ScreenshotResult's payload.
+     * <p>
+     * <strong>Note:</strong> In order to take screenshot your service has
+     * to declare the capability to take screenshot by setting the
+     * {@link android.R.styleable#AccessibilityService_canTakeScreenshot}
+     * property in its meta-data. For details refer to {@link #SERVICE_META_DATA}.
+     * Besides, This API is only supported for default display now
+     * {@link Display#DEFAULT_DISPLAY}.
+     * </p>
+     *
+     * @param displayId The logic display id, must be {@link Display#DEFAULT_DISPLAY} for
+     *                  default display.
+     * @param executor Executor on which to run the callback.
+     * @param callback The callback invoked when the taking screenshot is done.
+     *
+     * @return {@code true} if the taking screenshot accepted, {@code false} if too little time
+     * has elapsed since the last screenshot, invalid display or internal errors.
+     */
+    public boolean takeScreenshot(int displayId, @NonNull @CallbackExecutor Executor executor,
+            @NonNull Consumer<ScreenshotResult> callback) {
+        Preconditions.checkNotNull(executor, "executor cannot be null");
+        Preconditions.checkNotNull(callback, "callback cannot be null");
+        final IAccessibilityServiceConnection connection =
+                AccessibilityInteractionClient.getInstance().getConnection(
+                        mConnectionId);
+        if (connection == null) {
+            return false;
+        }
+        try {
+            return connection.takeScreenshot(displayId, new RemoteCallback((result) -> {
+                final HardwareBuffer hardwareBuffer =
+                        result.getParcelable(KEY_ACCESSIBILITY_SCREENSHOT_HARDWAREBUFFER);
+                final ParcelableColorSpace colorSpace =
+                        result.getParcelable(KEY_ACCESSIBILITY_SCREENSHOT_COLORSPACE);
+                ScreenshotResult screenshot = new ScreenshotResult(hardwareBuffer,
+                        colorSpace.getColorSpace(),
+                        result.getLong(KEY_ACCESSIBILITY_SCREENSHOT_TIMESTAMP));
+                sendScreenshotResult(executor, callback, screenshot);
+            }));
+        } catch (RemoteException re) {
+            throw new RuntimeException(re);
+        }
+    }
+
+    /**
      * Implement to return the implementation of the internal accessibility
      * service interface.
      */
@@ -1799,6 +2054,11 @@ public abstract class AccessibilityService extends Service {
             public void onAccessibilityButtonAvailabilityChanged(boolean available) {
                 AccessibilityService.this.onAccessibilityButtonAvailabilityChanged(available);
             }
+
+            @Override
+            public void onSystemActionsChanged() {
+                AccessibilityService.this.onSystemActionsChanged();
+            }
         });
     }
 
@@ -1823,6 +2083,7 @@ public abstract class AccessibilityService extends Service {
         private static final int DO_ON_FINGERPRINT_GESTURE = 11;
         private static final int DO_ACCESSIBILITY_BUTTON_CLICKED = 12;
         private static final int DO_ACCESSIBILITY_BUTTON_AVAILABILITY_CHANGED = 13;
+        private static final int DO_ON_SYSTEM_ACTIONS_CHANGED = 14;
 
         private final HandlerCaller mCaller;
 
@@ -1919,6 +2180,11 @@ public abstract class AccessibilityService extends Service {
             mCaller.sendMessage(message);
         }
 
+        /** This is called when the system action list is changed. */
+        public void onSystemActionsChanged() {
+            mCaller.sendMessage(mCaller.obtainMessage(DO_ON_SYSTEM_ACTIONS_CHANGED));
+        }
+
         @Override
         public void executeMessage(Message message) {
             switch (message.what) {
@@ -1940,14 +2206,14 @@ public abstract class AccessibilityService extends Service {
                             /* ignore - best effort */
                         }
                     }
-                } return;
-
+                    return;
+                }
                 case DO_ON_INTERRUPT: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         mCallback.onInterrupt();
                     }
-                } return;
-
+                    return;
+                }
                 case DO_INIT: {
                     mConnectionId = message.arg1;
                     SomeArgs args = (SomeArgs) message.obj;
@@ -1967,18 +2233,18 @@ public abstract class AccessibilityService extends Service {
                         AccessibilityInteractionClient.getInstance().clearCache();
                         mCallback.init(AccessibilityInteractionClient.NO_ID, null);
                     }
-                } return;
-
+                    return;
+                }
                 case DO_ON_GESTURE: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         mCallback.onGesture((AccessibilityGestureEvent) message.obj);
                     }
-                } return;
-
+                    return;
+                }
                 case DO_CLEAR_ACCESSIBILITY_CACHE: {
                     AccessibilityInteractionClient.getInstance().clearCache();
-                } return;
-
+                    return;
+                }
                 case DO_ON_KEY_EVENT: {
                     KeyEvent event = (KeyEvent) message.obj;
                     try {
@@ -2001,8 +2267,8 @@ public abstract class AccessibilityService extends Service {
                             /* ignore - best effort */
                         }
                     }
-                } return;
-
+                    return;
+                }
                 case DO_ON_MAGNIFICATION_CHANGED: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         final SomeArgs args = (SomeArgs) message.obj;
@@ -2015,45 +2281,53 @@ public abstract class AccessibilityService extends Service {
                         mCallback.onMagnificationChanged(displayId, region, scale,
                                 centerX, centerY);
                     }
-                } return;
-
+                    return;
+                }
                 case DO_ON_SOFT_KEYBOARD_SHOW_MODE_CHANGED: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         final int showMode = (int) message.arg1;
                         mCallback.onSoftKeyboardShowModeChanged(showMode);
                     }
-                } return;
-
+                    return;
+                }
                 case DO_GESTURE_COMPLETE: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         final boolean successfully = message.arg2 == 1;
                         mCallback.onPerformGestureResult(message.arg1, successfully);
                     }
-                } return;
+                    return;
+                }
                 case DO_ON_FINGERPRINT_ACTIVE_CHANGED: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         mCallback.onFingerprintCapturingGesturesChanged(message.arg1 == 1);
                     }
-                } return;
+                    return;
+                }
                 case DO_ON_FINGERPRINT_GESTURE: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         mCallback.onFingerprintGesture(message.arg1);
                     }
-                } return;
-
-                case (DO_ACCESSIBILITY_BUTTON_CLICKED): {
+                    return;
+                }
+                case DO_ACCESSIBILITY_BUTTON_CLICKED: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         mCallback.onAccessibilityButtonClicked(message.arg1);
                     }
-                } return;
-
-                case (DO_ACCESSIBILITY_BUTTON_AVAILABILITY_CHANGED): {
+                    return;
+                }
+                case DO_ACCESSIBILITY_BUTTON_AVAILABILITY_CHANGED: {
                     if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
                         final boolean available = (message.arg1 != 0);
                         mCallback.onAccessibilityButtonAvailabilityChanged(available);
                     }
-                } return;
-
+                    return;
+                }
+                case DO_ON_SYSTEM_ACTIONS_CHANGED: {
+                    if (mConnectionId != AccessibilityInteractionClient.NO_ID) {
+                        mCallback.onSystemActionsChanged();
+                    }
+                    return;
+                }
                 default :
                     Log.w(LOG_TAG, "Unknown message type " + message.what);
             }
@@ -2090,6 +2364,122 @@ public abstract class AccessibilityService extends Service {
             this.gestureDescription = gestureDescription;
             this.callback = callback;
             this.handler = handler;
+        }
+    }
+
+    private void sendScreenshotResult(Executor executor, Consumer<ScreenshotResult> callback,
+            ScreenshotResult screenshot) {
+        final ScreenshotResult result = screenshot;
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            executor.execute(() -> callback.accept(result));
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    /**
+     * Can be used to construct a bitmap of the screenshot or any other operations for
+     * {@link AccessibilityService#takeScreenshot} API.
+     */
+    public static final class ScreenshotResult {
+        private final @NonNull HardwareBuffer mHardwareBuffer;
+        private final @NonNull ColorSpace mColorSpace;
+        private final long mTimestamp;
+
+        private ScreenshotResult(@NonNull HardwareBuffer hardwareBuffer,
+                @NonNull ColorSpace colorSpace, long timestamp) {
+            Preconditions.checkNotNull(hardwareBuffer, "hardwareBuffer cannot be null");
+            Preconditions.checkNotNull(colorSpace, "colorSpace cannot be null");
+            mHardwareBuffer = hardwareBuffer;
+            mColorSpace = colorSpace;
+            mTimestamp = timestamp;
+        }
+
+        /**
+         * Gets the {@link ColorSpace} identifying a specific organization of colors of the
+         * screenshot.
+         *
+         * @return the color space
+         */
+        @NonNull
+        public ColorSpace getColorSpace() {
+            return mColorSpace;
+        }
+
+        /**
+         * Gets the {@link HardwareBuffer} representing a memory buffer of the screenshot.
+         * <p>
+         * <strong>Note:</strong> The application should call {@link HardwareBuffer#close()} when
+         * the buffer is no longer needed to free the underlying resources.
+         * </p>
+         *
+         * @return the hardware buffer
+         */
+        @NonNull
+        public HardwareBuffer getHardwareBuffer() {
+            return mHardwareBuffer;
+        }
+
+        /**
+         * Gets the timestamp of taking the screenshot.
+         *
+         * @return milliseconds of non-sleep uptime before screenshot since boot and it's from
+         * {@link SystemClock#uptimeMillis()}
+         */
+        public long getTimestamp() {
+            return mTimestamp;
+        };
+    }
+
+    /**
+     * When {@link AccessibilityServiceInfo#FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is enabled, this
+     * function requests that touch interactions starting in the specified region of the screen
+     * bypass the gesture detector. There can only be one gesture detection passthrough region per
+     * display. Requesting a new gesture detection passthrough region clears the existing one. To
+     * disable this passthrough and return to the original behavior, pass in an empty region. When
+     * {@link AccessibilityServiceInfo#FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is disabled this
+     * function has no effect.
+     *
+     * @param displayId The display on which to set this region.
+     * @param region the region of the screen.
+     */
+    public void setGestureDetectionPassthroughRegion(int displayId, @NonNull Region region) {
+        Preconditions.checkNotNull(region, "region cannot be null");
+        final IAccessibilityServiceConnection connection =
+                AccessibilityInteractionClient.getInstance().getConnection(mConnectionId);
+        if (connection != null) {
+            try {
+                connection.setGestureDetectionPassthroughRegion(displayId, region);
+            } catch (RemoteException re) {
+                throw new RuntimeException(re);
+            }
+        }
+    }
+
+    /**
+     * When {@link AccessibilityServiceInfo#FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is enabled, this
+     * function requests that touch interactions starting in the specified region of the screen
+     * bypass the touch explorer and go straight to the view hierarchy. There can only be one touch
+     * exploration passthrough region per display. Requesting a new touch explorationpassthrough
+     * region clears the existing one. To disable this passthrough and return to the original
+     * behavior, pass in an empty region. When {@link
+     * AccessibilityServiceInfo#FLAG_REQUEST_TOUCH_EXPLORATION_MODE} is disabled this function has
+     * no effect.
+     *
+     * @param displayId The display on which to set this region.
+     * @param region the region of the screen .
+     */
+    public void setTouchExplorationPassthroughRegion(int displayId, @NonNull Region region) {
+        Preconditions.checkNotNull(region, "region cannot be null");
+        final IAccessibilityServiceConnection connection =
+                AccessibilityInteractionClient.getInstance().getConnection(mConnectionId);
+        if (connection != null) {
+            try {
+                connection.setTouchExplorationPassthroughRegion(displayId, region);
+            } catch (RemoteException re) {
+                throw new RuntimeException(re);
+            }
         }
     }
 }

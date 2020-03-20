@@ -36,7 +36,7 @@ import android.util.Log;
 import com.android.systemui.R;
 import com.android.systemui.SystemUI;
 import com.android.systemui.broadcast.BroadcastDispatcher;
-import com.android.systemui.dagger.qualifiers.BgHandler;
+import com.android.systemui.dagger.qualifiers.Background;
 
 import com.google.android.collect.Sets;
 
@@ -70,7 +70,7 @@ public class ThemeOverlayController extends SystemUI {
 
     @Inject
     public ThemeOverlayController(Context context, BroadcastDispatcher broadcastDispatcher,
-            @BgHandler Handler bgHandler) {
+            @Background Handler bgHandler) {
         super(context);
         mBroadcastDispatcher = broadcastDispatcher;
         mBgHandler = bgHandler;
@@ -88,7 +88,7 @@ public class ThemeOverlayController extends SystemUI {
         final IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_USER_SWITCHED);
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_ADDED);
-        mBroadcastDispatcher.registerReceiver(new BroadcastReceiver() {
+        mBroadcastDispatcher.registerReceiverWithHandler(new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
                 if (DEBUG) Log.d(TAG, "Updating overlays for user switch / profile added.");
@@ -99,8 +99,10 @@ public class ThemeOverlayController extends SystemUI {
                 Settings.Secure.getUriFor(Settings.Secure.THEME_CUSTOMIZATION_OVERLAY_PACKAGES),
                 false,
                 new ContentObserver(mBgHandler) {
+
                     @Override
-                    public void onChange(boolean selfChange, Uri uri, int userId) {
+                    public void onChange(boolean selfChange, Iterable<Uri> uris, int flags,
+                            int userId) {
                         if (DEBUG) Log.d(TAG, "Overlay changed for user: " + userId);
                         if (ActivityManager.getCurrentUser() == userId) {
                             updateThemeOverlays();

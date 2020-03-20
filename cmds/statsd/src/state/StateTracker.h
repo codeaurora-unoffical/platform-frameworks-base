@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <statslog.h>
+#include <atoms_info.h>
 #include <utils/RefBase.h>
 #include "HashableDimensionKey.h"
 #include "logd/LogEvent.h"
@@ -72,7 +72,9 @@ private:
 
     int32_t mDefaultState = kStateUnknown;
 
-    int32_t mResetState;
+    int32_t mResetState = kStateUnknown;
+
+    const bool mNested;
 
     // Maps primary key to state value info
     std::unordered_map<HashableDimensionKey, StateValueInfo> mStateMap;

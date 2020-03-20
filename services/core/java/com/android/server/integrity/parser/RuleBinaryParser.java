@@ -17,28 +17,35 @@
 package com.android.server.integrity.parser;
 
 import static com.android.server.integrity.model.ComponentBitSize.ATOMIC_FORMULA_START;
+import static com.android.server.integrity.model.ComponentBitSize.BYTE_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.COMPOUND_FORMULA_END;
 import static com.android.server.integrity.model.ComponentBitSize.COMPOUND_FORMULA_START;
 import static com.android.server.integrity.model.ComponentBitSize.CONNECTOR_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.EFFECT_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.FORMAT_VERSION_BITS;
+import static com.android.server.integrity.model.ComponentBitSize.INSTALLER_ALLOWED_BY_MANIFEST_START;
 import static com.android.server.integrity.model.ComponentBitSize.IS_HASHED_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.KEY_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.OPERATOR_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.SEPARATOR_BITS;
 import static com.android.server.integrity.model.ComponentBitSize.SIGNAL_BIT;
 import static com.android.server.integrity.model.ComponentBitSize.VALUE_SIZE_BITS;
+import static com.android.server.integrity.parser.BinaryFileOperations.getBooleanValue;
+import static com.android.server.integrity.parser.BinaryFileOperations.getIntValue;
+import static com.android.server.integrity.parser.BinaryFileOperations.getStringValue;
 
 import android.content.integrity.AtomicFormula;
 import android.content.integrity.CompoundFormula;
-import android.content.integrity.Formula;
+import android.content.integrity.InstallerAllowedByManifestFormula;
+import android.content.integrity.IntegrityFormula;
 import android.content.integrity.Rule;
 
 import com.android.server.integrity.model.BitInputStream;
 
+import java.io.BufferedInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /** A helper class to parse rules into the {@link Rule} model from Binary representation. */
@@ -46,33 +53,67 @@ public class RuleBinaryParser implements RuleParser {
 
     @Override
     public List<Rule> parse(byte[] ruleBytes) throws RuleParseException {
-        try {
-            BitInputStream bitInputStream = new BitInputStream(ruleBytes);
-            return parseRules(bitInputStream);
-        } catch (Exception e) {
-            throw new RuleParseException(e.getMessage(), e);
-        }
+        return parse(RandomAccessObject.ofBytes(ruleBytes), Collections.emptyList());
     }
 
     @Override
-    public List<Rule> parse(InputStream inputStream) throws RuleParseException {
-        try {
-            BitInputStream bitInputStream = new BitInputStream(inputStream);
-            return parseRules(bitInputStream);
+    public List<Rule> parse(RandomAccessObject randomAccessObject, List<RuleIndexRange> indexRanges)
+            throws RuleParseException {
+        try (RandomAccessInputStream randomAccessInputStream =
+                new RandomAccessInputStream(randomAccessObject)) {
+            return parseRules(randomAccessInputStream, indexRanges);
         } catch (Exception e) {
             throw new RuleParseException(e.getMessage(), e);
         }
     }
 
-    private List<Rule> parseRules(BitInputStream bitInputStream) throws IOException {
-        List<Rule> parsedRules = new ArrayList<>();
+    private List<Rule> parseRules(
+            RandomAccessInputStream randomAccessInputStream, List<RuleIndexRange> indexRanges)
+            throws IOException {
 
         // Read the rule binary file format version.
-        bitInputStream.getNext(FORMAT_VERSION_BITS);
+        randomAccessInputStream.skip(FORMAT_VERSION_BITS / BYTE_BITS);
 
-        while (bitInputStream.hasNext()) {
-            if (bitInputStream.getNext(SIGNAL_BIT) == 1) {
-                parsedRules.add(parseRule(bitInputStream));
+        return indexRanges.isEmpty()
+                ? parseAllRules(randomAccessInputStream)
+                : parseIndexedRules(randomAccessInputStream, indexRanges);
+    }
+
+    private List<Rule> parseAllRules(RandomAccessInputStream randomAccessInputStream)
+            throws IOException {
+        List<Rule> parsedRules = new ArrayList<>();
+
+        BitInputStream inputStream =
+                new BitInputStream(new BufferedInputStream(randomAccessInputStream));
+        while (inputStream.hasNext()) {
+            if (inputStream.getNext(SIGNAL_BIT) == 1) {
+                parsedRules.add(parseRule(inputStream));
+            }
+        }
+
+        return parsedRules;
+    }
+
+    private List<Rule> parseIndexedRules(
+            RandomAccessInputStream randomAccessInputStream, List<RuleIndexRange> indexRanges)
+            throws IOException {
+        List<Rule> parsedRules = new ArrayList<>();
+
+        for (RuleIndexRange range : indexRanges) {
+            randomAccessInputStream.seek(range.getStartIndex());
+
+            BitInputStream inputStream =
+                    new BitInputStream(
+                            new BufferedInputStream(
+                                    new LimitInputStream(
+                                            randomAccessInputStream,
+                                            range.getEndIndex() - range.getStartIndex())));
+
+            // Read the rules until we reach the end index. available() here is not reliable.
+            while (inputStream.hasNext()) {
+                if (inputStream.getNext(SIGNAL_BIT) == 1) {
+                    parsedRules.add(parseRule(inputStream));
+                }
             }
         }
 
@@ -80,7 +121,7 @@ public class RuleBinaryParser implements RuleParser {
     }
 
     private Rule parseRule(BitInputStream bitInputStream) throws IOException {
-        Formula formula = parseFormula(bitInputStream);
+        IntegrityFormula formula = parseFormula(bitInputStream);
         int effect = bitInputStream.getNext(EFFECT_BITS);
 
         if (bitInputStream.getNext(SIGNAL_BIT) != 1) {
@@ -90,7 +131,7 @@ public class RuleBinaryParser implements RuleParser {
         return new Rule(formula, effect);
     }
 
-    private Formula parseFormula(BitInputStream bitInputStream) throws IOException {
+    private IntegrityFormula parseFormula(BitInputStream bitInputStream) throws IOException {
         int separator = bitInputStream.getNext(SEPARATOR_BITS);
         switch (separator) {
             case ATOMIC_FORMULA_START:
@@ -99,6 +140,8 @@ public class RuleBinaryParser implements RuleParser {
                 return parseCompoundFormula(bitInputStream);
             case COMPOUND_FORMULA_END:
                 return null;
+            case INSTALLER_ALLOWED_BY_MANIFEST_START:
+                return new InstallerAllowedByManifestFormula();
             default:
                 throw new IllegalArgumentException(
                         String.format("Unknown formula separator: %s", separator));
@@ -107,9 +150,9 @@ public class RuleBinaryParser implements RuleParser {
 
     private CompoundFormula parseCompoundFormula(BitInputStream bitInputStream) throws IOException {
         int connector = bitInputStream.getNext(CONNECTOR_BITS);
-        List<Formula> formulas = new ArrayList<>();
+        List<IntegrityFormula> formulas = new ArrayList<>();
 
-        Formula parsedFormula = parseFormula(bitInputStream);
+        IntegrityFormula parsedFormula = parseFormula(bitInputStream);
         while (parsedFormula != null) {
             formulas.add(parsedFormula);
             parsedFormula = parseFormula(bitInputStream);
@@ -122,24 +165,26 @@ public class RuleBinaryParser implements RuleParser {
         int key = bitInputStream.getNext(KEY_BITS);
         int operator = bitInputStream.getNext(OPERATOR_BITS);
 
-        boolean isHashedValue = bitInputStream.getNext(IS_HASHED_BITS) == 1;
-        int valueSize = bitInputStream.getNext(VALUE_SIZE_BITS);
-        StringBuilder value = new StringBuilder();
-        while (valueSize-- > 0) {
-            value.append((char) bitInputStream.getNext(/* numOfBits= */ 8));
-        }
-
         switch (key) {
             case AtomicFormula.PACKAGE_NAME:
             case AtomicFormula.APP_CERTIFICATE:
             case AtomicFormula.INSTALLER_NAME:
             case AtomicFormula.INSTALLER_CERTIFICATE:
-                return new AtomicFormula.StringAtomicFormula(key, value.toString(), isHashedValue);
+            case AtomicFormula.STAMP_CERTIFICATE_HASH:
+                boolean isHashedValue = bitInputStream.getNext(IS_HASHED_BITS) == 1;
+                int valueSize = bitInputStream.getNext(VALUE_SIZE_BITS);
+                String stringValue = getStringValue(bitInputStream, valueSize, isHashedValue);
+                return new AtomicFormula.StringAtomicFormula(key, stringValue, isHashedValue);
             case AtomicFormula.VERSION_CODE:
-                return new AtomicFormula.IntAtomicFormula(
-                        key, operator, Integer.parseInt(value.toString()));
+                // TODO(b/147880712): temporary hack until our input handles long
+                long upper = getIntValue(bitInputStream);
+                long lower = getIntValue(bitInputStream);
+                long longValue = (upper << 32) | lower;
+                return new AtomicFormula.LongAtomicFormula(key, operator, longValue);
             case AtomicFormula.PRE_INSTALLED:
-                return new AtomicFormula.BooleanAtomicFormula(key, value.toString().equals("1"));
+            case AtomicFormula.STAMP_TRUSTED:
+                boolean booleanValue = getBooleanValue(bitInputStream);
+                return new AtomicFormula.BooleanAtomicFormula(key, booleanValue);
             default:
                 throw new IllegalArgumentException(String.format("Unknown key: %d", key));
         }

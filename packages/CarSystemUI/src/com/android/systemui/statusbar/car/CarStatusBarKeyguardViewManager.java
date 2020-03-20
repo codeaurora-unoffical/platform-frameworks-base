@@ -24,13 +24,17 @@ import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.keyguard.ViewMediatorCallback;
 import com.android.systemui.R;
 import com.android.systemui.dock.DockManager;
+import com.android.systemui.navigationbar.car.CarNavigationBarController;
 import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.SysuiStatusBarStateController;
 import com.android.systemui.statusbar.phone.NavigationModeController;
+import com.android.systemui.statusbar.phone.NotificationShadeWindowController;
 import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
-import com.android.systemui.statusbar.phone.StatusBarWindowController;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -40,6 +44,8 @@ import javax.inject.Singleton;
 public class CarStatusBarKeyguardViewManager extends StatusBarKeyguardViewManager {
 
     protected boolean mShouldHideNavBar;
+    private final CarNavigationBarController mCarNavigationBarController;
+    private Set<OnKeyguardCancelClickedListener> mKeygaurdCancelClickedListenerSet;
 
     @Inject
     public CarStatusBarKeyguardViewManager(Context context,
@@ -50,15 +56,18 @@ public class CarStatusBarKeyguardViewManager extends StatusBarKeyguardViewManage
             KeyguardUpdateMonitor keyguardUpdateMonitor,
             NavigationModeController navigationModeController,
             DockManager dockManager,
-            StatusBarWindowController statusBarWindowController,
+            NotificationShadeWindowController notificationShadeWindowController,
             KeyguardStateController keyguardStateController,
-            NotificationMediaManager notificationMediaManager) {
+            NotificationMediaManager notificationMediaManager,
+            CarNavigationBarController carNavigationBarController) {
         super(context, callback, lockPatternUtils, sysuiStatusBarStateController,
                 configurationController, keyguardUpdateMonitor, navigationModeController,
-                dockManager, statusBarWindowController, keyguardStateController,
+                dockManager, notificationShadeWindowController, keyguardStateController,
                 notificationMediaManager);
         mShouldHideNavBar = context.getResources()
                 .getBoolean(R.bool.config_hideNavWhenKeyguardBouncerShown);
+        mCarNavigationBarController = carNavigationBarController;
+        mKeygaurdCancelClickedListenerSet = new HashSet<>();
     }
 
     @Override
@@ -66,8 +75,10 @@ public class CarStatusBarKeyguardViewManager extends StatusBarKeyguardViewManage
         if (!mShouldHideNavBar) {
             return;
         }
-        CarStatusBar statusBar = (CarStatusBar) mStatusBar;
-        statusBar.setNavBarVisibility(navBarVisible ? View.VISIBLE : View.GONE);
+        int visibility = navBarVisible ? View.VISIBLE : View.GONE;
+        mCarNavigationBarController.setBottomWindowVisibility(visibility);
+        mCarNavigationBarController.setLeftWindowVisibility(visibility);
+        mCarNavigationBarController.setRightWindowVisibility(visibility);
     }
 
     /**
@@ -86,8 +97,7 @@ public class CarStatusBarKeyguardViewManager extends StatusBarKeyguardViewManage
      */
     @Override
     public void onCancelClicked() {
-        CarStatusBar statusBar = (CarStatusBar) mStatusBar;
-        statusBar.showUserSwitcher();
+        mKeygaurdCancelClickedListenerSet.forEach(OnKeyguardCancelClickedListener::onCancelClicked);
     }
 
     /**
@@ -97,4 +107,31 @@ public class CarStatusBarKeyguardViewManager extends StatusBarKeyguardViewManage
      */
     @Override
     public void onDensityOrFontScaleChanged() {  }
+
+    /**
+     * Add listener for keyguard cancel clicked.
+     */
+    public void addOnKeyguardCancelClickedListener(
+            OnKeyguardCancelClickedListener keyguardCancelClickedListener) {
+        mKeygaurdCancelClickedListenerSet.add(keyguardCancelClickedListener);
+    }
+
+    /**
+     * Remove listener for keyguard cancel clicked.
+     */
+    public void removeOnKeyguardCancelClickedListener(
+            OnKeyguardCancelClickedListener keyguardCancelClickedListener) {
+        mKeygaurdCancelClickedListenerSet.remove(keyguardCancelClickedListener);
+    }
+
+
+    /**
+     * Defines a callback for keyguard cancel button clicked listeners.
+     */
+    public interface OnKeyguardCancelClickedListener {
+        /**
+         * Called when keyguard cancel button is clicked.
+         */
+        void onCancelClicked();
+    }
 }

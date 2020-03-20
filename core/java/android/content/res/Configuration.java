@@ -45,8 +45,9 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.app.UiModeManager;
 import android.app.WindowConfiguration;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.LocaleProto;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ActivityInfo.Config;
@@ -1973,6 +1974,15 @@ public final class Configuration implements Parcelable, Comparable<Configuration
      */
     private Configuration(Parcel source) {
         readFromParcel(source);
+    }
+
+
+    /**
+     * Retuns whether the configuration is in night mode
+     * @return true if night mode is active and false otherwise
+     */
+    public boolean isNightModeActive() {
+        return (uiMode & UI_MODE_NIGHT_MASK) == UI_MODE_NIGHT_YES;
     }
 
     public int compareTo(Configuration that) {

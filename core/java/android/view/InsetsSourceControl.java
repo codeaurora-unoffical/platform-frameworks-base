@@ -39,6 +39,17 @@ public class InsetsSourceControl implements Parcelable {
         mSurfacePosition = surfacePosition;
     }
 
+    public InsetsSourceControl(InsetsSourceControl other) {
+        mType = other.mType;
+        if (other.mLeash != null) {
+            mLeash = new SurfaceControl();
+            mLeash.copyFrom(other.mLeash);
+        } else {
+            mLeash = null;
+        }
+        mSurfacePosition = new Point(other.mSurfacePosition);
+    }
+
     public int getType() {
         return mType;
     }
@@ -81,6 +92,12 @@ public class InsetsSourceControl implements Parcelable {
         dest.writeInt(mType);
         dest.writeParcelable(mLeash, 0 /* flags*/);
         dest.writeParcelable(mSurfacePosition, 0 /* flags*/);
+    }
+
+    public void release() {
+        if (mLeash != null) {
+            mLeash.release();
+        }
     }
 
     public static final @android.annotation.NonNull Creator<InsetsSourceControl> CREATOR

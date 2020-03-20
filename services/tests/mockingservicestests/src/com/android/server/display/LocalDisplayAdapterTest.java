@@ -20,6 +20,8 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
@@ -29,6 +31,7 @@ import android.os.Binder;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.view.Display;
 import android.view.DisplayAddress;
 import android.view.SurfaceControl;
 
@@ -47,6 +50,7 @@ import org.mockito.Mock;
 import org.mockito.quality.Strictness;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedList;
 
 
@@ -109,10 +113,11 @@ public class LocalDisplayAdapterTest {
      */
     @Test
     public void testPrivateDisplay() throws Exception {
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_A), createDummyDisplayInfo()));
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_B), createDummyDisplayInfo()));
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_C), createDummyDisplayInfo()));
+        setUpDisplay(new FakeDisplay(PORT_A));
+        setUpDisplay(new FakeDisplay(PORT_B));
+        setUpDisplay(new FakeDisplay(PORT_C));
         updateAvailableDisplays();
+
         doReturn(new int[]{ PORT_B }).when(mMockedResources)
                 .getIntArray(com.android.internal.R.array.config_localPrivateDisplayPorts);
         mAdapter.registerLocked();
@@ -135,9 +140,10 @@ public class LocalDisplayAdapterTest {
      */
     @Test
     public void testPublicDisplaysForNoConfigLocalPrivateDisplayPorts() throws Exception {
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_A), createDummyDisplayInfo()));
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_C), createDummyDisplayInfo()));
+        setUpDisplay(new FakeDisplay(PORT_A));
+        setUpDisplay(new FakeDisplay(PORT_C));
         updateAvailableDisplays();
+
         // config_localPrivateDisplayPorts is null
         mAdapter.registerLocked();
 
@@ -166,8 +172,8 @@ public class LocalDisplayAdapterTest {
     @Test
     public void testDpiValues() throws Exception {
         // needs default one always
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_A), createDummyDisplayInfo()));
-        setUpDisplay(new DisplayConfig(createDisplayAddress(PORT_B), createDummyDisplayInfo()));
+        setUpDisplay(new FakeDisplay(PORT_A));
+        setUpDisplay(new FakeDisplay(PORT_B));
         updateAvailableDisplays();
         mAdapter.registerLocked();
 
@@ -179,6 +185,67 @@ public class LocalDisplayAdapterTest {
         assertDisplayDpi(
                 mListener.addedDisplays.get(1).getDisplayDeviceInfoLocked(), PORT_B, 100, 100,
                 16000);
+    }
+
+    @Test
+    public void testAfterDisplayChange_ModesAreUpdated() throws Exception {
+        SurfaceControl.DisplayConfig displayInfo = createFakeDisplayConfig(1920, 1080, 60f);
+        SurfaceControl.DisplayConfig[] configs =
+                new SurfaceControl.DisplayConfig[]{displayInfo};
+        FakeDisplay display = new FakeDisplay(PORT_A, configs, 0);
+        setUpDisplay(display);
+        updateAvailableDisplays();
+        mAdapter.registerLocked();
+        waitForHandlerToComplete(mHandler, HANDLER_WAIT_MS);
+
+        assertThat(mListener.addedDisplays.size()).isEqualTo(1);
+        assertThat(mListener.changedDisplays).isEmpty();
+
+        DisplayDeviceInfo displayDeviceInfo = mListener.addedDisplays.get(
+                0).getDisplayDeviceInfoLocked();
+
+        assertThat(displayDeviceInfo.supportedModes.length).isEqualTo(configs.length);
+        assertModeIsSupported(displayDeviceInfo.supportedModes, displayInfo);
+
+        Display.Mode defaultMode = getModeById(displayDeviceInfo, displayDeviceInfo.defaultModeId);
+        assertThat(defaultMode.matches(displayInfo.width, displayInfo.height,
+                displayInfo.refreshRate)).isTrue();
+
+        Display.Mode activeMode = getModeById(displayDeviceInfo, displayDeviceInfo.modeId);
+        assertThat(activeMode.matches(displayInfo.width, displayInfo.height,
+                displayInfo.refreshRate)).isTrue();
+
+        // Change the display
+        SurfaceControl.DisplayConfig addedDisplayInfo = createFakeDisplayConfig(3840, 2160,
+                60f);
+        configs = new SurfaceControl.DisplayConfig[]{displayInfo, addedDisplayInfo};
+        display.configs = configs;
+        display.activeConfig = 1;
+        setUpDisplay(display);
+        mAdapter.registerLocked();
+        waitForHandlerToComplete(mHandler, HANDLER_WAIT_MS);
+
+        assertThat(SurfaceControl.getActiveConfig(display.token)).isEqualTo(1);
+        assertThat(SurfaceControl.getDisplayConfigs(display.token).length).isEqualTo(2);
+
+        assertThat(mListener.addedDisplays.size()).isEqualTo(1);
+        assertThat(mListener.changedDisplays.size()).isEqualTo(1);
+
+        DisplayDevice displayDevice = mListener.changedDisplays.get(0);
+        displayDevice.applyPendingDisplayDeviceInfoChangesLocked();
+        displayDeviceInfo = displayDevice.getDisplayDeviceInfoLocked();
+
+        assertThat(displayDeviceInfo.supportedModes.length).isEqualTo(configs.length);
+        assertModeIsSupported(displayDeviceInfo.supportedModes, displayInfo);
+        assertModeIsSupported(displayDeviceInfo.supportedModes, addedDisplayInfo);
+
+        activeMode = getModeById(displayDeviceInfo, displayDeviceInfo.modeId);
+        assertThat(activeMode.matches(addedDisplayInfo.width, addedDisplayInfo.height,
+                addedDisplayInfo.refreshRate)).isTrue();
+
+        defaultMode = getModeById(displayDeviceInfo, displayDeviceInfo.defaultModeId);
+        assertThat(defaultMode.matches(addedDisplayInfo.width, addedDisplayInfo.height,
+                addedDisplayInfo.refreshRate)).isTrue();
     }
 
     private void assertDisplayDpi(DisplayDeviceInfo info, int expectedPort,
@@ -193,33 +260,56 @@ public class LocalDisplayAdapterTest {
         assertEquals(expectedDensityDpi, info.densityDpi);
     }
 
-    private class DisplayConfig {
-        public final DisplayAddress.Physical address;
-        public final IBinder displayToken = new Binder();
-        public final SurfaceControl.PhysicalDisplayInfo displayInfo;
+    private Display.Mode getModeById(DisplayDeviceInfo displayDeviceInfo, int modeId) {
+        return Arrays.stream(displayDeviceInfo.supportedModes)
+                .filter(mode -> mode.getModeId() == modeId)
+                .findFirst()
+                .get();
+    }
 
-        private DisplayConfig(
-                DisplayAddress.Physical address, SurfaceControl.PhysicalDisplayInfo displayInfo) {
-            this.address = address;
-            this.displayInfo = displayInfo;
+    private void assertModeIsSupported(Display.Mode[] supportedModes,
+            SurfaceControl.DisplayConfig mode) {
+        assertThat(Arrays.stream(supportedModes).anyMatch(
+                x -> x.matches(mode.width, mode.height, mode.refreshRate))).isTrue();
+    }
+
+    private static class FakeDisplay {
+        public final DisplayAddress.Physical address;
+        public final IBinder token = new Binder();
+        public final SurfaceControl.DisplayInfo info;
+        public SurfaceControl.DisplayConfig[] configs;
+        public int activeConfig;
+
+        private FakeDisplay(int port) {
+            this.address = createDisplayAddress(port);
+            this.info = createFakeDisplayInfo();
+            this.configs = new SurfaceControl.DisplayConfig[]{
+                    createFakeDisplayConfig(800, 600, 60f)
+            };
+            this.activeConfig = 0;
+        }
+
+        private FakeDisplay(int port, SurfaceControl.DisplayConfig[] configs, int activeConfig) {
+            this.address = createDisplayAddress(port);
+            this.info = createFakeDisplayInfo();
+            this.configs = configs;
+            this.activeConfig = activeConfig;
         }
     }
 
-    private void setUpDisplay(DisplayConfig config) {
-        mAddresses.add(config.address);
-        doReturn(config.displayToken).when(() ->
-                SurfaceControl.getPhysicalDisplayToken(config.address.getPhysicalDisplayId()));
-        doReturn(new SurfaceControl.PhysicalDisplayInfo[]{
-                config.displayInfo
-        }).when(() -> SurfaceControl.getDisplayConfigs(config.displayToken));
-        doReturn(0).when(() -> SurfaceControl.getActiveConfig(config.displayToken));
-        doReturn(0).when(() -> SurfaceControl.getActiveColorMode(config.displayToken));
-        doReturn(new int[]{
-                0
-        }).when(() -> SurfaceControl.getDisplayColorModes(config.displayToken));
-        doReturn(new int[]{
-                0
-        }).when(() -> SurfaceControl.getAllowedDisplayConfigs(config.displayToken));
+    private void setUpDisplay(FakeDisplay display) {
+        mAddresses.add(display.address);
+        doReturn(display.token).when(() ->
+                SurfaceControl.getPhysicalDisplayToken(display.address.getPhysicalDisplayId()));
+        doReturn(display.info).when(() -> SurfaceControl.getDisplayInfo(display.token));
+        doReturn(display.configs).when(
+                () -> SurfaceControl.getDisplayConfigs(display.token));
+        doReturn(display.activeConfig).when(() -> SurfaceControl.getActiveConfig(display.token));
+        doReturn(0).when(() -> SurfaceControl.getActiveColorMode(display.token));
+        doReturn(new int[] { 0 }).when(
+                () -> SurfaceControl.getDisplayColorModes(display.token));
+        doReturn(new SurfaceControl.DesiredDisplayConfigSpecs(0, 60.f, 60.f))
+                .when(() -> SurfaceControl.getDesiredDisplayConfigSpecs(display.token));
     }
 
     private void updateAvailableDisplays() {
@@ -236,16 +326,21 @@ public class LocalDisplayAdapterTest {
         return DisplayAddress.fromPortAndModel((byte) port, DISPLAY_MODEL);
     }
 
-    private static SurfaceControl.PhysicalDisplayInfo createDummyDisplayInfo() {
-        SurfaceControl.PhysicalDisplayInfo info = new SurfaceControl.PhysicalDisplayInfo();
+    private static SurfaceControl.DisplayInfo createFakeDisplayInfo() {
+        final SurfaceControl.DisplayInfo info = new SurfaceControl.DisplayInfo();
         info.density = 100;
-        info.xDpi = 100;
-        info.yDpi = 100;
-        info.secure = false;
-        info.width = 800;
-        info.height = 600;
-
         return info;
+    }
+
+    private static SurfaceControl.DisplayConfig createFakeDisplayConfig(int width, int height,
+            float refreshRate) {
+        final SurfaceControl.DisplayConfig config = new SurfaceControl.DisplayConfig();
+        config.width = width;
+        config.height = height;
+        config.refreshRate = refreshRate;
+        config.xDpi = 100;
+        config.yDpi = 100;
+        return config;
     }
 
     private void waitForHandlerToComplete(Handler handler, long waitTimeMs)
@@ -263,17 +358,19 @@ public class LocalDisplayAdapterTest {
 
     private class TestListener implements DisplayAdapter.Listener {
         public ArrayList<DisplayDevice> addedDisplays = new ArrayList<>();
+        public ArrayList<DisplayDevice> changedDisplays = new ArrayList<>();
 
         @Override
         public void onDisplayDeviceEvent(DisplayDevice device, int event) {
             if (event == DisplayAdapter.DISPLAY_DEVICE_EVENT_ADDED) {
                 addedDisplays.add(device);
+            } else if (event == DisplayAdapter.DISPLAY_DEVICE_EVENT_CHANGED) {
+                changedDisplays.add(device);
             }
         }
 
         @Override
         public void onTraversalRequested() {
-
         }
     }
 }

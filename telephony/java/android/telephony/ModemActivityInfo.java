@@ -16,14 +16,16 @@
 
 package android.telephony;
 
+import android.annotation.IntDef;
 import android.annotation.NonNull;
-import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.SystemClock;
 import android.util.Range;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -44,6 +46,38 @@ public final class ModemActivityInfo implements Parcelable {
      * </ul>
      */
     public static final int TX_POWER_LEVELS = 5;
+    /**
+     * Tx(transmit) power level 0: tx_power < 0dBm
+     */
+    public static final int TX_POWER_LEVEL_0 = 0;
+    /**
+     * Tx(transmit) power level 1: 0dBm < tx_power < 5dBm
+     */
+    public static final int TX_POWER_LEVEL_1 = 1;
+    /**
+     * Tx(transmit) power level 2: 5dBm < tx_power < 15dBm
+     */
+    public static final int TX_POWER_LEVEL_2 = 2;
+    /**
+     * Tx(transmit) power level 3: 15dBm < tx_power < 20dBm.
+     */
+    public static final int TX_POWER_LEVEL_3 = 3;
+    /**
+     * Tx(transmit) power level 4: tx_power > 20dBm
+     */
+    public static final int TX_POWER_LEVEL_4 = 4;
+
+    /** @hide */
+    @IntDef(prefix = {"TX_POWER_LEVEL_"}, value = {
+            TX_POWER_LEVEL_0,
+            TX_POWER_LEVEL_1,
+            TX_POWER_LEVEL_2,
+            TX_POWER_LEVEL_3,
+            TX_POWER_LEVEL_4,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface TxPowerLevel {}
+
     private static final Range<Integer>[] TX_POWER_RANGES = new Range[] {
         new Range<>(Integer.MIN_VALUE, 0),
         new Range<>(0, 5),
@@ -60,7 +94,7 @@ public final class ModemActivityInfo implements Parcelable {
     private int mRxTimeMs;
 
     public ModemActivityInfo(long timestamp, int sleepTimeMs, int idleTimeMs,
-                        @Nullable int[] txTimeMs, int rxTimeMs) {
+                        @NonNull int[] txTimeMs, int rxTimeMs) {
         mTimestamp = timestamp;
         mSleepTimeMs = sleepTimeMs;
         mIdleTimeMs = idleTimeMs;
@@ -69,13 +103,10 @@ public final class ModemActivityInfo implements Parcelable {
     }
 
     /** helper API to populate tx power range for each bucket **/
-    private void populateTransmitPowerRange(@Nullable int[] transmitPowerMs) {
+    private void populateTransmitPowerRange(@NonNull int[] transmitPowerMs) {
         int i = 0;
-        if (transmitPowerMs != null) {
-            for ( ; i < Math.min(transmitPowerMs.length, TX_POWER_LEVELS); i++) {
-                mTransmitPowerInfo.add(i,
-                        new TransmitPower(TX_POWER_RANGES[i], transmitPowerMs[i]));
-            }
+        for ( ; i < Math.min(transmitPowerMs.length, TX_POWER_LEVELS); i++) {
+            mTransmitPowerInfo.add(i, new TransmitPower(TX_POWER_RANGES[i], transmitPowerMs[i]));
         }
         // Make sure that mTransmitPowerInfo is fully initialized.
         for ( ; i < TX_POWER_LEVELS; i++) {
@@ -98,7 +129,7 @@ public final class ModemActivityInfo implements Parcelable {
         return 0;
     }
 
-    public static final @NonNull Parcelable.Creator<ModemActivityInfo> CREATOR =
+    public static final @android.annotation.NonNull Parcelable.Creator<ModemActivityInfo> CREATOR =
             new Parcelable.Creator<ModemActivityInfo>() {
         public ModemActivityInfo createFromParcel(Parcel in) {
             long timestamp = in.readLong();
@@ -153,7 +184,7 @@ public final class ModemActivityInfo implements Parcelable {
     }
 
     /** @hide */
-    public void setTransmitTimeMillis(@Nullable int[] txTimeMs) {
+    public void setTransmitTimeMillis(int[] txTimeMs) {
         populateTransmitPowerRange(txTimeMs);
     }
 
@@ -205,10 +236,10 @@ public final class ModemActivityInfo implements Parcelable {
     }
 
     /**
+     * Indicate if the ModemActivityInfo is invalid due to modem's invalid reporting.
+     *
      * @return {@code true} if this {@link ModemActivityInfo} record is valid,
      * {@code false} otherwise.
-     *
-     * @hide
      */
     public boolean isValid() {
         for (TransmitPower powerInfo : getTransmitPowerInfo()) {

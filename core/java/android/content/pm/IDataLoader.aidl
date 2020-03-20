@@ -16,19 +16,22 @@
 
 package android.content.pm;
 
-import android.os.Bundle;
+import android.content.pm.DataLoaderParamsParcel;
+import android.content.pm.FileSystemControlParcel;
 import android.content.pm.IDataLoaderStatusListener;
-import android.content.pm.InstallationFile;
+import android.content.pm.InstallationFileParcel;
 import java.util.List;
 
 /**
- * TODO: update with new APIs
  * @hide
  */
 oneway interface IDataLoader {
-   void create(int id, in Bundle params, IDataLoaderStatusListener listener);
-   void start(in List<InstallationFile> fileInfos);
+   void create(int id, in DataLoaderParamsParcel params,
+           in FileSystemControlParcel control,
+           IDataLoaderStatusListener listener);
+   void start();
    void stop();
    void destroy();
-   void onFileCreated(long inode, in byte[] metadata);
+
+   void prepareImage(in InstallationFileParcel[] addedFiles, in @utf8InCpp String[] removedFiles);
 }

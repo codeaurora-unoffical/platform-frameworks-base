@@ -36,15 +36,15 @@ import static com.google.common.truth.Truth.assertThat;
 
 import android.content.integrity.AtomicFormula;
 import android.content.integrity.CompoundFormula;
+import android.content.integrity.IntegrityUtils;
 import android.content.integrity.Rule;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.io.ByteArrayInputStream;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -58,7 +58,7 @@ public class RuleBinaryParserTest {
             getBits(COMPOUND_FORMULA_END, SEPARATOR_BITS);
     private static final String ATOMIC_FORMULA_START_BITS =
             getBits(ATOMIC_FORMULA_START, SEPARATOR_BITS);
-    private static final int INVALID_FORMULA_SEPARATOR_VALUE = 3;
+    private static final int INVALID_FORMULA_SEPARATOR_VALUE = (1 << SEPARATOR_BITS) - 1;
     private static final String INVALID_FORMULA_SEPARATOR_BITS =
             getBits(INVALID_FORMULA_SEPARATOR_VALUE, SEPARATOR_BITS);
 
@@ -73,7 +73,7 @@ public class RuleBinaryParserTest {
     private static final String APP_CERTIFICATE = getBits(AtomicFormula.APP_CERTIFICATE, KEY_BITS);
     private static final String VERSION_CODE = getBits(AtomicFormula.VERSION_CODE, KEY_BITS);
     private static final String PRE_INSTALLED = getBits(AtomicFormula.PRE_INSTALLED, KEY_BITS);
-    private static final int INVALID_KEY_VALUE = 6;
+    private static final int INVALID_KEY_VALUE = 8;
     private static final String INVALID_KEY = getBits(INVALID_KEY_VALUE, KEY_BITS);
 
     private static final String EQ = getBits(AtomicFormula.EQ, OPERATOR_BITS);
@@ -81,6 +81,7 @@ public class RuleBinaryParserTest {
     private static final String INVALID_OPERATOR = getBits(INVALID_OPERATOR_VALUE, OPERATOR_BITS);
 
     private static final String IS_NOT_HASHED = "0";
+    private static final String IS_HASHED = "1";
 
     private static final String DENY = getBits(Rule.DENY, EFFECT_BITS);
     private static final int INVALID_EFFECT_VALUE = 5;
@@ -93,8 +94,10 @@ public class RuleBinaryParserTest {
     private static final byte[] DEFAULT_FORMAT_VERSION_BYTES =
             getBytes(getBits(DEFAULT_FORMAT_VERSION, FORMAT_VERSION_BITS));
 
+    private static final List<RuleIndexRange> NO_INDEXING = Collections.emptyList();
+
     @Test
-    public void testBinaryStream_validCompoundFormula() throws Exception {
+    public void testBinaryStream_validCompoundFormula_noIndexing() throws Exception {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -115,7 +118,6 @@ public class RuleBinaryParserTest {
         rule.put(DEFAULT_FORMAT_VERSION_BYTES);
         rule.put(ruleBytes);
         RuleParser binaryParser = new RuleBinaryParser();
-        InputStream inputStream = new ByteArrayInputStream(rule.array());
         Rule expectedRule =
                 new Rule(
                         new CompoundFormula(
@@ -127,13 +129,14 @@ public class RuleBinaryParserTest {
                                                 /* isHashedValue= */ false))),
                         Rule.DENY);
 
-        List<Rule> rules = binaryParser.parse(inputStream);
+        List<Rule> rules =
+                binaryParser.parse(RandomAccessObject.ofBytes(rule.array()), NO_INDEXING);
 
         assertThat(rules).isEqualTo(Collections.singletonList(expectedRule));
     }
 
     @Test
-    public void testBinaryString_validCompoundFormula_notConnector() throws Exception {
+    public void testBinaryString_validCompoundFormula_notConnector_noIndexing() throws Exception {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -171,7 +174,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_validCompoundFormula_andConnector() throws Exception {
+    public void testBinaryString_validCompoundFormula_andConnector_noIndexing() throws Exception {
         String packageName = "com.test.app";
         String appCertificate = "test_cert";
         String ruleBits =
@@ -219,7 +222,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_validCompoundFormula_orConnector() throws Exception {
+    public void testBinaryString_validCompoundFormula_orConnector_noIndexing() throws Exception {
         String packageName = "com.test.app";
         String appCertificate = "test_cert";
         String ruleBits =
@@ -268,7 +271,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_validAtomicFormula_stringValue() throws Exception {
+    public void testBinaryString_validAtomicFormula_stringValue_noIndexing() throws Exception {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -300,16 +303,48 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_validAtomicFormula_integerValue() throws Exception {
-        String versionCode = "1";
+    public void testBinaryString_validAtomicFormula_hashedValue_noIndexing() throws Exception {
+        String appCertificate = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        String ruleBits =
+                START_BIT
+                        + ATOMIC_FORMULA_START_BITS
+                        + APP_CERTIFICATE
+                        + EQ
+                        + IS_HASHED
+                        + getBits(appCertificate.length(), VALUE_SIZE_BITS)
+                        + getValueBits(appCertificate)
+                        + DENY
+                        + END_BIT;
+        byte[] ruleBytes = getBytes(ruleBits);
+        ByteBuffer rule =
+                ByteBuffer.allocate(DEFAULT_FORMAT_VERSION_BYTES.length + ruleBytes.length);
+        rule.put(DEFAULT_FORMAT_VERSION_BYTES);
+        rule.put(ruleBytes);
+
+        RuleParser binaryParser = new RuleBinaryParser();
+        Rule expectedRule =
+                new Rule(
+                        new AtomicFormula.StringAtomicFormula(
+                                AtomicFormula.APP_CERTIFICATE,
+                                IntegrityUtils.getHexDigest(
+                                        appCertificate.getBytes(StandardCharsets.UTF_8)),
+                                /* isHashedValue= */ true),
+                        Rule.DENY);
+
+        List<Rule> rules = binaryParser.parse(rule.array());
+
+        assertThat(rules).isEqualTo(Collections.singletonList(expectedRule));
+    }
+
+    @Test
+    public void testBinaryString_validAtomicFormula_integerValue_noIndexing() throws Exception {
+        int versionCode = 1;
         String ruleBits =
                 START_BIT
                         + ATOMIC_FORMULA_START_BITS
                         + VERSION_CODE
                         + EQ
-                        + IS_NOT_HASHED
-                        + getBits(versionCode.length(), VALUE_SIZE_BITS)
-                        + getValueBits(versionCode)
+                        + getBits(versionCode, /* numOfBits= */ 64)
                         + DENY
                         + END_BIT;
         byte[] ruleBytes = getBytes(ruleBits);
@@ -320,7 +355,7 @@ public class RuleBinaryParserTest {
         RuleParser binaryParser = new RuleBinaryParser();
         Rule expectedRule =
                 new Rule(
-                        new AtomicFormula.IntAtomicFormula(
+                        new AtomicFormula.LongAtomicFormula(
                                 AtomicFormula.VERSION_CODE, AtomicFormula.EQ, 1),
                         Rule.DENY);
 
@@ -330,16 +365,14 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_validAtomicFormula_booleanValue() throws Exception {
+    public void testBinaryString_validAtomicFormula_booleanValue_noIndexing() throws Exception {
         String isPreInstalled = "1";
         String ruleBits =
                 START_BIT
                         + ATOMIC_FORMULA_START_BITS
                         + PRE_INSTALLED
                         + EQ
-                        + IS_NOT_HASHED
-                        + getBits(isPreInstalled.length(), VALUE_SIZE_BITS)
-                        + getValueBits(isPreInstalled)
+                        + isPreInstalled
                         + DENY
                         + END_BIT;
         byte[] ruleBytes = getBytes(ruleBits);
@@ -350,7 +383,8 @@ public class RuleBinaryParserTest {
         RuleParser binaryParser = new RuleBinaryParser();
         Rule expectedRule =
                 new Rule(
-                        new AtomicFormula.BooleanAtomicFormula(AtomicFormula.PRE_INSTALLED, true),
+                        new AtomicFormula.BooleanAtomicFormula(
+                                AtomicFormula.PRE_INSTALLED, true),
                         Rule.DENY);
 
         List<Rule> rules = binaryParser.parse(rule.array());
@@ -359,18 +393,15 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidAtomicFormula() throws Exception {
-        String versionCode = "test";
+    public void testBinaryString_invalidAtomicFormula_noIndexing() {
+        int versionCode = 1;
         String ruleBits =
                 START_BIT
                         + ATOMIC_FORMULA_START_BITS
                         + VERSION_CODE
                         + EQ
-                        + IS_NOT_HASHED
-                        + getBits(versionCode.length(), VALUE_SIZE_BITS)
-                        + getValueBits(versionCode)
-                        + DENY
-                        + END_BIT;
+                        + getBits(versionCode, /* numOfBits= */ 64)
+                        + DENY;
         byte[] ruleBytes = getBytes(ruleBits);
         ByteBuffer rule =
                 ByteBuffer.allocate(DEFAULT_FORMAT_VERSION_BYTES.length + ruleBytes.length);
@@ -380,12 +411,12 @@ public class RuleBinaryParserTest {
 
         assertExpectException(
                 RuleParseException.class,
-                /* expectedExceptionMessageRegex */ "For input string:",
+                /* expectedExceptionMessageRegex= */ "A rule must end with a '1' bit.",
                 () -> binaryParser.parse(rule.array()));
     }
 
     @Test
-    public void testBinaryString_withNoRuleList() throws RuleParseException {
+    public void testBinaryString_withNoRuleList_noIndexing() throws RuleParseException {
         ByteBuffer rule = ByteBuffer.allocate(DEFAULT_FORMAT_VERSION_BYTES.length);
         rule.put(DEFAULT_FORMAT_VERSION_BYTES);
         RuleParser binaryParser = new RuleBinaryParser();
@@ -396,7 +427,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_withEmptyRule() throws RuleParseException {
+    public void testBinaryString_withEmptyRule_noIndexing() {
         String ruleBits = START_BIT;
         byte[] ruleBytes = getBytes(ruleBits);
         ByteBuffer rule =
@@ -407,12 +438,12 @@ public class RuleBinaryParserTest {
 
         assertExpectException(
                 RuleParseException.class,
-                /* expectedExceptionMessageRegex */ "Invalid byte index",
+                /* expectedExceptionMessageRegex */ "",
                 () -> binaryParser.parse(rule.array()));
     }
 
     @Test
-    public void testBinaryString_invalidCompoundFormula_invalidNumberOfFormulas() throws Exception {
+    public void testBinaryString_invalidCompoundFormula_invalidNumberOfFormulas_noIndexing() {
         String packageName = "com.test.app";
         String appCertificate = "test_cert";
         String ruleBits =
@@ -448,8 +479,8 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidRule_invalidOperator() throws Exception {
-        String versionCode = "1";
+    public void testBinaryString_invalidRule_invalidOperator_noIndexing() {
+        int versionCode = 1;
         String ruleBits =
                 START_BIT
                         + COMPOUND_FORMULA_START_BITS
@@ -457,9 +488,7 @@ public class RuleBinaryParserTest {
                         + ATOMIC_FORMULA_START_BITS
                         + VERSION_CODE
                         + INVALID_OPERATOR
-                        + IS_NOT_HASHED
-                        + getBits(versionCode.length(), VALUE_SIZE_BITS)
-                        + getValueBits(versionCode)
+                        + getBits(versionCode, /* numOfBits= */ 64)
                         + COMPOUND_FORMULA_END_BITS
                         + DENY
                         + END_BIT;
@@ -478,7 +507,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidRule_invalidEffect() throws Exception {
+    public void testBinaryString_invalidRule_invalidEffect_noIndexing() {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -508,7 +537,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidRule_invalidConnector() throws Exception {
+    public void testBinaryString_invalidRule_invalidConnector_noIndexing() {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -538,7 +567,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidRule_invalidKey() throws Exception {
+    public void testBinaryString_invalidRule_invalidKey_noIndexing() {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -568,7 +597,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidRule_invalidSeparator() throws Exception {
+    public void testBinaryString_invalidRule_invalidSeparator_noIndexing() {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT
@@ -598,7 +627,7 @@ public class RuleBinaryParserTest {
     }
 
     @Test
-    public void testBinaryString_invalidRule_invalidEndMarker() throws Exception {
+    public void testBinaryString_invalidRule_invalidEndMarker_noIndexing() {
         String packageName = "com.test.app";
         String ruleBits =
                 START_BIT

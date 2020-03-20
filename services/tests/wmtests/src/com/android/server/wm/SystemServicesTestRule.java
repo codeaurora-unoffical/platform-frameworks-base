@@ -56,6 +56,7 @@ import android.os.PowerManagerInternal;
 import android.os.PowerSaveState;
 import android.os.StrictMode;
 import android.os.UserHandle;
+import android.util.Log;
 import android.view.InputChannel;
 import android.view.Surface;
 import android.view.SurfaceControl;
@@ -120,11 +121,23 @@ public class SystemServicesTestRule implements TestRule {
         return new Statement() {
             @Override
             public void evaluate() throws Throwable {
+                Throwable throwable = null;
                 try {
                     runWithDexmakerShareClassLoader(SystemServicesTestRule.this::setUp);
                     base.evaluate();
+                } catch (Throwable t) {
+                    throwable = t;
                 } finally {
-                    tearDown();
+                    try {
+                        tearDown();
+                    } catch (Throwable t) {
+                        if (throwable != null) {
+                            Log.e("SystemServicesTestRule", "Suppressed: ", throwable);
+                            t.addSuppressed(throwable);
+                        }
+                        throw t;
+                    }
+                    if (throwable != null) throw throwable;
                 }
             }
         };
@@ -269,6 +282,14 @@ public class SystemServicesTestRule implements TestRule {
                 mContext, mImService, false, false, mWMPolicy, mAtmService, StubTransaction::new,
                 () -> mock(Surface.class), (unused) -> new MockSurfaceControlBuilder());
         spyOn(mWmService);
+        spyOn(mWmService.mRoot);
+        // Invoked during {@link ActivityStack} creation.
+        doNothing().when(mWmService.mRoot).updateUIDsPresentOnDisplay();
+        // Always keep things awake.
+        doReturn(true).when(mWmService.mRoot).hasAwakeDisplay();
+        // Called when moving activity to pinned stack.
+        doNothing().when(mWmService.mRoot).ensureActivitiesVisible(any(),
+                anyInt(), anyBoolean(), anyBoolean());
 
         // Setup factory classes to prevent calls to native code.
         mTransaction = spy(StubTransaction.class);
@@ -284,9 +305,8 @@ public class SystemServicesTestRule implements TestRule {
         // Set configuration for default display
         mWmService.getDefaultDisplayContentLocked().reconfigureDisplayLocked();
 
-        // Mock root, some default display, and home stack.
-        spyOn(mWmService.mRoot);
-        final DisplayContent display = mAtmService.mRootActivityContainer.getDefaultDisplay();
+        // Mock default display, and home stack.
+        final DisplayContent display = mAtmService.mRootWindowContainer.getDefaultDisplay();
         // Set default display to be in fullscreen mode. Devices with PC feature may start their
         // default display in freeform mode but some of tests in WmTests have implicit assumption on
         // that the default display is in fullscreen mode.
@@ -300,7 +320,7 @@ public class SystemServicesTestRule implements TestRule {
     private void tearDown() {
         // Unregister display listener from root to avoid issues with subsequent tests.
         mContext.getSystemService(DisplayManager.class)
-                .unregisterDisplayListener(mAtmService.mRootActivityContainer);
+                .unregisterDisplayListener(mAtmService.mRootWindowContainer);
         // The constructor of WindowManagerService registers WindowManagerConstants and
         // HighRefreshRateBlacklist with DeviceConfig. We need to undo that here to avoid
         // leaking mWmService.
@@ -311,9 +331,12 @@ public class SystemServicesTestRule implements TestRule {
         // Needs to explicitly dispose current static threads because there could be messages
         // scheduled at a later time, and all mocks are invalid when it's executed.
         DisplayThread.dispose();
+        // Dispose SurfaceAnimationThread before AnimationThread does, so it won't create a new
+        // AnimationThread after AnimationThread disposed, see {@link
+        // AnimatorListenerAdapter#onAnimationEnd()}
+        SurfaceAnimationThread.dispose();
         AnimationThread.dispose();
         UiThread.dispose();
-        SurfaceAnimationThread.dispose();
         mInputChannel.dispose();
 
         tearDownLocalServices();
@@ -398,6 +421,16 @@ public class SystemServicesTestRule implements TestRule {
         }
     }
 
+    /**
+     * Throws if caller doesn't hold the given lock.
+     * @param lock the lock
+     */
+    static void checkHoldsLock(Object lock) {
+        if (!Thread.holdsLock(lock)) {
+            throw new IllegalStateException("Caller doesn't hold global lock.");
+        }
+    }
+
     protected class TestActivityTaskManagerService extends ActivityTaskManagerService {
         // ActivityStackSupervisor may be created more than once while setting up AMS and ATMS.
         // We keep the reference in order to prevent creating it twice.
@@ -419,11 +452,11 @@ public class SystemServicesTestRule implements TestRule {
             doNothing().when(this).updateCpuStats();
 
             // AppOpsService
-            final AppOpsService aos = mock(AppOpsService.class);
-            doReturn(aos).when(this).getAppOpsService();
+            final AppOpsManager aos = mock(AppOpsManager.class);
+            doReturn(aos).when(this).getAppOpsManager();
             // Make sure permission checks aren't overridden.
-            doReturn(AppOpsManager.MODE_DEFAULT).when(aos).noteOperation(anyInt(), anyInt(),
-                    anyString(), nullable(String.class));
+            doReturn(AppOpsManager.MODE_DEFAULT).when(aos).noteOpNoThrow(anyInt(), anyInt(),
+                    anyString(), nullable(String.class), nullable(String.class));
 
             // UserManagerService
             final UserManagerService ums = mock(UserManagerService.class);
@@ -443,22 +476,10 @@ public class SystemServicesTestRule implements TestRule {
             spyOn(getLifecycleManager());
             spyOn(getLockTaskController());
             spyOn(getTaskChangeNotificationController());
-            initRootActivityContainerMocks();
 
             AppWarnings appWarnings = getAppWarningsLocked();
             spyOn(appWarnings);
             doNothing().when(appWarnings).onStartActivity(any());
-        }
-
-        void initRootActivityContainerMocks() {
-            spyOn(mRootActivityContainer);
-            // Invoked during {@link ActivityStack} creation.
-            doNothing().when(mRootActivityContainer).updateUIDsPresentOnDisplay();
-            // Always keep things awake.
-            doReturn(true).when(mRootActivityContainer).hasAwakeDisplay();
-            // Called when moving activity to pinned stack.
-            doNothing().when(mRootActivityContainer).ensureActivitiesVisible(any(), anyInt(),
-                    anyBoolean());
         }
 
         @Override
@@ -486,8 +507,8 @@ public class SystemServicesTestRule implements TestRule {
             spyOn(this);
 
             // Do not schedule idle that may touch methods outside the scope of the test.
-            doNothing().when(this).scheduleIdleLocked();
-            doNothing().when(this).scheduleIdleTimeoutLocked(any());
+            doNothing().when(this).scheduleIdle();
+            doNothing().when(this).scheduleIdleTimeout(any());
             // unit test version does not handle launch wake lock
             doNothing().when(this).acquireLaunchWakelock();
             doReturn(mock(KeyguardController.class)).when(this).getKeyguardController();

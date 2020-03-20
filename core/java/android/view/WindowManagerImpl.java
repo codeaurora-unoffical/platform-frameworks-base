@@ -16,13 +16,23 @@
 
 package android.view;
 
+import static android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
+import static android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+import static android.view.WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR;
+import static android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.app.ResourcesManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
+import android.graphics.Insets;
+import android.graphics.Point;
+import android.graphics.Rect;
 import android.graphics.Region;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.util.Size;
 
 import com.android.internal.os.IResultReceiver;
 
@@ -92,7 +102,7 @@ public final class WindowManagerImpl implements WindowManager {
     @Override
     public void addView(@NonNull View view, @NonNull ViewGroup.LayoutParams params) {
         applyDefaultToken(params);
-        mGlobal.addView(view, params, mContext.getDisplay(), mParentWindow);
+        mGlobal.addView(view, params, mContext.getDisplayNoVerify(), mParentWindow);
     }
 
     @Override
@@ -146,7 +156,7 @@ public final class WindowManagerImpl implements WindowManager {
 
     @Override
     public Display getDefaultDisplay() {
-        return mContext.getDisplay();
+        return mContext.getDisplayNoVerify();
     }
 
     @Override
@@ -200,5 +210,70 @@ public final class WindowManagerImpl implements WindowManager {
         } catch (RemoteException e) {
         }
         return false;
+    }
+
+    @Override
+    public WindowMetrics getCurrentWindowMetrics() {
+        final Context context = mParentWindow != null ? mParentWindow.getContext() : mContext;
+        final Rect bound = getCurrentBounds(context);
+
+        return new WindowMetrics(toSize(bound), computeWindowInsets());
+    }
+
+    private static Rect getCurrentBounds(Context context) {
+        synchronized (ResourcesManager.getInstance()) {
+            return context.getResources().getConfiguration().windowConfiguration.getBounds();
+        }
+    }
+
+    @Override
+    public WindowMetrics getMaximumWindowMetrics() {
+        return new WindowMetrics(toSize(getMaximumBounds()), computeWindowInsets());
+    }
+
+    private Size toSize(Rect frame) {
+        return new Size(frame.width(), frame.height());
+    }
+
+    private Rect getMaximumBounds() {
+        // TODO(b/128338354): Current maximum bound is display size, but it should be displayArea
+        //  bound after displayArea feature is finished.
+        final Display display = mContext.getDisplayNoVerify();
+        final Point displaySize = new Point();
+        display.getRealSize(displaySize);
+        return new Rect(0, 0, displaySize.x, displaySize.y);
+    }
+
+    private WindowInsets computeWindowInsets() {
+        // TODO(b/118118435): This can only be properly implemented
+        //  once we flip the new insets mode flag.
+        // Initialize params which used for obtaining all system insets.
+        final WindowManager.LayoutParams params = new WindowManager.LayoutParams();
+        params.flags = FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_INSET_DECOR;
+        params.token = (mParentWindow != null) ? mParentWindow.getContext().getActivityToken()
+                : mContext.getActivityToken();
+        params.systemUiVisibility = SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+        params.setFitInsetsTypes(0);
+        params.setFitInsetsSides(0);
+
+        return getWindowInsetsFromServer(params);
+    }
+
+    private WindowInsets getWindowInsetsFromServer(WindowManager.LayoutParams attrs) {
+        try {
+            final Rect systemWindowInsets = new Rect();
+            final Rect stableInsets = new Rect();
+            final DisplayCutout.ParcelableWrapper displayCutout =
+                    new DisplayCutout.ParcelableWrapper();
+            WindowManagerGlobal.getWindowManagerService().getWindowInsets(attrs,
+                    mContext.getDisplayId(), systemWindowInsets, stableInsets, displayCutout);
+            return new WindowInsets.Builder()
+                    .setSystemWindowInsets(Insets.of(systemWindowInsets))
+                    .setStableInsets(Insets.of(stableInsets))
+                    .setDisplayCutout(displayCutout.get()).build();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 }

@@ -39,6 +39,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.database.ContentObserver;
 import android.graphics.ColorSpace;
 import android.graphics.Point;
 import android.graphics.Rect;
@@ -60,6 +61,7 @@ import android.hardware.display.WifiDisplayStatus;
 import android.hardware.input.InputManagerInternal;
 import android.media.projection.IMediaProjection;
 import android.media.projection.IMediaProjectionManager;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.IBinder;
@@ -119,7 +121,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * The display manager service relies on a collection of {@link DisplayAdapter} components,
  * for discovering and configuring physical display devices attached to the system.
  * There are separate display adapters for each manner that devices are attached:
- * one display adapter for built-in local displays, one for simulated non-functional
+ * one display adapter for physical displays, one for simulated non-functional
  * displays when the system is headless, one for simulated overlay displays used for
  * development, one for wifi displays, etc.
  * </p><p>
@@ -229,8 +231,8 @@ public final class DisplayManagerService extends SystemService {
     private int mGlobalDisplayState = Display.STATE_ON;
 
     // The overall display brightness.
-    // For now, this only applies to the built-in display but we may split it up eventually.
-    private int mGlobalDisplayBrightness = PowerManager.BRIGHTNESS_DEFAULT;
+    // For now, this only applies to the default display but we may split it up eventually.
+    private float mGlobalDisplayBrightness;
 
     // Set to true when there are pending display changes that have yet to be applied
     // to the surface flinger state.
@@ -305,6 +307,13 @@ public final class DisplayManagerService extends SystemService {
 
     private SensorManager mSensorManager;
 
+    // Whether minimal post processing is allowed by the user.
+    @GuardedBy("mSyncRoot")
+    private boolean mMinimalPostProcessingAllowed;
+
+    // Receives notifications about changes to Settings.
+    private SettingsObserver mSettingsObserver;
+
     public DisplayManagerService(Context context) {
         this(context, new Injector());
     }
@@ -331,7 +340,8 @@ public final class DisplayManagerService extends SystemService {
         mMinimumBrightnessSpline = Spline.createSpline(lux, nits);
 
         PowerManager pm = mContext.getSystemService(PowerManager.class);
-        mGlobalDisplayBrightness = pm.getDefaultScreenBrightnessSetting();
+        mGlobalDisplayBrightness = pm.getBrightnessConstraint(
+                PowerManager.BRIGHTNESS_CONSTRAINT_TYPE_DEFAULT);
         mCurrentUserId = UserHandle.USER_SYSTEM;
         ColorSpace[] colorSpaces = SurfaceControl.getCompositionColorSpaces();
         mWideColorSpace = colorSpaces[1];
@@ -404,6 +414,7 @@ public final class DisplayManagerService extends SystemService {
                 BrightnessConfiguration config =
                         mPersistentDataStore.getBrightnessConfiguration(userSerial);
                 mDisplayPowerController.setBrightnessConfiguration(config);
+                handleSettingsChange();
             }
             mDisplayPowerController.onSwitchUser(newUserId);
         }
@@ -429,12 +440,17 @@ public final class DisplayManagerService extends SystemService {
             // Just in case the top inset changed before the system was ready. At this point, any
             // relevant configuration should be in place.
             recordTopInsetLocked(mLogicalDisplays.get(Display.DEFAULT_DISPLAY));
+
+            updateSettingsLocked();
         }
 
-        mDisplayModeDirector.setDisplayModeListener(new AllowedDisplayModeObserver());
+        mDisplayModeDirector.setDesiredDisplayModeSpecsListener(
+                new DesiredDisplayModeSpecsObserver());
         mDisplayModeDirector.start(mSensorManager);
 
         mHandler.sendEmptyMessage(MSG_REGISTER_ADDITIONAL_DISPLAY_ADAPTERS);
+
+        mSettingsObserver = new SettingsObserver();
     }
 
     @VisibleForTesting
@@ -524,16 +540,16 @@ public final class DisplayManagerService extends SystemService {
         }
     }
 
-    private void requestGlobalDisplayStateInternal(int state, int brightness) {
+    private void requestGlobalDisplayStateInternal(int state, float brightnessState) {
         if (state == Display.STATE_UNKNOWN) {
             state = Display.STATE_ON;
         }
         if (state == Display.STATE_OFF) {
-            brightness = PowerManager.BRIGHTNESS_OFF;
-        } else if (brightness < 0) {
-            brightness = PowerManager.BRIGHTNESS_DEFAULT;
-        } else if (brightness > PowerManager.BRIGHTNESS_ON) {
-            brightness = PowerManager.BRIGHTNESS_ON;
+            brightnessState = PowerManager.BRIGHTNESS_OFF_FLOAT;
+        } else if (brightnessState < PowerManager.BRIGHTNESS_MIN || Float.isNaN(brightnessState)) {
+            brightnessState = PowerManager.BRIGHTNESS_INVALID_FLOAT;
+        } else if (brightnessState > PowerManager.BRIGHTNESS_MAX) {
+            brightnessState = PowerManager.BRIGHTNESS_MAX;
         }
 
         synchronized (mTempDisplayStateWorkQueue) {
@@ -543,15 +559,15 @@ public final class DisplayManagerService extends SystemService {
                 // may happen as a side-effect of displays changing state.
                 synchronized (mSyncRoot) {
                     if (mGlobalDisplayState == state
-                            && mGlobalDisplayBrightness == brightness) {
+                            && mGlobalDisplayBrightness == brightnessState) {
                         return; // no change
                     }
 
                     Trace.traceBegin(Trace.TRACE_TAG_POWER, "requestGlobalDisplayState("
                             + Display.stateToString(state)
-                            + ", brightness=" + brightness + ")");
+                            + ", brightness=" + brightnessState + ")");
                     mGlobalDisplayState = state;
-                    mGlobalDisplayBrightness = brightness;
+                    mGlobalDisplayBrightness = brightnessState;
                     applyGlobalDisplayStateLocked(mTempDisplayStateWorkQueue);
                 }
 
@@ -567,6 +583,33 @@ public final class DisplayManagerService extends SystemService {
                 mTempDisplayStateWorkQueue.clear();
             }
         }
+    }
+
+    private class SettingsObserver extends ContentObserver {
+        SettingsObserver() {
+            super(mHandler);
+
+            mContext.getContentResolver().registerContentObserver(
+                    Settings.Secure.getUriFor(
+                        Settings.Secure.MINIMAL_POST_PROCESSING_ALLOWED), false, this);
+        }
+
+        @Override
+        public void onChange(boolean selfChange, Uri uri) {
+            handleSettingsChange();
+        }
+    }
+
+    private void handleSettingsChange() {
+        synchronized (mSyncRoot) {
+            updateSettingsLocked();
+            scheduleTraversalLocked(false);
+        }
+    }
+
+    private void updateSettingsLocked() {
+        mMinimalPostProcessingAllowed = Settings.Secure.getIntForUser(mContext.getContentResolver(),
+                Settings.Secure.MINIMAL_POST_PROCESSING_ALLOWED, 1, UserHandle.USER_CURRENT) != 0;
     }
 
     private DisplayInfo getDisplayInfoInternal(int displayId, int callingUid) {
@@ -981,7 +1024,8 @@ public final class DisplayManagerService extends SystemService {
         // by the display power controller (if known).
         DisplayDeviceInfo info = device.getDisplayDeviceInfoLocked();
         if ((info.flags & DisplayDeviceInfo.FLAG_NEVER_BLANK) == 0) {
-            return device.requestDisplayStateLocked(mGlobalDisplayState, mGlobalDisplayBrightness);
+            return device.requestDisplayStateLocked(
+                    mGlobalDisplayState, mGlobalDisplayBrightness);
         }
         return null;
     }
@@ -1192,12 +1236,16 @@ public final class DisplayManagerService extends SystemService {
     }
 
     private void setDisplayPropertiesInternal(int displayId, boolean hasContent,
-            float requestedRefreshRate, int requestedModeId, boolean inTraversal) {
+            float requestedRefreshRate, int requestedModeId, boolean preferMinimalPostProcessing,
+            boolean inTraversal) {
         synchronized (mSyncRoot) {
             LogicalDisplay display = mLogicalDisplays.get(displayId);
             if (display == null) {
                 return;
             }
+
+            boolean shouldScheduleTraversal = false;
+
             if (display.hasContentLocked() != hasContent) {
                 if (DEBUG) {
                     Slog.d(TAG, "Display " + displayId + " hasContent flag changed: "
@@ -1205,7 +1253,7 @@ public final class DisplayManagerService extends SystemService {
                 }
 
                 display.setHasContentLocked(hasContent);
-                scheduleTraversalLocked(inTraversal);
+                shouldScheduleTraversal = true;
             }
             if (requestedModeId == 0 && requestedRefreshRate != 0) {
                 // Scan supported modes returned by display.getInfo() to find a mode with the same
@@ -1215,6 +1263,19 @@ public final class DisplayManagerService extends SystemService {
             }
             mDisplayModeDirector.getAppRequestObserver().setAppRequestedMode(
                     displayId, requestedModeId);
+
+            if (display.getDisplayInfoLocked().minimalPostProcessingSupported) {
+                boolean mppRequest = mMinimalPostProcessingAllowed && preferMinimalPostProcessing;
+
+                if (display.getRequestedMinimalPostProcessingLocked() != mppRequest) {
+                    display.setRequestedMinimalPostProcessingLocked(mppRequest);
+                    shouldScheduleTraversal = true;
+                }
+            }
+
+            if (shouldScheduleTraversal) {
+                scheduleTraversalLocked(inTraversal);
+            }
         }
     }
 
@@ -1287,13 +1348,21 @@ public final class DisplayManagerService extends SystemService {
     }
 
     private SurfaceControl.ScreenshotGraphicBuffer screenshotInternal(int displayId) {
-        final IBinder token = getDisplayToken(displayId);
-        if (token == null) {
-            return null;
+        synchronized (mSyncRoot) {
+            final IBinder token = getDisplayToken(displayId);
+            if (token == null) {
+                return null;
+            }
+            final LogicalDisplay logicalDisplay = mLogicalDisplays.get(displayId);
+            if (logicalDisplay == null) {
+                return null;
+            }
+
+            final DisplayInfo displayInfo = logicalDisplay.getDisplayInfoLocked();
+            return SurfaceControl.screenshotToBufferWithSecureLayersUnsafe(token, new Rect(),
+                    displayInfo.getNaturalWidth(), displayInfo.getNaturalHeight(),
+                    false /* useIdentityTransform */, 0 /* rotation */);
         }
-        return SurfaceControl.screenshotToBufferWithSecureLayersUnsafe(
-                        token, new Rect(), 0 /* width */, 0 /* height */,
-                        false /* useIdentityTransform */, 0 /* rotation */);
     }
 
     @VisibleForTesting
@@ -1327,19 +1396,53 @@ public final class DisplayManagerService extends SystemService {
         return SurfaceControl.getDisplayedContentSample(token, maxFrames, timestamp);
     }
 
-    private void onAllowedDisplayModesChangedInternal() {
+    void resetBrightnessConfiguration() {
+        setBrightnessConfigurationForUserInternal(null, mContext.getUserId(),
+                mContext.getPackageName());
+    }
+
+    void setAutoBrightnessLoggingEnabled(boolean enabled) {
+        if (mDisplayPowerController != null) {
+            synchronized (mSyncRoot) {
+                mDisplayPowerController.setAutoBrightnessLoggingEnabled(enabled);
+            }
+        }
+    }
+
+    void setDisplayWhiteBalanceLoggingEnabled(boolean enabled) {
+        if (mDisplayPowerController != null) {
+            synchronized (mSyncRoot) {
+                mDisplayPowerController.setDisplayWhiteBalanceLoggingEnabled(enabled);
+            }
+        }
+    }
+
+    void setAmbientColorTemperatureOverride(float cct) {
+        if (mDisplayPowerController != null) {
+            synchronized (mSyncRoot) {
+                mDisplayPowerController.setAmbientColorTemperatureOverride(cct);
+            }
+        }
+    }
+
+    private void onDesiredDisplayModeSpecsChangedInternal() {
         boolean changed = false;
         synchronized (mSyncRoot) {
             final int count = mLogicalDisplays.size();
             for (int i = 0; i < count; i++) {
                 LogicalDisplay display = mLogicalDisplays.valueAt(i);
                 int displayId = mLogicalDisplays.keyAt(i);
-                int[] allowedModes = mDisplayModeDirector.getAllowedModes(displayId);
-                // Note that order is important here since not all display devices are capable of
-                // automatically switching, so we do actually want to check for equality and not
-                // just equivalent contents (regardless of order).
-                if (!Arrays.equals(allowedModes, display.getAllowedDisplayModesLocked())) {
-                    display.setAllowedDisplayModesLocked(allowedModes);
+                DisplayModeDirector.DesiredDisplayModeSpecs desiredDisplayModeSpecs =
+                        mDisplayModeDirector.getDesiredDisplayModeSpecs(displayId);
+                DisplayModeDirector.DesiredDisplayModeSpecs existingDesiredDisplayModeSpecs =
+                        display.getDesiredDisplayModeSpecsLocked();
+                if (DEBUG) {
+                    Slog.i(TAG,
+                            "Comparing display specs: " + desiredDisplayModeSpecs
+                                    + ", existing: " + existingDesiredDisplayModeSpecs);
+                }
+                if (!desiredDisplayModeSpecs.equals(existingDesiredDisplayModeSpecs)) {
+                    display.setDesiredDisplayModeSpecsLocked(desiredDisplayModeSpecs);
                     changed = true;
                 }
             }
@@ -2192,7 +2295,14 @@ public final class DisplayManagerService extends SystemService {
         }
 
         @Override // Binder call
-        public void setTemporaryBrightness(int brightness) {
+        public boolean isMinimalPostProcessingRequested(int displayId) {
+            synchronized (mSyncRoot) {
+                return mLogicalDisplays.get(displayId).getRequestedMinimalPostProcessingLocked();
+            }
+        }
+
+        @Override // Binder call
+        public void setTemporaryBrightness(float brightness) {
             mContext.enforceCallingOrSelfPermission(
                     Manifest.permission.CONTROL_DISPLAY_BRIGHTNESS,
                     "Permission required to set the display's brightness");
@@ -2225,13 +2335,8 @@ public final class DisplayManagerService extends SystemService {
         public void onShellCommand(FileDescriptor in, FileDescriptor out,
                 FileDescriptor err, String[] args, ShellCallback callback,
                 ResultReceiver resultReceiver) {
-            final long token = Binder.clearCallingIdentity();
-            try {
-                DisplayManagerShellCommand command = new DisplayManagerShellCommand(this);
-                command.exec(this, in, out, err, args, callback, resultReceiver);
-            } finally {
-                Binder.restoreCallingIdentity(token);
-            }
+            new DisplayManagerShellCommand(DisplayManagerService.this).exec(this, in, out, err,
+                    args, callback, resultReceiver);
         }
 
         @Override // Binder call
@@ -2251,40 +2356,6 @@ public final class DisplayManagerService extends SystemService {
                 return getPreferredWideGamutColorSpaceIdInternal();
             } finally {
                 Binder.restoreCallingIdentity(token);
-            }
-        }
-
-        void setBrightness(int brightness) {
-            Settings.System.putIntForUser(mContext.getContentResolver(),
-                    Settings.System.SCREEN_BRIGHTNESS, brightness, UserHandle.USER_CURRENT);
-        }
-
-        void resetBrightnessConfiguration() {
-            setBrightnessConfigurationForUserInternal(null, mContext.getUserId(),
-                    mContext.getPackageName());
-        }
-
-        void setAutoBrightnessLoggingEnabled(boolean enabled) {
-            if (mDisplayPowerController != null) {
-                synchronized (mSyncRoot) {
-                    mDisplayPowerController.setAutoBrightnessLoggingEnabled(enabled);
-                }
-            }
-        }
-
-        void setDisplayWhiteBalanceLoggingEnabled(boolean enabled) {
-            if (mDisplayPowerController != null) {
-                synchronized (mSyncRoot) {
-                    mDisplayPowerController.setDisplayWhiteBalanceLoggingEnabled(enabled);
-                }
-            }
-        }
-
-        void setAmbientColorTemperatureOverride(float cct) {
-            if (mDisplayPowerController != null) {
-                synchronized (mSyncRoot) {
-                    mDisplayPowerController.setAmbientColorTemperatureOverride(cct);
-                }
             }
         }
 
@@ -2343,13 +2414,14 @@ public final class DisplayManagerService extends SystemService {
     }
 
     private final class LocalService extends DisplayManagerInternal {
+
         @Override
         public void initPowerManagement(final DisplayPowerCallbacks callbacks, Handler handler,
                 SensorManager sensorManager) {
             synchronized (mSyncRoot) {
                 DisplayBlanker blanker = new DisplayBlanker() {
                     @Override
-                    public void requestDisplayState(int state, int brightness) {
+                    public void requestDisplayState(int state, float brightness) {
                         // The order of operations is important for legacy reasons.
                         if (state == Display.STATE_OFF) {
                             requestGlobalDisplayStateInternal(state, brightness);
@@ -2431,9 +2503,10 @@ public final class DisplayManagerService extends SystemService {
 
         @Override
         public void setDisplayProperties(int displayId, boolean hasContent,
-                float requestedRefreshRate, int requestedMode, boolean inTraversal) {
+                float requestedRefreshRate, int requestedMode,
+                boolean requestedMinimalPostProcessing, boolean inTraversal) {
             setDisplayPropertiesInternal(displayId, hasContent, requestedRefreshRate,
-                    requestedMode, inTraversal);
+                    requestedMode, requestedMinimalPostProcessing, inTraversal);
         }
 
         @Override
@@ -2488,9 +2561,10 @@ public final class DisplayManagerService extends SystemService {
 
     }
 
-    class AllowedDisplayModeObserver implements DisplayModeDirector.DisplayModeListener {
-        public void onAllowedDisplayModesChanged() {
-            onAllowedDisplayModesChangedInternal();
+    class DesiredDisplayModeSpecsObserver
+            implements DisplayModeDirector.DesiredDisplayModeSpecsListener {
+        public void onDesiredDisplayModeSpecsChanged() {
+            onDesiredDisplayModeSpecsChangedInternal();
         }
     }
 }
