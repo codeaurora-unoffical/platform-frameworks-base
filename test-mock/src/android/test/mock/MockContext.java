@@ -16,6 +16,7 @@
 
 package android.test.mock;
 
+import android.annotation.NonNull;
 import android.annotation.SystemApi;
 import android.app.IApplicationThread;
 import android.app.IServiceConnection;
@@ -208,6 +209,15 @@ public class MockContext extends Context {
 
     @Override
     public File getFilesDir() {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * {@inheritDoc Context#getCrateDir()}
+     * @hide
+     */
+    @Override
+    public File getCrateDir(@NonNull String crateId) {
         throw new UnsupportedOperationException();
     }
 
@@ -469,10 +479,11 @@ public class MockContext extends Context {
         throw new UnsupportedOperationException();
     }
 
+    /** @hide */
     @Override
-    public void sendOrderedBroadcast(Intent intent, String receiverPermission, String receiverAppOp,
-            Bundle options, BroadcastReceiver resultReceiver, Handler scheduler, int initialCode,
-            String initialData, Bundle initialExtras) {
+    public void sendOrderedBroadcast(Intent intent, int initialCode, String receiverPermission,
+            String receiverAppOp, BroadcastReceiver resultReceiver, Handler scheduler,
+            String initialData, Bundle initialExtras, Bundle options) {
         throw new UnsupportedOperationException();
     }
 
@@ -801,6 +812,11 @@ public class MockContext extends Context {
     }
 
     @Override
+    public @NonNull Context createWindowContext(int type, Bundle options) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public boolean isRestricted() {
         throw new UnsupportedOperationException();
     }
@@ -811,9 +827,14 @@ public class MockContext extends Context {
         throw new UnsupportedOperationException();
     }
 
-    /** @hide */
     @Override
     public Display getDisplay() {
+        throw new UnsupportedOperationException();
+    }
+
+    /** @hide */
+    @Override
+    public Display getDisplayNoVerify() {
         throw new UnsupportedOperationException();
     }
 

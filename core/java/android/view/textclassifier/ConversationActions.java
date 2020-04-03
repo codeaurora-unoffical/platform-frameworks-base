@@ -38,6 +38,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Represents a list of actions suggested by a {@link TextClassifier} on a given conversation.
@@ -66,7 +67,7 @@ public final class ConversationActions implements Parcelable {
     public ConversationActions(
             @NonNull List<ConversationAction> conversationActions, @Nullable String id) {
         mConversationActions =
-                Collections.unmodifiableList(Preconditions.checkNotNull(conversationActions));
+                Collections.unmodifiableList(Objects.requireNonNull(conversationActions));
         mId = id;
     }
 
@@ -149,7 +150,7 @@ public final class ConversationActions implements Parcelable {
             mAuthor = author;
             mReferenceTime = referenceTime;
             mText = text;
-            mExtras = Preconditions.checkNotNull(bundle);
+            mExtras = Objects.requireNonNull(bundle);
         }
 
         private Message(Parcel in) {
@@ -243,7 +244,7 @@ public final class ConversationActions implements Parcelable {
              *               {@link #PERSON_USER_OTHERS} to represent a remote user.
              */
             public Builder(@NonNull Person author) {
-                mAuthor = Preconditions.checkNotNull(author);
+                mAuthor = Objects.requireNonNull(author);
             }
 
             /** Sets the text of this message. */
@@ -322,6 +323,7 @@ public final class ConversationActions implements Parcelable {
         private int mUserId = UserHandle.USER_NULL;
         @NonNull
         private Bundle mExtras;
+        private boolean mUseDefaultTextClassifier;
 
         private Request(
                 @NonNull List<Message> conversation,
@@ -329,8 +331,8 @@ public final class ConversationActions implements Parcelable {
                 int maxSuggestions,
                 @Nullable @Hint List<String> hints,
                 @NonNull Bundle extras) {
-            mConversation = Preconditions.checkNotNull(conversation);
-            mTypeConfig = Preconditions.checkNotNull(typeConfig);
+            mConversation = Objects.requireNonNull(conversation);
+            mTypeConfig = Objects.requireNonNull(typeConfig);
             mMaxSuggestions = maxSuggestions;
             mHints = hints;
             mExtras = extras;
@@ -346,6 +348,8 @@ public final class ConversationActions implements Parcelable {
             String callingPackageName = in.readString();
             int userId = in.readInt();
             Bundle extras = in.readBundle();
+            boolean useDefaultTextClassifier = in.readBoolean();
+
             Request request = new Request(
                     conversation,
                     typeConfig,
@@ -354,6 +358,7 @@ public final class ConversationActions implements Parcelable {
                     extras);
             request.setCallingPackageName(callingPackageName);
             request.setUserId(userId);
+            request.setUseDefaultTextClassifier(useDefaultTextClassifier);
             return request;
         }
 
@@ -366,6 +371,7 @@ public final class ConversationActions implements Parcelable {
             parcel.writeString(mCallingPackageName);
             parcel.writeInt(mUserId);
             parcel.writeBundle(mExtras);
+            parcel.writeBoolean(mUseDefaultTextClassifier);
         }
 
         @Override
@@ -454,6 +460,26 @@ public final class ConversationActions implements Parcelable {
         }
 
         /**
+         * Sets whether to use the default text classifier to handle this request.
+         * This will be ignored if it is not the system text classifier to handle this request.
+         *
+         * @hide
+         */
+        void setUseDefaultTextClassifier(boolean useDefaultTextClassifier) {
+            mUseDefaultTextClassifier = useDefaultTextClassifier;
+        }
+
+        /**
+         * Returns whether to use the default text classifier to handle this request. This
+         * will be ignored if it is not the system text classifier to handle this request.
+         *
+         * @hide
+         */
+        public boolean getUseDefaultTextClassifier() {
+            return mUseDefaultTextClassifier;
+        }
+
+        /**
          * Returns the extended data related to this request.
          *
          * <p><b>NOTE: </b>Do not modify this bundle.
@@ -483,7 +509,7 @@ public final class ConversationActions implements Parcelable {
              *     actions for.
              */
             public Builder(@NonNull List<Message> conversation) {
-                mConversation = Preconditions.checkNotNull(conversation);
+                mConversation = Objects.requireNonNull(conversation);
             }
 
             /**

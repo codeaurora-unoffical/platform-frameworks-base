@@ -16,16 +16,12 @@
 
 #pragma once
 
-#include <android/os/IPullAtomCallback.h>
-#include <android/os/IStatsCompanionService.h>
-#include <android/os/IStatsPullerCallback.h>
-#include <binder/IServiceManager.h>
+#include <aidl/android/os/IPullAtomCallback.h>
+#include <aidl/android/os/IStatsCompanionService.h>
 #include <utils/RefBase.h>
 #include <utils/threads.h>
 
 #include <list>
-#include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "PullDataReceiver.h"
@@ -33,28 +29,13 @@
 #include "guardrail/StatsdStats.h"
 #include "logd/LogEvent.h"
 
+using aidl::android::os::IPullAtomCallback;
+using aidl::android::os::IStatsCompanionService;
+using std::shared_ptr;
+
 namespace android {
 namespace os {
 namespace statsd {
-
-typedef struct {
-    // The field numbers of the fields that need to be summed when merging
-    // isolated uid with host uid.
-    std::vector<int> additiveFields;
-    // Minimum time before this puller does actual pull again.
-    // Pullers can cause significant impact to system health and battery.
-    // So that we don't pull too frequently.
-    // If a pull request comes before cooldown, a cached version from previous pull
-    // will be returned.
-    int64_t coolDownNs = 1 * NS_PER_SEC;
-    // The actual puller
-    sp<StatsPuller> puller;
-    // Max time allowed to pull this atom.
-    // We cannot reliably kill a pull thread. So we don't terminate the puller.
-    // The data is discarded if the pull takes longer than this and mHasGoodData
-    // marked as false.
-    int64_t pullTimeoutNs = StatsdStats::kPullMaxDelayNs;
-} PullAtomInfo;
 
 typedef struct PullerKey {
     // The uid of the process that registers this puller.
@@ -114,21 +95,18 @@ public:
     // Clear pull data cache if it is beyond respective cool down time.
     int ClearPullerCacheIfNecessary(int64_t timestampNs);
 
-    void SetStatsCompanionService(sp<IStatsCompanionService> statsCompanionService);
-
-    // Deprecated, remove after puller API is complete.
-    void RegisterPullerCallback(int32_t atomTag, const sp<IStatsPullerCallback>& callback);
+    void SetStatsCompanionService(shared_ptr<IStatsCompanionService> statsCompanionService);
 
     void RegisterPullAtomCallback(const int uid, const int32_t atomTag, const int64_t coolDownNs,
                                   const int64_t timeoutNs, const vector<int32_t>& additiveFields,
-                                  const sp<IPullAtomCallback>& callback);
+                                  const shared_ptr<IPullAtomCallback>& callback);
 
-    void UnregisterPullerCallback(int32_t atomTag);
+    void UnregisterPullAtomCallback(const int uid, const int32_t atomTag);
 
-    static std::map<PullerKey, PullAtomInfo> kAllPullAtomInfo;
+    std::map<const PullerKey, sp<StatsPuller>> kAllPullAtomInfo;
 
 private:
-    sp<IStatsCompanionService> mStatsCompanionService = nullptr;
+    shared_ptr<IStatsCompanionService> mStatsCompanionService = nullptr;
 
     typedef struct {
         int64_t nextPullTimeNs;
@@ -138,6 +116,8 @@ private:
 
     // mapping from simple matcher tagId to receivers
     std::map<int, std::list<ReceiverInfo>> mReceivers;
+
+    bool PullLocked(int tagId, vector<std::shared_ptr<LogEvent>>* data);
 
     // locks for data receiver and StatsCompanionService changes
     Mutex mLock;

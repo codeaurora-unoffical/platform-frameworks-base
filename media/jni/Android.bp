@@ -1,6 +1,8 @@
 cc_library_shared {
     name: "libmedia_jni",
 
+    defaults: ["libcodec2-internal-defaults"],
+
     srcs: [
         "android_media_ImageWriter.cpp",
         "android_media_ImageReader.cpp",
@@ -19,6 +21,7 @@ cc_library_shared {
         "android_media_MediaProfiles.cpp",
         "android_media_MediaRecorder.cpp",
         "android_media_MediaSync.cpp",
+        "android_media_MediaTranscodeManager.cpp",
         "android_media_ResampleInputStream.cpp",
         "android_media_Streams.cpp",
         "android_media_SyncParams.cpp",
@@ -133,13 +136,24 @@ cc_library_shared {
     ],
 
     shared_libs: [
+        "android.hardware.graphics.bufferqueue@2.0",
         "android.hardware.tv.tuner@1.0",
         "libandroid_runtime",
         "libcutils",
         "libfmq",
         "libhidlbase",
         "liblog",
+        "libmedia",
+        "libnativehelper",
         "libutils",
+    ],
+    defaults: [
+        "libcodec2-impl-defaults",
+    ],
+
+    header_libs: [
+        "libcodec2_internal",
+        "libstagefright_foundation_headers",
     ],
 
     export_include_dirs: ["."],
@@ -152,8 +166,3 @@ cc_library_shared {
         "-Wunreachable-code",
     ],
 }
-
-subdirs = [
-    "audioeffect",
-    "soundpool",
-]

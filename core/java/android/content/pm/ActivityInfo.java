@@ -18,7 +18,7 @@ package android.content.pm;
 
 import android.annotation.IntDef;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.res.Configuration;
@@ -467,6 +467,13 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * @hide
      */
     public static final int FLAG_TURN_SCREEN_ON = 0x1000000;
+
+    /**
+     * Bit in {@link #flags} indicating whether the display should preferably be switched to a
+     * minimal post processing mode.
+     * See {@link android.R.attr#preferMinimalPostProcessing}
+     */
+    public static final int FLAG_PREFER_MINIMAL_POST_PROCESSING = 0x2000000;
 
     /**
      * @hide Bit in {@link #flags}: If set, this component will only be seen

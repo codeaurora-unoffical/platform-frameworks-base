@@ -16,22 +16,36 @@
 
 package com.android.internal.logging;
 
-import android.util.StatsLog;
+import com.android.internal.util.FrameworkStatsLog;
 
 /**
- * Standard implementation of UiEventLogger, writing to StatsLog.
+ * Standard implementation of UiEventLogger, writing to FrameworkStatsLog.
  *
  * See UiEventReported atom in atoms.proto for more context.
  */
 public class UiEventLoggerImpl implements UiEventLogger {
-    /**
-     * Log a simple event, with no package or instance ID.
-     */
     @Override
     public void log(UiEventEnum event) {
+        log(event, 0, null);
+    }
+
+    @Override
+    public void log(UiEventEnum event, int uid, String packageName) {
         final int eventID = event.getId();
         if (eventID > 0) {
-            StatsLog.write(StatsLog.UI_EVENT_REPORTED, eventID, 0, null);
+            FrameworkStatsLog.write(FrameworkStatsLog.UI_EVENT_REPORTED, eventID, uid, packageName);
+        }
+    }
+
+    @Override
+    public void logWithInstanceId(UiEventEnum event, int uid, String packageName,
+            InstanceId instance) {
+        final int eventID = event.getId();
+        if ((eventID > 0)  && (instance != null)) {
+            FrameworkStatsLog.write(FrameworkStatsLog.UI_EVENT_REPORTED, eventID, uid, packageName,
+                    instance.getId());
+        } else {
+            log(event, uid, packageName);
         }
     }
 }

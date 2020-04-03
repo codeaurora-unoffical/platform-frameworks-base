@@ -188,13 +188,20 @@
     <string name="work_profile_deleted_details" msgid="3773706828364418016">"Falta a aplicación de administración do perfil de traballo ou ben está danada. Como resultado, eliminouse o teu perfil de traballo e os datos relacionados. Para obter asistencia, contacta co administrador."</string>
     <string name="work_profile_deleted_description_dpm_wipe" msgid="2477244968924647232">"O teu perfil de traballo xa non está dispoñible neste dispositivo"</string>
     <string name="work_profile_deleted_reason_maximum_password_failure" msgid="1080323158315663167">"Demasiados intentos de introdución do contrasinal"</string>
-    <!-- no translation found for device_ownership_relinquished (4080886992183195724) -->
-    <skip />
+    <string name="device_ownership_relinquished" msgid="4080886992183195724">"O administrador renunciou ao dispositivo para uso persoal"</string>
     <string name="network_logging_notification_title" msgid="554983187553845004">"O dispositivo está xestionado"</string>
     <string name="network_logging_notification_text" msgid="1327373071132562512">"A túa organización xestiona este dispositivo e pode controlar o tráfico de rede. Toca para obter máis detalles."</string>
+    <string name="location_changed_notification_title" msgid="4119726617105166830">"O administrador cambiou a configuración de localización"</string>
+    <string name="location_changed_notification_text" msgid="198907268219396399">"Toca para ver a configuración de localización."</string>
+    <string name="country_detector" msgid="7023275114706088854">"Detector do país"</string>
+    <string name="location_service" msgid="2439187616018455546">"Servizo de localización"</string>
+    <string name="sensor_notification_service" msgid="7474531979178682676">"Servizo de notificacións dos sensores"</string>
+    <string name="twilight_service" msgid="8964898045693187224">"Servizo Twilight"</string>
     <string name="factory_reset_warning" msgid="6858705527798047809">"Borrarase o teu dispositivo"</string>
     <string name="factory_reset_message" msgid="2657049595153992213">"Non se pode utilizar a aplicación de administración. Borrarase o teu dispositivo.\n\nSe tes preguntas, contacta co administrador da organización."</string>
     <string name="printing_disabled_by" msgid="3517499806528864633">"<xliff:g id="OWNER_APP">%s</xliff:g> desactivou a impresión."</string>
+    <string name="personal_apps_suspended_notification_title" msgid="6551578720258229430">"Un administrador suspendeu as aplicacións persoais"</string>
+    <string name="personal_apps_suspended_notification_text" msgid="8321053338614244297">"Toca aquí para comprobar o cumprimento da política."</string>
     <string name="me" msgid="6207584824693813140">"Eu"</string>
     <string name="power_dialog" product="tablet" msgid="8333207765671417261">"Opcións da tableta"</string>
     <string name="power_dialog" product="tv" msgid="7792839006640933763">"Opcións de Android TV"</string>
@@ -242,6 +249,8 @@
       <item quantity="other">Vaise facer unha captura de pantalla para o informe de erros en <xliff:g id="NUMBER_1">%d</xliff:g> segundos.</item>
       <item quantity="one">Vaise facer unha captura de pantalla para o informe de erros en <xliff:g id="NUMBER_0">%d</xliff:g> segundo.</item>
     </plurals>
+    <string name="bugreport_screenshot_success_toast" msgid="7986095104151473745">"Realizouse a captura de pantalla co informe de erros"</string>
+    <string name="bugreport_screenshot_failure_toast" msgid="6736320861311294294">"Produciuse un erro ao realizar a captura de pantalla co informe de erros"</string>
     <string name="global_action_toggle_silent_mode" msgid="8464352592860372188">"Modo de silencio"</string>
     <string name="global_action_silent_mode_on_status" msgid="2371892537738632013">"O son está desactivado"</string>
     <string name="global_action_silent_mode_off_status" msgid="6608006545950920042">"O son está activado"</string>
@@ -288,7 +297,7 @@
     <string name="permgroupdesc_calendar" msgid="6762751063361489379">"acceder ao teu calendario"</string>
     <string name="permgrouplab_sms" msgid="795737735126084874">"SMS"</string>
     <string name="permgroupdesc_sms" msgid="5726462398070064542">"enviar e consultar mensaxes de SMS"</string>
-    <string name="permgrouplab_storage" msgid="1121695277384787841">"Almacenamento"</string>
+    <string name="permgrouplab_storage" msgid="1938416135375282333">"Ficheiros e contido multimedia"</string>
     <string name="permgroupdesc_storage" msgid="6351503740613026600">"acceder a fotos, contido multimedia e ficheiros no teu dispositivo"</string>
     <string name="permgrouplab_microphone" msgid="2480597427667420076">"Micrófono"</string>
     <string name="permgroupdesc_microphone" msgid="1047786732792487722">"gravar audio"</string>
@@ -314,6 +323,8 @@
     <string name="capability_desc_canPerformGestures" msgid="6619457251067929726">"Podes tocar, pasar o dedo, beliscar e realizar outros xestos."</string>
     <string name="capability_title_canCaptureFingerprintGestures" msgid="1189053104594608091">"Xestos de impresión dixital"</string>
     <string name="capability_desc_canCaptureFingerprintGestures" msgid="6861869337457461274">"Pode rexistrar os xestos realizados no sensor de impresión dixital do dispositivo."</string>
+    <string name="capability_title_canTakeScreenshot" msgid="3895812893130071930">"Facer captura de pantalla"</string>
+    <string name="capability_desc_canTakeScreenshot" msgid="7762297374317934052">"Pode facer capturas de pantalla."</string>
     <string name="permlab_statusBar" msgid="8798267849526214017">"desactivar ou modificar a barra de estado"</string>
     <string name="permdesc_statusBar" msgid="5809162768651019642">"Permite á aplicación desactivar a barra de estado ou engadir e eliminar as iconas do sistema."</string>
     <string name="permlab_statusBarService" msgid="2523421018081437981">"actuar como a barra de estado"</string>
@@ -381,13 +392,13 @@
     <string name="permdesc_broadcastSticky" product="tv" msgid="2338185920171000650">"Permite que a aplicación envíe emisións permanentes que continúan unha vez finalizada a emisión. Un uso excesivo pode provocar que o dispositivo Android TV funcione con lentitude ou de forma inestable debido á necesidade de utilizar demasiada memoria."</string>
     <string name="permdesc_broadcastSticky" product="default" msgid="134529339678913453">"Permite á aplicación enviar difusións permanentes que continúan unha vez finalizada a difusión. Un uso excesivo pode provocar que o teléfono funcione con lentitude ou de forma inestable debido á necesidade de utilizar demasiada memoria."</string>
     <string name="permlab_readContacts" msgid="8776395111787429099">"ler os teus contactos"</string>
-    <string name="permdesc_readContacts" product="tablet" msgid="3792628955305119168">"Permite á aplicación ler datos acerca dos teus contactos almacenados na tableta, incluída a frecuencia coa que os chamaches, lles enviaches un correo electrónico ou te comunicaches con individuos específicos doutras formas. Con este permiso as aplicacións poden gardar os teus datos de contacto e as aplicacións maliciosas poden compartir os datos de contacto sen o teu coñecemento."</string>
-    <string name="permdesc_readContacts" product="tv" msgid="2387823103274997441">"Permite que a aplicación lea datos acerca dos contactos que tes almacenados no dispositivo Android TV, incluída a frecuencia coa que lles chamaches, lles enviaches un correo electrónico ou te comunicaches con individuos específicos doutras formas. Con este permiso as aplicacións poden gardar os teus datos de contacto e as aplicacións maliciosas poden compartir os datos de contacto sen o teu coñecemento."</string>
-    <string name="permdesc_readContacts" product="default" msgid="6938416250821270191">"Permite á aplicación ler datos acerca dos teus contactos almacenados no teléfono, incluída a frecuencia coa que os chamaches, lles enviaches un correo electrónico ou te comunicaches con individuos específicos doutras formas. Con este permiso as aplicacións poden gardar os teus datos de contacto e as aplicacións maliciosas poden compartir os datos de contacto sen o teu coñecemento."</string>
+    <string name="permdesc_readContacts" product="tablet" msgid="6430093481659992692">"Permite que a aplicación lea datos sobre os contactos almacenados na túa tableta. As aplicacións tamén terán acceso ás contas da túa tableta que creasen contactos, entre as que se poden incluír as creadas polas aplicacións que instalases. Con este permiso as aplicacións poden gardar os teus datos de contacto e as aplicacións maliciosas poden compartir os datos mencionados sen o teu coñecemento."</string>
+    <string name="permdesc_readContacts" product="tv" msgid="8400138591135554789">"Permite que a aplicación lea datos sobre os contactos almacenados no teu dispositivo Android TV. As aplicacións tamén terán acceso ás contas do teu dispositivo Android TV que creasen contactos, entre as que se poden incluír as creadas polas aplicacións que instalases. Con este permiso as aplicacións poden gardar os teus datos de contacto e as aplicacións maliciosas poden compartir os datos mencionados sen o teu coñecemento."</string>
+    <string name="permdesc_readContacts" product="default" msgid="4911989776203207644">"Permite que a aplicación lea datos sobre os contactos almacenados no teu teléfono. As aplicacións tamén terán acceso ás contas do teu teléfono que creasen contactos, entre as que se poden incluír as creadas polas aplicacións que instalases. Con este permiso as aplicacións poden gardar os teus datos de contacto e as aplicacións maliciosas poden compartir os datos mencionados sen o teu coñecemento."</string>
     <string name="permlab_writeContacts" msgid="8919430536404830430">"modificar os teus contactos"</string>
-    <string name="permdesc_writeContacts" product="tablet" msgid="4460252002098005534">"Permite á aplicación modificar os datos acerca dos teus contactos almacenados na tableta, incluído a frecuencia coa que os chamaches, lles enviaches un correo electrónico ou te comunicaches con contactos específicos doutras formas. Con este permiso as aplicacións poden eliminar datos de contactos."</string>
-    <string name="permdesc_writeContacts" product="tv" msgid="3870937407268625273">"Permite que a aplicación modifique os datos sobre os contactos almacenados no dispositivo Android TV, incluída a frecuencia coa que lles chamaches, lles enviaches un correo electrónico ou te comunicaches con eles doutra forma. Con este permiso as aplicacións poden eliminar datos de contactos."</string>
-    <string name="permdesc_writeContacts" product="default" msgid="4152877294201215490">"Permite á aplicación modificar os datos acerca dos teus contactos almacenados no teléfono, incluída a frecuencia coa que chamaches, enviaches correos electrónicos ou te comunicaches doutras maneiras con contactos específicos. Con este permiso as aplicacións poden eliminar datos de contactos."</string>
+    <string name="permdesc_writeContacts" product="tablet" msgid="6422419281427826181">"Permite que a aplicación modifique datos sobre os contactos almacenados na túa tableta. Con este permiso as aplicacións poden eliminar datos de contactos."</string>
+    <string name="permdesc_writeContacts" product="tv" msgid="6488872735379978935">"Permite que a aplicación modifique datos sobre os contactos almacenados no teu dispositivo Android TV. Con este permiso as aplicacións poden eliminar datos de contactos."</string>
+    <string name="permdesc_writeContacts" product="default" msgid="8304795696237065281">"Permite que a aplicación modifique datos sobre os contactos almacenados no teu teléfono. Con este permiso as aplicacións poden eliminar datos de contactos."</string>
     <string name="permlab_readCallLog" msgid="1739990210293505948">"ler rexistro de chamadas"</string>
     <string name="permdesc_readCallLog" msgid="8964770895425873433">"Esta aplicación pode ler o teu historial de chamadas."</string>
     <string name="permlab_writeCallLog" msgid="670292975137658895">"escribir no rexistro de chamadas"</string>
@@ -407,13 +418,11 @@
     <string name="permlab_accessLocationExtraCommands" msgid="5162339812057983988">"acceder a comandos adicionais do provedor de localización"</string>
     <string name="permdesc_accessLocationExtraCommands" msgid="355369611979907967">"Permite á aplicación acceder a comandos adicionais de fornecedor de localizacións. É posible que isto provoque que a aplicación interfira co funcionamento do GPS ou doutras fontes da localización."</string>
     <string name="permlab_accessFineLocation" msgid="6426318438195622966">"acceder á localización exacta só en primeiro plano"</string>
-    <string name="permdesc_accessFineLocation" msgid="3056141052532120237">"Esta aplicación pode obter a túa localización exacta só cando se atope en primeiro plano. É necesario activar estes servizos de localización e deben estar dispoñibles no teléfono para que a aplicación poida utilizalos. Ademais, poden supoñer un aumento do consumo de batería."</string>
-    <string name="permlab_accessCoarseLocation" msgid="8215351553392299056">"acceder á localización aproximada a partir de fontes de rede só en primeiro plano"</string>
-    <string name="permdesc_accessCoarseLocation" product="tablet" msgid="7479449026750078899">"Esta aplicación pode obter a túa localización a partir de fontes de rede, como torres de telecomunicacións e redes wifi, pero só mentres está en primeiro plano. Para que a aplicación poida utilizar os servizos de localización, deben estar activados e dispoñibles na túa tableta."</string>
-    <string name="permdesc_accessCoarseLocation" product="tv" msgid="6994518594789550469">"Esta aplicación pode obter a túa localización a partir de fontes de rede, como antenas de telefonía móbil e redes wifi, pero só mentres está en primeiro plano. É necesario activar estes servizos de localización e deben estar dispoñibles no dispositivo Android TV para que a aplicación poida utilizalos."</string>
-    <string name="permdesc_accessCoarseLocation" product="default" msgid="8962998102400124341">"Esta aplicación pode obter a túa localización a partir de fontes de rede, como torres de telecomunicacións e redes wifi, pero só mentres está en primeiro plano. Para que a aplicación poida utilizar os servizos de localización, deben estar activados e dispoñibles no teu teléfono."</string>
+    <string name="permdesc_accessFineLocation" msgid="9221079523494157324">"Esta aplicación pode obter a túa localización exacta só cando se atope en primeiro plano. É necesario activar os servizos de localización e deben estar dispoñibles no teléfono para que a aplicación poida utilizalos. Ademais, poden supoñer un aumento do consumo de batería."</string>
+    <string name="permlab_accessCoarseLocation" msgid="1561042925407799741">"acceder á localización aproximada só en primeiro plano"</string>
+    <string name="permdesc_accessCoarseLocation" msgid="4826281078353537786">"Esta aplicación pode obter a túa localización aproximada, pero só mentres está en primeiro plano. Para que a aplicación poida utilizar os servizos de localización, deben estar activados e dispoñibles no teu dispositivo."</string>
     <string name="permlab_accessBackgroundLocation" msgid="1721164702777366138">"acceder á localización en segundo plano"</string>
-    <string name="permdesc_accessBackgroundLocation" msgid="6904788108073882096">"Se a aplicación ten acceso á localización aproximada ou exacta e lle concedes este permiso, poderá consultar onde te atopas cando estea en segundo plano."</string>
+    <string name="permdesc_accessBackgroundLocation" msgid="623676842127558197">"Esta aplicación pode acceder á localización mentres se executa en segundo plano, ademais de acceder á localización en primeiro plano."</string>
     <string name="permlab_modifyAudioSettings" msgid="6129039778010031815">"cambiar a configuración de son"</string>
     <string name="permdesc_modifyAudioSettings" msgid="8687227609663124921">"Permite á aplicación modificar a configuración de audio global, como o volume e que altofalante se utiliza para a saída."</string>
     <string name="permlab_recordAudio" msgid="1208457423054219147">"gravar audio"</string>
@@ -428,6 +437,7 @@
     <string name="permdesc_systemCamera" msgid="544730545441964482">"Esta aplicación do sistema con privilexios pode utilizar unha cámara do sistema en calquera momento para sacar fotos e gravar vídeos. Require que a aplicación tamén teña o permiso android.permission.CAMERA"</string>
     <string name="permlab_vibrate" msgid="8596800035791962017">"controlar a vibración"</string>
     <string name="permdesc_vibrate" msgid="8733343234582083721">"Permite á aplicación controlar o vibrador."</string>
+    <string name="permdesc_vibrator_state" msgid="7050024956594170724">"Permite que a aplicación acceda ao estado de vibrador"</string>
     <string name="permlab_callPhone" msgid="1798582257194643320">"chamar directamente aos números de teléfono"</string>
     <string name="permdesc_callPhone" msgid="5439809516131609109">"Permite á aplicación chamar a números de teléfono sen a túa intervención. Esta acción pode implicar chamadas ou custos inesperados. Ten en conta que isto non permite á aplicación chamar a números de emerxencia. É posible que aplicacións maliciosas che custen diñeiro debido á realización de chamadas sen a túa confirmación."</string>
     <string name="permlab_accessImsCallService" msgid="442192920714863782">"acceso ao servizo de chamadas de IMS"</string>
@@ -442,9 +452,11 @@
     <string name="permdesc_acceptHandovers" msgid="7129026180128626870">"Permite que a aplicación continúe unha chamada que se iniciou noutra aplicación."</string>
     <string name="permlab_readPhoneNumbers" msgid="5668704794723365628">"ler números de teléfono"</string>
     <string name="permdesc_readPhoneNumbers" msgid="7368652482818338871">"Permite que a aplicación acceda aos números de teléfono do dispositivo."</string>
+    <string name="permlab_wakeLock" product="automotive" msgid="1904736682319375676">"manter acendida a pantalla do coche"</string>
     <string name="permlab_wakeLock" product="tablet" msgid="1527660973931694000">"evitar que a tableta entre en modo de inactividade"</string>
     <string name="permlab_wakeLock" product="tv" msgid="2856941418123343518">"evitar que o dispositivo Android TV entre en modo de suspensión"</string>
     <string name="permlab_wakeLock" product="default" msgid="569409726861695115">"evitar que o teléfono entre en modo de suspensión"</string>
+    <string name="permdesc_wakeLock" product="automotive" msgid="5995045369683254571">"Permite que a aplicación manteña acendida a pantalla do coche."</string>
     <string name="permdesc_wakeLock" product="tablet" msgid="2441742939101526277">"Permite á aplicación evitar que a tableta acceda ao modo de suspensión."</string>
     <string name="permdesc_wakeLock" product="tv" msgid="2329298966735118796">"Permite que a aplicación evite que o dispositivo Android TV entre en modo de suspensión."</string>
     <string name="permdesc_wakeLock" product="default" msgid="3689523792074007163">"Permite á aplicación evitar que o teléfono acceda ao modo de suspensión."</string>
@@ -494,6 +506,8 @@
     <string name="permdesc_bluetooth" product="tablet" msgid="3053222571491402635">"Permite á aplicación ver a configuración do Bluetooth na tableta e efectuar e aceptar conexións con dispositivos sincronizados."</string>
     <string name="permdesc_bluetooth" product="tv" msgid="8851534496561034998">"Permite que a aplicación consulte a configuración do Bluetooth no dispositivo Android TV, e efectúe e acepte conexións con dispositivos vinculados."</string>
     <string name="permdesc_bluetooth" product="default" msgid="2779606714091276746">"Permite á aplicación ver a configuración do Bluetooth no teléfono e efectuar e aceptar conexións con dispositivos sincronizados."</string>
+    <string name="permlab_preferredPaymentInfo" msgid="5274423844767445054">"Información do servizo de pago de NFC preferido"</string>
+    <string name="permdesc_preferredPaymentInfo" msgid="8583552469807294967">"Permite que a aplicación obteña información do servizo de pago de NFC preferido, como as axudas rexistradas e o destino da ruta."</string>
     <string name="permlab_nfc" msgid="1904455246837674977">"controlar Near Field Communication"</string>
     <string name="permdesc_nfc" msgid="8352737680695296741">"Permite á aplicación comunicarse con etiquetas, tarxetas e lectores Near Field Communication (NFC)."</string>
     <string name="permlab_disableKeyguard" msgid="3605253559020928505">"desactivar o bloqueo da pantalla"</string>
@@ -540,6 +554,7 @@
     <string name="fingerprint_error_unable_to_process" msgid="1148553603490048742">"Téntao de novo."</string>
     <string name="fingerprint_error_no_fingerprints" msgid="8671811719699072411">"Non se rexistraron impresións dixitais."</string>
     <string name="fingerprint_error_hw_not_present" msgid="578914350967423382">"Este dispositivo non ten sensor de impresión dixital."</string>
+    <string name="fingerprint_error_security_update_required" msgid="7750187320640856433">"Desactivouse o sensor temporalmente."</string>
     <string name="fingerprint_name_template" msgid="8941662088160289778">"Dedo <xliff:g id="FINGERID">%d</xliff:g>"</string>
   <string-array name="fingerprint_error_vendor">
   </string-array>
@@ -583,6 +598,7 @@
     <string name="face_error_unable_to_process" msgid="5723292697366130070">"Non se puido verificar a cara. Téntao de novo."</string>
     <string name="face_error_not_enrolled" msgid="7369928733504691611">"Non configuraches o desbloqueo facial."</string>
     <string name="face_error_hw_not_present" msgid="1070600921591729944">"Este dispositivo non admite o desbloqueo facial."</string>
+    <string name="face_error_security_update_required" msgid="5076017208528750161">"Desactivouse o sensor temporalmente."</string>
     <string name="face_name_template" msgid="3877037340223318119">"Cara <xliff:g id="FACEID">%d</xliff:g>"</string>
   <string-array name="face_error_vendor">
   </string-array>
@@ -1308,6 +1324,9 @@
     <string name="adb_active_notification_title" msgid="408390247354560331">"Depuración por USB conectada"</string>
     <string name="adb_active_notification_message" msgid="5617264033476778211">"Toca para desactivar a depuración por USB"</string>
     <string name="adb_active_notification_message" product="tv" msgid="6624498401272780855">"Selecciona a opción para desactivar a depuración por USB."</string>
+    <string name="adbwifi_active_notification_title" msgid="6147343659168302473">"A depuración sen fíos está conectada"</string>
+    <string name="adbwifi_active_notification_message" msgid="930987922852867972">"Toca para desactivar a depuración sen fíos"</string>
+    <string name="adbwifi_active_notification_message" product="tv" msgid="8633421848366915478">"Selecciona para desactivar a depuración sen fíos."</string>
     <string name="test_harness_mode_notification_title" msgid="2282785860014142511">"Activouse o modo de axente de proba"</string>
     <string name="test_harness_mode_notification_message" msgid="3039123743127958420">"Restablece a configuración de fábrica para desactivar o modo de axente de proba."</string>
     <string name="console_running_notification_title" msgid="6087888939261635904">"A consola de serie está activada"</string>
@@ -1608,9 +1627,18 @@
     <string name="kg_failed_attempts_almost_at_login" product="default" msgid="5270861875006378092">"Debuxaches o padrón de desbloqueo incorrectamente <xliff:g id="NUMBER_0">%1$d</xliff:g> veces. Se realizas <xliff:g id="NUMBER_1">%2$d</xliff:g> intentos incorrectos máis, terás que desbloquear o teléfono a través dunha conta de correo electrónico.\n\n Téntao de novo dentro de <xliff:g id="NUMBER_2">%3$d</xliff:g> segundos."</string>
     <string name="kg_text_message_separator" product="default" msgid="4503708889934976866">" — "</string>
     <string name="kg_reordering_delete_drop_target_text" msgid="2034358143731750914">"Eliminar"</string>
+    <string name="allow_while_in_use_permission_in_fgs" msgid="4101339676785053656">"Nas futuras compilacións R, o servizo en primeiro plano iniciado en segundo plano desde <xliff:g id="PACKAGENAME">%1$s</xliff:g> non terá permiso mentres estea en uso. Consulta go/r-bg-fgs-restriction e presenta un informe de erros."</string>
     <string name="safe_media_volume_warning" product="default" msgid="3751676824423049994">"Queres subir o volume máis do nivel recomendado?\n\nA reprodución de son a un volume elevado durante moito tempo pode provocar danos nos oídos."</string>
     <string name="accessibility_shortcut_warning_dialog_title" msgid="4017995837692622933">"Queres utilizar o atallo de accesibilidade?"</string>
-    <string name="accessibility_shortcut_toogle_warning" msgid="8306239551412868396">"Cando o atallo está activado, podes premer os dous botóns de volume durante 3 segundos para iniciar unha función de accesibilidade.\n\n Función de accesibilidade actual:\n <xliff:g id="SERVICE_NAME">%1$s</xliff:g>\n\n Podes cambiar a función en Configuración &gt; Accesibilidade."</string>
+    <string name="accessibility_shortcut_toogle_warning" msgid="4161716521310929544">"Cando o atallo está activado, podes premer os dous botóns de volume durante 3 segundos para iniciar unha función de accesibilidade."</string>
+    <!-- no translation found for accessibility_select_shortcut_menu_title (7310194076629867377) -->
+    <skip />
+    <!-- no translation found for accessibility_edit_shortcut_menu_button_title (6096484087245145325) -->
+    <skip />
+    <!-- no translation found for accessibility_edit_shortcut_menu_volume_title (4849108668454490699) -->
+    <skip />
+    <string name="edit_accessibility_shortcut_menu_button" msgid="8885752738733772935">"Editar atallos"</string>
+    <string name="cancel_accessibility_shortcut_menu_button" msgid="1817413122335452474">"Cancelar"</string>
     <string name="disable_accessibility_shortcut" msgid="5806091378745232383">"Desactivar atallo"</string>
     <string name="leave_accessibility_shortcut_on" msgid="6543362062336990814">"Utilizar atallo"</string>
     <string name="color_inversion_feature_name" msgid="326050048927789012">"Inversión de cor"</string>
@@ -1618,12 +1646,6 @@
     <string name="accessibility_shortcut_enabling_service" msgid="6141620395915529473">"O atallo de accesibilidade activou <xliff:g id="SERVICE_NAME">%1$s</xliff:g>"</string>
     <string name="accessibility_shortcut_disabling_service" msgid="1287340429965172651">"O atallo de accesibilidade desactivou <xliff:g id="SERVICE_NAME">%1$s</xliff:g>"</string>
     <string name="accessibility_shortcut_spoken_feedback" msgid="4228997042855695090">"Mantén premidas as teclas do volume durante tres segudos para usar <xliff:g id="SERVICE_NAME">%1$s</xliff:g>"</string>
-    <string name="accessibility_button_prompt_text" msgid="1634298854002673171">"Escolle o servizo que queres utilizar cando toques o botón de accesibilidade:"</string>
-    <string name="accessibility_gesture_prompt_text" msgid="3271927619707898924">"Escolle o servizo que queres usar co xesto de accesibilidade (pasa dous dedos cara arriba desde a parte inferior da pantalla):"</string>
-    <string name="accessibility_gesture_3finger_prompt_text" msgid="218295923313037542">"Escolle o servizo que queres usar co xesto de accesibilidade (pasa tres dedos cara arriba desde a parte inferior da pantalla):"</string>
-    <string name="accessibility_button_instructional_text" msgid="8523635009916665153">"Para cambiar de servizo, mantén premido o botón de accesibilidade."</string>
-    <string name="accessibility_gesture_instructional_text" msgid="927882482331885974">"Para cambiar de servizo, pasa dous dedos cara arriba e mantén premida a pantalla."</string>
-    <string name="accessibility_gesture_3finger_instructional_text" msgid="7527523742771203377">"Para cambiar de servizo, pasa tres dedos cara arriba pola pantalla e mantén premido."</string>
     <string name="accessibility_magnification_chooser_text" msgid="1502075582164931596">"Ampliación"</string>
     <string name="user_switched" msgid="7249833311585228097">"Usuario actual <xliff:g id="NAME">%1$s</xliff:g>."</string>
     <string name="user_switching_message" msgid="1912993630661332336">"Cambiando a <xliff:g id="NAME">%1$s</xliff:g>…"</string>
@@ -1759,8 +1781,8 @@
     <string name="confirm_battery_saver" msgid="5247976246208245754">"Aceptar"</string>
     <string name="battery_saver_description_with_learn_more" msgid="1817385558636532621">"Para aumentar a duración da batería, a función Aforro de batería fai o seguinte:\n·Activa o tema escuro\n·Desactiva ou restrinxe a actividade en segundo plano, algúns efectos visuais e outras funcións, como \"Ok Google\"\n\n"<annotation id="url">"Máis información"</annotation></string>
     <string name="battery_saver_description" msgid="7618492104632328184">"Para aumentar a duración da batería, a función Aforro de batería fai o seguinte:\n·Activa o tema escuro\n·Desactiva ou restrinxe a actividade en segundo plano, algúns efectos visuais e outras funcións, como \"Ok Google\""</string>
-    <string name="data_saver_description" msgid="4995164271550590517">"Para contribuír a reducir o uso de datos, o Economizador de datos impide que algunhas aplicacións envíen ou reciban datos en segundo plano. Cando esteas utilizando unha aplicación, esta poderá acceder aos datos, pero é posible que o faga con menos frecuencia. Por exemplo, é posible que as imaxes non se mostren ata que as toques."</string>
-    <string name="data_saver_enable_title" msgid="7080620065745260137">"Queres activar o economizador de datos?"</string>
+    <string name="data_saver_description" msgid="4995164271550590517">"Para contribuír a reducir o uso de datos, o aforro de datos impide que algunhas aplicacións envíen ou reciban datos en segundo plano. Cando esteas utilizando unha aplicación, esta poderá acceder aos datos, pero é posible que o faga con menos frecuencia. Por exemplo, é posible que as imaxes non se mostren ata que as toques."</string>
+    <string name="data_saver_enable_title" msgid="7080620065745260137">"Queres activar o aforro de datos?"</string>
     <string name="data_saver_enable_button" msgid="4399405762586419726">"Activar"</string>
     <plurals name="zen_mode_duration_minutes_summary" formatted="false" msgid="2877101784123058273">
       <item quantity="other">Durante %1$d minutos (ata as <xliff:g id="FORMATTEDTIME_1">%2$s</xliff:g>)</item>
@@ -1837,6 +1859,7 @@
     <string name="default_notification_channel_label" msgid="3697928973567217330">"Sen clasificar"</string>
     <string name="importance_from_user" msgid="2782756722448800447">"Ti defines a importancia destas notificacións."</string>
     <string name="importance_from_person" msgid="4235804979664465383">"É importante polas persoas involucradas."</string>
+    <string name="notification_history_title_placeholder" msgid="7748630986182249599">"Notificación de aplicacións personalizada"</string>
     <string name="user_creation_account_exists" msgid="2239146360099708035">"Queres permitir que <xliff:g id="APP">%1$s</xliff:g> cree un usuario novo con <xliff:g id="ACCOUNT">%2$s</xliff:g>? (Xa existe un usuario con esta conta)"</string>
     <string name="user_creation_adding" msgid="7305185499667958364">"Queres permitir que <xliff:g id="APP">%1$s</xliff:g> cree un usuario novo con <xliff:g id="ACCOUNT">%2$s</xliff:g>?"</string>
     <string name="language_selection_title" msgid="52674936078683285">"Engadir un idioma"</string>
@@ -1849,9 +1872,12 @@
     <string name="app_suspended_title" msgid="888873445010322650">"A aplicación non está dispoñible"</string>
     <string name="app_suspended_default_message" msgid="6451215678552004172">"A aplicación <xliff:g id="APP_NAME_0">%1$s</xliff:g> non está dispoñible neste momento. A dispoñibilidade está xestionada por <xliff:g id="APP_NAME_1">%2$s</xliff:g>."</string>
     <string name="app_suspended_more_details" msgid="211260942831587014">"Máis información"</string>
+    <string name="app_suspended_unsuspend_message" msgid="1665438589450555459">"Volver activar aplicación"</string>
     <string name="work_mode_off_title" msgid="5503291976647976560">"Activar o perfil de traballo?"</string>
     <string name="work_mode_off_message" msgid="8417484421098563803">"Activaranse as túas aplicacións de traballo, as notificacións, os datos e outras funcións do perfil de traballo"</string>
     <string name="work_mode_turn_on" msgid="3662561662475962285">"Activar"</string>
+    <string name="app_blocked_title" msgid="7353262160455028160">"A aplicación non está dispoñible"</string>
+    <string name="app_blocked_message" msgid="542972921087873023">"A aplicación <xliff:g id="APP_NAME">%1$s</xliff:g> non está dispoñible neste momento."</string>
     <string name="deprecated_target_sdk_message" msgid="5203207875657579953">"Esta aplicación deseñouse para unha versión anterior de Android e quizais non funcione correctamente. Proba a buscar actualizacións ou contacta co programador."</string>
     <string name="deprecated_target_sdk_app_store" msgid="8456784048558808909">"Buscar actualización"</string>
     <string name="new_sms_notification_title" msgid="6528758221319927107">"Tes mensaxes novas"</string>
@@ -1862,7 +1888,9 @@
     <string name="usb_mtp_launch_notification_title" msgid="774319638256707227">"Conectado a <xliff:g id="PRODUCT_NAME">%1$s</xliff:g>"</string>
     <string name="usb_mtp_launch_notification_description" msgid="6942535713629852684">"Toca para ver os ficheiros"</string>
     <string name="pin_target" msgid="8036028973110156895">"Fixar"</string>
+    <string name="pin_specific_target" msgid="7824671240625957415">"Fixar a <xliff:g id="LABEL">%1$s</xliff:g>"</string>
     <string name="unpin_target" msgid="3963318576590204447">"Deixar de fixar"</string>
+    <string name="unpin_specific_target" msgid="3859828252160908146">"Deixar de fixar a <xliff:g id="LABEL">%1$s</xliff:g>"</string>
     <string name="app_info" msgid="6113278084877079851">"Info. da aplicación"</string>
     <string name="negative_duration" msgid="1938335096972945232">"−<xliff:g id="TIME">%1$s</xliff:g>"</string>
     <string name="demo_starting_message" msgid="6577581216125805905">"Iniciando demostración…"</string>
@@ -1905,6 +1933,8 @@
     <string name="autofill_update_title_with_3types" msgid="1312232153076212291">"Queres actualizar <xliff:g id="TYPE_0">%1$s</xliff:g>, <xliff:g id="TYPE_1">%2$s</xliff:g> e <xliff:g id="TYPE_2">%3$s</xliff:g> en "<b>"<xliff:g id="LABEL">%4$s</xliff:g>"</b>"?"</string>
     <string name="autofill_save_yes" msgid="8035743017382012850">"Gardar"</string>
     <string name="autofill_save_no" msgid="9212826374207023544">"Non, grazas"</string>
+    <string name="autofill_save_notnow" msgid="2853932672029024195">"Agora non"</string>
+    <string name="autofill_save_never" msgid="6821841919831402526">"Nunca"</string>
     <string name="autofill_update_yes" msgid="4608662968996874445">"Actualizar"</string>
     <string name="autofill_continue_yes" msgid="7914985605534510385">"Continuar"</string>
     <string name="autofill_save_type_password" msgid="5624528786144539944">"contrasinal"</string>
@@ -1958,13 +1988,10 @@
     <string name="dynamic_mode_notification_title" msgid="9205715501274608016">"A batería pode esgotarse antes do habitual"</string>
     <string name="dynamic_mode_notification_summary" msgid="4141614604437372157">"Para ampliar a duración da batería activouse a función Aforro de batería"</string>
     <string name="battery_saver_notification_channel_name" msgid="3918243458067916913">"Aforro de batería"</string>
-    <string name="battery_saver_sticky_disabled_notification_title" msgid="616803848887159814">"A función Aforro de batería non se activará de novo ata que volva quedar pouca batería"</string>
-    <string name="battery_saver_sticky_disabled_notification_summary" msgid="9091127514013090563">"A batería cargouse ata un nivel suficiente. A función Aforro de batería non se activará de novo ata que volva quedar pouca batería."</string>
-    <string name="battery_saver_charged_notification_title" product="default" msgid="3323003634503470433">"Nivel de batería do teléfono: <xliff:g id="CHARGE_LEVEL">%1$s</xliff:g>"</string>
-    <string name="battery_saver_charged_notification_title" product="tablet" msgid="7917739170436791596">"Nivel de batería da tableta: <xliff:g id="CHARGE_LEVEL">%1$s</xliff:g>"</string>
-    <string name="battery_saver_charged_notification_title" product="device" msgid="6316898726189914805">"Nivel de batería do dispositivo: <xliff:g id="CHARGE_LEVEL">%1$s</xliff:g>"</string>
-    <string name="battery_saver_off_notification_summary" msgid="8489738830261291526">"A función Aforro de batería está desactivada. Xa non se restrinxirá ningunha función."</string>
-    <string name="battery_saver_off_alternative_notification_summary" msgid="8875240624827898671">"Desactivouse a función Aforro de batería. Xa non se restrinxirá ningunha función."</string>
+    <string name="battery_saver_off_notification_title" msgid="7637255960468032515">"Desactivouse a función Aforro de batería."</string>
+    <string name="battery_saver_charged_notification_summary" product="default" msgid="5544457317418624367">"O teléfono non ten suficiente batería. Xa non se restrinxirán as funcións."</string>
+    <string name="battery_saver_charged_notification_summary" product="tablet" msgid="4426317048139996888">"A tableta non ten suficiente batería. Xa non se restrinxirán as funcións."</string>
+    <string name="battery_saver_charged_notification_summary" product="device" msgid="1031562417867646649">"O dispositivo non ten suficiente batería. Xa non se restrinxirán as funcións."</string>
     <string name="mime_type_folder" msgid="2203536499348787650">"Cartafol"</string>
     <string name="mime_type_apk" msgid="3168784749499623902">"Aplicación Android"</string>
     <string name="mime_type_generic" msgid="4606589110116560228">"Ficheiro"</string>
@@ -1983,6 +2010,7 @@
     <string name="mime_type_spreadsheet_ext" msgid="8720173181137254414">"Folla de cálculo <xliff:g id="EXTENSION">%1$s</xliff:g>"</string>
     <string name="mime_type_presentation" msgid="1145384236788242075">"Presentación"</string>
     <string name="mime_type_presentation_ext" msgid="8761049335564371468">"Presentación <xliff:g id="EXTENSION">%1$s</xliff:g>"</string>
+    <string name="bluetooth_airplane_mode_toast" msgid="2066399056595768554">"O Bluetooth permanecerá activado mentres se utilice o modo avión"</string>
     <string name="car_loading_profile" msgid="8219978381196748070">"Cargando"</string>
     <plurals name="file_count" formatted="false" msgid="7063513834724389247">
       <item quantity="other"><xliff:g id="FILE_NAME_2">%s</xliff:g> + <xliff:g id="COUNT_3">%d</xliff:g> ficheiros</item>
@@ -2000,5 +2028,34 @@
     <string name="accessibility_system_action_toggle_split_screen_label" msgid="6626177163849387748">"Activar/desactivar pantalla dividida"</string>
     <string name="accessibility_system_action_lock_screen_label" msgid="5484190691945563838">"Pantalla de bloqueo"</string>
     <string name="accessibility_system_action_screenshot_label" msgid="3581566515062741676">"Captura de pantalla"</string>
-    <string name="accessibility_freeform_caption" msgid="7873194416838321119">"Aplicación <xliff:g id="APP_NAME">%1$s</xliff:g> nunha ventá emerxente."</string>
+    <string name="accessibility_system_action_accessibility_menu_label" msgid="8436484650391125184">"Menú de accesibilidade"</string>
+    <string name="accessibility_freeform_caption" msgid="8377519323496290122">"Barra de subtítulos de <xliff:g id="APP_NAME">%1$s</xliff:g>."</string>
+    <string name="as_app_forced_to_restricted_bucket" msgid="8233871289353898964">"<xliff:g id="PACKAGE_NAME">%1$s</xliff:g> incluíuse no grupo RESTRINXIDO"</string>
+    <string name="resolver_personal_tab" msgid="2051260504014442073">"Persoal"</string>
+    <string name="resolver_work_tab" msgid="2690019516263167035">"Traballo"</string>
+    <!-- no translation found for resolver_personal_tab_accessibility (5739524949153091224) -->
+    <skip />
+    <!-- no translation found for resolver_work_tab_accessibility (4753168230363802734) -->
+    <skip />
+    <string name="resolver_cant_share_with_work_apps" msgid="7539495559434146897">"Non se pode compartir información coas aplicacións do traballo"</string>
+    <string name="resolver_cant_share_with_personal_apps" msgid="8020581735267157241">"Non se pode compartir información coas aplicacións persoais"</string>
+    <!-- no translation found for resolver_cant_share_cross_profile_explanation (5556640604460901386) -->
+    <skip />
+    <!-- no translation found for resolver_cant_access_work_apps (375634344111233790) -->
+    <skip />
+    <!-- no translation found for resolver_cant_access_work_apps_explanation (3958762224516867388) -->
+    <skip />
+    <!-- no translation found for resolver_cant_access_personal_apps (1953215925406474177) -->
+    <skip />
+    <!-- no translation found for resolver_cant_access_personal_apps_explanation (1725572276741281136) -->
+    <skip />
+    <!-- no translation found for resolver_turn_on_work_apps_share (619263911204978175) -->
+    <skip />
+    <!-- no translation found for resolver_turn_on_work_apps_view (3073389230905543680) -->
+    <skip />
+    <string name="resolver_no_apps_available" msgid="7710339903040989654">"Non hai aplicacións dispoñibles"</string>
+    <!-- no translation found for resolver_switch_on_work (2873009160846966379) -->
+    <skip />
+    <string name="permlab_accessCallAudio" msgid="1682957511874097664">"Gravar ou reproducir audio en chamadas telefónicas"</string>
+    <string name="permdesc_accessCallAudio" msgid="8448360894684277823">"Permite que esta aplicación, cando está asignada como aplicación predeterminada do marcador, grave e reproduza audio en chamadas telefónicas."</string>
 </resources>

@@ -24,6 +24,7 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.ICameraDeviceCallbacks;
 import android.hardware.camera2.ICameraDeviceUser;
+import android.hardware.camera2.ICameraOfflineSession;
 import android.hardware.camera2.impl.CameraMetadataNative;
 import android.hardware.camera2.impl.CaptureResultExtras;
 import android.hardware.camera2.impl.PhysicalCaptureResultInfo;
@@ -540,7 +541,7 @@ public class CameraDeviceUserShim implements ICameraDeviceUser {
     }
 
     @Override
-    public void endConfigure(int operatingMode, CameraMetadataNative sessionParams) {
+    public int[] endConfigure(int operatingMode, CameraMetadataNative sessionParams) {
         if (DEBUG) {
             Log.d(TAG, "endConfigure called.");
         }
@@ -575,6 +576,8 @@ public class CameraDeviceUserShim implements ICameraDeviceUser {
             mConfiguring = false;
         }
         mLegacyDevice.configureOutputs(surfaces);
+
+        return new int[0]; // Offline mode is not supported
     }
 
     @Override
@@ -786,6 +789,12 @@ public class CameraDeviceUserShim implements ICameraDeviceUser {
         }
 
         return mLegacyDevice.getAudioRestriction();
+    }
+
+    @Override
+    public ICameraOfflineSession switchToOffline(ICameraDeviceCallbacks cbs,
+            int[] offlineOutputIds) {
+        throw new UnsupportedOperationException("Legacy device does not support offline mode");
     }
 
     @Override

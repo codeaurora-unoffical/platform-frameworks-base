@@ -21,6 +21,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -43,7 +44,6 @@ import android.os.BatteryManager;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.os.UserManager;
-import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.test.InstrumentationRegistry;
@@ -51,19 +51,15 @@ import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
 import com.android.internal.app.IBatteryStats;
-import com.android.internal.widget.LockPatternUtils;
 import com.android.keyguard.KeyguardUpdateMonitor;
-import com.android.keyguard.KeyguardUpdateMonitor.BatteryStatus;
 import com.android.settingslib.Utils;
+import com.android.settingslib.fuelgauge.BatteryStatus;
 import com.android.systemui.R;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.phone.KeyguardIndicationTextView;
-import com.android.systemui.statusbar.phone.LockIcon;
-import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
-import com.android.systemui.statusbar.policy.AccessibilityController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.util.wakelock.WakeLockFake;
 
@@ -84,14 +80,6 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
     @Mock
     private ViewGroup mIndicationArea;
     @Mock
-    private LockIcon mLockIcon;
-    @Mock
-    private LockPatternUtils mLockPatternUtils;
-    @Mock
-    private ShadeController mShadeController;
-    @Mock
-    private AccessibilityController mAccessibilityController;
-    @Mock
     private KeyguardStateController mKeyguardStateController;
     @Mock
     private StatusBarStateController mStatusBarStateController;
@@ -110,6 +98,7 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
     private KeyguardIndicationTextView mTextView;
 
     private KeyguardIndicationController mController;
+    private WakeLockFake.Builder mWakeLockBuilder;
     private WakeLockFake mWakeLock;
     private Instrumentation mInstrumentation;
 
@@ -124,22 +113,25 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
         mContext.addMockSystemService(Context.TRUST_SERVICE, mock(TrustManager.class));
         mContext.addMockSystemService(Context.FINGERPRINT_SERVICE, mock(FingerprintManager.class));
 
-        when(mKeyguardUpdateMonitor.isUnlockingWithBiometricAllowed()).thenReturn(true);
+        when(mKeyguardUpdateMonitor.isUnlockingWithBiometricAllowed(anyBoolean())).thenReturn(true);
         when(mKeyguardUpdateMonitor.isScreenOn()).thenReturn(true);
         when(mKeyguardUpdateMonitor.isUserUnlocked(anyInt())).thenReturn(true);
         when(mIndicationArea.findViewById(R.id.keyguard_indication_text)).thenReturn(mTextView);
 
         mWakeLock = new WakeLockFake();
+        mWakeLockBuilder = new WakeLockFake.Builder(mContext);
+        mWakeLockBuilder.setWakeLock(mWakeLock);
     }
 
     private void createController() {
         if (Looper.myLooper() == null) {
             Looper.prepare();
         }
-        mController = new KeyguardIndicationController(mContext, mIndicationArea, mLockIcon,
-                mLockPatternUtils, mWakeLock, mShadeController, mAccessibilityController,
+
+        mController = new KeyguardIndicationController(mContext, mWakeLockBuilder,
                 mKeyguardStateController, mStatusBarStateController, mKeyguardUpdateMonitor,
                 mDockManager, mIBatteryStats);
+        mController.setIndicationArea(mIndicationArea);
         mController.setStatusBarKeyguardViewManager(mStatusBarKeyguardViewManager);
         clearInvocations(mIBatteryStats);
     }
@@ -154,12 +146,14 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_showsSlowChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(
-                DockManager.ALIGN_STATE_POOR);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_POOR);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_slow_charging));
@@ -169,11 +163,14 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_showsNotChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_not_charging));
@@ -183,13 +180,15 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_whileDozing_showsSlowChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
-        mController.setDozing(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
+            mController.setDozing(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(
-                DockManager.ALIGN_STATE_POOR);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_POOR);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_slow_charging));
@@ -199,12 +198,15 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_whileDozing_showsNotChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
-        mController.setDozing(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
+            mController.setDozing(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_not_charging));
@@ -308,26 +310,6 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
     }
 
     @Test
-    public void lockIcon_click() {
-        createController();
-
-        ArgumentCaptor<View.OnLongClickListener> longClickCaptor = ArgumentCaptor.forClass(
-                View.OnLongClickListener.class);
-        ArgumentCaptor<View.OnClickListener> clickCaptor = ArgumentCaptor.forClass(
-                View.OnClickListener.class);
-        verify(mLockIcon).setOnLongClickListener(longClickCaptor.capture());
-        verify(mLockIcon).setOnClickListener(clickCaptor.capture());
-
-        when(mAccessibilityController.isAccessibilityEnabled()).thenReturn(true);
-        clickCaptor.getValue().onClick(mLockIcon);
-        verify(mShadeController).animateCollapsePanels(anyInt(), eq(true));
-
-        longClickCaptor.getValue().onLongClick(mLockIcon);
-        verify(mLockPatternUtils).requireCredentialEntry(anyInt());
-        verify(mKeyguardUpdateMonitor).onLockIconPressed();
-    }
-
-    @Test
     public void updateMonitor_listenerUpdatesIndication() {
         createController();
         String restingIndication = "Resting indication";
@@ -391,5 +373,19 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
         verify(mKeyguardStateController).addCallback(eq(mController));
         verify(mStatusBarStateController).addCallback(eq(mController));
         verify(mKeyguardUpdateMonitor, times(2)).registerCallback(any());
+    }
+
+    @Test
+    public void unlockMethodCache_listenerUpdatesPluggedIndication() {
+        createController();
+        when(mKeyguardUpdateMonitor.getUserHasTrust(anyInt())).thenReturn(true);
+        mController.setPowerPluggedIn(true);
+        mController.setVisible(true);
+        String powerIndication = mController.computePowerIndication();
+        String pluggedIndication = mContext.getString(R.string.keyguard_indication_trust_unlocked);
+        pluggedIndication = mContext.getString(
+                R.string.keyguard_indication_trust_unlocked_plugged_in,
+                pluggedIndication, powerIndication);
+        assertThat(mTextView.getText()).isEqualTo(pluggedIndication);
     }
 }

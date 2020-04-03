@@ -16,9 +16,12 @@
 
 package com.android.server.wm;
 
+import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
+import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 import static android.content.pm.ActivityInfo.CONFIG_ORIENTATION;
 import static android.content.pm.ActivityInfo.CONFIG_SCREEN_LAYOUT;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
 import static android.content.res.Configuration.ORIENTATION_LANDSCAPE;
 import static android.content.res.Configuration.ORIENTATION_PORTRAIT;
 import static android.os.Process.NOBODY_UID;
@@ -26,6 +29,7 @@ import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.WindowManager.TRANSIT_TASK_CLOSE;
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.any;
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.anyBoolean;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.atLeast;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doAnswer;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
@@ -55,6 +59,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -62,6 +67,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 
 import android.app.ActivityOptions;
+import android.app.WindowConfiguration;
 import android.app.servertransaction.ActivityConfigurationChangeItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.PauseActivityItem;
@@ -70,6 +76,7 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.PersistableBundle;
 import android.platform.test.annotations.Presubmit;
@@ -106,7 +113,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
     @Before
     public void setUp() throws Exception {
-        mStack = new StackBuilder(mRootActivityContainer).build();
+        mStack = new StackBuilder(mRootWindowContainer).build();
         mTask = mStack.getBottomMostTask();
         mActivity = mTask.getTopNonFinishingActivity();
 
@@ -117,28 +124,40 @@ public class ActivityRecordTests extends ActivityTestsBase {
     @Test
     public void testStackCleanupOnClearingTask() {
         mActivity.onParentChanged(null /*newParent*/, mActivity.getTask());
-        verify(mStack, times(1)).onActivityRemovedFromStack(any());
+        verify(mStack, times(1)).cleanUpActivityReferences(any());
     }
 
     @Test
     public void testStackCleanupOnActivityRemoval() {
         mTask.removeChild(mActivity);
-        verify(mStack, times(1)).onActivityRemovedFromStack(any());
+        verify(mStack, times(1)).cleanUpActivityReferences(any());
     }
 
     @Test
     public void testStackCleanupOnTaskRemoval() {
         mStack.removeChild(mTask, null /*reason*/);
         // Stack should be gone on task removal.
-        assertNull(mService.mRootActivityContainer.getStack(mStack.mStackId));
+        assertNull(mService.mRootWindowContainer.getStack(mStack.mTaskId));
+    }
+
+    @Test
+    public void testRemoveChildWithOverlayActivity() {
+        final ActivityRecord overlayActivity =
+                new ActivityBuilder(mService).setTask(mTask).build();
+        overlayActivity.setTaskOverlay(true);
+        final ActivityRecord overlayActivity2 =
+                new ActivityBuilder(mService).setTask(mTask).build();
+        overlayActivity2.setTaskOverlay(true);
+
+        mTask.removeChild(overlayActivity2, "test");
+        verify(mSupervisor, never()).removeTask(any(), anyBoolean(), anyBoolean(), any());
     }
 
     @Test
     public void testNoCleanupMovingActivityInSameStack() {
-        final Task newTask = new TaskBuilder(mService.mStackSupervisor).setStack(mStack)
-                .build();
+        final Task newTask = new TaskBuilder(mService.mStackSupervisor).setStack(mStack).build();
         mActivity.reparent(newTask, 0, null /*reason*/);
-        verify(mStack, times(0)).onActivityRemovedFromStack(any());
+        verify(mStack, times(0)).cleanUpActivityReferences(any());
     }
 
     @Test
@@ -376,6 +395,64 @@ public class ActivityRecordTests extends ActivityTestsBase {
     }
 
     @Test
+    public void ignoreRequestedOrientationInFreeformWindows() {
+        mStack.setWindowingMode(WindowConfiguration.WINDOWING_MODE_FREEFORM);
+        final Rect stableRect = new Rect();
+        mStack.getDisplay().mDisplayContent.getStableRect(stableRect);
+        final boolean isScreenPortrait = stableRect.width() <= stableRect.height();
+        final Rect bounds = new Rect(stableRect);
+        if (isScreenPortrait) {
+            // Landscape bounds
+            final int newHeight = stableRect.width() - 10;
+            bounds.top = stableRect.top + (stableRect.height() - newHeight) / 2;
+            bounds.bottom = bounds.top + newHeight;
+        } else {
+            // Portrait bounds
+            final int newWidth = stableRect.height() - 10;
+            bounds.left = stableRect.left + (stableRect.width() - newWidth) / 2;
+            bounds.right = bounds.left + newWidth;
+        }
+        mTask.setBounds(bounds);
+
+        // Requests orientation that's different from its bounds.
+        mActivity.setRequestedOrientation(
+                isScreenPortrait ? SCREEN_ORIENTATION_PORTRAIT : SCREEN_ORIENTATION_LANDSCAPE);
+
+        // Asserts it has orientation derived from bounds.
+        assertEquals(isScreenPortrait ? ORIENTATION_LANDSCAPE : ORIENTATION_PORTRAIT,
+                mActivity.getConfiguration().orientation);
+    }
+
+    @Test
+    public void ignoreRequestedOrientationInSplitWindows() {
+        mStack.setWindowingMode(WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY);
+        final Rect stableRect = new Rect();
+        mStack.getDisplay().mDisplayContent.getStableRect(stableRect);
+        final boolean isScreenPortrait = stableRect.width() <= stableRect.height();
+        final Rect bounds = new Rect(stableRect);
+        if (isScreenPortrait) {
+            // Landscape bounds
+            final int newHeight = stableRect.width() - 10;
+            bounds.top = stableRect.top + (stableRect.height() - newHeight) / 2;
+            bounds.bottom = bounds.top + newHeight;
+        } else {
+            // Portrait bounds
+            final int newWidth = stableRect.height() - 10;
+            bounds.left = stableRect.left + (stableRect.width() - newWidth) / 2;
+            bounds.right = bounds.left + newWidth;
+        }
+        mTask.setBounds(bounds);
+
+        // Requests orientation that's different from its bounds.
+        mActivity.setRequestedOrientation(
+                isScreenPortrait ? SCREEN_ORIENTATION_PORTRAIT : SCREEN_ORIENTATION_LANDSCAPE);
+
+        // Asserts it has orientation derived from bounds.
+        assertEquals(isScreenPortrait ? ORIENTATION_LANDSCAPE : ORIENTATION_PORTRAIT,
+                mActivity.getConfiguration().orientation);
+    }
+
+    @Test
     public void testShouldMakeActive_deferredResume() {
         mActivity.setState(ActivityStack.ActivityState.STOPPED, "Testing");
 
@@ -424,9 +501,9 @@ public class ActivityRecordTests extends ActivityTestsBase {
                 .build();
         mActivity.setState(ActivityStack.ActivityState.STOPPED, "Testing");
 
-        final ActivityStack stack = new StackBuilder(mRootActivityContainer).build();
+        final ActivityStack stack = new StackBuilder(mRootWindowContainer).build();
         try {
-            doReturn(false).when(stack).isStackTranslucent(any());
+            doReturn(false).when(stack).isTranslucent(any());
             assertFalse(mStack.shouldBeVisible(null /* starting */));
 
             mActivity.setLastReportedConfiguration(new MergedConfiguration(new Configuration(),
@@ -460,11 +537,12 @@ public class ActivityRecordTests extends ActivityTestsBase {
     }
 
     @Test
-    public void testShouldPauseWhenMakeClientVisible() {
+    public void testShouldStartWhenMakeClientActive() {
         ActivityRecord topActivity = new ActivityBuilder(mService).setTask(mTask).build();
         topActivity.setOccludesParent(false);
         mActivity.setState(ActivityStack.ActivityState.STOPPED, "Testing");
-        mActivity.makeClientVisible();
+        mActivity.setVisibility(true);
+        mActivity.makeActiveIfNeeded(null /* activeActivity */);
         assertEquals(STARTED, mActivity.getState());
     }
 
@@ -540,7 +618,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
         // Set state to STOPPING, or ActivityRecord#activityStoppedLocked() call will be ignored.
         mActivity.setState(STOPPING, "test");
-        mActivity.activityStoppedLocked(savedState, persistentSavedState, "desc");
+        mActivity.activityStopped(savedState, persistentSavedState, "desc");
         assertTrue(mActivity.hasSavedState());
         assertEquals(savedState, mActivity.getSavedState());
         assertEquals(persistentSavedState, mActivity.getPersistentSavedState());
@@ -548,8 +626,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
         // Sending 'null' for saved state can only happen due to timeout, so previously stored saved
         // states should not be overridden.
         mActivity.setState(STOPPING, "test");
-        mActivity.activityStoppedLocked(null /* savedState */, null /* persistentSavedState */,
-                "desc");
+        mActivity.activityStopped(null /* savedState */, null /* persistentSavedState */, "desc");
         assertTrue(mActivity.hasSavedState());
         assertEquals(savedState, mActivity.getSavedState());
         assertEquals(persistentSavedState, mActivity.getPersistentSavedState());
@@ -632,14 +709,14 @@ public class ActivityRecordTests extends ActivityTestsBase {
     @Test
     public void testFinishActivityIfPossible_adjustStackOrder() {
         // Prepare the stacks with order (top to bottom): mStack, stack1, stack2.
-        final ActivityStack stack1 = new StackBuilder(mRootActivityContainer).build();
+        final ActivityStack stack1 = new StackBuilder(mRootWindowContainer).build();
         mStack.moveToFront("test");
         // The stack2 is needed here for moving back to simulate the
         // {@link DisplayContent#mPreferredTopFocusableStack} is cleared, so
         // {@link DisplayContent#getFocusedStack} will rely on the order of focusable-and-visible
         // stacks. Then when mActivity is finishing, its stack will be invisible (no running
         // activities in the stack) that is the key condition to verify.
-        final ActivityStack stack2 = new StackBuilder(mRootActivityContainer).build();
+        final ActivityStack stack2 = new StackBuilder(mRootWindowContainer).build();
         stack2.moveToBack("test", stack2.getBottomMostTask());
 
         assertTrue(mStack.isTopStackOnDisplay());
@@ -791,7 +868,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
         // Simulates that {@code currentTop} starts an existing activity from background (so its
         // state is stopped) and the starting flow just goes to place it at top.
-        final ActivityStack nextStack = new StackBuilder(mRootActivityContainer).build();
+        final ActivityStack nextStack = new StackBuilder(mRootWindowContainer).build();
         final ActivityRecord nextTop = nextStack.getTopNonFinishingActivity();
         nextTop.setState(STOPPED, "test");
 
@@ -841,7 +918,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
         topActivity.mVisibleRequested = false;
         topActivity.nowVisible = false;
         topActivity.finishing = true;
-        topActivity.setState(PAUSED, "true");
+        topActivity.setState(STOPPED, "true");
         // Mark the bottom activity as not visible, so that we would wait for it before removing
         // the top one.
         mActivity.mVisibleRequested = false;
@@ -913,7 +990,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
         // Add another stack to become focused and make the activity there visible. This way it
         // simulates finishing in non-focused stack in split-screen.
-        final ActivityStack stack = new StackBuilder(mRootActivityContainer).build();
+        final ActivityStack stack = new StackBuilder(mRootWindowContainer).build();
         final ActivityRecord focusedActivity = stack.getTopMostActivity();
         focusedActivity.nowVisible = true;
         focusedActivity.mVisibleRequested = true;
@@ -930,7 +1007,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
      */
     @Test
     public void testDestroyIfPossible() {
-        doReturn(false).when(mRootActivityContainer).resumeFocusedStacksTopActivities();
+        doReturn(false).when(mRootWindowContainer).resumeFocusedStacksTopActivities();
         spyOn(mStack);
         mActivity.destroyIfPossible("test");
 
@@ -947,10 +1024,12 @@ public class ActivityRecordTests extends ActivityTestsBase {
     @Test
     public void testDestroyIfPossible_lastActivityAboveEmptyHomeStack() {
         // Empty the home stack.
-        final ActivityStack homeStack = mActivity.getDisplay().getHomeStack();
-        homeStack.forAllTasks((t) -> { homeStack.removeChild(t, "test"); });
+        final ActivityStack homeStack = mActivity.getDisplay().getRootHomeTask();
+        homeStack.forAllLeafTasks((t) -> {
+            homeStack.removeChild(t, "test");
+        }, true /* traverseTopToBottom */);
         mActivity.finishing = true;
-        doReturn(false).when(mRootActivityContainer).resumeFocusedStacksTopActivities();
+        doReturn(false).when(mRootWindowContainer).resumeFocusedStacksTopActivities();
         spyOn(mStack);
 
         // Try to destroy the last activity above the home stack.
@@ -971,8 +1050,10 @@ public class ActivityRecordTests extends ActivityTestsBase {
     @Test
     public void testCompleteFinishing_lastActivityAboveEmptyHomeStack() {
         // Empty the home stack.
-        final ActivityStack homeStack = mActivity.getDisplay().getHomeStack();
-        homeStack.forAllTasks((t) -> { homeStack.removeChild(t, "test"); });
+        final ActivityStack homeStack = mActivity.getDisplay().getRootHomeTask();
+        homeStack.forAllLeafTasks((t) -> {
+            homeStack.removeChild(t, "test");
+        }, true /* traverseTopToBottom */);
         mActivity.finishing = true;
         spyOn(mStack);
 
@@ -1069,7 +1150,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
     @Test
     public void testRemoveFromHistory() {
-        final ActivityStack stack = mActivity.getActivityStack();
+        final ActivityStack stack = mActivity.getRootTask();
         final Task task = mActivity.getTask();
 
         mActivity.removeFromHistory("test");
@@ -1078,7 +1159,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
         assertNull(mActivity.app);
         assertNull(mActivity.getTask());
         assertEquals(0, task.getChildCount());
-        assertNull(task.getStack());
+        assertEquals(task.getStack(), task);
         assertEquals(0, stack.getChildCount());
     }
 
@@ -1112,5 +1193,161 @@ public class ActivityRecordTests extends ActivityTestsBase {
         mActivity.destroyed("test");
 
         verify(mActivity).removeFromHistory(anyString());
+    }
+
+    @Test
+    public void testActivityOverridesProcessConfig() {
+        final WindowProcessController wpc = mActivity.app;
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertFalse(wpc.registeredForDisplayConfigChanges());
+
+        final ActivityRecord secondaryDisplayActivity =
+                createActivityOnDisplay(false /* defaultDisplay */, null /* process */);
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, mActivity.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+        assertNotEquals(mActivity.getConfiguration(),
+                secondaryDisplayActivity.getConfiguration());
+    }
+
+    @Test
+    public void testActivityOverridesProcessConfig_TwoActivities() {
+        final WindowProcessController wpc = mActivity.app;
+        assertTrue(wpc.registeredForActivityConfigChanges());
+
+        final Task firstTaskRecord = mActivity.getTask();
+        final ActivityRecord secondActivityRecord =
+                new ActivityBuilder(mService).setTask(firstTaskRecord).setUseProcess(wpc).build();
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivityRecord.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+    }
+
+    @Test
+    public void testActivityOverridesProcessConfig_TwoActivities_SecondaryDisplay() {
+        final WindowProcessController wpc = mActivity.app;
+        assertTrue(wpc.registeredForActivityConfigChanges());
+
+        final ActivityRecord secondActivityRecord =
+                new ActivityBuilder(mService).setTask(mTask).setUseProcess(wpc).build();
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivityRecord.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+    }
+
+    @Test
+    public void testActivityOverridesProcessConfig_TwoActivities_DifferentTasks() {
+        final WindowProcessController wpc = mActivity.app;
+        assertTrue(wpc.registeredForActivityConfigChanges());
+
+        final ActivityRecord secondActivityRecord =
+                createActivityOnDisplay(true /* defaultDisplay */, wpc);
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivityRecord.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+    }
+
+    @Test
+    public void testActivityOnDifferentDisplayUpdatesProcessOverride() {
+        final ActivityRecord secondaryDisplayActivity =
+                createActivityOnDisplay(false /* defaultDisplay */, null /* process */);
+        final WindowProcessController wpc = secondaryDisplayActivity.app;
+        assertTrue(wpc.registeredForActivityConfigChanges());
+
+        final ActivityRecord secondActivityRecord =
+                createActivityOnDisplay(true /* defaultDisplay */, wpc);
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivityRecord.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+        assertFalse(wpc.registeredForDisplayConfigChanges());
+    }
+
+    @Test
+    public void testActivityReparentChangesProcessOverride() {
+        final WindowProcessController wpc = mActivity.app;
+        final Task initialTask = mActivity.getTask();
+        final Configuration initialConf =
+                new Configuration(mActivity.getMergedOverrideConfiguration());
+        assertEquals(0, mActivity.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+        assertTrue(wpc.registeredForActivityConfigChanges());
+
+        // Create a new task with custom config to reparent the activity to.
+        final Task newTask =
+                new TaskBuilder(mSupervisor).setStack(initialTask.getStack()).build();
+        final Configuration newConfig = newTask.getConfiguration();
+        newConfig.densityDpi += 100;
+        newTask.onRequestedOverrideConfigurationChanged(newConfig);
+        assertEquals(newTask.getConfiguration().densityDpi, newConfig.densityDpi);
+
+        // Reparent the activity and verify that config override changed.
+        mActivity.reparent(newTask, 0 /* top */, "test");
+        assertEquals(mActivity.getConfiguration().densityDpi, newConfig.densityDpi);
+        assertEquals(mActivity.getMergedOverrideConfiguration().densityDpi, newConfig.densityDpi);
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertNotEquals(initialConf, wpc.getRequestedOverrideConfiguration());
+        assertEquals(0, mActivity.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+    }
+
+    @Test
+    public void testActivityReparentDoesntClearProcessOverride_TwoActivities() {
+        final WindowProcessController wpc = mActivity.app;
+        final Configuration initialConf =
+                new Configuration(mActivity.getMergedOverrideConfiguration());
+        final Task initialTask = mActivity.getTask();
+        final ActivityRecord secondActivity = new ActivityBuilder(mService).setTask(initialTask)
+                .setUseProcess(wpc).build();
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivity.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+
+        // Create a new task with custom config to reparent the second activity to.
+        final Task newTask =
+                new TaskBuilder(mSupervisor).setStack(initialTask.getStack()).build();
+        final Configuration newConfig = newTask.getConfiguration();
+        newConfig.densityDpi += 100;
+        newTask.onRequestedOverrideConfigurationChanged(newConfig);
+
+        // Reparent the activity and verify that config override changed.
+        secondActivity.reparent(newTask, 0 /* top */, "test");
+
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivity.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+        assertNotEquals(initialConf, wpc.getRequestedOverrideConfiguration());
+
+        // Reparent the first activity and verify that config override didn't change.
+        mActivity.reparent(newTask, 1 /* top */, "test");
+        assertTrue(wpc.registeredForActivityConfigChanges());
+        assertEquals(0, secondActivity.getMergedOverrideConfiguration()
+                .diff(wpc.getRequestedOverrideConfiguration()));
+        assertNotEquals(initialConf, wpc.getRequestedOverrideConfiguration());
+    }
+
+    /**
+     * Creates an activity on display. For non-default display request it will also create a new
+     * display with custom DisplayInfo.
+     */
+    private ActivityRecord createActivityOnDisplay(boolean defaultDisplay,
+            WindowProcessController process) {
+        final DisplayContent display;
+        if (defaultDisplay) {
+            display = mRootWindowContainer.getDefaultDisplay();
+        } else {
+            display = new TestDisplayContent.Builder(mService, 2000, 1000).setDensityDpi(300)
+                    .setPosition(DisplayContent.POSITION_TOP).build();
+        }
+        final ActivityStack stack = display.createStack(WINDOWING_MODE_UNDEFINED,
+                ACTIVITY_TYPE_STANDARD, true /* onTop */);
+        final Task task = new TaskBuilder(mSupervisor).setStack(stack).build();
+        return new ActivityBuilder(mService).setTask(task).setUseProcess(process).build();
     }
 }

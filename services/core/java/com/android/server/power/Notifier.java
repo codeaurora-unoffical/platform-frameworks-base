@@ -46,20 +46,23 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.WorkSource;
 import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.util.EventLog;
 import android.util.Slog;
-import android.util.StatsLog;
 import android.view.WindowManagerPolicyConstants.OnReason;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+import com.android.internal.util.FrameworkStatsLog;
 import com.android.server.EventLogTags;
 import com.android.server.LocalServices;
 import com.android.server.inputmethod.InputMethodManagerInternal;
 import com.android.server.policy.WindowManagerPolicy;
 import com.android.server.statusbar.StatusBarManagerInternal;
+
+import java.io.PrintWriter;
 
 /**
  * Sends broadcasts about important power state changes.
@@ -122,6 +125,7 @@ public class Notifier {
     @Nullable private final StatusBarManagerInternal mStatusBarManagerInternal;
     private final TrustManager mTrustManager;
     private final Vibrator mVibrator;
+    private final WakeLockLog mWakeLockLog;
 
     private final NotifierHandler mHandler;
     private final Intent mScreenOnIntent;
@@ -189,12 +193,14 @@ public class Notifier {
         mShowWirelessChargingAnimationConfig = context.getResources().getBoolean(
                 com.android.internal.R.bool.config_showBuiltinWirelessChargingAnim);
 
+        mWakeLockLog = new WakeLockLog();
+
         // Initialize interactive state for battery stats.
         try {
             mBatteryStats.noteInteractive(true);
         } catch (RemoteException ex) { }
-        StatsLog.write(StatsLog.INTERACTIVE_STATE_CHANGED,
-                StatsLog.INTERACTIVE_STATE_CHANGED__STATE__ON);
+        FrameworkStatsLog.write(FrameworkStatsLog.INTERACTIVE_STATE_CHANGED,
+                FrameworkStatsLog.INTERACTIVE_STATE_CHANGED__STATE__ON);
     }
 
     /**
@@ -227,6 +233,8 @@ public class Notifier {
                 // Ignore
             }
         }
+
+        mWakeLockLog.onWakeLockAcquired(tag, ownerUid, flags);
     }
 
     public void onLongPartialWakeLockStart(String tag, int ownerUid, WorkSource workSource,
@@ -239,13 +247,15 @@ public class Notifier {
         try {
             if (workSource != null) {
                 mBatteryStats.noteLongPartialWakelockStartFromSource(tag, historyTag, workSource);
-                StatsLog.write(StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED, workSource,
-                        tag, historyTag, StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__ON);
+                FrameworkStatsLog.write(FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED,
+                        workSource, tag, historyTag,
+                        FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__ON);
             } else {
                 mBatteryStats.noteLongPartialWakelockStart(tag, historyTag, ownerUid);
-                StatsLog.write_non_chained(StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED,
-                        ownerUid, null, tag, historyTag,
-                        StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__ON);
+                FrameworkStatsLog.write_non_chained(
+                        FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED, ownerUid, null, tag,
+                        historyTag,
+                        FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__ON);
             }
         } catch (RemoteException ex) {
             // Ignore
@@ -262,13 +272,15 @@ public class Notifier {
         try {
             if (workSource != null) {
                 mBatteryStats.noteLongPartialWakelockFinishFromSource(tag, historyTag, workSource);
-                StatsLog.write(StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED, workSource,
-                        tag, historyTag, StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__OFF);
+                FrameworkStatsLog.write(FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED,
+                        workSource, tag, historyTag,
+                        FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__OFF);
             } else {
                 mBatteryStats.noteLongPartialWakelockFinish(tag, historyTag, ownerUid);
-                StatsLog.write_non_chained(StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED,
-                        ownerUid, null, tag, historyTag,
-                        StatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__OFF);
+                FrameworkStatsLog.write_non_chained(
+                        FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED, ownerUid, null, tag,
+                        historyTag,
+                        FrameworkStatsLog.LONG_PARTIAL_WAKELOCK_STATE_CHANGED__STATE__OFF);
             }
         } catch (RemoteException ex) {
             // Ignore
@@ -337,6 +349,7 @@ public class Notifier {
                 // Ignore
             }
         }
+        mWakeLockLog.onWakeLockReleased(tag, ownerUid);
     }
 
     private int getBatteryStatsWakeLockMonitorType(int flags) {
@@ -400,15 +413,14 @@ public class Notifier {
 
             // Start input as soon as we start waking up or going to sleep.
             mInputManagerInternal.setInteractive(interactive);
-            mInputMethodManagerInternal.setInteractive(interactive);
 
             // Notify battery stats.
             try {
                 mBatteryStats.noteInteractive(interactive);
             } catch (RemoteException ex) { }
-            StatsLog.write(StatsLog.INTERACTIVE_STATE_CHANGED,
-                    interactive ? StatsLog.INTERACTIVE_STATE_CHANGED__STATE__ON :
-                            StatsLog.INTERACTIVE_STATE_CHANGED__STATE__OFF);
+            FrameworkStatsLog.write(FrameworkStatsLog.INTERACTIVE_STATE_CHANGED,
+                    interactive ? FrameworkStatsLog.INTERACTIVE_STATE_CHANGED__STATE__ON :
+                            FrameworkStatsLog.INTERACTIVE_STATE_CHANGED__STATE__OFF);
 
             // Handle early behaviors.
             mInteractive = interactive;
@@ -646,6 +658,17 @@ public class Notifier {
         mHandler.sendMessage(msg);
     }
 
+    /**
+     * Dumps data for bugreports.
+     *
+     * @param pw The stream to print to.
+     */
+    public void dump(PrintWriter pw) {
+        if (mWakeLockLog != null) {
+            mWakeLockLog.dump(pw);
+        }
+    }
+
     private void updatePendingBroadcastLocked() {
         if (!mBroadcastInProgress
                 && mPendingInteractiveState != INTERACTIVE_STATE_UNKNOWN
@@ -671,6 +694,8 @@ public class Notifier {
             }
             mUserActivityPending = false;
         }
+        TelephonyManager tm = mContext.getSystemService(TelephonyManager.class);
+        tm.notifyUserActivity();
         mPolicy.userActivity();
     }
 
@@ -678,9 +703,20 @@ public class Notifier {
         final int powerState;
         synchronized (mLock) {
             if (mBroadcastedInteractiveState == INTERACTIVE_STATE_UNKNOWN) {
-                // Broadcasted power state is unknown.  Send wake up.
-                mPendingWakeUpBroadcast = false;
-                mBroadcastedInteractiveState = INTERACTIVE_STATE_AWAKE;
+                // Broadcasted power state is unknown.
+                // Send wake up or go to sleep.
+                switch (mPendingInteractiveState) {
+                    case INTERACTIVE_STATE_ASLEEP:
+                        mPendingGoToSleepBroadcast = false;
+                        mBroadcastedInteractiveState = INTERACTIVE_STATE_ASLEEP;
+                        break;
+
+                    case INTERACTIVE_STATE_AWAKE:
+                    default:
+                        mPendingWakeUpBroadcast = false;
+                        mBroadcastedInteractiveState = INTERACTIVE_STATE_AWAKE;
+                        break;
+                }
             } else if (mBroadcastedInteractiveState == INTERACTIVE_STATE_AWAKE) {
                 // Broadcasted power state is awake.  Send asleep if needed.
                 if (mPendingWakeUpBroadcast || mPendingGoToSleepBroadcast

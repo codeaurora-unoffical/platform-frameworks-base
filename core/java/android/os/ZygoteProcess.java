@@ -16,13 +16,17 @@
 
 package android.os;
 
+import static android.os.Process.ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE;
+import static android.os.Process.ZYGOTE_POLICY_FLAG_SYSTEM_PROCESS;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.ApplicationInfo;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
 import android.util.Log;
+import android.util.Pair;
 import android.util.Slog;
 
 import com.android.internal.annotations.GuardedBy;
@@ -39,6 +43,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /*package*/ class ZygoteStartFailedEx extends Exception {
@@ -117,6 +122,10 @@ public class ZygoteProcess {
         mUsapPoolSecondarySocketAddress =
                 new LocalSocketAddress(Zygote.USAP_POOL_SECONDARY_SOCKET_NAME,
                                        LocalSocketAddress.Namespace.RESERVED);
+
+        // This constructor is used to create the primary and secondary Zygotes, which can support
+        // Unspecialized App Process Pools.
+        mUsapPoolSupported = true;
     }
 
     public ZygoteProcess(LocalSocketAddress primarySocketAddress,
@@ -126,6 +135,10 @@ public class ZygoteProcess {
 
         mUsapPoolSocketAddress = null;
         mUsapPoolSecondarySocketAddress = null;
+
+        // This constructor is used to create the primary and secondary Zygotes, which CAN NOT
+        // support Unspecialized App Process Pools.
+        mUsapPoolSupported = false;
     }
 
     public LocalSocketAddress getPrimarySocketAddress() {
@@ -265,6 +278,14 @@ public class ZygoteProcess {
     private ZygoteState secondaryZygoteState;
 
     /**
+     * If this Zygote supports the creation and maintenance of a USAP pool.
+     *
+     * Currently only the primary and secondary Zygotes support USAP pools. Any
+     * child Zygotes will be unable to create or use a USAP pool.
+     */
+    private final boolean mUsapPoolSupported;
+
+    /**
      * If the USAP pool should be created and used to start applications.
      *
      * Setting this value to false will disable the creation, maintenance, and use of the USAP
@@ -306,11 +327,14 @@ public class ZygoteProcess {
      * @param appDataDir null-ok the data directory of the app.
      * @param invokeWith null-ok the command to invoke with.
      * @param packageName null-ok the name of the package this process belongs to.
+     * @param zygotePolicyFlags Flags used to determine how to launch the application.
+     * @param isTopApp Whether the process starts for high priority application.
      * @param disabledCompatChanges null-ok list of disabled compat changes for the process being
      *                             started.
-     * @param zygoteArgs Additional arguments to supply to the zygote process.
-     * @param isTopApp Whether the process starts for high priority application.
+     * @param pkgDataInfoMap Map from related package names to private data directory
+     *                       volume UUID and inode number.
      *
+     * @param zygoteArgs Additional arguments to supply to the Zygote process.
      * @return An object that describes the result of the attempt to start the process.
      * @throws RuntimeException on fatal start failure
      */
@@ -325,9 +349,11 @@ public class ZygoteProcess {
                                                   @Nullable String appDataDir,
                                                   @Nullable String invokeWith,
                                                   @Nullable String packageName,
-                                                  boolean useUsapPool,
+                                                  int zygotePolicyFlags,
                                                   boolean isTopApp,
                                                   @Nullable long[] disabledCompatChanges,
+                                                  @Nullable Map<String, Pair<String, Long>>
+                                                          pkgDataInfoMap,
                                                   @Nullable String[] zygoteArgs) {
         // TODO (chriswailes): Is there a better place to check this value?
         if (fetchUsapPoolEnabledPropWithMinInterval()) {
@@ -338,7 +364,8 @@ public class ZygoteProcess {
             return startViaZygote(processClass, niceName, uid, gid, gids,
                     runtimeFlags, mountExternal, targetSdkVersion, seInfo,
                     abi, instructionSet, appDataDir, invokeWith, /*startChildZygote=*/ false,
-                    packageName, useUsapPool, isTopApp, disabledCompatChanges, zygoteArgs);
+                    packageName, zygotePolicyFlags, isTopApp, disabledCompatChanges,
+                    pkgDataInfoMap, zygoteArgs);
         } catch (ZygoteStartFailedEx ex) {
             Log.e(LOG_TAG,
                     "Starting VM process through Zygote failed");
@@ -384,7 +411,7 @@ public class ZygoteProcess {
      */
     @GuardedBy("mLock")
     private Process.ProcessStartResult zygoteSendArgsAndGetResult(
-            ZygoteState zygoteState, boolean useUsapPool, @NonNull ArrayList<String> args)
+            ZygoteState zygoteState, int zygotePolicyFlags, @NonNull ArrayList<String> args)
             throws ZygoteStartFailedEx {
         // Throw early if any of the arguments are malformed. This means we can
         // avoid writing a partial response to the zygote.
@@ -410,7 +437,7 @@ public class ZygoteProcess {
          */
         String msgStr = args.size() + "\n" + String.join("\n", args) + "\n";
 
-        if (useUsapPool && mUsapPoolEnabled && canAttemptUsap(args)) {
+        if (shouldAttemptUsapLaunch(zygotePolicyFlags, args)) {
             try {
                 return attemptUsapSendArgsAndGetResult(zygoteState, msgStr);
             } catch (IOException ex) {
@@ -481,7 +508,43 @@ public class ZygoteProcess {
     }
 
     /**
-     * Flags that may not be passed to a USAP.
+     * Test various member properties and parameters to determine if a launch event should be
+     * handled using an Unspecialized App Process Pool or not.
+     *
+     * @param zygotePolicyFlags Policy flags indicating special behavioral observations about the
+     *                          Zygote command
+     * @param args Arguments that will be passed to the Zygote
+     * @return If the command should be sent to a USAP Pool member or an actual Zygote
+     */
+    private boolean shouldAttemptUsapLaunch(int zygotePolicyFlags, ArrayList<String> args) {
+        return mUsapPoolSupported
+                && mUsapPoolEnabled
+                && policySpecifiesUsapPoolLaunch(zygotePolicyFlags)
+                && commandSupportedByUsap(args);
+    }
+
+    /**
+     * Tests a Zygote policy flag set for various properties that determine if it is eligible for
+     * being handled by an Unspecialized App Process Pool.
+     *
+     * @param zygotePolicyFlags Policy flags indicating special behavioral observations about the
+     *                          Zygote command
+     * @return If the policy allows for use of a USAP pool
+     */
+    private static boolean policySpecifiesUsapPoolLaunch(int zygotePolicyFlags) {
+        /*
+         * Zygote USAP Pool Policy: Launch the new process from the USAP Pool iff the launch event
+         * is latency sensitive but *NOT* a system process.  All system processes are equally
+         * important so we don't want to prioritize one over another.
+         */
+        return (zygotePolicyFlags
+                & (ZYGOTE_POLICY_FLAG_SYSTEM_PROCESS | ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE))
+                == ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE;
+    }
+
+    /**
+     * Flags that may not be passed to a USAP.  These may appear as prefixes to individual Zygote
+     * arguments.
      */
     private static final String[] INVALID_USAP_FLAGS = {
         "--query-abi-list",
@@ -498,10 +561,11 @@ public class ZygoteProcess {
 
     /**
      * Tests a command list to see if it is valid to send to a USAP.
+     *
      * @param args  Zygote/USAP command arguments
      * @return  True if the command can be passed to a USAP; false otherwise
      */
-    private static boolean canAttemptUsap(ArrayList<String> args) {
+    private static boolean commandSupportedByUsap(ArrayList<String> args) {
         for (String flag : args) {
             for (String badFlag : INVALID_USAP_FLAGS) {
                 if (flag.startsWith(badFlag)) {
@@ -537,8 +601,11 @@ public class ZygoteProcess {
      * @param startChildZygote Start a sub-zygote. This creates a new zygote process
      * that has its state cloned from this zygote process.
      * @param packageName null-ok the name of the package this process belongs to.
+     * @param zygotePolicyFlags Flags used to determine how to launch the application.
      * @param isTopApp Whether the process starts for high priority application.
      * @param disabledCompatChanges a list of disabled compat changes for the process being started.
+     * @param pkgDataInfoMap Map from related package names to private data directory volume UUID
+     *                       and inode number.
      * @param extraArgs Additional arguments to supply to the zygote process.
      * @return An object that describes the result of the attempt to start the process.
      * @throws ZygoteStartFailedEx if process start failed for any reason
@@ -556,9 +623,11 @@ public class ZygoteProcess {
                                                       @Nullable String invokeWith,
                                                       boolean startChildZygote,
                                                       @Nullable String packageName,
-                                                      boolean useUsapPool,
+                                                      int zygotePolicyFlags,
                                                       boolean isTopApp,
                                                       @Nullable long[] disabledCompatChanges,
+                                                      @Nullable Map<String, Pair<String, Long>>
+                                                              pkgDataInfoMap,
                                                       @Nullable String[] extraArgs)
                                                       throws ZygoteStartFailedEx {
         ArrayList<String> argsForZygote = new ArrayList<>();
@@ -583,6 +652,8 @@ public class ZygoteProcess {
             argsForZygote.add("--mount-external-legacy");
         } else if (mountExternal == Zygote.MOUNT_EXTERNAL_PASS_THROUGH) {
             argsForZygote.add("--mount-external-pass-through");
+        } else if (mountExternal == Zygote.MOUNT_EXTERNAL_ANDROID_WRITABLE) {
+            argsForZygote.add("--mount-external-android-writable");
         }
 
         argsForZygote.add("--target-sdk-version=" + targetSdkVersion);
@@ -635,6 +706,24 @@ public class ZygoteProcess {
         if (isTopApp) {
             argsForZygote.add(Zygote.START_AS_TOP_APP_ARG);
         }
+        if (pkgDataInfoMap != null && pkgDataInfoMap.size() > 0) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(Zygote.PKG_DATA_INFO_MAP);
+            sb.append("=");
+            boolean started = false;
+            for (Map.Entry<String, Pair<String, Long>> entry : pkgDataInfoMap.entrySet()) {
+                if (started) {
+                    sb.append(',');
+                }
+                started = true;
+                sb.append(entry.getKey());
+                sb.append(',');
+                sb.append(entry.getValue().first);
+                sb.append(',');
+                sb.append(entry.getValue().second);
+            }
+            argsForZygote.add(sb.toString());
+        }
 
         if (disabledCompatChanges != null && disabledCompatChanges.length > 0) {
             StringBuilder sb = new StringBuilder();
@@ -661,7 +750,7 @@ public class ZygoteProcess {
             // The USAP pool can not be used if the application will not use the systems graphics
             // driver.  If that driver is requested use the Zygote application start path.
             return zygoteSendArgsAndGetResult(openZygoteSocketIfNeeded(abi),
-                                              useUsapPool,
+                                              zygotePolicyFlags,
                                               argsForZygote);
         }
     }
@@ -691,6 +780,10 @@ public class ZygoteProcess {
     private long mLastPropCheckTimestamp = 0;
 
     private boolean fetchUsapPoolEnabledPropWithMinInterval() {
+        // If this Zygote doesn't support USAPs there is no need to fetch any
+        // properties.
+        if (!mUsapPoolSupported) return false;
+
         final long currentTimestamp = SystemClock.elapsedRealtime();
 
         if (mIsFirstPropCheck
@@ -1182,12 +1275,14 @@ public class ZygoteProcess {
 
         Process.ProcessStartResult result;
         try {
+            // As app zygote is for generating isolated process, at the end it can't access
+            // apps data, so doesn't need to its data info.
             result = startViaZygote(processClass, niceName, uid, gid,
                     gids, runtimeFlags, 0 /* mountExternal */, 0 /* targetSdkVersion */, seInfo,
                     abi, instructionSet, null /* appDataDir */, null /* invokeWith */,
                     true /* startChildZygote */, null /* packageName */,
-                    false /* useUsapPool */, false /* isTopApp */,
-                    null /* disabledCompatChanges */, extraArgs);
+                    ZYGOTE_POLICY_FLAG_SYSTEM_PROCESS /* zygotePolicyFlags */, false /* isTopApp */,
+                    null /* disabledCompatChanges */, null /* pkgDataInfoMap */, extraArgs);
         } catch (ZygoteStartFailedEx ex) {
             throw new RuntimeException("Starting child-zygote through Zygote failed", ex);
         }

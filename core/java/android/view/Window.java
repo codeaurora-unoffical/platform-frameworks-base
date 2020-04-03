@@ -26,13 +26,14 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.StyleRes;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.WindowConfiguration;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.graphics.Insets;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
@@ -46,6 +47,9 @@ import android.os.RemoteException;
 import android.transition.Scene;
 import android.transition.Transition;
 import android.transition.TransitionManager;
+import android.util.Pair;
+import android.view.View.OnApplyWindowInsetsListener;
+import android.view.ViewGroup.LayoutParams;
 import android.view.WindowInsets.Side.InsetsSide;
 import android.view.WindowInsets.Type.InsetsType;
 import android.view.accessibility.AccessibilityEvent;
@@ -692,6 +696,33 @@ public abstract class Window {
                 int dropCountSinceLastInvocation);
     }
 
+    /**
+     * Listener for applying window insets on the content of a window. Used only by the framework to
+     * fit content according to legacy SystemUI flags.
+     *
+     * @hide
+     */
+    public interface OnContentApplyWindowInsetsListener {
+
+        /**
+         * Called when the window needs to apply insets on the container of its content view which
+         * are set by calling {@link #setContentView}. The method should determine what insets to
+         * apply on the container of the root level content view and what should be dispatched to
+         * the content view's
+         * {@link View#setOnApplyWindowInsetsListener(OnApplyWindowInsetsListener)} through the view
+         * hierarchy.
+         *
+         * @param view The view for which to apply insets. Must not be directly modified.
+         * @param insets The root level insets that are about to be dispatched
+         * @return A pair, with the first element containing the insets to apply as margin to the
+         * root-level content views, and the second element determining what should be
+         * dispatched to the content view.
+         */
+        @NonNull
+        Pair<Insets, WindowInsets> onContentApplyWindowInsets(@NonNull View view,
+                @NonNull WindowInsets insets);
+    }
+
 
     public Window(Context context) {
         mContext = context;
@@ -1199,6 +1230,44 @@ public abstract class Window {
     }
 
     /**
+     * If {@code isPreferred} is true, this method requests that the connected display does minimal
+     * post processing when this window is visible on the screen. Otherwise, it requests that the
+     * display switches back to standard image processing.
+     *
+     * <p> By default, the display does not do minimal post processing and if this is desired, this
+     * method should not be used. It should be used with {@code isPreferred=true} when low
+     * latency has a higher priority than image enhancement processing (e.g. for games or video
+     * conferencing). The display will automatically go back into standard image processing mode
+     * when no window requesting minimal posst processing is visible on screen anymore.
+     * {@code setPreferMinimalPostProcessing(false)} can be used if
+     * {@code setPreferMinimalPostProcessing(true)} was previously called for this window and
+     * minimal post processing is no longer required.
+     *
+     * <p>If the Display sink is connected via HDMI, the device will begin to send infoframes with
+     * Auto Low Latency Mode enabled and Game Content Type. This will switch the connected display
+     * to a minimal image processing mode (if available), which reduces latency, improving the user
+     * experience for gaming or video conferencing applications. For more information, see HDMI 2.1
+     * specification.
+     *
+     * <p>If the Display sink has an internal connection or uses some other protocol than HDMI,
+     * effects may be similar but implementation-defined.
+     *
+     * <p>The ability to switch to a mode with minimal post proessing may be disabled by a user
+     * setting in the system settings menu. In that case, this method does nothing.
+     *
+     * @see android.content.pm.ActivityInfo#FLAG_PREFER_MINIMAL_POST_PROCESSING
+     * @see android.view.Display#isMinimalPostProcessingSupported
+     * @see android.view.WindowManager.LayoutParams#preferMinimalPostProcessing
+     *
+     * @param isPreferred Indicates whether minimal post processing is preferred for this window
+     *                    ({@code isPreferred=true}) or not ({@code isPreferred=false}).
+     */
+    public void setPreferMinimalPostProcessing(boolean isPreferred) {
+        mWindowAttributes.preferMinimalPostProcessing = isPreferred;
+        dispatchWindowAttributesChanged(mWindowAttributes);
+    }
+
+    /**
      * Returns the requested color mode of the window, one of
      * {@link ActivityInfo#COLOR_MODE_DEFAULT}, {@link ActivityInfo#COLOR_MODE_WIDE_COLOR_GAMUT}
      * or {@link ActivityInfo#COLOR_MODE_HDR}. If {@link ActivityInfo#COLOR_MODE_WIDE_COLOR_GAMUT}
@@ -1243,57 +1312,21 @@ public abstract class Window {
     }
 
     /**
-     * A shortcut for {@link WindowManager.LayoutParams#setFitWindowInsetsTypes(int)}
-     * @hide pending unhide
+     * Sets whether the decor view should fit root-level content views for {@link WindowInsets}.
+     * <p>
+     * If set to {@code true}, the framework will inspect the now deprecated
+     * {@link View#SYSTEM_UI_LAYOUT_FLAGS} as well the
+     * {@link WindowManager.LayoutParams#SOFT_INPUT_ADJUST_RESIZE} flag and fits content according
+     * to these flags.
+     * </p>
+     * <p>
+     * If set to {@code false}, the framework will not fit the content view to the insets and will
+     * just pass through the {@link WindowInsets} to the content view.
+     * </p>
+     * @param decorFitsSystemWindows Whether the decor view should fit root-level content views for
+     *                               insets.
      */
-    public void setFitWindowInsetsTypes(@InsetsType int types) {
-        final WindowManager.LayoutParams attrs = getAttributes();
-        attrs.setFitWindowInsetsTypes(types);
-        dispatchWindowAttributesChanged(attrs);
-    }
-
-    /**
-     * A shortcut for {@link WindowManager.LayoutParams#setFitWindowInsetsSides(int)}
-     * @hide pending unhide
-     */
-    public void setFitWindowInsetsSides(@InsetsSide int sides) {
-        final WindowManager.LayoutParams attrs = getAttributes();
-        attrs.setFitWindowInsetsSides(sides);
-        dispatchWindowAttributesChanged(attrs);
-    }
-
-    /**
-     * A shortcut for {@link WindowManager.LayoutParams#setFitIgnoreVisibility(boolean)}
-     * @hide pending unhide
-     */
-    public void setFitIgnoreVisibility(boolean ignore) {
-        final WindowManager.LayoutParams attrs = getAttributes();
-        attrs.setFitIgnoreVisibility(ignore);
-        dispatchWindowAttributesChanged(attrs);
-    }
-
-    /**
-     * A shortcut for {@link WindowManager.LayoutParams#getFitWindowInsetsTypes}
-     * @hide pending unhide
-     */
-    public @InsetsType int getFitWindowInsetsTypes() {
-        return getAttributes().getFitWindowInsetsTypes();
-    }
-
-    /**
-     * A shortcut for {@link WindowManager.LayoutParams#getFitWindowInsetsSides()}
-     * @hide pending unhide
-     */
-    public @InsetsSide int getFitWindowInsetsSides() {
-        return getAttributes().getFitWindowInsetsSides();
-    }
-
-    /**
-     * A shortcut for {@link WindowManager.LayoutParams#getFitIgnoreVisibility()}
-     * @hide pending unhide
-     */
-    public boolean getFitIgnoreVisibility() {
-        return getAttributes().getFitIgnoreVisibility();
+    public void setDecorFitsSystemWindows(boolean decorFitsSystemWindows) {
     }
 
     /**
@@ -2573,7 +2606,8 @@ public abstract class Window {
     /**
      * @return The {@link WindowInsetsController} associated with this window
      * @see View#getWindowInsetsController()
-     * @hide pending unhide
      */
-    public abstract @NonNull WindowInsetsController getInsetsController();
+    public @Nullable WindowInsetsController getInsetsController() {
+        return null;
+    }
 }

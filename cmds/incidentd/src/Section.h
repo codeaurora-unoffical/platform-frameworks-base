@@ -23,6 +23,8 @@
 #include <stdarg.h>
 #include <map>
 
+#include <android/os/IIncidentDumpCallback.h>
+
 #include <utils/String16.h>
 #include <utils/String8.h>
 #include <utils/Vector.h>
@@ -89,7 +91,7 @@ public:
 
     virtual status_t Execute(ReportWriter* writer) const;
 
-    virtual status_t BlockingCall(int pipeWriteFd) const = 0;
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const = 0;
 };
 
 /**
@@ -110,14 +112,30 @@ private:
 };
 
 /**
- * Section that calls dumpsys on a system service.
+ * Section that calls protobuf dumpsys on a system service, usually
+ * "dumpsys [service_name] --proto".
  */
 class DumpsysSection : public WorkerThreadSection {
 public:
     DumpsysSection(int id, const char* service, ...);
     virtual ~DumpsysSection();
 
-    virtual status_t BlockingCall(int pipeWriteFd) const;
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const;
+
+private:
+    String16 mService;
+    Vector<String16> mArgs;
+};
+
+/**
+ * Section that calls text dumpsys on a system service, usually "dumpsys [service_name]".
+ */
+class TextDumpsysSection : public WorkerThreadSection {
+public:
+    TextDumpsysSection(int id, const char* service, ...);
+    virtual ~TextDumpsysSection();
+
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const;
 
 private:
     String16 mService;
@@ -132,7 +150,7 @@ public:
     SystemPropertyDumpsysSection(int id, const char* service, ...);
     virtual ~SystemPropertyDumpsysSection();
 
-    virtual status_t BlockingCall(int pipeWriteFd) const;
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const;
 
 private:
     String16 mService;
@@ -153,7 +171,7 @@ public:
     LogSection(int id, const char* logID, ...);
     virtual ~LogSection();
 
-    virtual status_t BlockingCall(int pipeWriteFd) const;
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const;
 
 private:
     log_id_t mLogID;
@@ -169,10 +187,27 @@ public:
     TombstoneSection(int id, const char* type, int64_t timeoutMs = 120000 /* 2 minutes */);
     virtual ~TombstoneSection();
 
-    virtual status_t BlockingCall(int pipeWriteFd) const;
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const;
 
 private:
     std::string mType;
+};
+
+/**
+ * Section that gets data from a registered dump callback.
+ */
+class BringYourOwnSection : public WorkerThreadSection {
+public:
+    const uid_t uid;
+
+    BringYourOwnSection(int id, const char* customName, const uid_t callingUid,
+        const sp<IIncidentDumpCallback>& callback);
+    virtual ~BringYourOwnSection();
+
+    virtual status_t BlockingCall(unique_fd& pipeWriteFd) const;
+
+private:
+    const sp<IIncidentDumpCallback>& mCallback;
 };
 
 

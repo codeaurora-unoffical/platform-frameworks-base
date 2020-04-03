@@ -34,7 +34,6 @@ import static android.view.WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
 
 import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
 
-import static com.android.dx.mockito.inline.extended.ExtendedMockito.doNothing;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.server.wm.WindowStateAnimator.STACK_CLIP_AFTER_ANIM;
 import static com.android.server.wm.WindowStateAnimator.STACK_CLIP_BEFORE_ANIM;
@@ -135,17 +134,19 @@ public class AppWindowTokenTests extends WindowTestsBase {
 
     @Test
     @Presubmit
-    public void testGetTopFullscreenWindow() {
-        assertNull(mActivity.getTopFullscreenWindow());
+    public void testGetTopFullscreenOpaqueWindow() {
+        assertNull(mActivity.getTopFullscreenOpaqueWindow());
 
         final WindowState window1 = createWindow(null, TYPE_BASE_APPLICATION, mActivity, "window1");
         final WindowState window11 = createWindow(null, TYPE_APPLICATION, mActivity, "window11");
         final WindowState window12 = createWindow(null, TYPE_APPLICATION, mActivity, "window12");
-        assertEquals(window12, mActivity.getTopFullscreenWindow());
+        assertEquals(window12, mActivity.getTopFullscreenOpaqueWindow());
         window12.mAttrs.width = 500;
-        assertEquals(window11, mActivity.getTopFullscreenWindow());
+        assertEquals(window11, mActivity.getTopFullscreenOpaqueWindow());
         window11.mAttrs.width = 500;
-        assertEquals(window1, mActivity.getTopFullscreenWindow());
+        assertEquals(window1, mActivity.getTopFullscreenOpaqueWindow());
+        window1.mAttrs.alpha = 0f;
+        assertNull(mActivity.getTopFullscreenOpaqueWindow());
         mActivity.removeImmediately();
     }
 
@@ -204,49 +205,6 @@ public class AppWindowTokenTests extends WindowTestsBase {
     private void performRotation(DisplayRotation spiedRotation, int rotationToReport) {
         doReturn(rotationToReport).when(spiedRotation).rotationForOrientation(anyInt(), anyInt());
         mWm.updateRotation(false, false);
-    }
-
-    @Test
-    public void testSizeCompatBounds() {
-        // Disable the real configuration resolving because we only simulate partial flow.
-        // TODO: Have test use full flow.
-        doNothing().when(mTask).computeConfigResourceOverrides(any(), any());
-        final Rect fixedBounds = mActivity.getRequestedOverrideConfiguration().windowConfiguration
-                .getBounds();
-        fixedBounds.set(0, 0, 1200, 1600);
-        mActivity.getRequestedOverrideConfiguration().windowConfiguration.setAppBounds(fixedBounds);
-        final Configuration newParentConfig = mTask.getConfiguration();
-
-        // Change the size of the container to two times smaller with insets.
-        newParentConfig.windowConfiguration.setAppBounds(200, 0, 800, 800);
-        final Rect containerAppBounds = newParentConfig.windowConfiguration.getAppBounds();
-        final Rect containerBounds = newParentConfig.windowConfiguration.getBounds();
-        containerBounds.set(0, 0, 600, 800);
-        mActivity.onConfigurationChanged(newParentConfig);
-
-        assertTrue(mActivity.hasSizeCompatBounds());
-        assertEquals(containerAppBounds, mActivity.getBounds());
-        assertEquals((float) containerAppBounds.width() / fixedBounds.width(),
-                mActivity.getSizeCompatScale(), 0.0001f /* delta */);
-
-        // Change the width of the container to two times bigger.
-        containerAppBounds.set(0, 0, 2400, 1600);
-        containerBounds.set(containerAppBounds);
-        mActivity.onConfigurationChanged(newParentConfig);
-
-        assertTrue(mActivity.hasSizeCompatBounds());
-        // Don't scale up, so the bounds keep the same as the fixed width.
-        assertEquals(fixedBounds.width(), mActivity.getBounds().width());
-        // Assert the position is horizontal center.
-        assertEquals((containerAppBounds.width() - fixedBounds.width()) / 2,
-                mActivity.getBounds().left);
-        assertEquals(1f, mActivity.getSizeCompatScale(), 0.0001f  /* delta */);
-
-        // Change the width of the container to fit the fixed bounds.
-        containerBounds.set(0, 0, 1200, 2000);
-        mActivity.onConfigurationChanged(newParentConfig);
-        // Assert don't use fixed bounds because the region is enough.
-        assertFalse(mActivity.hasSizeCompatBounds());
     }
 
     @Test

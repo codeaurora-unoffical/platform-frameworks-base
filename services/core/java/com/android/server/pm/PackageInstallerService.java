@@ -129,6 +129,13 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
     /** Upper bound on number of historical sessions for a UID */
     private static final long MAX_HISTORICAL_SESSIONS = 1048576;
 
+    /**
+     * Allow verification-skipping if it's a development app installed through ADB with
+     * disable verification flag specified.
+     */
+    private static final int ADB_DEV_MODE = PackageManager.INSTALL_FROM_ADB
+            | PackageManager.INSTALL_ALLOW_TEST;
+
     private final Context mContext;
     private final PackageManagerService mPm;
     private final ApexManager mApexManager;
@@ -188,7 +195,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         }
     };
 
-    public PackageInstallerService(Context context, PackageManagerService pm, ApexManager am) {
+    public PackageInstallerService(Context context, PackageManagerService pm) {
         mContext = context;
         mPm = pm;
         mPermissionManager = LocalServices.getService(PermissionManagerServiceInternal.class);
@@ -206,9 +213,8 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         mSessionsDir = new File(Environment.getDataSystemDirectory(), "install_sessions");
         mSessionsDir.mkdirs();
 
-        mApexManager = am;
-
-        mStagingManager = new StagingManager(this, am, context);
+        mApexManager = ApexManager.getInstance();
+        mStagingManager = new StagingManager(this, context);
     }
 
     boolean okToSendBroadcasts()  {
@@ -217,6 +223,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
 
     public void systemReady() {
         mAppOps = mContext.getSystemService(AppOpsManager.class);
+        mStagingManager.systemReady();
 
         synchronized (mSessions) {
             readSessionsLocked();
@@ -257,12 +264,15 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         }
         // Don't hold mSessions lock when calling restoreSession, since it might trigger an APK
         // atomic install which needs to query sessions, which requires lock on mSessions.
+        boolean isDeviceUpgrading = mPm.isDeviceUpgrading();
         for (PackageInstallerSession session : stagedSessionsToRestore) {
-            if (mPm.isDeviceUpgrading() && !session.isStagedAndInTerminalState()) {
+            if (!session.isStagedAndInTerminalState() && session.hasParentSessionId()
+                    && getSession(session.getParentSessionId()) == null) {
                 session.setStagedSessionFailed(SessionInfo.STAGED_SESSION_ACTIVATION_FAILED,
-                        "Build fingerprint has changed");
+                        "An orphan staged session " + session.sessionId + " is found, "
+                                + "parent " + session.getParentSessionId() + " is missing");
             }
-            mStagingManager.restoreSession(session);
+            mStagingManager.restoreSession(session, isDeviceUpgrading);
         }
         // Broadcasts are not sent while we restore sessions on boot, since no processes would be
         // ready to listen to them. From now on, we greedily assume that broadcasts requests are
@@ -399,10 +409,10 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         } finally {
             IoUtils.closeQuietly(fis);
         }
-        // After all of the sessions were loaded, they are ready to be sealed and validated
+        // After reboot housekeeping.
         for (int i = 0; i < mSessions.size(); ++i) {
             PackageInstallerSession session = mSessions.valueAt(i);
-            session.sealAndValidateIfNecessary();
+            session.onAfterSessionRead();
         }
     }
 
@@ -528,8 +538,10 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             params.installFlags &= ~PackageManager.INSTALL_REQUEST_DOWNGRADE;
         }
 
-        if (callingUid != Process.SYSTEM_UID) {
-            // Only system_server can use INSTALL_DISABLE_VERIFICATION.
+        if (callingUid != Process.SYSTEM_UID
+                && (params.installFlags & ADB_DEV_MODE) != ADB_DEV_MODE) {
+            // Only system_server or tools under specific conditions (test app installed
+            // through ADB, and verification disabled flag specified) can disable verification.
             params.installFlags &= ~PackageManager.INSTALL_DISABLE_VERIFICATION;
         }
 
@@ -632,12 +644,19 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
                 stageCid = buildExternalStageCid(sessionId);
             }
         }
+
+        // reset the force queryable param if it's not called by an approved caller.
+        if (params.forceQueryableOverride) {
+            if (callingUid != Process.SHELL_UID && callingUid != Process.ROOT_UID) {
+                params.forceQueryableOverride = false;
+            }
+        }
         InstallSource installSource = InstallSource.create(installerPackageName,
-                originatingPackageName, requestedInstallerPackageName, false);
+                originatingPackageName, requestedInstallerPackageName);
         session = new PackageInstallerSession(mInternalCallback, mContext, mPm, this,
                 mInstallThread.getLooper(), mStagingManager, sessionId, userId, callingUid,
                 installSource, params, createdMillis,
-                stageDir, stageCid, false, false, false, null, SessionInfo.INVALID_ID,
+                stageDir, stageCid, null, false, false, false, null, SessionInfo.INVALID_ID,
                 false, false, false, SessionInfo.STAGED_SESSION_NO_ERROR, "");
 
         synchronized (mSessions) {
@@ -1014,12 +1033,28 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         }
     }
 
+    static void sendPendingStreaming(Context context, IntentSender target, int sessionId,
+            Throwable cause) {
+        final Intent intent = new Intent();
+        intent.putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId);
+        intent.putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_STREAMING);
+        if (cause != null && !TextUtils.isEmpty(cause.getMessage())) {
+            intent.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE,
+                    "Staging Image Not Ready [" + cause.getMessage() + "]");
+        } else {
+            intent.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE, "Staging Image Not Ready");
+        }
+        try {
+            target.sendIntent(context, 0, intent, null, null);
+        } catch (SendIntentException ignored) {
+        }
+    }
+
     static void sendOnUserActionRequired(Context context, IntentSender target, int sessionId,
             Intent intent) {
         final Intent fillIn = new Intent();
         fillIn.putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId);
-        fillIn.putExtra(PackageInstaller.EXTRA_STATUS,
-                PackageInstaller.STATUS_PENDING_USER_ACTION);
+        fillIn.putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_USER_ACTION);
         fillIn.putExtra(Intent.EXTRA_INTENT, intent);
         try {
             target.sendIntent(context, 0, fillIn, null, null);

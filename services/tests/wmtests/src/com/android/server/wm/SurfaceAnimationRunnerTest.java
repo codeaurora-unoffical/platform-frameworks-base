@@ -60,7 +60,7 @@ import java.util.concurrent.CountDownLatch;
  * Test class for {@link SurfaceAnimationRunner}.
  *
  * Build/Install/Run:
- *  atest FrameworksServicesTests:SurfaceAnimationRunnerTest
+ *  atest WmTests:SurfaceAnimationRunnerTest
  */
 @SmallTest
 @Presubmit
@@ -88,6 +88,7 @@ public class SurfaceAnimationRunnerTest extends WindowTestsBase {
         mFinishCallbackLatch.countDown();
     }
 
+    @FlakyTest(bugId = 144611135)
     @Test
     public void testAnimation() throws Exception {
         mSurfaceAnimationRunner

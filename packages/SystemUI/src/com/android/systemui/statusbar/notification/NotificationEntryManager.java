@@ -18,6 +18,9 @@ package com.android.systemui.statusbar.notification;
 import static android.service.notification.NotificationListenerService.REASON_CANCEL;
 import static android.service.notification.NotificationListenerService.REASON_ERROR;
 
+import static com.android.systemui.statusbar.notification.collection.NotifCollection.REASON_UNKNOWN;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.InflationCallback;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.Notification;
@@ -30,24 +33,23 @@ import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.statusbar.NotificationVisibility;
-import com.android.systemui.Dependency;
 import com.android.systemui.Dumpable;
+import com.android.systemui.statusbar.FeatureFlags;
 import com.android.systemui.statusbar.NotificationLifetimeExtender;
+import com.android.systemui.statusbar.NotificationListener;
+import com.android.systemui.statusbar.NotificationListener.NotificationHandler;
 import com.android.systemui.statusbar.NotificationPresenter;
 import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.NotificationRemoveInterceptor;
 import com.android.systemui.statusbar.NotificationUiAdjustment;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.collection.NotificationRankingManager;
-import com.android.systemui.statusbar.notification.collection.NotificationRowBinder;
-import com.android.systemui.statusbar.notification.logging.NotifEvent;
-import com.android.systemui.statusbar.notification.logging.NotifLog;
+import com.android.systemui.statusbar.notification.collection.inflation.NotificationRowBinder;
+import com.android.systemui.statusbar.notification.collection.notifcollection.CommonNotifCollection;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener;
+import com.android.systemui.statusbar.notification.dagger.NotificationsModule;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
-import com.android.systemui.statusbar.notification.row.NotificationContentInflater;
-import com.android.systemui.statusbar.notification.row.NotificationContentInflater.InflationFlag;
-import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
-import com.android.systemui.statusbar.policy.HeadsUpManager;
 import com.android.systemui.util.Assert;
 import com.android.systemui.util.leak.LeakDetector;
 
@@ -61,8 +63,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.inject.Inject;
-import javax.inject.Singleton;
+import dagger.Lazy;
 
 /**
  * NotificationEntryManager is responsible for the adding, removing, and updating of
@@ -89,10 +90,10 @@ import javax.inject.Singleton;
  * aware of
  * @see #getActiveNotificationsForCurrentUser() to see every notification that the current user owns
  */
-@Singleton
 public class NotificationEntryManager implements
+        CommonNotifCollection,
         Dumpable,
-        NotificationContentInflater.InflationCallback,
+        InflationCallback,
         VisualStabilityManager.Callback {
     private static final String TAG = "NotificationEntryMgr";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
@@ -121,23 +122,28 @@ public class NotificationEntryManager implements
     private final Map<NotificationEntry, NotificationLifetimeExtender> mRetainedNotifications =
             new ArrayMap<>();
 
+    private final NotificationEntryManagerLogger mLogger;
+
     // Lazily retrieved dependencies
-    private NotificationRemoteInputManager mRemoteInputManager;
-    private NotificationRowBinder mNotificationRowBinder;
+    private final Lazy<NotificationRowBinder> mNotificationRowBinderLazy;
+    private final Lazy<NotificationRemoteInputManager> mRemoteInputManagerLazy;
+    private final LeakDetector mLeakDetector;
+    private final List<NotifCollectionListener> mNotifCollectionListeners = new ArrayList<>();
 
     private final KeyguardEnvironment mKeyguardEnvironment;
     private final NotificationGroupManager mGroupManager;
     private final NotificationRankingManager mRankingManager;
+    private final FeatureFlags mFeatureFlags;
+    private final ForegroundServiceDismissalFeatureController mFgsFeatureController;
 
     private NotificationPresenter mPresenter;
     private RankingMap mLatestRankingMap;
-    private NotifLog mNotifLog;
 
     @VisibleForTesting
     final ArrayList<NotificationLifetimeExtender> mNotificationLifetimeExtenders
             = new ArrayList<>();
     private final List<NotificationEntryListener> mNotificationEntryListeners = new ArrayList<>();
-    private NotificationRemoveInterceptor mRemoveInterceptor;
+    private final List<NotificationRemoveInterceptor> mRemoveInterceptors = new ArrayList<>();
 
     @Override
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
@@ -149,6 +155,14 @@ public class NotificationEntryManager implements
             for (NotificationEntry entry : mPendingNotifications.values()) {
                 pw.println(entry.getSbn());
             }
+        }
+        pw.println("  Remove interceptors registered:");
+        for (NotificationRemoveInterceptor interceptor : mRemoveInterceptors) {
+            pw.println("    " + interceptor.getClass().getSimpleName());
+        }
+        pw.println("  Lifetime extenders registered:");
+        for (NotificationLifetimeExtender extender : mNotificationLifetimeExtenders) {
+            pw.println("    " + extender.getClass().getSimpleName());
         }
         pw.println("  Lifetime-extended notifications:");
         if (mRetainedNotifications.isEmpty()) {
@@ -162,16 +176,33 @@ public class NotificationEntryManager implements
         }
     }
 
-    @Inject
+    /**
+     * Injected constructor. See {@link NotificationsModule}.
+     */
     public NotificationEntryManager(
-            NotifLog notifLog,
+            NotificationEntryManagerLogger logger,
             NotificationGroupManager groupManager,
             NotificationRankingManager rankingManager,
-            KeyguardEnvironment keyguardEnvironment) {
-        mNotifLog = notifLog;
+            KeyguardEnvironment keyguardEnvironment,
+            FeatureFlags featureFlags,
+            Lazy<NotificationRowBinder> notificationRowBinderLazy,
+            Lazy<NotificationRemoteInputManager> notificationRemoteInputManagerLazy,
+            LeakDetector leakDetector,
+            ForegroundServiceDismissalFeatureController fgsFeatureController) {
+        mLogger = logger;
         mGroupManager = groupManager;
         mRankingManager = rankingManager;
         mKeyguardEnvironment = keyguardEnvironment;
+        mFeatureFlags = featureFlags;
+        mNotificationRowBinderLazy = notificationRowBinderLazy;
+        mRemoteInputManagerLazy = notificationRemoteInputManagerLazy;
+        mLeakDetector = leakDetector;
+        mFgsFeatureController = fgsFeatureController;
+    }
+
+    /** Once called, the NEM will start processing notification events from system server. */
+    public void attach(NotificationListener notificationListener) {
+        notificationListener.addNotificationHandler(mNotifListener);
     }
 
     /** Adds a {@link NotificationEntryListener}. */
@@ -187,28 +218,17 @@ public class NotificationEntryManager implements
         mNotificationEntryListeners.remove(listener);
     }
 
-    /** Sets the {@link NotificationRemoveInterceptor}. */
-    public void setNotificationRemoveInterceptor(NotificationRemoveInterceptor interceptor) {
-        mRemoveInterceptor = interceptor;
+    /** Add a {@link NotificationRemoveInterceptor}. */
+    public void addNotificationRemoveInterceptor(NotificationRemoveInterceptor interceptor) {
+        mRemoveInterceptors.add(interceptor);
     }
 
-    /**
-     * Our dependencies can have cyclic references, so some need to be lazy
-     */
-    private NotificationRemoteInputManager getRemoteInputManager() {
-        if (mRemoteInputManager == null) {
-            mRemoteInputManager = Dependency.get(NotificationRemoteInputManager.class);
-        }
-        return mRemoteInputManager;
+    /** Remove a {@link NotificationRemoveInterceptor} */
+    public void removeNotificationRemoveInterceptor(NotificationRemoveInterceptor interceptor) {
+        mRemoveInterceptors.remove(interceptor);
     }
 
-    public void setRowBinder(NotificationRowBinder notificationRowBinder) {
-        mNotificationRowBinder = notificationRowBinder;
-    }
-
-    public void setUpWithPresenter(NotificationPresenter presenter,
-            NotificationListContainer listContainer,
-            HeadsUpManager headsUpManager) {
+    public void setUpWithPresenter(NotificationPresenter presenter) {
         mPresenter = presenter;
     }
 
@@ -265,13 +285,15 @@ public class NotificationEntryManager implements
             NotificationEntry entry = mPendingNotifications.get(key);
             entry.abortTask();
             mPendingNotifications.remove(key);
-            mNotifLog.log(NotifEvent.INFLATION_ABORTED, entry, "PendingNotification aborted"
-                    + " reason=" + reason);
+            for (NotifCollectionListener listener : mNotifCollectionListeners) {
+                listener.onEntryCleanUp(entry);
+            }
+            mLogger.logInflationAborted(key, "pending", reason);
         }
         NotificationEntry addedEntry = getActiveNotificationUnfiltered(key);
         if (addedEntry != null) {
             addedEntry.abortTask();
-            mNotifLog.log(NotifEvent.INFLATION_ABORTED, addedEntry.getKey() + " " + reason);
+            mLogger.logInflationAborted(key, "active", reason);
         }
     }
 
@@ -282,6 +304,10 @@ public class NotificationEntryManager implements
      * WARNING: this will call back into us.  Don't hold any locks.
      */
     @Override
+    public void handleInflationException(NotificationEntry n, Exception e) {
+        handleInflationException(n.getSbn(), e);
+    }
+
     public void handleInflationException(StatusBarNotification n, Exception e) {
         removeNotificationInternal(
                 n.getKey(), null, null, true /* forceRemove */, false /* removedByUser */,
@@ -292,17 +318,16 @@ public class NotificationEntryManager implements
     }
 
     @Override
-    public void onAsyncInflationFinished(NotificationEntry entry,
-            @InflationFlag int inflatedFlags) {
+    public void onAsyncInflationFinished(NotificationEntry entry) {
         mPendingNotifications.remove(entry.getKey());
         // If there was an async task started after the removal, we don't want to add it back to
         // the list, otherwise we might get leaks.
         if (!entry.isRowRemoved()) {
             boolean isNew = getActiveNotificationUnfiltered(entry.getKey()) == null;
+            mLogger.logNotifInflated(entry.getKey(), isNew);
             if (isNew) {
                 for (NotificationEntryListener listener : mNotificationEntryListeners) {
-                    mNotifLog.log(NotifEvent.INFLATED, entry);
-                    listener.onEntryInflated(entry, inflatedFlags);
+                    listener.onEntryInflated(entry);
                 }
                 addActiveNotification(entry);
                 updateNotifications("onAsyncInflationFinished");
@@ -311,12 +336,41 @@ public class NotificationEntryManager implements
                 }
             } else {
                 for (NotificationEntryListener listener : mNotificationEntryListeners) {
-                    mNotifLog.log(NotifEvent.INFLATED, entry);
                     listener.onEntryReinflated(entry);
                 }
             }
         }
     }
+
+    private final NotificationHandler mNotifListener = new NotificationHandler() {
+        @Override
+        public void onNotificationPosted(StatusBarNotification sbn, RankingMap rankingMap) {
+            final boolean isUpdate = mActiveNotifications.containsKey(sbn.getKey());
+            if (isUpdate) {
+                updateNotification(sbn, rankingMap);
+            } else {
+                addNotification(sbn, rankingMap);
+            }
+        }
+
+        @Override
+        public void onNotificationRemoved(StatusBarNotification sbn, RankingMap rankingMap) {
+            removeNotification(sbn.getKey(), rankingMap, UNDEFINED_DISMISS_REASON);
+        }
+
+        @Override
+        public void onNotificationRemoved(
+                StatusBarNotification sbn,
+                RankingMap rankingMap,
+                int reason) {
+            removeNotification(sbn.getKey(), rankingMap, reason);
+        }
+
+        @Override
+        public void onNotificationRankingUpdate(RankingMap rankingMap) {
+            updateNotificationRanking(rankingMap);
+        }
+    };
 
     /**
      * Equivalent to the old NotificationData#add
@@ -358,14 +412,16 @@ public class NotificationEntryManager implements
             boolean removedByUser,
             int reason) {
 
-        if (mRemoveInterceptor != null
-                && mRemoveInterceptor.onNotificationRemoveRequested(key, reason)) {
-            // Remove intercepted; log and skip
-            mNotifLog.log(NotifEvent.REMOVE_INTERCEPTED);
-            return;
+        final NotificationEntry entry = getActiveNotificationUnfiltered(key);
+
+        for (NotificationRemoveInterceptor interceptor : mRemoveInterceptors) {
+            if (interceptor.onNotificationRemoveRequested(key, entry, reason)) {
+                // Remove intercepted; log and skip
+                mLogger.logRemovalIntercepted(key);
+                return;
+            }
         }
 
-        final NotificationEntry entry = getActiveNotificationUnfiltered(key);
         boolean lifetimeExtended = false;
 
         // Notification was canceled before it got inflated
@@ -376,10 +432,7 @@ public class NotificationEntryManager implements
                     if (extender.shouldExtendLifetimeForPendingNotification(pendingEntry)) {
                         extendLifetime(pendingEntry, extender);
                         lifetimeExtended = true;
-                        mNotifLog.log(
-                                NotifEvent.LIFETIME_EXTENDED,
-                                pendingEntry.getSbn(),
-                                "pendingEntry extendedBy=" + extender.toString());
+                        mLogger.logLifetimeExtended(key, extender.getClass().getName(), "pending");
                     }
                 }
             }
@@ -399,10 +452,7 @@ public class NotificationEntryManager implements
                         mLatestRankingMap = ranking;
                         extendLifetime(entry, extender);
                         lifetimeExtended = true;
-                        mNotifLog.log(
-                                NotifEvent.LIFETIME_EXTENDED,
-                                entry.getSbn(),
-                                "entry extendedBy=" + extender.toString());
+                        mLogger.logLifetimeExtended(key, extender.getClass().getName(), "active");
                         break;
                     }
                 }
@@ -422,13 +472,19 @@ public class NotificationEntryManager implements
                 handleGroupSummaryRemoved(key);
                 removeVisibleNotification(key);
                 updateNotifications("removeNotificationInternal");
-                Dependency.get(LeakDetector.class).trackGarbage(entry);
+                mLeakDetector.trackGarbage(entry);
                 removedByUser |= entryDismissed;
 
-                mNotifLog.log(NotifEvent.NOTIF_REMOVED, entry.getSbn(),
-                        "removedByUser=" + removedByUser);
+                mLogger.logNotifRemoved(entry.getKey(), removedByUser);
                 for (NotificationEntryListener listener : mNotificationEntryListeners) {
-                    listener.onEntryRemoved(entry, visibility, removedByUser);
+                    listener.onEntryRemoved(entry, visibility, removedByUser, reason);
+                }
+                for (NotifCollectionListener listener : mNotifCollectionListeners) {
+                    // NEM doesn't have a good knowledge of reasons so defaulting to unknown.
+                    listener.onEntryRemoved(entry, REASON_UNKNOWN);
+                }
+                for (NotifCollectionListener listener : mNotifCollectionListeners) {
+                    listener.onEntryCleanUp(entry);
                 }
             }
         }
@@ -461,8 +517,8 @@ public class NotificationEntryManager implements
                 boolean isForeground = (entry.getSbn().getNotification().flags
                         & Notification.FLAG_FOREGROUND_SERVICE) != 0;
                 boolean keepForReply =
-                        getRemoteInputManager().shouldKeepForRemoteInputHistory(childEntry)
-                        || getRemoteInputManager().shouldKeepForSmartReplyHistory(childEntry);
+                        mRemoteInputManagerLazy.get().shouldKeepForRemoteInputHistory(childEntry)
+                        || mRemoteInputManagerLazy.get().shouldKeepForSmartReplyHistory(childEntry);
                 if (isForeground || keepForReply) {
                     // the child is a foreground service notification which we can't remove or it's
                     // a child we're keeping around for reply!
@@ -488,18 +544,32 @@ public class NotificationEntryManager implements
         Ranking ranking = new Ranking();
         rankingMap.getRanking(key, ranking);
 
-        NotificationEntry entry = new NotificationEntry(notification, ranking);
+        NotificationEntry entry = new NotificationEntry(
+                notification,
+                ranking,
+                mFgsFeatureController.isForegroundServiceDismissalEnabled());
 
-        Dependency.get(LeakDetector.class).trackInstance(entry);
+        mLeakDetector.trackInstance(entry);
+
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onEntryInit(entry);
+        }
+
         // Construct the expanded view.
-        requireBinder().inflateViews(entry, () -> performRemoveNotification(notification,
-                REASON_CANCEL));
+        if (!mFeatureFlags.isNewNotifPipelineRenderingEnabled()) {
+            mNotificationRowBinderLazy.get()
+                    .inflateViews(entry, () -> performRemoveNotification(notification,
+                            REASON_CANCEL));
+        }
 
         abortExistingInflation(key, "addNotification");
         mPendingNotifications.put(key, entry);
-        mNotifLog.log(NotifEvent.NOTIF_ADDED, entry);
+        mLogger.logNotifAdded(entry.getKey());
         for (NotificationEntryListener listener : mNotificationEntryListeners) {
             listener.onPendingEntryAdded(entry);
+        }
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onEntryAdded(entry);
         }
     }
 
@@ -531,18 +601,25 @@ public class NotificationEntryManager implements
         entry.setSbn(notification);
         mGroupManager.onEntryUpdated(entry, oldSbn);
 
-        mNotifLog.log(NotifEvent.NOTIF_UPDATED, entry);
+        mLogger.logNotifUpdated(entry.getKey());
         for (NotificationEntryListener listener : mNotificationEntryListeners) {
             listener.onPreEntryUpdated(entry);
         }
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onEntryUpdated(entry);
+        }
 
-        requireBinder().inflateViews(entry, () -> performRemoveNotification(notification,
-                REASON_CANCEL));
+        if (!mFeatureFlags.isNewNotifPipelineRenderingEnabled()) {
+            mNotificationRowBinderLazy.get()
+                    .inflateViews(entry, () -> performRemoveNotification(notification,
+                            REASON_CANCEL));
+        }
+
         updateNotifications("updateNotificationInternal");
 
         if (DEBUG) {
             // Is this for you?
-            boolean isForCurrentUser = Dependency.get(KeyguardEnvironment.class)
+            boolean isForCurrentUser = mKeyguardEnvironment
                     .isNotificationForCurrentProfiles(notification);
             Log.d(TAG, "notification is " + (isForCurrentUser ? "" : "not ") + "for you");
         }
@@ -592,17 +669,21 @@ public class NotificationEntryManager implements
 
         // By comparing the old and new UI adjustments, reinflate the view accordingly.
         for (NotificationEntry entry : entries) {
-            requireBinder().onNotificationRankingUpdated(
-                    entry,
-                    oldImportances.get(entry.getKey()),
-                    oldAdjustments.get(entry.getKey()),
-                    NotificationUiAdjustment.extractFromNotificationEntry(entry));
+            mNotificationRowBinderLazy.get()
+                    .onNotificationRankingUpdated(
+                            entry,
+                            oldImportances.get(entry.getKey()),
+                            oldAdjustments.get(entry.getKey()),
+                            NotificationUiAdjustment.extractFromNotificationEntry(entry));
         }
 
         updateNotifications("updateNotificationRanking");
 
         for (NotificationEntryListener listener : mNotificationEntryListeners) {
             listener.onNotificationRankingUpdated(rankingMap);
+        }
+        for (NotifCollectionListener listener : mNotifCollectionListeners) {
+            listener.onRankingUpdate(rankingMap);
         }
     }
 
@@ -676,14 +757,6 @@ public class NotificationEntryManager implements
         }
     }
 
-    private NotificationRowBinder requireBinder() {
-        if (mNotificationRowBinder == null) {
-            throw new RuntimeException("You must initialize NotificationEntryManager by calling"
-                    + "setRowBinder() before using.");
-        }
-        return mNotificationRowBinder;
-    }
-
     /*
      * -----
      * Annexed from NotificationData below:
@@ -723,7 +796,7 @@ public class NotificationEntryManager implements
     //TODO: Get rid of this in favor of NotificationUpdateHandler#updateNotificationRanking
     /**
      * @param rankingMap the {@link RankingMap} to apply to the current notification list
-     * @param reason the reason for calling this method, for {@link NotifLog}
+     * @param reason the reason for calling this method, which will be logged
      */
     public void updateRanking(RankingMap rankingMap, String reason) {
         updateRankingAndSort(rankingMap, reason);
@@ -798,6 +871,11 @@ public class NotificationEntryManager implements
      */
     public boolean hasActiveNotifications() {
         return mReadOnlyNotifications.size() != 0;
+    }
+
+    @Override
+    public void addCollectionListener(NotifCollectionListener listener) {
+        mNotifCollectionListeners.add(listener);
     }
 
     /*

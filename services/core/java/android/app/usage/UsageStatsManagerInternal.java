@@ -16,14 +16,16 @@
 
 package android.app.usage;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.app.usage.UsageStatsManager.StandbyBuckets;
 import android.content.ComponentName;
+import android.content.LocusId;
 import android.content.res.Configuration;
+import android.os.IBinder;
 import android.os.UserHandle;
 import android.os.UserManager;
-
-import com.android.server.usage.AppStandbyInternal.AppIdleStateChangeListener;
 
 import java.util.List;
 import java.util.Set;
@@ -113,6 +115,20 @@ public abstract class UsageStatsManagerInternal {
     public abstract void reportContentProviderUsage(String name, String pkgName,
             @UserIdInt int userId);
 
+
+    /**
+     * Reports locusId update for a given activity.
+     *
+     * @param activity The component name of the app.
+     * @param userId The user id of who uses the app.
+     * @param locusId The locusId a unique, stable id that identifies this activity.
+     * @param appToken ActivityRecord's appToken.
+     * {@link UsageEvents}
+     * @hide
+     */
+    public abstract void reportLocusUpdate(@NonNull ComponentName activity, @UserIdInt int userId,
+            @Nullable LocusId locusId, @NonNull IBinder appToken);
+
     /**
      * Prepares the UsageStatsService for shutdown.
      */
@@ -196,6 +212,15 @@ public abstract class UsageStatsManagerInternal {
      */
     public abstract List<UsageStats> queryUsageStatsForUser(@UserIdInt int userId, int interval,
             long beginTime, long endTime, boolean obfuscateInstantApps);
+
+    /**
+     * Returns the events for the user in the given time period.
+     *
+     * @param flags defines the visibility of certain usage events - see flags defined in
+     * {@link UsageEvents}.
+     */
+    public abstract UsageEvents queryEventsForUser(@UserIdInt int userId, long beginTime,
+            long endTime, int flags);
 
     /**
      * Used to persist the last time a job was run for this app, in order to make decisions later

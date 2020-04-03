@@ -61,7 +61,7 @@ public class ImeInsetsSourceConsumerTest {
                 .setName("testSurface")
                 .build();
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-            ViewRootImpl viewRootImpl = new ViewRootImpl(mContext, mContext.getDisplay());
+            ViewRootImpl viewRootImpl = new ViewRootImpl(mContext, mContext.getDisplayNoVerify());
             try {
                 viewRootImpl.setView(new TextView(mContext), new LayoutParams(), null);
             } catch (BadTokenException e) {
@@ -74,7 +74,7 @@ public class ImeInsetsSourceConsumerTest {
                     false,
                     new DisplayCutout(
                             Insets.of(10, 10, 10, 10), rect, rect, rect, rect),
-                    rect, rect, SOFT_INPUT_ADJUST_RESIZE);
+                    rect, rect, SOFT_INPUT_ADJUST_RESIZE, 0);
             mImeConsumer = new ImeInsetsSourceConsumer(
                     new InsetsState(), Transaction::new, mController);
         });
@@ -90,12 +90,12 @@ public class ImeInsetsSourceConsumerTest {
             mImeConsumer.onWindowFocusGained();
             mImeConsumer.applyImeVisibility(true);
             mController.cancelExistingAnimation();
-            assertTrue(mController.getSourceConsumer(ime.getType()).isVisible());
+            assertTrue(mController.getSourceConsumer(ime.getType()).isRequestedVisible());
 
             // test if setVisibility can hide IME
             mImeConsumer.applyImeVisibility(false);
             mController.cancelExistingAnimation();
-            assertFalse(mController.getSourceConsumer(ime.getType()).isVisible());
+            assertFalse(mController.getSourceConsumer(ime.getType()).isRequestedVisible());
         });
     }
 

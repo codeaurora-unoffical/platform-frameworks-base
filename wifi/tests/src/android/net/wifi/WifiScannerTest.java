@@ -80,12 +80,6 @@ public class WifiScannerTest {
     private static final int TEST_PNOSETTINGS_MIN_5GHZ_RSSI = -60;
     private static final int TEST_PNOSETTINGS_MIN_2GHZ_RSSI = -70;
     private static final int TEST_PNOSETTINGS_MIN_6GHZ_RSSI = -55;
-    private static final int TEST_PNOSETTINGS_INITIAL_SCORE_MAX = 50;
-    private static final int TEST_PNOSETTINGS_CURRENT_CONNECTION_BONUS = 10;
-    private static final int TEST_PNOSETTINGS_SAME_NETWORK_BONUS = 11;
-    private static final int TEST_PNOSETTINGS_SECURE_BONUS = 12;
-    private static final int TEST_PNOSETTINGS_BAND_5GHZ_BONUS = 13;
-    private static final int TEST_PNOSETTINGS_BAND_6GHZ_BONUS = 15;
     private static final String TEST_SSID_1 = "TEST1";
     private static final String TEST_SSID_2 = "TEST2";
     private static final int[] TEST_FREQUENCIES_1 = {};
@@ -186,12 +180,6 @@ public class WifiScannerTest {
         pnoSettings.min5GHzRssi = TEST_PNOSETTINGS_MIN_5GHZ_RSSI;
         pnoSettings.min24GHzRssi = TEST_PNOSETTINGS_MIN_2GHZ_RSSI;
         pnoSettings.min6GHzRssi = TEST_PNOSETTINGS_MIN_6GHZ_RSSI;
-        pnoSettings.initialScoreMax = TEST_PNOSETTINGS_INITIAL_SCORE_MAX;
-        pnoSettings.currentConnectionBonus = TEST_PNOSETTINGS_CURRENT_CONNECTION_BONUS;
-        pnoSettings.sameNetworkBonus = TEST_PNOSETTINGS_SAME_NETWORK_BONUS;
-        pnoSettings.secureBonus = TEST_PNOSETTINGS_SECURE_BONUS;
-        pnoSettings.band5GHzBonus = TEST_PNOSETTINGS_BAND_5GHZ_BONUS;
-        pnoSettings.band6GHzBonus = TEST_PNOSETTINGS_BAND_6GHZ_BONUS;
 
         Parcel parcel = Parcel.obtain();
         pnoSettings.writeToParcel(parcel, 0);
@@ -205,14 +193,6 @@ public class WifiScannerTest {
         assertEquals(TEST_PNOSETTINGS_MIN_5GHZ_RSSI, pnoSettingsDeserialized.min5GHzRssi);
         assertEquals(TEST_PNOSETTINGS_MIN_2GHZ_RSSI, pnoSettingsDeserialized.min24GHzRssi);
         assertEquals(TEST_PNOSETTINGS_MIN_6GHZ_RSSI, pnoSettingsDeserialized.min6GHzRssi);
-        assertEquals(TEST_PNOSETTINGS_INITIAL_SCORE_MAX, pnoSettingsDeserialized.initialScoreMax);
-        assertEquals(TEST_PNOSETTINGS_CURRENT_CONNECTION_BONUS,
-                pnoSettingsDeserialized.currentConnectionBonus);
-        assertEquals(TEST_PNOSETTINGS_SAME_NETWORK_BONUS,
-                pnoSettingsDeserialized.sameNetworkBonus);
-        assertEquals(TEST_PNOSETTINGS_SECURE_BONUS, pnoSettingsDeserialized.secureBonus);
-        assertEquals(TEST_PNOSETTINGS_BAND_5GHZ_BONUS, pnoSettingsDeserialized.band5GHzBonus);
-        assertEquals(TEST_PNOSETTINGS_BAND_6GHZ_BONUS, pnoSettingsDeserialized.band6GHzBonus);
 
         // Test parsing of PnoNetwork
         assertEquals(pnoSettings.networkList.length, pnoSettingsDeserialized.networkList.length);
@@ -386,7 +366,7 @@ public class WifiScannerTest {
 
     /**
      * Test behavior of {@link WifiScanner#startDisconnectedPnoScan(ScanSettings, PnoSettings,
-     * WifiScanner.PnoScanListener)}
+     * Executor, WifiScanner.PnoScanListener)}
      * @throws Exception
      */
     @Test
@@ -395,7 +375,8 @@ public class WifiScannerTest {
         PnoSettings pnoSettings = new PnoSettings();
         WifiScanner.PnoScanListener pnoScanListener = mock(WifiScanner.PnoScanListener.class);
 
-        mWifiScanner.startDisconnectedPnoScan(scanSettings, pnoSettings, pnoScanListener);
+        mWifiScanner.startDisconnectedPnoScan(
+                scanSettings, pnoSettings, mock(Executor.class), pnoScanListener);
         mLooper.dispatchAll();
 
         ArgumentCaptor<Message> messageArgumentCaptor = ArgumentCaptor.forClass(Message.class);
@@ -416,7 +397,7 @@ public class WifiScannerTest {
 
     /**
      * Test behavior of {@link WifiScanner#startConnectedPnoScan(ScanSettings, PnoSettings,
-     * WifiScanner.PnoScanListener)}
+     * Executor, WifiScanner.PnoScanListener)}
      * @throws Exception
      */
     @Test
@@ -425,7 +406,8 @@ public class WifiScannerTest {
         PnoSettings pnoSettings = new PnoSettings();
         WifiScanner.PnoScanListener pnoScanListener = mock(WifiScanner.PnoScanListener.class);
 
-        mWifiScanner.startConnectedPnoScan(scanSettings, pnoSettings, pnoScanListener);
+        mWifiScanner.startConnectedPnoScan(
+                scanSettings, pnoSettings, mock(Executor.class), pnoScanListener);
         mLooper.dispatchAll();
 
         ArgumentCaptor<Message> messageArgumentCaptor = ArgumentCaptor.forClass(Message.class);
@@ -446,7 +428,7 @@ public class WifiScannerTest {
 
     /**
      * Test behavior of {@link WifiScanner#stopPnoScan(ScanListener)}
-     * WifiScanner.PnoScanListener)}
+     * Executor, WifiScanner.PnoScanListener)}
      * @throws Exception
      */
     @Test
@@ -455,7 +437,8 @@ public class WifiScannerTest {
         PnoSettings pnoSettings = new PnoSettings();
         WifiScanner.PnoScanListener pnoScanListener = mock(WifiScanner.PnoScanListener.class);
 
-        mWifiScanner.startDisconnectedPnoScan(scanSettings, pnoSettings, pnoScanListener);
+        mWifiScanner.startDisconnectedPnoScan(
+                scanSettings, pnoSettings, mock(Executor.class), pnoScanListener);
         mLooper.dispatchAll();
         mWifiScanner.stopPnoScan(pnoScanListener);
         mLooper.dispatchAll();

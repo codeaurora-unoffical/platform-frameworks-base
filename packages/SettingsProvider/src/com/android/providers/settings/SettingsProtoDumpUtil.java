@@ -52,6 +52,8 @@ class SettingsProtoDumpUtil {
                 ConfigSettingsProto.APP_COMPAT_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_AUTOFILL,
                 ConfigSettingsProto.AUTOFILL_SETTINGS);
+        namespaceToFieldMap.put(DeviceConfig.NAMESPACE_BLOBSTORE,
+                ConfigSettingsProto.BLOBSTORE_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_CONNECTIVITY,
                 ConfigSettingsProto.CONNECTIVITY_SETTINGS);
         namespaceToFieldMap.put(DeviceConfig.NAMESPACE_CONTENT_CAPTURE,
@@ -266,9 +268,6 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Global.BACKUP_AGENT_TIMEOUT_PARAMETERS,
                 GlobalSettingsProto.Backup.BACKUP_AGENT_TIMEOUT_PARAMETERS);
-        dumpSetting(s, p,
-                Settings.Global.BACKUP_MULTI_USER_ENABLED,
-                GlobalSettingsProto.Backup.BACKUP_MULTI_USER_ENABLED);
         p.end(backupToken);
 
         final long batteryToken = p.start(GlobalSettingsProto.BATTERY);
@@ -1073,9 +1072,6 @@ class SettingsProtoDumpUtil {
                 Settings.Global.NETWORK_RECOMMENDATIONS_PACKAGE,
                 GlobalSettingsProto.Network.RECOMMENDATIONS_PACKAGE);
         dumpSetting(s, p,
-                Settings.Global.NETWORK_RECOMMENDATION_REQUEST_TIMEOUT_MS,
-                GlobalSettingsProto.Network.RECOMMENDATION_REQUEST_TIMEOUT_MS);
-        dumpSetting(s, p,
                 Settings.Global.NETWORK_WATCHLIST_ENABLED,
                 GlobalSettingsProto.Network.WATCHLIST_ENABLED);
         dumpSetting(s, p,
@@ -1569,9 +1565,6 @@ class SettingsProtoDumpUtil {
                 Settings.Global.WIFI_WAKEUP_ENABLED,
                 GlobalSettingsProto.Wifi.WAKEUP_ENABLED);
         dumpSetting(s, p,
-                Settings.Global.WIFI_SAVED_STATE,
-                GlobalSettingsProto.Wifi.SAVED_STATE);
-        dumpSetting(s, p,
                 Settings.Global.WIFI_SUPPLICANT_SCAN_INTERVAL_MS,
                 GlobalSettingsProto.Wifi.SUPPLICANT_SCAN_INTERVAL_MS);
         dumpSetting(s, p,
@@ -1589,9 +1582,6 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Global.WIFI_WATCHDOG_POOR_NETWORK_TEST_ENABLED,
                 GlobalSettingsProto.Wifi.WATCHDOG_POOR_NETWORK_TEST_ENABLED);
-        dumpSetting(s, p,
-                Settings.Global.WIFI_SUSPEND_OPTIMIZATIONS_ENABLED,
-                GlobalSettingsProto.Wifi.SUSPEND_OPTIMIZATIONS_ENABLED);
         dumpSetting(s, p,
                 Settings.Global.WIFI_VERBOSE_LOGGING_ENABLED,
                 GlobalSettingsProto.Wifi.VERBOSE_LOGGING_ENABLED);
@@ -1820,7 +1810,19 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Secure.ACCESSIBILITY_INTERACTIVE_UI_TIMEOUT_MS,
                 SecureSettingsProto.Accessibility.INTERACTIVE_UI_TIMEOUT_MS);
+        dumpSetting(s, p,
+                Settings.Secure.ACCESSIBILITY_MAGNIFICATION_MODE,
+                SecureSettingsProto.Accessibility.ACCESSIBILITY_MAGNIFICATION_MODE);
+        dumpSetting(s, p,
+                Settings.Secure.ACCESSIBILITY_BUTTON_LONG_PRESS_TARGETS,
+                SecureSettingsProto.Accessibility.BUTTON_LONG_PRESS_TARGETS);
         p.end(accessibilityToken);
+
+        final long adaptiveSleepToken = p.start(SecureSettingsProto.ADAPTIVE_SLEEP);
+        dumpSetting(s, p,
+                Settings.Secure.ADAPTIVE_SLEEP,
+                SecureSettingsProto.AdaptiveSleep.ENABLED);
+        p.end(adaptiveSleepToken);
 
         dumpSetting(s, p,
                 Settings.Secure.ALLOWED_GEOLOCATION_ORIGINS,
@@ -2005,6 +2007,9 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
                 SecureSettingsProto.Doze.PULSE_ON_TAP);
+        dumpSetting(s, p,
+                Settings.Secure.SUPPRESS_DOZE,
+                SecureSettingsProto.Doze.SUPPRESS);
         p.end(dozeToken);
 
         dumpSetting(s, p,
@@ -2190,6 +2195,15 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Secure.NAVIGATION_MODE,
                 SecureSettingsProto.NAVIGATION_MODE);
+
+        final long gestureNavToken = p.start(SecureSettingsProto.GESTURE_NAVIGATION);
+        dumpSetting(s, p,
+                Settings.Secure.BACK_GESTURE_INSET_SCALE_LEFT,
+                SecureSettingsProto.GestureNavigation.BACK_GESTURE_INSET_SCALE_LEFT);
+        dumpSetting(s, p,
+                Settings.Secure.BACK_GESTURE_INSET_SCALE_RIGHT,
+                SecureSettingsProto.GestureNavigation.BACK_GESTURE_INSET_SCALE_RIGHT);
+        p.end(gestureNavToken);
 
         final long nfcPaymentToken = p.start(SecureSettingsProto.NFC_PAYMENT);
         dumpSetting(s, p,
@@ -2724,6 +2738,12 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.System.SCREEN_AUTO_BRIGHTNESS_ADJ,
                 SystemSettingsProto.Screen.AUTO_BRIGHTNESS_ADJ);
+        dumpSetting(s, p,
+                Settings.System.SCREEN_BRIGHTNESS_FLOAT,
+                SystemSettingsProto.Screen.BRIGHTNESS_FLOAT);
+        dumpSetting(s, p,
+                Settings.System.SCREEN_BRIGHTNESS_FOR_VR_FLOAT,
+                SystemSettingsProto.Screen.BRIGHTNESS_FOR_VR_FLOAT);
         p.end(screenToken);
 
         dumpSetting(s, p,

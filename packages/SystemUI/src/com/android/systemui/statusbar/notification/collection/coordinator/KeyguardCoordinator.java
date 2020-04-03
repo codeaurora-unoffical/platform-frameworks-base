@@ -37,10 +37,12 @@ import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.notification.NotificationUtils;
-import com.android.systemui.statusbar.notification.collection.NotifCollection;
+import com.android.systemui.statusbar.notification.collection.GroupEntry;
+import com.android.systemui.statusbar.notification.collection.ListEntry;
+import com.android.systemui.statusbar.notification.collection.NotifPipeline;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
-import com.android.systemui.statusbar.notification.collection.listbuilder.NotifListBuilder;
 import com.android.systemui.statusbar.notification.collection.listbuilder.pluggable.NotifFilter;
+import com.android.systemui.statusbar.notification.collection.provider.HighPriorityProvider;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 
 import javax.inject.Inject;
@@ -60,6 +62,7 @@ public class KeyguardCoordinator implements Coordinator {
     private final BroadcastDispatcher mBroadcastDispatcher;
     private final StatusBarStateController mStatusBarStateController;
     private final KeyguardUpdateMonitor mKeyguardUpdateMonitor;
+    private final HighPriorityProvider mHighPriorityProvider;
 
     @Inject
     public KeyguardCoordinator(
@@ -69,21 +72,22 @@ public class KeyguardCoordinator implements Coordinator {
             NotificationLockscreenUserManager lockscreenUserManager,
             BroadcastDispatcher broadcastDispatcher,
             StatusBarStateController statusBarStateController,
-            KeyguardUpdateMonitor keyguardUpdateMonitor) {
+            KeyguardUpdateMonitor keyguardUpdateMonitor,
+            HighPriorityProvider highPriorityProvider) {
         mContext = context;
         mMainHandler = mainThreadHandler;
         mKeyguardStateController = keyguardStateController;
         mLockscreenUserManager = lockscreenUserManager;
-
         mBroadcastDispatcher = broadcastDispatcher;
         mStatusBarStateController = statusBarStateController;
         mKeyguardUpdateMonitor = keyguardUpdateMonitor;
+        mHighPriorityProvider = highPriorityProvider;
     }
 
     @Override
-    public void attach(NotifCollection notifCollection, NotifListBuilder notifListBuilder) {
+    public void attach(NotifPipeline pipeline) {
         setupInvalidateNotifListCallbacks();
-        notifListBuilder.addFilter(mNotifFilter);
+        pipeline.addFinalizeFilter(mNotifFilter);
     }
 
     private final NotifFilter mNotifFilter = new NotifFilter(TAG) {
@@ -129,12 +133,11 @@ public class KeyguardCoordinator implements Coordinator {
                     }
                 }
 
-                // ... neither this notification nor its summary have high enough priority
+                // ... neither this notification nor its group have high enough priority
                 // to be shown on the lockscreen
-                // TODO: grouping hasn't happened yet (b/145134683)
                 if (entry.getParent() != null) {
-                    final NotificationEntry summary = entry.getParent().getRepresentativeEntry();
-                    if (priorityExceedsLockscreenShowingThreshold(summary)) {
+                    final GroupEntry parent = entry.getParent();
+                    if (priorityExceedsLockscreenShowingThreshold(parent)) {
                         return false;
                     }
                 }
@@ -144,17 +147,16 @@ public class KeyguardCoordinator implements Coordinator {
         }
     };
 
-    private boolean priorityExceedsLockscreenShowingThreshold(NotificationEntry entry) {
+    private boolean priorityExceedsLockscreenShowingThreshold(ListEntry entry) {
         if (entry == null) {
             return false;
         }
         if (NotificationUtils.useNewInterruptionModel(mContext)
                 && hideSilentNotificationsOnLockscreen()) {
-            // TODO: make sure in the NewNotifPipeline that entry.isHighPriority() has been
-            //  correctly updated before reaching this point (b/145134683)
-            return entry.isHighPriority();
+            return mHighPriorityProvider.isHighPriority(entry);
         } else {
-            return !entry.getRanking().isAmbient();
+            return entry.getRepresentativeEntry() != null
+                    && !entry.getRepresentativeEntry().getRanking().isAmbient();
         }
     }
 

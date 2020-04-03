@@ -228,11 +228,10 @@ final class AccessibilityController {
         }
     }
 
-    public void onAppWindowTransitionLocked(WindowState windowState, int transition) {
-        final int displayId = windowState.getDisplayId();
+    public void onAppWindowTransitionLocked(int displayId, int transition) {
         final DisplayMagnifier displayMagnifier = mDisplayMagnifiers.get(displayId);
         if (displayMagnifier != null) {
-            displayMagnifier.onAppWindowTransitionLocked(windowState, transition);
+            displayMagnifier.onAppWindowTransitionLocked(displayId, transition);
         }
         // Not relevant for the window observer.
     }
@@ -362,7 +361,7 @@ final class AccessibilityController {
         private final Region mTempRegion3 = new Region();
         private final Region mTempRegion4 = new Region();
 
-        private final Context mContext;
+        private final Context mDisplayContext;
         private final WindowManagerService mService;
         private final MagnifiedViewport mMagnifedViewport;
         private final Handler mHandler;
@@ -379,14 +378,14 @@ final class AccessibilityController {
                 DisplayContent displayContent,
                 Display display,
                 MagnificationCallbacks callbacks) {
-            mContext = windowManagerService.mContext;
+            mDisplayContext = windowManagerService.mContext.createDisplayContext(display);
             mService = windowManagerService;
             mCallbacks = callbacks;
             mDisplayContent = displayContent;
             mDisplay = display;
             mHandler = new MyHandler(mService.mH.getLooper());
             mMagnifedViewport = new MagnifiedViewport();
-            mLongAnimationDuration = mContext.getResources().getInteger(
+            mLongAnimationDuration = mDisplayContext.getResources().getInteger(
                     com.android.internal.R.integer.config_longAnimTime);
         }
 
@@ -446,11 +445,11 @@ final class AccessibilityController {
             mHandler.sendEmptyMessage(MyHandler.MESSAGE_NOTIFY_ROTATION_CHANGED);
         }
 
-        public void onAppWindowTransitionLocked(WindowState windowState, int transition) {
+        public void onAppWindowTransitionLocked(int displayId, int transition) {
             if (DEBUG_WINDOW_TRANSITIONS) {
                 Slog.i(LOG_TAG, "Window transition: "
                         + AppTransition.appTransitionToString(transition)
-                        + " displayId: " + windowState.getDisplayId());
+                        + " displayId: " + displayId);
             }
             final boolean magnifying = mMagnifedViewport.isMagnifyingLocked();
             if (magnifying) {
@@ -569,8 +568,6 @@ final class AccessibilityController {
 
             private final MagnificationSpec mMagnificationSpec = MagnificationSpec.obtain();
 
-            private final WindowManager mWindowManager;
-
             private final float mBorderWidth;
             private final int mHalfBorderWidth;
             private final int mDrawBorderInset;
@@ -581,14 +578,13 @@ final class AccessibilityController {
             private int mTempLayer = 0;
 
             public MagnifiedViewport() {
-                mWindowManager = (WindowManager) mContext.getSystemService(Service.WINDOW_SERVICE);
-                mBorderWidth = mContext.getResources().getDimension(
+                mBorderWidth = mDisplayContext.getResources().getDimension(
                         com.android.internal.R.dimen.accessibility_magnification_indicator_width);
                 mHalfBorderWidth = (int) Math.ceil(mBorderWidth / 2);
                 mDrawBorderInset = (int) mBorderWidth / 2;
-                mWindow = new ViewportWindow(mContext);
+                mWindow = new ViewportWindow(mDisplayContext);
 
-                if (mContext.getResources().getConfiguration().isScreenRound()) {
+                if (mDisplayContext.getResources().getConfiguration().isScreenRound()) {
                     mCircularPath = new Path();
                     mDisplay.getRealSize(mTempPoint);
                     final int centerXY = mTempPoint.x / 2;
@@ -917,7 +913,7 @@ final class AccessibilityController {
 
                 public void updateSize(SurfaceControl.Transaction t) {
                     synchronized (mService.mGlobalLock) {
-                        mWindowManager.getDefaultDisplay().getRealSize(mTempPoint);
+                        mDisplay.getRealSize(mTempPoint);
                         t.setBufferSize(mSurfaceControl, mTempPoint.x, mTempPoint.y);
                         invalidate(mDirtyRect);
                     }
@@ -1310,7 +1306,7 @@ final class AccessibilityController {
                         // If a window has tap exclude region, we need to account it.
                         final Region displayRegion = new Region(windowState.getDisplayFrameLw());
                         final Region tapExcludeRegion = new Region();
-                        windowState.amendTapExcludeRegion(tapExcludeRegion);
+                        windowState.getTapExcludeRegion(tapExcludeRegion);
                         displayRegion.op(tapExcludeRegion, displayRegion,
                                 Region.Op.REVERSE_DIFFERENCE);
                         unaccountedSpace.op(displayRegion, unaccountedSpace,
@@ -1396,7 +1392,7 @@ final class AccessibilityController {
                     tempWindowStatesList.add(w);
                 }
             }, false /* traverseTopToBottom */);
-            // Insert the re-parented windows in another display on top of their parents in
+            // Insert the re-parented windows in another display below their parents in
             // default display.
             mService.mRoot.forAllWindows(w -> {
                 final WindowState parentWindow = findRootDisplayParentWindow(w);

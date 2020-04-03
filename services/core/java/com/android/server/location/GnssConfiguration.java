@@ -23,7 +23,8 @@ import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionManager;
 import android.text.TextUtils;
 import android.util.Log;
-import android.util.StatsLog;
+
+import com.android.internal.util.FrameworkStatsLog;
 
 import libcore.io.IoUtils;
 
@@ -79,7 +80,7 @@ class GnssConfiguration {
 
     // Represents an HAL interface version. Instances of this class are created in the JNI layer
     // and returned through native methods.
-    private static class HalInterfaceVersion {
+    static class HalInterfaceVersion {
         final int mMajor;
         final int mMinor;
 
@@ -205,6 +206,10 @@ class GnssConfiguration {
         native_set_satellite_blacklist(constellations, svids);
     }
 
+    HalInterfaceVersion getHalInterfaceVersion() {
+        return native_get_gnss_configuration_version();
+    }
+
     interface SetCarrierProperty {
         boolean set(int value);
     }
@@ -231,8 +236,7 @@ class GnssConfiguration {
 
         logConfigurations();
 
-        final HalInterfaceVersion gnssConfigurationIfaceVersion =
-                native_get_gnss_configuration_version();
+        final HalInterfaceVersion gnssConfigurationIfaceVersion = getHalInterfaceVersion();
         if (gnssConfigurationIfaceVersion != null) {
             // Set to a range checked value.
             if (isConfigEsExtensionSecSupported(gnssConfigurationIfaceVersion)
@@ -283,7 +287,7 @@ class GnssConfiguration {
     }
 
     private void logConfigurations() {
-        StatsLog.write(StatsLog.GNSS_CONFIGURATION_REPORTED,
+        FrameworkStatsLog.write(FrameworkStatsLog.GNSS_CONFIGURATION_REPORTED,
                 getSuplHost(),
                 getSuplPort(0),
                 getC2KHost(),

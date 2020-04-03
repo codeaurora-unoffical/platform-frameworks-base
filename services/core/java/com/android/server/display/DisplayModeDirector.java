@@ -63,7 +63,7 @@ public class DisplayModeDirector {
     private static final String TAG = "DisplayModeDirector";
     private static final boolean DEBUG = false;
 
-    private static final int MSG_ALLOWED_MODES_CHANGED = 1;
+    private static final int MSG_REFRESH_RATE_RANGE_CHANGED = 1;
     private static final int MSG_BRIGHTNESS_THRESHOLDS_CHANGED = 2;
     private static final int MSG_DEFAULT_PEAK_REFRESH_RATE_CHANGED = 3;
     private static final int MSG_REFRESH_RATE_IN_ZONE_CHANGED = 4;
@@ -73,7 +73,7 @@ public class DisplayModeDirector {
     private static final int GLOBAL_ID = -1;
 
     // The tolerance within which we consider something approximately equals.
-    private static final float EPSILON = 0.001f;
+    private static final float FLOAT_TOLERANCE = 0.01f;
 
     private final Object mLock = new Object();
     private final Context mContext;
@@ -95,7 +95,7 @@ public class DisplayModeDirector {
     private final BrightnessObserver mBrightnessObserver;
 
     private final DeviceConfigDisplaySettings mDeviceConfigDisplaySettings;
-    private DisplayModeListener mDisplayModeListener;
+    private DesiredDisplayModeSpecsListener mDesiredDisplayModeSpecsListener;
 
     public DisplayModeDirector(@NonNull Context context, @NonNull Handler handler) {
         mContext = context;
@@ -125,21 +125,9 @@ public class DisplayModeDirector {
         synchronized (mLock) {
             // We may have a listener already registered before the call to start, so go ahead and
             // notify them to pick up our newly initialized state.
-            notifyAllowedModesChangedLocked();
+            notifyDesiredDisplayModeSpecsChangedLocked();
         }
 
-    }
-
-    /**
-     * Calculates the modes the system is allowed to freely switch between based on global and
-     * display-specific constraints.
-     *
-     * @param displayId The display to query for.
-     * @return The IDs of the modes the system is allowed to freely switch between.
-     */
-    @NonNull
-    public int[] getAllowedModes(int displayId) {
-        return getDesiredDisplayConfigSpecs(displayId).allowedConfigs;
     }
 
     @NonNull
@@ -173,16 +161,16 @@ public class DisplayModeDirector {
      * system is allowed to switch between.
      */
     @NonNull
-    public DesiredDisplayConfigSpecs getDesiredDisplayConfigSpecs(int displayId) {
+    public DesiredDisplayModeSpecs getDesiredDisplayModeSpecs(int displayId) {
         synchronized (mLock) {
             SparseArray<Vote> votes = getVotesLocked(displayId);
             Display.Mode[] modes = mSupportedModesByDisplay.get(displayId);
             Display.Mode defaultMode = mDefaultModeByDisplay.get(displayId);
             if (modes == null || defaultMode == null) {
-                Slog.e(TAG, "Asked about unknown display, returning empty desired configs!"
-                        + "(id=" + displayId + ")");
-                return new DesiredDisplayConfigSpecs(displayId, new RefreshRateRange(60, 60),
-                        new int[0]);
+                Slog.e(TAG,
+                        "Asked about unknown display, returning empty display mode specs!"
+                                + "(id=" + displayId + ")");
+                return new DesiredDisplayModeSpecs();
             }
 
             int[] availableModes = new int[]{defaultMode.getModeId()};
@@ -190,6 +178,8 @@ public class DisplayModeDirector {
             float maxRefreshRate = Float.POSITIVE_INFINITY;
             int lowestConsideredPriority = Vote.MIN_PRIORITY;
             while (lowestConsideredPriority <= Vote.MAX_PRIORITY) {
+                minRefreshRate = 0f;
+                maxRefreshRate = Float.POSITIVE_INFINITY;
                 int height = Vote.INVALID_SIZE;
                 int width = Vote.INVALID_SIZE;
 
@@ -249,15 +239,15 @@ public class DisplayModeDirector {
                 lowestConsideredPriority++;
             }
 
-            int defaultModeId = defaultMode.getModeId();
+            int baseModeId = defaultMode.getModeId();
             if (availableModes.length > 0) {
-                defaultModeId = availableModes[0];
+                baseModeId = availableModes[0];
             }
             // filterModes function is going to filter the modes based on the voting system. If
             // the application requests a given mode with preferredModeId function, it will be
-            // stored as the first and only element in available modes array.
-            return new DesiredDisplayConfigSpecs(defaultModeId,
-                    new RefreshRateRange(minRefreshRate, maxRefreshRate), availableModes);
+            // stored as baseModeId.
+            return new DesiredDisplayModeSpecs(
+                    baseModeId, new RefreshRateRange(minRefreshRate, maxRefreshRate));
         }
     }
 
@@ -279,8 +269,8 @@ public class DisplayModeDirector {
             // Some refresh rates are calculated based on frame timings, so they aren't *exactly*
             // equal to expected refresh rate. Given that, we apply a bit of tolerance to this
             // comparison.
-            if (refreshRate < (minRefreshRate - EPSILON)
-                    || refreshRate > (maxRefreshRate + EPSILON)) {
+            if (refreshRate < (minRefreshRate - FLOAT_TOLERANCE)
+                    || refreshRate > (maxRefreshRate + FLOAT_TOLERANCE)) {
                 if (DEBUG) {
                     Slog.w(TAG, "Discarding mode " + mode.getModeId()
                             + ", outside refresh rate bounds"
@@ -311,11 +301,13 @@ public class DisplayModeDirector {
     }
 
     /**
-     * Sets the modeListener for changes to allowed display modes.
+     * Sets the desiredDisplayModeSpecsListener for changes to display mode and refresh rate
+     * ranges.
      */
-    public void setDisplayModeListener(@Nullable DisplayModeListener displayModeListener) {
+    public void setDesiredDisplayModeSpecsListener(
+            @Nullable DesiredDisplayModeSpecsListener desiredDisplayModeSpecsListener) {
         synchronized (mLock) {
-            mDisplayModeListener = displayModeListener;
+            mDesiredDisplayModeSpecsListener = desiredDisplayModeSpecsListener;
         }
     }
 
@@ -389,16 +381,18 @@ public class DisplayModeDirector {
             mVotesByDisplay.remove(displayId);
         }
 
-        notifyAllowedModesChangedLocked();
+        notifyDesiredDisplayModeSpecsChangedLocked();
     }
 
-    private void notifyAllowedModesChangedLocked() {
-        if (mDisplayModeListener != null && !mHandler.hasMessages(MSG_ALLOWED_MODES_CHANGED)) {
+    private void notifyDesiredDisplayModeSpecsChangedLocked() {
+        if (mDesiredDisplayModeSpecsListener != null
+                && !mHandler.hasMessages(MSG_REFRESH_RATE_RANGE_CHANGED)) {
             // We need to post this to a handler to avoid calling out while holding the lock
             // since we know there are things that both listen for changes as well as provide
-            // information. If we did call out while holding the lock, then there's no guaranteed
-            // lock order and we run the real of risk deadlock.
-            Message msg = mHandler.obtainMessage(MSG_ALLOWED_MODES_CHANGED, mDisplayModeListener);
+            // information. If we did call out while holding the lock, then there's no
+            // guaranteed lock order and we run the real of risk deadlock.
+            Message msg = mHandler.obtainMessage(
+                    MSG_REFRESH_RATE_RANGE_CHANGED, mDesiredDisplayModeSpecsListener);
             msg.sendToTarget();
         }
     }
@@ -430,13 +424,13 @@ public class DisplayModeDirector {
     }
 
     /**
-     * Listens for changes to display mode coordination.
+     * Listens for changes refresh rate coordination.
      */
-    public interface DisplayModeListener {
+    public interface DesiredDisplayModeSpecsListener {
         /**
-         * Called when the allowed display modes may have changed.
+         * Called when the refresh rate range may have changed.
          */
-        void onAllowedDisplayModesChanged();
+        void onDesiredDisplayModeSpecsChanged();
     }
 
     private final class DisplayModeDirectorHandler extends Handler {
@@ -447,11 +441,6 @@ public class DisplayModeDirector {
         @Override
         public void handleMessage(Message msg) {
             switch (msg.what) {
-                case MSG_ALLOWED_MODES_CHANGED:
-                    DisplayModeListener displayModeListener = (DisplayModeListener) msg.obj;
-                    displayModeListener.onAllowedDisplayModesChanged();
-                    break;
-
                 case MSG_BRIGHTNESS_THRESHOLDS_CHANGED:
                     Pair<int[], int[]> thresholds = (Pair<int[], int[]>) msg.obj;
 
@@ -474,6 +463,12 @@ public class DisplayModeDirector {
                     mBrightnessObserver.onDeviceConfigRefreshRateInZoneChanged(
                             refreshRateInZone);
                     break;
+
+                case MSG_REFRESH_RATE_RANGE_CHANGED:
+                    DesiredDisplayModeSpecsListener desiredDisplayModeSpecsListener =
+                            (DesiredDisplayModeSpecsListener) msg.obj;
+                    desiredDisplayModeSpecsListener.onDesiredDisplayModeSpecsChanged();
+                    break;
             }
         }
     }
@@ -485,18 +480,26 @@ public class DisplayModeDirector {
         /**
          * The lowest desired refresh rate.
          */
-        public final float min;
+        public float min;
         /**
          * The highest desired refresh rate.
          */
-        public final float max;
+        public float max;
+
+        public RefreshRateRange() {}
 
         public RefreshRateRange(float min, float max) {
-            if (min < 0 || max < 0 || min > max) {
+            if (min < 0 || max < 0 || min > max + FLOAT_TOLERANCE) {
                 Slog.e(TAG, "Wrong values for min and max when initializing RefreshRateRange : "
                         + min + " " + max);
                 this.min = this.max = 0;
                 return;
+            }
+            if (min > max) {
+                // Min and max are within epsilon of each other, but in the wrong order.
+                float t = min;
+                min = max;
+                max = t;
             }
             this.min = min;
             this.max = max;
@@ -531,32 +534,31 @@ public class DisplayModeDirector {
     }
 
     /**
-     * Information about the desired configuration to be set by the system. Includes the default
-     * configuration ID, refresh rate range, and the list of policy decisions that influenced the
-     * choice.
+     * Information about the desired display mode to be set by the system. Includes the base
+     * mode ID and refresh rate range.
+     *
+     * We have this class in addition to SurfaceControl.DesiredDisplayConfigSpecs to make clear the
+     * distinction between the config ID / physical index that
+     * SurfaceControl.DesiredDisplayConfigSpecs uses, and the mode ID used here.
      */
-    public static final class DesiredDisplayConfigSpecs {
+    public static final class DesiredDisplayModeSpecs {
         /**
-         * Default configuration ID. This is what system defaults to for all other settings, or
+         * Base mode ID. This is what system defaults to for all other settings, or
          * if the refresh rate range is not available.
          */
-        public final int defaultModeId;
+        public int baseModeId;
         /**
          * The refresh rate range.
          */
         public final RefreshRateRange refreshRateRange;
-        /**
-         * For legacy reasons, keep a list of allowed configs.
-         * TODO(b/142507213): Re-assess whether the list of allowed configs is still necessary.
-         */
-        public final int[] allowedConfigs;
 
-        public DesiredDisplayConfigSpecs(int defaultModeId,
-                @NonNull RefreshRateRange refreshRateRange,
-                @NonNull int[] allowedConfigs) {
-            this.defaultModeId = defaultModeId;
+        public DesiredDisplayModeSpecs() {
+            refreshRateRange = new RefreshRateRange();
+        }
+
+        public DesiredDisplayModeSpecs(int baseModeId, @NonNull RefreshRateRange refreshRateRange) {
+            this.baseModeId = baseModeId;
             this.refreshRateRange = refreshRateRange;
-            this.allowedConfigs = allowedConfigs;
         }
 
         /**
@@ -564,9 +566,8 @@ public class DisplayModeDirector {
          */
         @Override
         public String toString() {
-            return "DesiredDisplayConfigSpecs(defaultModeId=" + defaultModeId
-                    + ", refreshRateRange=" + refreshRateRange.toString()
-                    + ", allowedConfigs=" + Arrays.toString(allowedConfigs) + ")";
+            return String.format("baseModeId=%d min=%.0f max=%.0f", baseModeId,
+                    refreshRateRange.min, refreshRateRange.max);
         }
         /**
          * Checks whether the two objects have the same values.
@@ -577,17 +578,16 @@ public class DisplayModeDirector {
                 return true;
             }
 
-            if (!(other instanceof DesiredDisplayConfigSpecs)) {
+            if (!(other instanceof DesiredDisplayModeSpecs)) {
                 return false;
             }
 
-            DesiredDisplayConfigSpecs desiredDisplayConfigSpecs =
-                    (DesiredDisplayConfigSpecs) other;
+            DesiredDisplayModeSpecs desiredDisplayModeSpecs = (DesiredDisplayModeSpecs) other;
 
-            if (defaultModeId != desiredDisplayConfigSpecs.defaultModeId) {
+            if (baseModeId != desiredDisplayModeSpecs.baseModeId) {
                 return false;
             }
-            if (!refreshRateRange.equals(desiredDisplayConfigSpecs.refreshRateRange)) {
+            if (!refreshRateRange.equals(desiredDisplayModeSpecs.refreshRateRange)) {
                 return false;
             }
             return true;
@@ -595,7 +595,16 @@ public class DisplayModeDirector {
 
         @Override
         public int hashCode() {
-            return Objects.hash(defaultModeId, refreshRateRange);
+            return Objects.hash(baseModeId, refreshRateRange);
+        }
+
+        /**
+         * Copy values from the other object.
+         */
+        public void copyFrom(DesiredDisplayModeSpecs other) {
+            baseModeId = other.baseModeId;
+            refreshRateRange.min = other.refreshRateRange.min;
+            refreshRateRange.max = other.refreshRateRange.max;
         }
     }
 
@@ -932,7 +941,7 @@ public class DisplayModeDirector {
                     mDefaultModeByDisplay.put(displayId, info.getDefaultMode());
                 }
                 if (changed) {
-                    notifyAllowedModesChangedLocked();
+                    notifyDesiredDisplayModeSpecsChangedLocked();
                 }
             }
         }
@@ -945,9 +954,9 @@ public class DisplayModeDirector {
      * {@link R.array#config_ambientThresholdsOfPeakRefreshRate}.
      */
     private class BrightnessObserver extends ContentObserver {
+        // TODO: brightnessfloat: change this to the float setting
         private final Uri mDisplayBrightnessSetting =
                 Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS);
-
         private final static int LIGHT_SENSOR_RATE_MS = 250;
         private int[] mDisplayBrightnessThresholds;
         private int[] mAmbientBrightnessThresholds;
@@ -1049,6 +1058,7 @@ public class DisplayModeDirector {
 
         public void dumpLocked(PrintWriter pw) {
             pw.println("  BrightnessObserver");
+            pw.println("    mAmbientLux: " + mAmbientLux);
             pw.println("    mRefreshRateInZone: " + mRefreshRateInZone);
 
             for (int d: mDisplayBrightnessThresholds) {
@@ -1058,6 +1068,8 @@ public class DisplayModeDirector {
             for (int d: mAmbientBrightnessThresholds) {
                 pw.println("    mAmbientBrightnessThreshold: " + d);
             }
+
+            mLightSensorListener.dumpLocked(pw);
         }
 
         public void onDisplayChanged(int displayId) {
@@ -1170,7 +1182,7 @@ public class DisplayModeDirector {
 
             return false;
         }
-
+        // TODO: brightnessfloat: make it use float not int
         private void onBrightnessChangedLocked() {
             int brightness = Settings.System.getInt(mContext.getContentResolver(),
                     Settings.System.SCREEN_BRIGHTNESS, -1);
@@ -1220,6 +1232,10 @@ public class DisplayModeDirector {
         private final class LightSensorEventListener implements SensorEventListener {
             final private static int INJECT_EVENTS_INTERVAL_MS = LIGHT_SENSOR_RATE_MS;
             private float mLastSensorData;
+
+            public void dumpLocked(PrintWriter pw) {
+                pw.println("    mLastSensorData: " + mLastSensorData);
+            }
 
             @Override
             public void onSensorChanged(SensorEvent event) {

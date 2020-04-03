@@ -155,7 +155,6 @@ public class KeyguardBottomAreaView extends FrameLayout implements View.OnClickL
     };
 
     private boolean mLeftIsVoiceAssist;
-    private AssistManager mAssistManager;
     private Drawable mLeftAssistIcon;
 
     private IntentButton mRightButton = new DefaultRightButton();
@@ -254,7 +253,6 @@ public class KeyguardBottomAreaView extends FrameLayout implements View.OnClickL
         mActivityStarter = Dependency.get(ActivityStarter.class);
         mFlashlightController = Dependency.get(FlashlightController.class);
         mAccessibilityController = Dependency.get(AccessibilityController.class);
-        mAssistManager = Dependency.get(AssistManager.class);
         mActivityIntentHelper = new ActivityIntentHelper(getContext());
         updateLeftAffordance();
     }
@@ -494,7 +492,7 @@ public class KeyguardBottomAreaView extends FrameLayout implements View.OnClickL
                     try {
                         result = ActivityTaskManager.getService().startActivityAsUser(
                                 null, getContext().getBasePackageName(),
-                                intent,
+                                getContext().getFeatureId(), intent,
                                 intent.resolveTypeIfNeeded(getContext().getContentResolver()),
                                 null, null, 0, Intent.FLAG_ACTIVITY_NEW_TASK, null, o.toBundle(),
                                 UserHandle.CURRENT.getIdentifier());
@@ -551,7 +549,7 @@ public class KeyguardBottomAreaView extends FrameLayout implements View.OnClickL
         Runnable runnable = new Runnable() {
             @Override
             public void run() {
-                mAssistManager.launchVoiceAssistFromKeyguard();
+                Dependency.get(AssistManager.class).launchVoiceAssistFromKeyguard();
             }
         };
         if (!mKeyguardStateController.canDismissLockScreen()) {
@@ -565,7 +563,7 @@ public class KeyguardBottomAreaView extends FrameLayout implements View.OnClickL
     }
 
     private boolean canLaunchVoiceAssist() {
-        return mAssistManager.canVoiceAssistBeLaunchedFromKeyguard();
+        return Dependency.get(AssistManager.class).canVoiceAssistBeLaunchedFromKeyguard();
     }
 
     private void launchPhone() {
@@ -645,9 +643,12 @@ public class KeyguardBottomAreaView extends FrameLayout implements View.OnClickL
         if (previewBefore != null) {
             mPreviewContainer.removeView(previewBefore);
         }
+
         if (mLeftIsVoiceAssist) {
-            mLeftPreview = mPreviewInflater.inflatePreviewFromService(
-                    mAssistManager.getVoiceInteractorComponentName());
+            if (Dependency.get(AssistManager.class).getVoiceInteractorComponentName() != null) {
+                mLeftPreview = mPreviewInflater.inflatePreviewFromService(
+                        Dependency.get(AssistManager.class).getVoiceInteractorComponentName());
+            }
         } else {
             mLeftPreview = mPreviewInflater.inflatePreview(mLeftButton.getIntent());
         }

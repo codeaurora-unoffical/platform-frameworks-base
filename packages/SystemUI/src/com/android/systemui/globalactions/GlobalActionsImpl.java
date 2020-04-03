@@ -30,81 +30,75 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.android.internal.R;
-import com.android.internal.colorextraction.ColorExtractor.GradientColors;
 import com.android.internal.colorextraction.drawable.ScrimDrawable;
 import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.settingslib.Utils;
 import com.android.systemui.Dependency;
-import com.android.systemui.colorextraction.SysuiColorExtractor;
 import com.android.systemui.plugins.GlobalActions;
 import com.android.systemui.plugins.GlobalActionsPanelPlugin;
-import com.android.systemui.plugins.PluginListener;
-import com.android.systemui.shared.plugins.PluginManager;
+import com.android.systemui.statusbar.BlurUtils;
 import com.android.systemui.statusbar.CommandQueue;
+import com.android.systemui.statusbar.phone.ScrimController;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import com.android.systemui.statusbar.policy.ExtensionController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 
-public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks,
-        PluginListener<GlobalActionsPanelPlugin> {
+import javax.inject.Inject;
+
+import dagger.Lazy;
+
+public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks {
 
     private static final float SHUTDOWN_SCRIM_ALPHA = 0.95f;
 
     private final Context mContext;
+    private final Lazy<GlobalActionsDialog> mGlobalActionsDialogLazy;
     private final KeyguardStateController mKeyguardStateController;
     private final DeviceProvisionedController mDeviceProvisionedController;
     private final ExtensionController.Extension<GlobalActionsPanelPlugin> mPanelExtension;
-    private GlobalActionsPanelPlugin mPlugin;
+    private final BlurUtils mBlurUtils;
     private final CommandQueue mCommandQueue;
-    private GlobalActionsDialog mGlobalActions;
+    private GlobalActionsDialog mGlobalActionsDialog;
     private boolean mDisabled;
-    private final PluginManager mPluginManager;
-    private final String mPluginPackageName;
 
-    public GlobalActionsImpl(Context context, CommandQueue commandQueue) {
+    @Inject
+    public GlobalActionsImpl(Context context, CommandQueue commandQueue,
+            Lazy<GlobalActionsDialog> globalActionsDialogLazy, BlurUtils blurUtils) {
         mContext = context;
+        mGlobalActionsDialogLazy = globalActionsDialogLazy;
         mKeyguardStateController = Dependency.get(KeyguardStateController.class);
         mDeviceProvisionedController = Dependency.get(DeviceProvisionedController.class);
-        mPluginManager = Dependency.get(PluginManager.class);
         mCommandQueue = commandQueue;
+        mBlurUtils = blurUtils;
         mCommandQueue.addCallback(this);
         mPanelExtension = Dependency.get(ExtensionController.class)
                 .newExtension(GlobalActionsPanelPlugin.class)
                 .withPlugin(GlobalActionsPanelPlugin.class)
                 .build();
-        mPluginPackageName = mContext.getString(
-                com.android.systemui.R.string.config_controlsPluginPackageName);
-        mPluginManager.addPluginListener(
-                GlobalActionsPanelPlugin.ACTION, this, GlobalActionsPanelPlugin.class, true);
     }
 
     @Override
     public void destroy() {
         mCommandQueue.removeCallback(this);
-        mPluginManager.removePluginListener(this);
-        if (mPlugin != null) mPlugin.onDestroy();
-        if (mGlobalActions != null) {
-            mGlobalActions.destroy();
-            mGlobalActions = null;
+        if (mGlobalActionsDialog != null) {
+            mGlobalActionsDialog.destroy();
+            mGlobalActionsDialog = null;
         }
     }
 
     @Override
     public void showGlobalActions(GlobalActionsManager manager) {
         if (mDisabled) return;
-        if (mGlobalActions == null) {
-            mGlobalActions = new GlobalActionsDialog(mContext, manager);
-        }
-        mGlobalActions.showDialog(mKeyguardStateController.isShowing(),
+        mGlobalActionsDialog = mGlobalActionsDialogLazy.get();
+        mGlobalActionsDialog.showDialog(mKeyguardStateController.isShowing(),
                 mDeviceProvisionedController.isDeviceProvisioned(),
-                mPlugin != null ? mPlugin : mPanelExtension.get());
+                mPanelExtension.get());
         Dependency.get(KeyguardUpdateMonitor.class).requestFaceAuth();
     }
 
     @Override
     public void showShutdownUi(boolean isReboot, String reason) {
         ScrimDrawable background = new ScrimDrawable();
-        background.setAlpha((int) (SHUTDOWN_SCRIM_ALPHA * 255));
 
         Dialog d = new Dialog(mContext,
                 com.android.systemui.R.style.Theme_SystemUI_Dialog_GlobalActions);
@@ -120,7 +114,7 @@ public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks,
         window.getAttributes().height = ViewGroup.LayoutParams.MATCH_PARENT;
         window.getAttributes().layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         window.setType(WindowManager.LayoutParams.TYPE_VOLUME_OVERLAY);
-        window.setFitWindowInsetsTypes(0 /* types */);
+        window.getAttributes().setFitInsetsTypes(0 /* types */);
         window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         window.addFlags(
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
@@ -154,8 +148,13 @@ public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks,
             reasonView.setText(rebootReasonMessage);
         }
 
-        GradientColors colors = Dependency.get(SysuiColorExtractor.class).getNeutralColors();
-        background.setColor(colors.getMainColor(), false);
+        if (mBlurUtils.supportsBlursOnWindows()) {
+            background.setAlpha((int) (ScrimController.BUSY_SCRIM_ALPHA * 255));
+            mBlurUtils.applyBlur(d.getWindow().getDecorView().getViewRootImpl(),
+                        mBlurUtils.radiusForRatio(1));
+        } else {
+            background.setAlpha((int) (SHUTDOWN_SCRIM_ALPHA * 255));
+        }
 
         d.show();
     }
@@ -189,20 +188,8 @@ public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks,
         final boolean disabled = (state2 & DISABLE2_GLOBAL_ACTIONS) != 0;
         if (displayId != mContext.getDisplayId() || disabled == mDisabled) return;
         mDisabled = disabled;
-        if (disabled && mGlobalActions != null) {
-            mGlobalActions.dismissDialog();
+        if (disabled && mGlobalActionsDialog != null) {
+            mGlobalActionsDialog.dismissDialog();
         }
-    }
-
-    @Override
-    public void onPluginConnected(GlobalActionsPanelPlugin plugin, Context pluginContext) {
-        if (pluginContext.getPackageName().equals(mPluginPackageName)) {
-            mPlugin = plugin;
-        }
-    }
-
-    @Override
-    public void onPluginDisconnected(GlobalActionsPanelPlugin plugin) {
-        mPlugin = null;
     }
 }

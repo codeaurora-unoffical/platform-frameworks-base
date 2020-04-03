@@ -20,7 +20,6 @@ import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertThat;
 
 import android.testing.AndroidTestingRunner;
-import android.testing.TestableLooper;
 
 import androidx.test.filters.SmallTest;
 
@@ -33,7 +32,6 @@ import org.junit.runner.RunWith;
 
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
-@TestableLooper.RunWithLooper
 public class DistanceClassifierTest extends ClassifierTest {
 
     private FalsingDataProvider mDataProvider;
@@ -62,10 +60,10 @@ public class DistanceClassifierTest extends ClassifierTest {
         mClassifier.onTouchEvent(appendDownEvent(1, 1));
         assertThat(mClassifier.isFalseTouch(), is(true));
 
-        mClassifier.onTouchEvent(appendMoveEvent(1, 2));
+        mClassifier.onTouchEvent(appendMoveEvent(1, 40));
         assertThat(mClassifier.isFalseTouch(), is(true));
 
-        mClassifier.onTouchEvent(appendUpEvent(1, 40));
+        mClassifier.onTouchEvent(appendUpEvent(1, 80));
         assertThat(mClassifier.isFalseTouch(), is(false));
     }
 

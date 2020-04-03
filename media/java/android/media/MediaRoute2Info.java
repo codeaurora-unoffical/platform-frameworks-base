@@ -16,13 +16,20 @@
 
 package android.media;
 
+import static android.media.MediaRouter2Utils.toUniqueId;
+
+import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.TestApi;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.text.TextUtils;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -30,7 +37,6 @@ import java.util.Objects;
 
 /**
  * Describes the properties of a route.
- * @hide
  */
 public final class MediaRoute2Info implements Parcelable {
     @NonNull
@@ -46,84 +52,503 @@ public final class MediaRoute2Info implements Parcelable {
         }
     };
 
+    /** @hide */
+    @IntDef({CONNECTION_STATE_DISCONNECTED, CONNECTION_STATE_CONNECTING,
+            CONNECTION_STATE_CONNECTED})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface ConnectionState {}
+
+    /**
+     * The default connection state indicating the route is disconnected.
+     *
+     * @see #getConnectionState
+     */
+    public static final int CONNECTION_STATE_DISCONNECTED = 0;
+
+    /**
+     * A connection state indicating the route is in the process of connecting and is not yet
+     * ready for use.
+     *
+     * @see #getConnectionState
+     */
+    public static final int CONNECTION_STATE_CONNECTING = 1;
+
+    /**
+     * A connection state indicating the route is connected.
+     *
+     * @see #getConnectionState
+     */
+    public static final int CONNECTION_STATE_CONNECTED = 2;
+
+    /** @hide */
+    @IntDef({PLAYBACK_VOLUME_FIXED, PLAYBACK_VOLUME_VARIABLE})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PlaybackVolume {}
+
     /**
      * Playback information indicating the playback volume is fixed, i&#46;e&#46; it cannot be
      * controlled from this object. An example of fixed playback volume is a remote player,
      * playing over HDMI where the user prefers to control the volume on the HDMI sink, rather
      * than attenuate at the source.
+     *
      * @see #getVolumeHandling()
      */
     public static final int PLAYBACK_VOLUME_FIXED = 0;
     /**
      * Playback information indicating the playback volume is variable and can be controlled
      * from this object.
+     *
      * @see #getVolumeHandling()
      */
     public static final int PLAYBACK_VOLUME_VARIABLE = 1;
 
-    @NonNull
+    /** @hide */
+    @IntDef({
+            TYPE_UNKNOWN, TYPE_BUILTIN_SPEAKER, TYPE_WIRED_HEADSET,
+            TYPE_WIRED_HEADPHONES, TYPE_BLUETOOTH_A2DP, TYPE_HDMI, TYPE_USB_DEVICE,
+            TYPE_USB_ACCESSORY, TYPE_DOCK, TYPE_USB_HEADSET, TYPE_HEARING_AID,
+            TYPE_REMOTE_TV, TYPE_REMOTE_SPEAKER, TYPE_GROUP})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface Type {}
+
+    /**
+     * The default receiver device type of the route indicating the type is unknown.
+     *
+     * @see #getDeviceType
+     */
+    public static final int DEVICE_TYPE_UNKNOWN = 0;
+
+    /**
+     * A receiver device type of the route indicating the presentation of the media is happening
+     * on a TV.
+     *
+     * @see #getDeviceType
+     */
+    public static final int DEVICE_TYPE_REMOTE_TV = 1;
+
+    /**
+     * A receiver device type of the route indicating the presentation of the media is happening
+     * on a speaker.
+     *
+     * @see #getDeviceType
+     */
+    public static final int DEVICE_TYPE_REMOTE_SPEAKER = 2;
+
+    /**
+     * A receiver device type of the route indicating the presentation of the media is happening
+     * on a bluetooth device such as a bluetooth speaker.
+     *
+     * @see #getDeviceType
+     */
+    public static final int DEVICE_TYPE_BLUETOOTH = 3;
+
+
+    /**
+     * The default route type indicating the type is unknown.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_UNKNOWN = 0;
+
+    /**
+     * A route type describing the speaker system (i.e. a mono speaker or stereo speakers) built
+     * in a device.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_BUILTIN_SPEAKER = AudioDeviceInfo.TYPE_BUILTIN_SPEAKER;
+
+    /**
+     * A route type describing a headset, which is the combination of a headphones and microphone.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_WIRED_HEADSET = AudioDeviceInfo.TYPE_WIRED_HEADSET;
+
+    /**
+     * A route type describing a pair of wired headphones.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_WIRED_HEADPHONES = AudioDeviceInfo.TYPE_WIRED_HEADPHONES;
+
+    /**
+     * A route type indicating the presentation of the media is happening
+     * on a bluetooth device such as a bluetooth speaker.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_BLUETOOTH_A2DP = AudioDeviceInfo.TYPE_BLUETOOTH_A2DP;
+
+    /**
+     * A route type describing an HDMI connection.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_HDMI = AudioDeviceInfo.TYPE_HDMI;
+
+    /**
+     * A route type describing a USB audio device.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_USB_DEVICE = AudioDeviceInfo.TYPE_USB_DEVICE;
+
+    /**
+     * A route type describing a USB audio device in accessory mode.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_USB_ACCESSORY = AudioDeviceInfo.TYPE_USB_ACCESSORY;
+
+    /**
+     * A route type describing the audio device associated with a dock.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_DOCK = AudioDeviceInfo.TYPE_DOCK;
+
+    /**
+     * A device type describing a USB audio headset.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_USB_HEADSET = AudioDeviceInfo.TYPE_USB_HEADSET;
+
+    /**
+     * A route type describing a Hearing Aid.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_HEARING_AID = AudioDeviceInfo.TYPE_HEARING_AID;
+
+    /**
+     * A route type indicating the presentation of the media is happening on a TV.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_REMOTE_TV = 1001;
+
+    /**
+     * A route type indicating the presentation of the media is happening on a speaker.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_REMOTE_SPEAKER = 1002;
+
+    /**
+     * A route type indicating the presentation of the media is happening on multiple devices.
+     *
+     * @see #getType
+     * @hide
+     */
+    public static final int TYPE_GROUP = 2000;
+
+    /**
+     * Media feature: Live audio.
+     * <p>
+     * A route that supports live audio routing will allow the media audio stream
+     * to be sent to supported destinations.  This can include internal speakers or
+     * audio jacks on the device itself, A2DP devices, and more.
+     * </p><p>
+     * When a live audio route is selected, audio routing is transparent to the application.
+     * All audio played on the media stream will be routed to the selected destination.
+     * </p><p>
+     * Refer to the class documentation for details about live audio routes.
+     * </p>
+     */
+    public static final String FEATURE_LIVE_AUDIO = "android.media.intent.category.LIVE_AUDIO";
+
+    /**
+     * Media feature: Live video.
+     * <p>
+     * A route that supports live video routing will allow a mirrored version
+     * of the device's primary display or a customized
+     * {@link android.app.Presentation Presentation} to be sent to supported
+     * destinations.
+     * </p><p>
+     * When a live video route is selected, audio and video routing is transparent
+     * to the application.  By default, audio and video is routed to the selected
+     * destination.  For certain live video routes, the application may also use a
+     * {@link android.app.Presentation Presentation} to replace the mirrored view
+     * on the external display with different content.
+     * </p><p>
+     * Refer to the class documentation for details about live video routes.
+     * </p>
+     *
+     * @see android.app.Presentation
+     */
+    public static final String FEATURE_LIVE_VIDEO = "android.media.intent.category.LIVE_VIDEO";
+
+    /**
+     * Media feature: Remote playback.
+     * <p>
+     * A route that supports remote playback routing will allow an application to send
+     * requests to play content remotely to supported destinations.
+     * </p><p>
+     * Remote playback routes destinations operate independently of the local device.
+     * When a remote playback route is selected, the application can control the content
+     * playing on the destination using {@link MediaRouter2.RoutingController#getControlHints()}.
+     * The application may also receive status updates from the route regarding remote playback.
+     * </p><p>
+     * Refer to the class documentation for details about remote playback routes.
+     * </p>
+     */
+    public static final String FEATURE_REMOTE_PLAYBACK =
+            "android.media.intent.category.REMOTE_PLAYBACK";
+
     final String mId;
-    @Nullable
-    final String mProviderId;
-    @NonNull
     final CharSequence mName;
-    @Nullable
+    final List<String> mFeatures;
+    @Type
+    final int mType;
+    final boolean mIsSystem;
+    final Uri mIconUri;
     final CharSequence mDescription;
-    @Nullable
+    @ConnectionState
+    final int mConnectionState;
     final String mClientPackageName;
-    @NonNull
-    final List<String> mSupportedCategories;
     final int mVolume;
     final int mVolumeMax;
     final int mVolumeHandling;
-    @Nullable
     final Bundle mExtras;
-
-    private final String mUniqueId;
+    final String mProviderId;
 
     MediaRoute2Info(@NonNull Builder builder) {
         mId = builder.mId;
-        mProviderId = builder.mProviderId;
         mName = builder.mName;
+        mFeatures = builder.mFeatures;
+        mType = builder.mType;
+        mIsSystem = builder.mIsSystem;
+        mIconUri = builder.mIconUri;
         mDescription = builder.mDescription;
+        mConnectionState = builder.mConnectionState;
         mClientPackageName = builder.mClientPackageName;
-        mSupportedCategories = builder.mSupportedCategories;
-        mVolume = builder.mVolume;
-        mVolumeMax = builder.mVolumeMax;
         mVolumeHandling = builder.mVolumeHandling;
+        mVolumeMax = builder.mVolumeMax;
+        mVolume = builder.mVolume;
         mExtras = builder.mExtras;
-        mUniqueId = createUniqueId();
+        mProviderId = builder.mProviderId;
     }
 
     MediaRoute2Info(@NonNull Parcel in) {
         mId = in.readString();
-        mProviderId = in.readString();
         mName = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(in);
+        mFeatures = in.createStringArrayList();
+        mType = in.readInt();
+        mIsSystem = in.readBoolean();
+        mIconUri = in.readParcelable(null);
         mDescription = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(in);
+        mConnectionState = in.readInt();
         mClientPackageName = in.readString();
-        mSupportedCategories = in.createStringArrayList();
-        mVolume = in.readInt();
-        mVolumeMax = in.readInt();
         mVolumeHandling = in.readInt();
+        mVolumeMax = in.readInt();
+        mVolume = in.readInt();
         mExtras = in.readBundle();
-        mUniqueId = createUniqueId();
+        mProviderId = in.readString();
     }
 
-    private String createUniqueId() {
-        String uniqueId = null;
+    /**
+     * Gets the id of the route. The routes which are given by {@link MediaRouter2} will have
+     * unique IDs.
+     * <p>
+     * In order to ensure uniqueness in {@link MediaRouter2} side, the value of this method
+     * can be different from what was set in {@link MediaRoute2ProviderService}.
+     *
+     * @see Builder#Builder(String, CharSequence)
+     */
+    @NonNull
+    public String getId() {
         if (mProviderId != null) {
-            uniqueId = mProviderId + ":" + mId;
+            return toUniqueId(mProviderId, mId);
+        } else {
+            return mId;
         }
-        return uniqueId;
+    }
+
+    /**
+     * Gets the user-visible name of the route.
+     */
+    @NonNull
+    public CharSequence getName() {
+        return mName;
+    }
+
+    /**
+     * Gets the supported features of the route.
+     */
+    @NonNull
+    public List<String> getFeatures() {
+        return mFeatures;
+    }
+
+    /**
+     * Gets the type of the receiver device associated with this route.
+     *
+     * @return The type of the receiver device associated with this route:
+     * {@link #DEVICE_TYPE_REMOTE_TV}, {@link #DEVICE_TYPE_REMOTE_SPEAKER},
+     * {@link #DEVICE_TYPE_BLUETOOTH}.
+     */
+    @Type
+    public int getDeviceType() {
+        return getType();
+    }
+
+    /**
+     * Gets the type of this route.
+     *
+     * @return The type of this route:
+     * {@link #TYPE_UNKNOWN},
+     * {@link #TYPE_BUILTIN_SPEAKER}, {@link #TYPE_WIRED_HEADSET}, {@link #TYPE_WIRED_HEADPHONES},
+     * {@link #TYPE_BLUETOOTH_A2DP}, {@link #TYPE_HDMI}, {@link #TYPE_DOCK},
+     * {@Link #TYPE_USB_DEVICE}, {@link #TYPE_USB_ACCESSORY}, {@link #TYPE_USB_HEADSET}
+     * {@link #TYPE_HEARING_AID},
+     * {@link #TYPE_REMOTE_TV}, {@link #TYPE_REMOTE_SPEAKER}, {@link #TYPE_GROUP}.
+     * @hide
+     */
+    @Type
+    public int getType() {
+        return mType;
+    }
+
+    /**
+     * Returns whether the route is a system route or not.
+     * <p>
+     * System routes are media routes directly controlled by the system
+     * such as phone speaker, wired headset, and Bluetooth devices.
+     * </p>
+     */
+    public boolean isSystemRoute() {
+        return mIsSystem;
+    }
+
+    /**
+     * Gets the URI of the icon representing this route.
+     * <p>
+     * This icon will be used in picker UIs if available.
+     *
+     * @return The URI of the icon representing this route, or null if none.
+     */
+    @Nullable
+    public Uri getIconUri() {
+        return mIconUri;
+    }
+
+    /**
+     * Gets the user-visible description of the route.
+     */
+    @Nullable
+    public CharSequence getDescription() {
+        return mDescription;
+    }
+
+    /**
+     * Gets the connection state of the route.
+     *
+     * @return The connection state of this route: {@link #CONNECTION_STATE_DISCONNECTED},
+     * {@link #CONNECTION_STATE_CONNECTING}, or {@link #CONNECTION_STATE_CONNECTED}.
+     */
+    @ConnectionState
+    public int getConnectionState() {
+        return mConnectionState;
+    }
+
+    /**
+     * Gets the package name of the app using the route.
+     * Returns null if no apps are using this route.
+     */
+    @Nullable
+    public String getClientPackageName() {
+        return mClientPackageName;
+    }
+
+    /**
+     * Gets information about how volume is handled on the route.
+     *
+     * @return {@link #PLAYBACK_VOLUME_FIXED} or {@link #PLAYBACK_VOLUME_VARIABLE}
+     */
+    @PlaybackVolume
+    public int getVolumeHandling() {
+        return mVolumeHandling;
+    }
+
+    /**
+     * Gets the maximum volume of the route.
+     */
+    public int getVolumeMax() {
+        return mVolumeMax;
+    }
+
+    /**
+     * Gets the current volume of the route. This may be invalid if the route is not selected.
+     */
+    public int getVolume() {
+        return mVolume;
+    }
+
+    @Nullable
+    public Bundle getExtras() {
+        return mExtras == null ? null : new Bundle(mExtras);
+    }
+
+    /**
+     * Gets the original id set by {@link Builder#Builder(String, CharSequence)}.
+     * @hide
+     */
+    @NonNull
+    @TestApi
+    public String getOriginalId() {
+        return mId;
+    }
+
+    /**
+     * Gets the provider id of the route. It is assigned automatically by
+     * {@link com.android.server.media.MediaRouterService}.
+     *
+     * @return provider id of the route or null if it's not set.
+     * @hide
+     */
+    @Nullable
+    public String getProviderId() {
+        return mProviderId;
+    }
+
+    /**
+     * Returns if the route has at least one of the specified route features.
+     *
+     * @param features the list of route features to consider
+     * @return true if the route has at least one feature in the list
+     * @hide
+     */
+    public boolean hasAnyFeatures(@NonNull Collection<String> features) {
+        Objects.requireNonNull(features, "features must not be null");
+        for (String feature : features) {
+            if (getFeatures().contains(feature)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
      * Returns true if the route info has all of the required field.
-     * A route info only obtained from {@link com.android.server.media.MediaRouterService}
-     * is valid.
+     * A route is valid if and only if it is obtained from
+     * {@link com.android.server.media.MediaRouterService}.
      * @hide
      */
-    //TODO: Reconsider the validity of a route info when fields are added.
     public boolean isValid() {
         if (TextUtils.isEmpty(getId()) || TextUtils.isEmpty(getName())
                 || TextUtils.isEmpty(getProviderId())) {
@@ -141,131 +566,50 @@ public final class MediaRoute2Info implements Parcelable {
             return false;
         }
         MediaRoute2Info other = (MediaRoute2Info) obj;
+
+        // Note: mExtras is not included.
         return Objects.equals(mId, other.mId)
-                && Objects.equals(mProviderId, other.mProviderId)
                 && Objects.equals(mName, other.mName)
+                && Objects.equals(mFeatures, other.mFeatures)
+                && (mType == other.mType)
+                && (mIsSystem == other.mIsSystem)
+                && Objects.equals(mIconUri, other.mIconUri)
                 && Objects.equals(mDescription, other.mDescription)
+                && (mConnectionState == other.mConnectionState)
                 && Objects.equals(mClientPackageName, other.mClientPackageName)
-                && Objects.equals(mSupportedCategories, other.mSupportedCategories)
-                && (mVolume == other.mVolume)
-                && (mVolumeMax == other.mVolumeMax)
                 && (mVolumeHandling == other.mVolumeHandling)
-                //TODO: This will be evaluated as false in most cases. Try not to.
-                && Objects.equals(mExtras, other.mExtras);
+                && (mVolumeMax == other.mVolumeMax)
+                && (mVolume == other.mVolume)
+                && Objects.equals(mProviderId, other.mProviderId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(mId, mName, mDescription, mSupportedCategories);
+        // Note: mExtras is not included.
+        return Objects.hash(mId, mName, mFeatures, mType, mIsSystem, mIconUri, mDescription,
+                mConnectionState, mClientPackageName, mVolumeHandling, mVolumeMax, mVolume,
+                mProviderId);
     }
 
-    /**
-     * Gets the id of the route.
-     * Use {@link #getUniqueId()} if you need a unique identifier.
-     *
-     * @see #getUniqueId()
-     */
-    @NonNull
-    public String getId() {
-        return mId;
-    }
-
-    /**
-     * Gets the unique id of the route. A route obtained from
-     * {@link com.android.server.media.MediaRouterService} always has a unique id.
-     *
-     * @return unique id of the route or null if it has no unique id.
-     */
-    @Nullable
-    public String getUniqueId() {
-        return mUniqueId;
-    }
-
-    /**
-     * Gets the provider id of the route. It is assigned automatically by
-     * {@link com.android.server.media.MediaRouterService}.
-     *
-     * @return provider id of the route or null if it's not set.
-     * @hide
-     */
-    @Nullable
-    public String getProviderId() {
-        return mProviderId;
-    }
-
-    @NonNull
-    public CharSequence getName() {
-        return mName;
-    }
-
-    @Nullable
-    public CharSequence getDescription() {
-        return mDescription;
-    }
-
-    /**
-     * Gets the package name of the client that uses the route.
-     * Returns null if no clients use this.
-     * @hide
-     */
-    @Nullable
-    public String getClientPackageName() {
-        return mClientPackageName;
-    }
-
-    /**
-     * Gets the supported categories of the route.
-     */
-    @NonNull
-    public List<String> getSupportedCategories() {
-        return mSupportedCategories;
-    }
-
-    /**
-     * Gets the current volume of the route. This may be invalid if the route is not selected.
-     */
-    public int getVolume() {
-        return mVolume;
-    }
-
-    /**
-     * Gets the maximum volume of the route.
-     */
-    public int getVolumeMax() {
-        return mVolumeMax;
-    }
-
-    /**
-     * Gets information about how volume is handled on the route.
-     *
-     * @return {@link #PLAYBACK_VOLUME_FIXED} or {@link #PLAYBACK_VOLUME_VARIABLE}
-     */
-    public int getVolumeHandling() {
-        return mVolumeHandling;
-    }
-
-    @Nullable
-    public Bundle getExtras() {
-        return mExtras;
-    }
-
-    //TODO: Move this if we re-define control category / selector things.
-    /**
-     * Returns true if the route supports at least one of the specified control categories
-     *
-     * @param controlCategories the list of control categories to consider
-     * @return true if the route supports at least one category
-     */
-    public boolean supportsControlCategory(@NonNull Collection<String> controlCategories) {
-        Objects.requireNonNull(controlCategories, "control categories must not be null");
-        for (String controlCategory : controlCategories) {
-            for (String supportedCategory : getSupportedCategories()) {
-                if (TextUtils.equals(controlCategory, supportedCategory)) {
-                    return true;
-                }
-            }
-        }
-        return false;
+    @Override
+    public String toString() {
+        // Note: mExtras is not printed here.
+        StringBuilder result = new StringBuilder()
+                .append("MediaRoute2Info{ ")
+                .append("id=").append(getId())
+                .append(", name=").append(getName())
+                .append(", features=").append(getFeatures())
+                .append(", deviceType=").append(getDeviceType())
+                .append(", iconUri=").append(getIconUri())
+                .append(", description=").append(getDescription())
+                .append(", connectionState=").append(getConnectionState())
+                .append(", clientPackageName=").append(getClientPackageName())
+                .append(", volumeHandling=").append(getVolumeHandling())
+                .append(", volumeMax=").append(getVolumeMax())
+                .append(", volume=").append(getVolume())
+                .append(", providerId=").append(getProviderId())
+                .append(" }");
+        return result.toString();
     }
 
     @Override
@@ -276,83 +620,255 @@ public final class MediaRoute2Info implements Parcelable {
     @Override
     public void writeToParcel(@NonNull Parcel dest, int flags) {
         dest.writeString(mId);
-        dest.writeString(mProviderId);
         TextUtils.writeToParcel(mName, dest, flags);
+        dest.writeStringList(mFeatures);
+        dest.writeInt(mType);
+        dest.writeBoolean(mIsSystem);
+        dest.writeParcelable(mIconUri, flags);
         TextUtils.writeToParcel(mDescription, dest, flags);
+        dest.writeInt(mConnectionState);
         dest.writeString(mClientPackageName);
-        dest.writeStringList(mSupportedCategories);
-        dest.writeInt(mVolume);
-        dest.writeInt(mVolumeMax);
         dest.writeInt(mVolumeHandling);
+        dest.writeInt(mVolumeMax);
+        dest.writeInt(mVolume);
         dest.writeBundle(mExtras);
-    }
-
-    @Override
-    public String toString() {
-        StringBuilder result = new StringBuilder()
-                .append("MediaRouteInfo{ ")
-                .append("id=").append(getId())
-                .append(", name=").append(getName())
-                .append(", description=").append(getDescription())
-                .append(", volume=").append(getVolume())
-                .append(", volumeMax=").append(getVolumeMax())
-                .append(", volumeHandling=").append(getVolumeHandling())
-                .append(", providerId=").append(getProviderId())
-                .append(" }");
-        return result.toString();
+        dest.writeString(mProviderId);
     }
 
     /**
      * Builder for {@link MediaRoute2Info media route info}.
      */
     public static final class Builder {
-        String mId;
-        String mProviderId;
-        CharSequence mName;
+        final String mId;
+        final CharSequence mName;
+        final List<String> mFeatures;
+
+        @Type
+        int mType = TYPE_UNKNOWN;
+        boolean mIsSystem;
+        Uri mIconUri;
         CharSequence mDescription;
+        @ConnectionState
+        int mConnectionState;
         String mClientPackageName;
-        List<String> mSupportedCategories;
-        int mVolume;
-        int mVolumeMax;
         int mVolumeHandling = PLAYBACK_VOLUME_FIXED;
+        int mVolumeMax;
+        int mVolume;
         Bundle mExtras;
+        String mProviderId;
 
+        /**
+         * Constructor for builder to create {@link MediaRoute2Info}.
+         * <p>
+         * In order to ensure ID uniqueness, the {@link MediaRoute2Info#getId() ID} of a route info
+         * obtained from {@link MediaRouter2} can be different from what was set in
+         * {@link MediaRoute2ProviderService}.
+         * </p>
+         * @param id The ID of the route. Must not be empty.
+         * @param name The user-visible name of the route.
+         */
         public Builder(@NonNull String id, @NonNull CharSequence name) {
-            setId(id);
-            setName(name);
-            mSupportedCategories = new ArrayList<>();
-        }
-
-        public Builder(@NonNull MediaRoute2Info routeInfo) {
-            if (routeInfo == null) {
-                throw new IllegalArgumentException("route info must not be null");
+            if (TextUtils.isEmpty(id)) {
+                throw new IllegalArgumentException("id must not be empty");
             }
-
-            setId(routeInfo.mId);
-            if (!TextUtils.isEmpty(routeInfo.mProviderId)) {
-                setProviderId(routeInfo.mProviderId);
+            if (TextUtils.isEmpty(name)) {
+                throw new IllegalArgumentException("name must not be empty");
             }
-            setName(routeInfo.mName);
-            mDescription = routeInfo.mDescription;
-            setClientPackageName(routeInfo.mClientPackageName);
-            setSupportedCategories(routeInfo.mSupportedCategories);
-            setVolume(routeInfo.mVolume);
-            setVolumeMax(routeInfo.mVolumeMax);
-            setVolumeHandling(routeInfo.mVolumeHandling);
-            if (routeInfo.mExtras != null) {
-                mExtras = new Bundle(routeInfo.mExtras);
-            }
+            mId = id;
+            mName = name;
+            mFeatures = new ArrayList<>();
         }
 
         /**
-         * Sets the unique id of the route.
+         * Constructor for builder to create {@link MediaRoute2Info} with
+         * existing {@link MediaRoute2Info} instance.
+         *
+         * @param routeInfo the existing instance to copy data from.
+         */
+        public Builder(@NonNull MediaRoute2Info routeInfo) {
+            Objects.requireNonNull(routeInfo, "routeInfo must not be null");
+
+            mId = routeInfo.mId;
+            mName = routeInfo.mName;
+            mFeatures = new ArrayList<>(routeInfo.mFeatures);
+            mType = routeInfo.mType;
+            mIsSystem = routeInfo.mIsSystem;
+            mIconUri = routeInfo.mIconUri;
+            mDescription = routeInfo.mDescription;
+            mConnectionState = routeInfo.mConnectionState;
+            mClientPackageName = routeInfo.mClientPackageName;
+            mVolumeHandling = routeInfo.mVolumeHandling;
+            mVolumeMax = routeInfo.mVolumeMax;
+            mVolume = routeInfo.mVolume;
+            if (routeInfo.mExtras != null) {
+                mExtras = new Bundle(routeInfo.mExtras);
+            }
+            mProviderId = routeInfo.mProviderId;
+        }
+
+        /**
+         * Adds a feature for the route.
+         * @param feature a feature that the route has. May be one of predefined features
+         *                such as {@link #FEATURE_LIVE_AUDIO}, {@link #FEATURE_LIVE_VIDEO} or
+         *                {@link #FEATURE_REMOTE_PLAYBACK} or a custom feature defined by
+         *                a provider.
+         *
+         * @see #addFeatures(Collection)
          */
         @NonNull
-        public Builder setId(@NonNull String id) {
-            if (TextUtils.isEmpty(id)) {
-                throw new IllegalArgumentException("id must not be null or empty");
+        public Builder addFeature(@NonNull String feature) {
+            if (TextUtils.isEmpty(feature)) {
+                throw new IllegalArgumentException("feature must not be null or empty");
             }
-            mId = id;
+            mFeatures.add(feature);
+            return this;
+        }
+
+        /**
+         * Adds features for the route. A route must support at least one route type.
+         * @param features features that the route has. May include predefined features
+         *                such as {@link #FEATURE_LIVE_AUDIO}, {@link #FEATURE_LIVE_VIDEO} or
+         *                {@link #FEATURE_REMOTE_PLAYBACK} or custom features defined by
+         *                a provider.
+         *
+         * @see #addFeature(String)
+         */
+        @NonNull
+        public Builder addFeatures(@NonNull Collection<String> features) {
+            Objects.requireNonNull(features, "features must not be null");
+            for (String feature : features) {
+                addFeature(feature);
+            }
+            return this;
+        }
+
+        /**
+         * Clears the features of the route. A route must support at least one route type.
+         */
+        @NonNull
+        public Builder clearFeatures() {
+            mFeatures.clear();
+            return this;
+        }
+
+        /**
+         * Sets the route's device type.
+         */
+        @NonNull
+        public Builder setDeviceType(@Type int type) {
+            return setType(type);
+        }
+
+        /**
+         * Sets the route's type.
+         * @hide
+         */
+        @NonNull
+        public Builder setType(@Type int type) {
+            mType = type;
+            return this;
+        }
+
+        /**
+         * Sets whether the route is a system route or not.
+         * @hide
+         */
+        @NonNull
+        public Builder setSystemRoute(boolean isSystem) {
+            mIsSystem = isSystem;
+            return this;
+        }
+
+        /**
+         * Sets the URI of the icon representing this route.
+         * <p>
+         * This icon will be used in picker UIs if available.
+         * </p><p>
+         * The URI must be one of the following formats:
+         * <ul>
+         * <li>content ({@link android.content.ContentResolver#SCHEME_CONTENT})</li>
+         * <li>android.resource ({@link android.content.ContentResolver#SCHEME_ANDROID_RESOURCE})
+         * </li>
+         * <li>file ({@link android.content.ContentResolver#SCHEME_FILE})</li>
+         * </ul>
+         * </p>
+         */
+        @NonNull
+        public Builder setIconUri(@Nullable Uri iconUri) {
+            mIconUri = iconUri;
+            return this;
+        }
+
+        /**
+         * Sets the user-visible description of the route.
+         */
+        @NonNull
+        public Builder setDescription(@Nullable CharSequence description) {
+            mDescription = description;
+            return this;
+        }
+
+        /**
+        * Sets the route's connection state.
+        *
+        * {@link #CONNECTION_STATE_DISCONNECTED},
+        * {@link #CONNECTION_STATE_CONNECTING}, or
+        * {@link #CONNECTION_STATE_CONNECTED}.
+        */
+        @NonNull
+        public Builder setConnectionState(@ConnectionState int connectionState) {
+            mConnectionState = connectionState;
+            return this;
+        }
+
+        /**
+         * Sets the package name of the app using the route.
+         */
+        @NonNull
+        public Builder setClientPackageName(@Nullable String packageName) {
+            mClientPackageName = packageName;
+            return this;
+        }
+
+        /**
+         * Sets the route's volume handling.
+         */
+        @NonNull
+        public Builder setVolumeHandling(@PlaybackVolume int volumeHandling) {
+            mVolumeHandling = volumeHandling;
+            return this;
+        }
+
+        /**
+         * Sets the route's maximum volume, or 0 if unknown.
+         */
+        @NonNull
+        public Builder setVolumeMax(int volumeMax) {
+            mVolumeMax = volumeMax;
+            return this;
+        }
+
+        /**
+         * Sets the route's current volume, or 0 if unknown.
+         */
+        @NonNull
+        public Builder setVolume(int volume) {
+            mVolume = volume;
+            return this;
+        }
+
+        /**
+         * Sets a bundle of extras for the route.
+         * <p>
+         * Note: The extras will not affect the result of {@link MediaRoute2Info#equals(Object)}.
+         */
+        @NonNull
+        public Builder setExtras(@Nullable Bundle extras) {
+            if (extras == null) {
+                mExtras = null;
+                return this;
+            }
+            mExtras = new Bundle(extras);
             return this;
         }
 
@@ -370,106 +886,15 @@ public final class MediaRoute2Info implements Parcelable {
         }
 
         /**
-         * Sets the user-visible name of the route.
-         */
-        @NonNull
-        public Builder setName(@NonNull CharSequence name) {
-            Objects.requireNonNull(name, "name must not be null");
-            mName = name;
-            return this;
-        }
-
-        /**
-         * Sets the user-visible description of the route.
-         */
-        @NonNull
-        public Builder setDescription(@Nullable String description) {
-            mDescription = description;
-            return this;
-        }
-
-        /**
-         * Sets the package name of the app using the route.
-         */
-        @NonNull
-        public Builder setClientPackageName(@Nullable String packageName) {
-            mClientPackageName = packageName;
-            return this;
-        }
-
-        /**
-         * Sets the supported categories of the route.
-         */
-        @NonNull
-        public Builder setSupportedCategories(@NonNull Collection<String> categories) {
-            mSupportedCategories = new ArrayList<>();
-            return addSupportedCategories(categories);
-        }
-
-        /**
-         * Adds supported categories for the route.
-         */
-        @NonNull
-        public Builder addSupportedCategories(@NonNull Collection<String> categories) {
-            Objects.requireNonNull(categories, "categories must not be null");
-            for (String category: categories) {
-                addSupportedCategory(category);
-            }
-            return this;
-        }
-
-        /**
-         * Add a supported category for the route.
-         */
-        @NonNull
-        public Builder addSupportedCategory(@NonNull String category) {
-            if (TextUtils.isEmpty(category)) {
-                throw new IllegalArgumentException("category must not be null or empty");
-            }
-            mSupportedCategories.add(category);
-            return this;
-        }
-
-        /**
-         * Sets the route's current volume, or 0 if unknown.
-         */
-        @NonNull
-        public Builder setVolume(int volume) {
-            mVolume = volume;
-            return this;
-        }
-
-        /**
-         * Sets the route's maximum volume, or 0 if unknown.
-         */
-        @NonNull
-        public Builder setVolumeMax(int volumeMax) {
-            mVolumeMax = volumeMax;
-            return this;
-        }
-
-        /**
-         * Sets the route's volume handling.
-         */
-        @NonNull
-        public Builder setVolumeHandling(int volumeHandling) {
-            mVolumeHandling = volumeHandling;
-            return this;
-        }
-        /**
-         * Sets a bundle of extras for the route.
-         */
-        @NonNull
-        public Builder setExtras(@Nullable Bundle extras) {
-            mExtras = extras;
-            return this;
-        }
-
-        /**
          * Builds the {@link MediaRoute2Info media route info}.
+         *
+         * @throws IllegalArgumentException if no features are added.
          */
         @NonNull
         public MediaRoute2Info build() {
+            if (mFeatures.isEmpty()) {
+                throw new IllegalArgumentException("features must not be empty!");
+            }
             return new MediaRoute2Info(this);
         }
     }

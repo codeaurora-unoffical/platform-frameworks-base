@@ -17,9 +17,12 @@
 package android.app.admin;
 
 import android.annotation.UserIdInt;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.os.UserHandle;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Device policy manager local system service interface.
@@ -165,4 +168,41 @@ public abstract class DevicePolicyManagerInternal {
      * Do not call it directly. Use {@link DevicePolicyCache#getInstance()} instead.
      */
     protected abstract DeviceStateCache getDeviceStateCache();
+
+    /**
+     * Returns the combined set of the following:
+     * <ul>
+     * <li>The package names that the admin has previously set as allowed to request user consent
+     * for cross-profile communication, via {@link
+     * DevicePolicyManager#setCrossProfilePackages(ComponentName, Set)}.</li>
+     * <li>The default package names that are allowed to request user consent for cross-profile
+     * communication without being explicitly enabled by the admin , via {@link
+     * DevicePolicyManager#setDefaultCrossProfilePackages(ComponentName, UserHandle, Set)}.</li>
+     * </ul>
+     *
+     * @return the combined set of whitelisted package names set via
+     * {@link DevicePolicyManager#setCrossProfilePackages(ComponentName, Set)} and
+     * {@link DevicePolicyManager#setDefaultCrossProfilePackages(ComponentName, UserHandle, Set)}
+     *
+     * @hide
+     */
+    public abstract List<String> getAllCrossProfilePackages();
+
+    /**
+     * Sends the {@code intent} to the packages with cross profile capabilities.
+     *
+     * <p>This means the application must have the {@code crossProfile} property and the
+     * corresponding permissions, defined by
+     * {@link
+     * android.content.pm.CrossProfileAppsInternal#verifyPackageHasInteractAcrossProfilePermission}.
+     *
+     * <p>Note: This method doesn't modify {@code intent} but copies it before use.
+     *
+     * @param intent Template for the intent sent to the package.
+     * @param parentHandle Handle of the user that will receive the intents.
+     * @param requiresPermission If false, all packages with the {@code crossProfile} property
+     *                           will receive the intent.
+     */
+    public abstract void broadcastIntentToCrossProfileManifestReceiversAsUser(Intent intent,
+            UserHandle parentHandle, boolean requiresPermission);
 }

@@ -172,6 +172,7 @@ public class AppTransition implements Dump {
     private static final int MAX_CLIP_REVEAL_TRANSITION_DURATION = 420;
     private static final int THUMBNAIL_APP_TRANSITION_DURATION = 336;
     private static final long APP_TRANSITION_TIMEOUT_MS = 5000;
+    static final int MAX_APP_TRANSITION_DURATION = 3 * 1000; // 3 secs.
 
     private final Context mContext;
     private final WindowManagerService mService;
@@ -436,17 +437,16 @@ public class AppTransition implements Dump {
         mNextAppTransition = TRANSIT_UNSET;
         mNextAppTransitionFlags = 0;
         setAppTransitionState(APP_STATE_RUNNING);
-        final AnimationAdapter topOpeningAnim = topOpeningApp != null
-                ? topOpeningApp.getAnimation()
-                : null;
+        final WindowContainer wc =
+                topOpeningApp != null ? topOpeningApp.getAnimatingContainer() : null;
+        final AnimationAdapter topOpeningAnim = wc != null ? wc.getAnimation() : null;
+
         int redoLayout = notifyAppTransitionStartingLocked(transit,
                 topOpeningAnim != null ? topOpeningAnim.getDurationHint() : 0,
                 topOpeningAnim != null
                         ? topOpeningAnim.getStatusBarTransitionsStartTime()
                         : SystemClock.uptimeMillis(),
                 AnimationAdapter.STATUS_BAR_TRANSITION_DURATION);
-        mDisplayContent.getDockedDividerController()
-                .notifyAppTransitionStarting(openingApps, transit);
 
         if (mRemoteAnimationController != null) {
             mRemoteAnimationController.goodToGo();
@@ -524,6 +524,12 @@ public class AppTransition implements Dump {
     private void notifyAppTransitionCancelledLocked(int transit) {
         for (int i = 0; i < mListeners.size(); i++) {
             mListeners.get(i).onAppTransitionCancelledLocked(transit);
+        }
+    }
+
+    private void notifyAppTransitionTimeoutLocked() {
+        for (int i = 0; i < mListeners.size(); i++) {
+            mListeners.get(i).onAppTransitionTimeoutLocked();
         }
     }
 
@@ -2299,15 +2305,16 @@ public class AppTransition implements Dump {
             if (dc == null) {
                 return;
             }
+            notifyAppTransitionTimeoutLocked();
             if (isTransitionSet() || !dc.mOpeningApps.isEmpty() || !dc.mClosingApps.isEmpty()
-                    || !dc.mChangingApps.isEmpty()) {
+                    || !dc.mChangingContainers.isEmpty()) {
                 ProtoLog.v(WM_DEBUG_APP_TRANSITIONS,
                             "*** APP TRANSITION TIMEOUT. displayId=%d isTransitionSet()=%b "
                                     + "mOpeningApps.size()=%d mClosingApps.size()=%d "
                                     + "mChangingApps.size()=%d",
                             dc.getDisplayId(), dc.mAppTransition.isTransitionSet(),
                             dc.mOpeningApps.size(), dc.mClosingApps.size(),
-                            dc.mChangingApps.size());
+                            dc.mChangingContainers.size());
 
                 setTimeout();
                 mService.mWindowPlacerLocked.performSurfacePlacement();

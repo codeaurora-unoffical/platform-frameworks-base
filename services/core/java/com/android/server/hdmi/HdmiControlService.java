@@ -105,32 +105,57 @@ import java.util.stream.Collectors;
  */
 public class HdmiControlService extends SystemService {
     private static final String TAG = "HdmiControlService";
-    private final Locale HONG_KONG = new Locale("zh", "HK");
-    private final Locale MACAU = new Locale("zh", "MO");
+    private static final Locale HONG_KONG = new Locale("zh", "HK");
+    private static final Locale MACAU = new Locale("zh", "MO");
 
-    private static final Map<String, String> mTerminologyToBibliographicMap;
-    static {
-        mTerminologyToBibliographicMap = new HashMap<>();
+    private static final Map<String, String> sTerminologyToBibliographicMap =
+            createsTerminologyToBibliographicMap();
+
+    private static Map<String, String> createsTerminologyToBibliographicMap() {
+        Map<String, String> temp = new HashMap<>();
         // NOTE: (TERMINOLOGY_CODE, BIBLIOGRAPHIC_CODE)
-        mTerminologyToBibliographicMap.put("sqi", "alb"); // Albanian
-        mTerminologyToBibliographicMap.put("hye", "arm"); // Armenian
-        mTerminologyToBibliographicMap.put("eus", "baq"); // Basque
-        mTerminologyToBibliographicMap.put("mya", "bur"); // Burmese
-        mTerminologyToBibliographicMap.put("ces", "cze"); // Czech
-        mTerminologyToBibliographicMap.put("nld", "dut"); // Dutch
-        mTerminologyToBibliographicMap.put("kat", "geo"); // Georgian
-        mTerminologyToBibliographicMap.put("deu", "ger"); // German
-        mTerminologyToBibliographicMap.put("ell", "gre"); // Greek
-        mTerminologyToBibliographicMap.put("fra", "fre"); // French
-        mTerminologyToBibliographicMap.put("isl", "ice"); // Icelandic
-        mTerminologyToBibliographicMap.put("mkd", "mac"); // Macedonian
-        mTerminologyToBibliographicMap.put("mri", "mao"); // Maori
-        mTerminologyToBibliographicMap.put("msa", "may"); // Malay
-        mTerminologyToBibliographicMap.put("fas", "per"); // Persian
-        mTerminologyToBibliographicMap.put("ron", "rum"); // Romanian
-        mTerminologyToBibliographicMap.put("slk", "slo"); // Slovak
-        mTerminologyToBibliographicMap.put("bod", "tib"); // Tibetan
-        mTerminologyToBibliographicMap.put("cym", "wel"); // Welsh
+        temp.put("sqi", "alb"); // Albanian
+        temp.put("hye", "arm"); // Armenian
+        temp.put("eus", "baq"); // Basque
+        temp.put("mya", "bur"); // Burmese
+        temp.put("ces", "cze"); // Czech
+        temp.put("nld", "dut"); // Dutch
+        temp.put("kat", "geo"); // Georgian
+        temp.put("deu", "ger"); // German
+        temp.put("ell", "gre"); // Greek
+        temp.put("fra", "fre"); // French
+        temp.put("isl", "ice"); // Icelandic
+        temp.put("mkd", "mac"); // Macedonian
+        temp.put("mri", "mao"); // Maori
+        temp.put("msa", "may"); // Malay
+        temp.put("fas", "per"); // Persian
+        temp.put("ron", "rum"); // Romanian
+        temp.put("slk", "slo"); // Slovak
+        temp.put("bod", "tib"); // Tibetan
+        temp.put("cym", "wel"); // Welsh
+        return Collections.unmodifiableMap(temp);
+    }
+
+    @VisibleForTesting static String localeToMenuLanguage(Locale locale) {
+        if (locale.equals(Locale.TAIWAN) || locale.equals(HONG_KONG) || locale.equals(MACAU)) {
+            // Android always returns "zho" for all Chinese variants.
+            // Use "bibliographic" code defined in CEC639-2 for traditional
+            // Chinese used in Taiwan/Hong Kong/Macau.
+            return "chi";
+        } else {
+            String language = locale.getISO3Language();
+
+            // locale.getISO3Language() returns terminology code and need to
+            // send it as bibliographic code instead since the Bibliographic
+            // codes of ISO/FDIS 639-2 shall be used.
+            // NOTE: Chinese also has terminology/bibliographic code "zho" and "chi"
+            // But, as it depends on the locale, is not handled here.
+            if (sTerminologyToBibliographicMap.containsKey(language)) {
+                language = sTerminologyToBibliographicMap.get(language);
+            }
+
+            return language;
+        }
     }
 
     static final String PERMISSION = "android.permission.HDMI_CEC";
@@ -208,8 +233,8 @@ public class HdmiControlService extends SystemService {
                     }
                     break;
                 case Intent.ACTION_CONFIGURATION_CHANGED:
-                    String language = getMenuLanguage();
-                    if (!mLanguage.equals(language)) {
+                    String language = HdmiControlService.localeToMenuLanguage(Locale.getDefault());
+                    if (!mMenuLanguage.equals(language)) {
                         onLanguageChanged(language);
                     }
                     break;
@@ -221,28 +246,6 @@ public class HdmiControlService extends SystemService {
             }
         }
 
-        private String getMenuLanguage() {
-            Locale locale = Locale.getDefault();
-            if (locale.equals(Locale.TAIWAN) || locale.equals(HONG_KONG) || locale.equals(MACAU)) {
-                // Android always returns "zho" for all Chinese variants.
-                // Use "bibliographic" code defined in CEC639-2 for traditional
-                // Chinese used in Taiwan/Hong Kong/Macau.
-                return "chi";
-            } else {
-                String language = locale.getISO3Language();
-
-                // locale.getISO3Language() returns terminology code and need to
-                // send it as bibliographic code instead since the Bibliographic
-                // codes of ISO/FDIS 639-2 shall be used.
-                // NOTE: Chinese also has terminology/bibliographic code "zho" and "chi"
-                // But, as it depends on the locale, is not handled here.
-                if (mTerminologyToBibliographicMap.containsKey(language)) {
-                    language = mTerminologyToBibliographicMap.get(language);
-                }
-
-                return language;
-            }
-        }
     }
 
     // A thread to handle synchronous IO of CEC and MHL control service.
@@ -339,7 +342,7 @@ public class HdmiControlService extends SystemService {
     private int mPowerStatus = HdmiControlManager.POWER_STATUS_STANDBY;
 
     @ServiceThreadOnly
-    private String mLanguage = Locale.getDefault().getISO3Language();
+    private String mMenuLanguage = localeToMenuLanguage(Locale.getDefault());
 
     @ServiceThreadOnly
     private boolean mStandbyMessageReceived = false;
@@ -491,7 +494,7 @@ public class HdmiControlService extends SystemService {
             mIoThread.start();
             mIoLooper = mIoThread.getLooper();
         }
-        mPowerStatus = HdmiControlManager.POWER_STATUS_TRANSIENT_TO_ON;
+        mPowerStatus = getInitialPowerStatus();
         mProhibitMode = false;
         mHdmiControlEnabled = readBooleanSetting(Global.HDMI_CONTROL_ENABLED, true);
         mMhlInputChangeEnabled = readBooleanSetting(Global.MHL_INPUT_SWITCHING_ENABLED, true);
@@ -538,6 +541,28 @@ public class HdmiControlService extends SystemService {
         mMhlController.setOption(OPTION_MHL_SERVICE_CONTROL, ENABLED);
     }
 
+    private void bootCompleted() {
+        // on boot, if device is interactive, set HDMI CEC state as powered on as well
+        if (mPowerManager.isInteractive() && isPowerStandbyOrTransient()) {
+            onWakeUp();
+        }
+    }
+
+    /**
+     * Returns the initial power status used when the HdmiControlService starts.
+     */
+    @VisibleForTesting
+    int getInitialPowerStatus() {
+        // The initial power status is POWER_STATUS_TRANSIENT_TO_STANDBY.
+        // Once boot completes the service transitions to POWER_STATUS_ON if the device is
+        // interactive.
+        // Quiescent boot is a special boot mode, in which the screen stays off during boot
+        // and the device goes to sleep after boot has finished.
+        // We don't transition to POWER_STATUS_ON initially, as we might be booting in quiescent
+        // mode, during which we don't want to appear powered on to avoid being made active source.
+        return HdmiControlManager.POWER_STATUS_TRANSIENT_TO_STANDBY;
+    }
+
     @VisibleForTesting
     void setCecController(HdmiCecController cecController) {
         mCecController = cecController;
@@ -553,7 +578,9 @@ public class HdmiControlService extends SystemService {
         if (phase == SystemService.PHASE_SYSTEM_SERVICES_READY) {
             mTvInputManager = (TvInputManager) getContext().getSystemService(
                     Context.TV_INPUT_SERVICE);
-            mPowerManager = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+            mPowerManager = getContext().getSystemService(PowerManager.class);
+        } else if (phase == SystemService.PHASE_BOOT_COMPLETED) {
+            runOnServiceThread(this::bootCompleted);
         }
     }
 
@@ -579,9 +606,7 @@ public class HdmiControlService extends SystemService {
      * Called when the initialization of local devices is complete.
      */
     private void onInitializeCecComplete(int initiatedBy) {
-        if (mPowerStatus == HdmiControlManager.POWER_STATUS_TRANSIENT_TO_ON) {
-            mPowerStatus = HdmiControlManager.POWER_STATUS_ON;
-        }
+        updatePowerStatusOnInitializeCecComplete();
         mWakeUpMessageReceived = false;
 
         if (isTvDeviceEnabled()) {
@@ -603,6 +628,17 @@ public class HdmiControlService extends SystemService {
         if (reason != -1) {
             invokeVendorCommandListenersOnControlStateChanged(true, reason);
             announceHdmiControlStatusChange(true);
+        }
+    }
+
+    /**
+     * Updates the power status once the initialization of local devices is complete.
+     */
+    private void updatePowerStatusOnInitializeCecComplete() {
+        if (mPowerStatus == HdmiControlManager.POWER_STATUS_TRANSIENT_TO_ON) {
+            mPowerStatus = HdmiControlManager.POWER_STATUS_ON;
+        } else if (mPowerStatus == HdmiControlManager.POWER_STATUS_TRANSIENT_TO_STANDBY) {
+            mPowerStatus = HdmiControlManager.POWER_STATUS_STANDBY;
         }
     }
 
@@ -726,7 +762,7 @@ public class HdmiControlService extends SystemService {
     private void initializeCec(int initiatedBy) {
         mAddressAllocated = false;
         mCecController.setOption(OptionKey.SYSTEM_CEC_CONTROL, true);
-        mCecController.setLanguage(mLanguage);
+        mCecController.setLanguage(mMenuLanguage);
         initializeLocalDevices(initiatedBy);
     }
 
@@ -2667,6 +2703,13 @@ public class HdmiControlService extends SystemService {
     }
 
     @ServiceThreadOnly
+    @VisibleForTesting
+    void setPowerStatus(int powerStatus) {
+        assertRunOnServiceThread();
+        mPowerStatus = powerStatus;
+    }
+
+    @ServiceThreadOnly
     boolean isPowerOnOrTransient() {
         assertRunOnServiceThread();
         return mPowerStatus == HdmiControlManager.POWER_STATUS_ON
@@ -2778,7 +2821,7 @@ public class HdmiControlService extends SystemService {
     @ServiceThreadOnly
     private void onLanguageChanged(String language) {
         assertRunOnServiceThread();
-        mLanguage = language;
+        mMenuLanguage = language;
 
         if (isTvDeviceEnabled()) {
             tv().broadcastMenuLanguage(language);
@@ -2786,10 +2829,19 @@ public class HdmiControlService extends SystemService {
         }
     }
 
+    /**
+     * Gets the CEC menu language.
+     *
+     * <p>This is the ISO/FDIS 639-2 3 letter language code sent in the CEC message @{code <Set Menu
+     * Language>}.
+     * See HDMI 1.4b section CEC 13.6.2
+     *
+     * @see {@link Locale#getISO3Language()}
+     */
     @ServiceThreadOnly
     String getLanguage() {
         assertRunOnServiceThread();
-        return mLanguage;
+        return mMenuLanguage;
     }
 
     private void disableDevices(PendingActionClearedCallback callback) {
@@ -2798,7 +2850,6 @@ public class HdmiControlService extends SystemService {
                 device.disableDevice(mStandbyMessageReceived, callback);
             }
         }
-
         mMhlController.clearAllLocalDevices();
     }
 

@@ -20,6 +20,7 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.view.Surface;
 import android.view.SurfaceControl.Transaction;
+import android.view.SurfaceControl;
 
 public class TransactionCompat {
 
@@ -86,9 +87,15 @@ public class TransactionCompat {
         return this;
     }
 
+    public TransactionCompat setBackgroundBlurRadius(SurfaceControlCompat surfaceControl,
+            int radius) {
+        mTransaction.setBackgroundBlurRadius(surfaceControl.mSurfaceControl, radius);
+        return this;
+    }
+
     public TransactionCompat deferTransactionUntil(SurfaceControlCompat surfaceControl,
-            Surface barrier, long frameNumber) {
-        mTransaction.deferTransactionUntilSurface(surfaceControl.mSurfaceControl, barrier,
+            SurfaceControl barrier, long frameNumber) {
+        mTransaction.deferTransactionUntil(surfaceControl.mSurfaceControl, barrier,
                 frameNumber);
         return this;
     }

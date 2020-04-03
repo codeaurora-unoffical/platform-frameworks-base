@@ -27,9 +27,13 @@ import static android.widget.espresso.FloatingToolbarEspressoUtils.sleepForFloat
 import static android.widget.espresso.TextViewActions.Handle;
 import static android.widget.espresso.TextViewActions.clickOnTextAtIndex;
 import static android.widget.espresso.TextViewActions.doubleClickOnTextAtIndex;
+import static android.widget.espresso.TextViewActions.doubleTapAndDragHandle;
 import static android.widget.espresso.TextViewActions.doubleTapAndDragOnText;
+import static android.widget.espresso.TextViewActions.doubleTapHandle;
 import static android.widget.espresso.TextViewActions.dragHandle;
+import static android.widget.espresso.TextViewActions.longPressAndDragHandle;
 import static android.widget.espresso.TextViewActions.longPressAndDragOnText;
+import static android.widget.espresso.TextViewActions.longPressHandle;
 import static android.widget.espresso.TextViewActions.longPressOnTextAtIndex;
 import static android.widget.espresso.TextViewAssertions.doesNotHaveStyledText;
 import static android.widget.espresso.TextViewAssertions.hasInsertionPointerAtIndex;
@@ -508,6 +512,83 @@ public class TextViewActivityTest {
         onHandleView(com.android.internal.R.id.insertion_handle)
                 .perform(dragHandle(textView, Handle.INSERTION, text.indexOf('f')));
         onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.indexOf("f")));
+    }
+
+    private void enableFlagsForInsertionHandleGestures() {
+        final TextView textView = mActivity.findViewById(R.id.textview);
+        final Editor editor = textView.getEditorForTesting();
+        editor.setFlagCursorDragFromAnywhereEnabled(true);
+        editor.setFlagInsertionHandleGesturesEnabled(true);
+        // Note: We don't need to reset these flags explicitly at the end of each test, because a
+        // fresh TextView and Editor will be created for each test.
+    }
+
+    @Test
+    public void testInsertionHandle_touchThrough() {
+        enableFlagsForInsertionHandleGestures();
+        testInsertionHandle();
+        testInsertionHandle_multiLine();
+    }
+
+    @Test
+    public void testInsertionHandle_longPressToSelect() {
+        enableFlagsForInsertionHandleGestures();
+        final TextView textView = mActivity.findViewById(R.id.textview);
+
+        final String text = "hello the world";
+        onView(withId(R.id.textview)).perform(replaceText(text));
+
+        onView(withId(R.id.textview)).perform(clickOnTextAtIndex(text.length()));
+        onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.length()));
+
+        onHandleView(com.android.internal.R.id.insertion_handle).perform(longPressHandle(textView));
+        onView(withId(R.id.textview)).check(hasSelection("world"));
+    }
+
+    @Test
+    public void testInsertionHandle_longPressAndDragToSelect() {
+        enableFlagsForInsertionHandleGestures();
+        final TextView textView = mActivity.findViewById(R.id.textview);
+        final String text = "hello the world";
+        onView(withId(R.id.textview)).perform(replaceText(text));
+
+        onView(withId(R.id.textview)).perform(clickOnTextAtIndex(text.length()));
+        onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.length()));
+
+        onHandleView(com.android.internal.R.id.insertion_handle)
+                .perform(longPressAndDragHandle(textView, Handle.INSERTION, text.indexOf('t')));
+        onView(withId(R.id.textview)).check(hasSelection("the world"));
+    }
+
+    @Test
+    public void testInsertionHandle_doubleTapToSelect() {
+        enableFlagsForInsertionHandleGestures();
+        final TextView textView = mActivity.findViewById(R.id.textview);
+
+        final String text = "hello the world";
+        onView(withId(R.id.textview)).perform(replaceText(text));
+
+        onView(withId(R.id.textview)).perform(clickOnTextAtIndex(text.length()));
+        onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.length()));
+
+        onHandleView(com.android.internal.R.id.insertion_handle).perform(doubleTapHandle(textView));
+        onView(withId(R.id.textview)).check(hasSelection("world"));
+    }
+
+    @Test
+    public void testInsertionHandle_doubleTapAndDragToSelect() {
+        enableFlagsForInsertionHandleGestures();
+        final TextView textView = mActivity.findViewById(R.id.textview);
+
+        final String text = "hello the world";
+        onView(withId(R.id.textview)).perform(replaceText(text));
+
+        onView(withId(R.id.textview)).perform(clickOnTextAtIndex(text.length()));
+        onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.length()));
+
+        onHandleView(com.android.internal.R.id.insertion_handle)
+                .perform(doubleTapAndDragHandle(textView, Handle.INSERTION, text.indexOf('t')));
+        onView(withId(R.id.textview)).check(hasSelection("the world"));
     }
 
     @Test
@@ -1022,23 +1103,11 @@ public class TextViewActivityTest {
 
     @Test
     public void testSelectionMetricsLogger_abandonEventIncludesEntityType() throws Throwable {
-        final List<SelectionEvent> selectionEvents = new ArrayList<>();
-        final TextClassifier classifier = new TextClassifier() {
-            @Override
-            public void onSelectionEvent(SelectionEvent event) {
-                selectionEvents.add(event);
-            }
-
-            @Override
-            public TextSelection suggestSelection(TextSelection.Request request) {
-                return new TextSelection.Builder(request.getStartIndex(), request.getEndIndex())
-                        .setEntityType(TextClassifier.TYPE_PHONE, 1)
-                        .build();
-            }
-        };
+        final TestableTextClassifier classifier = new TestableTextClassifier();
         final TextView textView = mActivity.findViewById(R.id.textview);
         mActivityRule.runOnUiThread(() -> textView.setTextClassifier(classifier));
         mInstrumentation.waitForIdleSync();
+
         final String text = "My number is 987654321";
 
         onView(withId(R.id.textview)).perform(replaceText(text));
@@ -1053,6 +1122,7 @@ public class TextViewActivityTest {
         long waitTime = 0;
         SelectionEvent lastEvent;
         do {
+            final List<SelectionEvent> selectionEvents = classifier.getSelectionEvents();
             lastEvent = selectionEvents.get(selectionEvents.size() - 1);
             if (lastEvent.getEventType() == SelectionEvent.ACTION_ABANDON) {
                 break;
@@ -1061,6 +1131,29 @@ public class TextViewActivityTest {
             waitTime += pollInterval;
         } while (waitTime < abandonDelay * 10);
         assertEquals(SelectionEvent.ACTION_ABANDON, lastEvent.getEventType());
+    }
+
+    @Test
+    public void testSelectionMetricsLogger_overtypeEventIncludesEntityType() throws Throwable {
+        final TestableTextClassifier classifier = new TestableTextClassifier();
+        final TextView textView = mActivity.findViewById(R.id.textview);
+        mActivityRule.runOnUiThread(() -> textView.setTextClassifier(classifier));
+        mInstrumentation.waitForIdleSync();
+
+        final String text = "My number is 987654321";
+
+        // Long press to trigger selection
+        onView(withId(R.id.textview)).perform(replaceText(text));
+        onView(withId(R.id.textview)).perform(longPressOnTextAtIndex(text.indexOf('9')));
+        sleepForFloatingToolbarPopup();
+
+        // Type over the selection
+        onView(withId(R.id.textview)).perform(pressKey(KeyEvent.KEYCODE_A));
+        mInstrumentation.waitForIdleSync();
+
+        final List<SelectionEvent> selectionEvents = classifier.getSelectionEvents();
+        final SelectionEvent lastEvent = selectionEvents.get(selectionEvents.size() - 1);
+        assertEquals(SelectionEvent.ACTION_OVERTYPE, lastEvent.getEventType());
         assertEquals(TextClassifier.TYPE_PHONE, lastEvent.getEntityType());
     }
 
@@ -1114,5 +1207,25 @@ public class TextViewActivityTest {
 
     private enum TextStyle {
         PLAIN, STYLED
+    }
+
+    private final class TestableTextClassifier implements TextClassifier {
+        final List<SelectionEvent> mSelectionEvents = new ArrayList<>();
+
+        @Override
+        public void onSelectionEvent(SelectionEvent event) {
+            mSelectionEvents.add(event);
+        }
+
+        @Override
+        public TextSelection suggestSelection(TextSelection.Request request) {
+            return new TextSelection.Builder(request.getStartIndex(), request.getEndIndex())
+                    .setEntityType(TextClassifier.TYPE_PHONE, 1)
+                    .build();
+        }
+
+        List<SelectionEvent> getSelectionEvents() {
+            return mSelectionEvents;
+        }
     }
 }

@@ -236,6 +236,7 @@ public class LockSettingsServiceTests extends BaseLockSettingsServiceTests {
     @Test
     public void testSetLockCredential_forProfileWithSeparateChallenge_updatesCredentials()
             throws Exception {
+        mService.setSeparateProfileChallengeEnabled(MANAGED_PROFILE_USER_ID, true, null);
         initializeStorageWithCredential(
                 MANAGED_PROFILE_USER_ID,
                 newPattern("12345"),
@@ -423,7 +424,7 @@ public class LockSettingsServiceTests extends BaseLockSettingsServiceTests {
 
     private void testCreateCredentialFailsWithoutLockScreen(
             int userId, LockscreenCredential credential) throws RemoteException {
-        mHasSecureLockScreen = false;
+        mService.mHasSecureLockScreen = false;
 
         try {
             mService.setLockCredential(credential, null, userId);

@@ -21,6 +21,7 @@ import static android.os.UserHandle.USER_SYSTEM;
 import static com.android.server.rollback.Rollback.rollbackStateFromString;
 
 import android.annotation.NonNull;
+import android.content.pm.PackageManager;
 import android.content.pm.VersionedPackage;
 import android.content.rollback.PackageRollbackInfo;
 import android.content.rollback.PackageRollbackInfo.RestoreInfo;
@@ -198,9 +199,11 @@ class RollbackStore {
      * Creates a new Rollback instance for a non-staged rollback with
      * backupDir assigned.
      */
-    Rollback createNonStagedRollback(int rollbackId, int userId, String installerPackageName) {
+    Rollback createNonStagedRollback(int rollbackId, int userId, String installerPackageName,
+            int[] packageSessionIds) {
         File backupDir = new File(mRollbackDataDir, Integer.toString(rollbackId));
-        return new Rollback(rollbackId, backupDir, -1, userId, installerPackageName);
+        return new Rollback(rollbackId, backupDir, -1, userId, installerPackageName,
+                packageSessionIds);
     }
 
     /**
@@ -208,9 +211,10 @@ class RollbackStore {
      * backupDir assigned.
      */
     Rollback createStagedRollback(int rollbackId, int stagedSessionId, int userId,
-            String installerPackageName) {
+            String installerPackageName, int[] packageSessionIds) {
         File backupDir = new File(mRollbackDataDir, Integer.toString(rollbackId));
-        return new Rollback(rollbackId, backupDir, stagedSessionId, userId, installerPackageName);
+        return new Rollback(rollbackId, backupDir, stagedSessionId, userId, installerPackageName,
+                packageSessionIds);
     }
 
     /**
@@ -340,10 +344,13 @@ class RollbackStore {
         json.put("pendingRestores", convertToJsonArray(pendingRestores));
 
         json.put("isApex", info.isApex());
+        json.put("isApkInApex", info.isApkInApex());
 
         // Field is named 'installedUsers' for legacy reasons.
         json.put("installedUsers", convertToJsonArray(snapshottedUsers));
         json.put("ceSnapshotInodes", ceSnapshotInodesToJson(info.getCeSnapshotInodes()));
+
+        json.put("rollbackDataPolicy", info.getRollbackDataPolicy());
 
         return json;
     }
@@ -361,14 +368,20 @@ class RollbackStore {
                 json.getJSONArray("pendingRestores"));
 
         final boolean isApex = json.getBoolean("isApex");
+        final boolean isApkInApex = json.getBoolean("isApkInApex");
 
         // Field is named 'installedUsers' for legacy reasons.
         final IntArray snapshottedUsers = convertToIntArray(json.getJSONArray("installedUsers"));
         final SparseLongArray ceSnapshotInodes = ceSnapshotInodesFromJson(
                 json.getJSONArray("ceSnapshotInodes"));
 
+        // Backward compatibility: no such field for old versions.
+        final int rollbackDataPolicy = json.optInt("rollbackDataPolicy",
+                PackageManager.RollbackDataPolicy.RESTORE);
+
         return new PackageRollbackInfo(versionRolledBackFrom, versionRolledBackTo,
-                pendingBackups, pendingRestores, isApex, snapshottedUsers, ceSnapshotInodes);
+                pendingBackups, pendingRestores, isApex, isApkInApex, snapshottedUsers,
+                ceSnapshotInodes, rollbackDataPolicy);
     }
 
     private static JSONArray versionedPackagesToJson(List<VersionedPackage> packages)

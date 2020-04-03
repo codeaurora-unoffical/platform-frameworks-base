@@ -1,0 +1,219 @@
+// Copyright (C) 2019 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+filegroup {
+    name: "framework-wifi-updatable-exported-aidl-sources",
+    srcs: ["aidl-export/**/*.aidl"],
+    path: "aidl-export",
+    visibility: ["//visibility:private"],
+}
+
+filegroup {
+    name: "framework-wifi-updatable-java-sources",
+    srcs: [
+        "java/**/*.java",
+        "java/**/*.aidl",
+    ],
+    exclude_srcs: [
+        ":framework-wifi-non-updatable-sources"
+    ],
+    path: "java",
+    visibility: ["//visibility:private"],
+}
+
+filegroup {
+    name: "framework-wifi-updatable-sources",
+    srcs: [
+        ":framework-wifi-updatable-java-sources",
+        ":framework-wifi-updatable-exported-aidl-sources",
+    ],
+}
+
+filegroup {
+    name: "framework-wifi-non-updatable-sources",
+    srcs: [
+        // TODO(b/146011398) package android.net.wifi is now split amongst 2 jars: framework.jar and
+        // framework-wifi.jar. This is not a good idea, should move WifiNetworkScoreCache
+        // to a separate package.
+        "java/android/net/wifi/WifiNetworkScoreCache.java",
+        "java/android/net/wifi/WifiMigration.java",
+        "java/android/net/wifi/nl80211/*.java",
+        ":libwificond_ipc_aidl",
+    ],
+}
+
+filegroup {
+    name: "framework-wifi-annotations",
+    srcs: ["java/android/net/wifi/WifiAnnotations.java"],
+}
+
+// list of tests that are allowed to access @hide APIs from framework-wifi
+test_access_hidden_api_whitelist = [
+    "//frameworks/base/wifi/tests",
+    "//frameworks/opt/net/wifi/tests/wifitests:__subpackages__",
+
+    "//external/robolectric-shadows:__subpackages__",
+    "//frameworks/base/packages/SettingsLib/tests/integ",
+    "//external/sl4a:__subpackages__",
+]
+
+// wifi-service needs pre-jarjared version of framework-wifi so it can reference copied utility
+// classes before they are renamed.
+java_library {
+    name: "framework-wifi-pre-jarjar",
+    // TODO(b/146757305): sdk_version should be "module_lib_current"
+    sdk_version: "core_current",
+    static_libs: [
+        "framework-wifi-util-lib",
+        "android.hardware.wifi-V1.0-java-constants",
+    ],
+    libs: [
+        "framework-annotations-lib",
+        "unsupportedappusage", // for android.compat.annotation.UnsupportedAppUsage
+        "unsupportedappusage-annotation", // for dalvik.annotation.compat.UnsupportedAppUsage
+        "framework-telephony-stubs",
+        // TODO(b/146757305): should be unnecessary once
+        // sdk_version="module_lib_current"
+        "android_system_stubs_current",
+    ],
+    srcs: [
+        ":framework-wifi-updatable-sources",
+        ":framework-wifi-util-lib-aidls",
+    ],
+    // java_api_finder must accompany `srcs`
+    plugins: ["java_api_finder"],
+    installable: false,
+    visibility: [
+        "//frameworks/opt/net/wifi/service",
+        "//frameworks/opt/net/wifi/tests/wifitests",
+    ],
+
+    // TODO(b/146757305): should be unnecessary once
+    // sdk_version="module_lib_current"
+    aidl: {
+        include_dirs: [
+            "frameworks/base/core/java",
+        ],
+    },
+}
+
+// post-jarjar version of framework-wifi
+java_library {
+    name: "framework-wifi",
+    // TODO(b/146757305): sdk_version should be "module_lib_current"
+    sdk_version: "core_current",
+    static_libs: [
+        "framework-wifi-pre-jarjar",
+    ],
+    jarjar_rules: ":wifi-jarjar-rules",
+
+    installable: true,
+    optimize: {
+        enabled: false
+    },
+    hostdex: true, // for hiddenapi check
+    visibility: [
+        "//frameworks/opt/net/wifi/service:__subpackages__",
+    ] + test_access_hidden_api_whitelist,
+    apex_available: [
+        "com.android.wifi",
+        "test_com.android.wifi",
+    ],
+}
+
+stubs_defaults {
+    name: "framework-wifi-stubs-srcs-defaults",
+    srcs: [
+        ":framework-wifi-updatable-sources",
+        ":framework-wifi-util-lib-aidls",
+    ],
+    libs: [ "framework-annotations-lib" ],
+    sdk_version: "module_current",
+}
+
+droidstubs {
+    name: "framework-wifi-stubs-srcs-publicapi",
+    defaults: [
+        "framework-module-stubs-defaults-publicapi",
+        "framework-wifi-stubs-srcs-defaults",
+    ],
+}
+
+droidstubs {
+    name: "framework-wifi-stubs-srcs-systemapi",
+    defaults: [
+        "framework-module-stubs-defaults-systemapi",
+        "framework-wifi-stubs-srcs-defaults",
+    ],
+}
+
+droidstubs {
+    name: "framework-wifi-api-module_libs_api",
+    defaults: [
+        "framework-module-api-defaults-module_libs_api",
+        "framework-wifi-stubs-srcs-defaults",
+    ],
+}
+
+droidstubs {
+    name: "framework-wifi-stubs-srcs-module_libs_api",
+    defaults: [
+        "framework-module-stubs-defaults-module_libs_api",
+        "framework-wifi-stubs-srcs-defaults",
+    ],
+}
+
+java_library {
+    name: "framework-wifi-stubs-publicapi",
+    srcs: [":framework-wifi-stubs-srcs-publicapi"],
+    sdk_version: "module_current",
+    installable: false,
+}
+
+java_library {
+    name: "framework-wifi-stubs-systemapi",
+    srcs: [":framework-wifi-stubs-srcs-systemapi"],
+    sdk_version: "module_current",
+    libs: ["framework-annotations-lib"],
+    installable: false,
+}
+
+java_library {
+    name: "framework-wifi-stubs-module_libs_api",
+    srcs: [":framework-wifi-stubs-srcs-module_libs_api"],
+    sdk_version: "module_current",
+    libs: ["framework-annotations-lib"],
+    installable: false,
+}
+
+// defaults for tests that need to build against framework-wifi's @hide APIs
+java_defaults {
+    name: "framework-wifi-test-defaults",
+    sdk_version: "core_platform", // tests can use @CorePlatformApi's
+    libs: [
+        // order matters: classes in framework-wifi are resolved before framework, meaning
+        // @hide APIs in framework-wifi are resolved before @SystemApi stubs in framework
+        "framework-wifi",
+        "framework",
+
+        // if sdk_version="" this gets automatically included, but here we need to add manually.
+        "framework-res",
+    ],
+    visibility: test_access_hidden_api_whitelist,
+}
+
+filegroup {
+    name: "wifi-jarjar-rules",
+    srcs: ["jarjar-rules.txt"],
+}

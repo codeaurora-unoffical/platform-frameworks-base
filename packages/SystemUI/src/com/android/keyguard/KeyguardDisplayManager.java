@@ -72,11 +72,12 @@ public class KeyguardDisplayManager {
         @Override
         public void onDisplayChanged(int displayId) {
             if (displayId == DEFAULT_DISPLAY) return;
-            final Display display = mDisplayService.getDisplay(displayId);
-            if (display != null && mShowing) {
-                final Presentation presentation = mPresentations.get(displayId);
-                if (presentation != null && !presentation.getDisplay().equals(display)) {
-                    hidePresentation(displayId);
+            final Presentation presentation = mPresentations.get(displayId);
+            if (presentation != null && mShowing) {
+                hidePresentation(displayId);
+                // update DisplayInfo.
+                final Display display = mDisplayService.getDisplay(displayId);
+                if (display != null) {
                     showPresentation(display);
                 }
             }
@@ -266,6 +267,11 @@ public class KeyguardDisplayManager {
         }
 
         @Override
+        public void cancel() {
+            // Do not allow anything to cancel KeyguardPresetation except KeyguardDisplayManager.
+        }
+
+        @Override
         public void onDetachedFromWindow() {
             mClock.removeCallbacks(mMoveTextRunnable);
         }
@@ -290,7 +296,7 @@ public class KeyguardDisplayManager {
                     View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-            getWindow().setFitWindowInsetsTypes(0 /* types */);
+            getWindow().getAttributes().setFitInsetsTypes(0 /* types */);
             getWindow().setNavigationBarContrastEnforced(false);
             getWindow().setNavigationBarColor(Color.TRANSPARENT);
 

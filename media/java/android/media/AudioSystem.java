@@ -19,8 +19,8 @@ package android.media;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.bluetooth.BluetoothCodecConfig;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.media.audiofx.AudioEffect;
@@ -33,6 +33,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /* IF YOU CHANGE ANY OF THE CONSTANTS IN THIS FILE, DO NOT FORGET
@@ -80,6 +81,8 @@ public class AudioSystem
     public static final int STREAM_TTS = 9;
     /** Used to identify the volume of audio streams for accessibility prompts */
     public static final int STREAM_ACCESSIBILITY = 10;
+    /** Used to identify the volume of audio streams for virtual assistant */
+    public static final int STREAM_ASSISTANT = 11;
     /**
      * @deprecated Use {@link #numStreamTypes() instead}
      */
@@ -92,7 +95,7 @@ public class AudioSystem
     private static native int native_get_FCC_8();
 
     // Expose only the getter method publicly so we can change it in the future
-    private static final int NUM_STREAM_TYPES = 11;
+    private static final int NUM_STREAM_TYPES = 12;
     @UnsupportedAppUsage
     public static final int getNumStreamTypes() { return NUM_STREAM_TYPES; }
 
@@ -107,7 +110,8 @@ public class AudioSystem
         "STREAM_SYSTEM_ENFORCED",
         "STREAM_DTMF",
         "STREAM_TTS",
-        "STREAM_ACCESSIBILITY"
+        "STREAM_ACCESSIBILITY",
+        "STREAM_ASSISTANT"
     };
 
     /*
@@ -1020,7 +1024,18 @@ public class AudioSystem
                                                       String device_name,
                                                       int codecFormat);
     @UnsupportedAppUsage
-    public static native int setPhoneState(int state);
+    public static int setPhoneState(int state) {
+        Log.w(TAG, "Do not use this method! Use AudioManager.setMode() instead.");
+        return 0;
+    }
+    /**
+     * @hide
+     * Send the current audio mode to audio policy manager and audio HAL.
+     * @param state the audio mode
+     * @param uid the UID of the app owning the audio mode
+     * @return command completion status.
+     */
+    public static native int setPhoneState(int state, int uid);
     @UnsupportedAppUsage
     public static native int setForceUse(int usage, int config);
     @UnsupportedAppUsage
@@ -1073,6 +1088,41 @@ public class AudioSystem
     public static native boolean getMasterMute();
     @UnsupportedAppUsage
     public static native int getDevicesForStream(int stream);
+
+    /**
+     * Do not use directly, see {@link AudioManager#getDevicesForAttributes(AudioAttributes)}
+     * Get the audio devices that would be used for the routing of the given audio attributes.
+     * @param attributes the {@link AudioAttributes} for which the routing is being queried
+     * @return an empty list if there was an issue with the request, a list of audio devices
+     *   otherwise (typically one device, except for duplicated paths).
+     */
+    public static @NonNull ArrayList<AudioDeviceAttributes> getDevicesForAttributes(
+            @NonNull AudioAttributes attributes) {
+        Objects.requireNonNull(attributes);
+        final AudioDeviceAttributes[] devices = new AudioDeviceAttributes[MAX_DEVICE_ROUTING];
+        final int res = getDevicesForAttributes(attributes, devices);
+        final ArrayList<AudioDeviceAttributes> routeDevices = new ArrayList<>();
+        if (res != SUCCESS) {
+            Log.e(TAG, "error " + res + " in getDevicesForAttributes for " + attributes);
+            return routeDevices;
+        }
+
+        for (AudioDeviceAttributes device : devices) {
+            if (device != null) {
+                routeDevices.add(device);
+            }
+        }
+        return routeDevices;
+    }
+
+    /**
+     * Maximum number of audio devices a track is ever routed to, determines the size of the
+     * array passed to {@link #getDevicesForAttributes(AudioAttributes, AudioDeviceAttributes[])}
+     */
+    private static final int MAX_DEVICE_ROUTING = 4;
+
+    private static native int getDevicesForAttributes(@NonNull AudioAttributes aa,
+                                                      @NonNull AudioDeviceAttributes[] devices);
 
     /** @hide returns true if master mono is enabled. */
     public static native boolean getMasterMono();
@@ -1130,9 +1180,21 @@ public class AudioSystem
     /** see AudioPolicy.removeUidDeviceAffinities() */
     public static native int removeUidDeviceAffinities(int uid);
 
+    /** see AudioPolicy.setUserIdDeviceAffinities() */
+    public static native int setUserIdDeviceAffinities(int userId, @NonNull int[] types,
+            @NonNull String[] addresses);
+
+    /** see AudioPolicy.removeUserIdDeviceAffinities() */
+    public static native int removeUserIdDeviceAffinities(int userId);
+
     public static native int systemReady();
 
     public static native float getStreamVolumeDB(int stream, int index, int device);
+
+    /**
+     * Communicate supported system usages to audio policy service.
+     */
+    public static native int setSupportedSystemUsages(int[] systemUsages);
 
     /**
      * @see AudioManager#setAllowedCapturePolicy()
@@ -1195,7 +1257,7 @@ public class AudioSystem
      * @return {@link #SUCCESS} if successfully set
      */
     public static int setPreferredDeviceForStrategy(
-            int strategy, @NonNull AudioDeviceAddress device) {
+            int strategy, @NonNull AudioDeviceAttributes device) {
         return setPreferredDeviceForStrategy(strategy,
                 AudioDeviceInfo.convertDeviceTypeToInternalDevice(device.getType()),
                 device.getAddress());
@@ -1226,7 +1288,7 @@ public class AudioSystem
      *     and written to the array
      */
     public static native int getPreferredDeviceForStrategy(int strategy,
-                                                           AudioDeviceAddress[] device);
+                                                           AudioDeviceAttributes[] device);
 
     // Items shared with audio service
 
@@ -1277,6 +1339,7 @@ public class AudioSystem
         5, // STREAM_DTMF
         5, // STREAM_TTS
         5, // STREAM_ACCESSIBILITY
+        5, // STREAM_ASSISTANT
     };
 
     public static String streamToString(int stream) {

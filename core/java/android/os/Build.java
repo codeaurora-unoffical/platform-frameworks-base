@@ -22,9 +22,9 @@ import android.annotation.RequiresPermission;
 import android.annotation.SuppressAutoDoc;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityThread;
 import android.app.Application;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.sysprop.TelephonyProperties;
 import android.text.TextUtils;
@@ -238,6 +238,13 @@ public class Build {
          * different releases can be somehow ordered.
          */
         public static final String RELEASE = getString("ro.build.version.release");
+
+        /**
+         * The version string we show to the user; may be {@link #RELEASE} or
+         * {@link #CODENAME} if not a final release build.
+         */
+        @NonNull public static final String RELEASE_OR_CODENAME = getString(
+                "ro.build.version.release_or_codename");
 
         /**
          * The base OS build the product is based on.

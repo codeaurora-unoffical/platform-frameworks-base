@@ -35,29 +35,28 @@ import android.text.TextUtils;
 import android.util.AtomicFile;
 import android.util.EventLog;
 import android.util.Slog;
-import android.util.StatsLog;
 import android.util.Xml;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.util.FastXmlSerializer;
+import com.android.internal.util.FrameworkStatsLog;
 import com.android.internal.util.XmlUtils;
-import com.android.server.DropboxLogTags;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlSerializer;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.FileNotFoundException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
 
 /**
  * Performs a number of miscellaneous, non-system-critical actions
@@ -330,7 +329,7 @@ public class BootReceiver extends BroadcastReceiver {
             addTextToDropBox(db, "system_server_native_crash", text, filename, maxSize);
         }
         if (tag.equals(TAG_TOMBSTONE)) {
-            StatsLog.write(StatsLog.TOMB_STONE_OCCURRED);
+            FrameworkStatsLog.write(FrameworkStatsLog.TOMB_STONE_OCCURRED);
         }
         addTextToDropBox(db, tag, text, filename, maxSize);
     }
@@ -424,7 +423,28 @@ public class BootReceiver extends BroadcastReceiver {
         for (String propPostfix : MOUNT_DURATION_PROPS_POSTFIX) {
             int duration = SystemProperties.getInt("ro.boottime.init.mount_all." + propPostfix, 0);
             if (duration != 0) {
-                MetricsLogger.histogram(null, "boot_mount_all_duration_" + propPostfix, duration);
+                int eventType;
+                switch (propPostfix) {
+                    case "early":
+                        eventType =
+                                FrameworkStatsLog
+                                        .BOOT_TIME_EVENT_DURATION__EVENT__MOUNT_EARLY_DURATION;
+                        break;
+                    case "default":
+                        eventType =
+                                FrameworkStatsLog
+                                        .BOOT_TIME_EVENT_DURATION__EVENT__MOUNT_DEFAULT_DURATION;
+                        break;
+                    case "late":
+                        eventType =
+                                FrameworkStatsLog
+                                        .BOOT_TIME_EVENT_DURATION__EVENT__MOUNT_LATE_DURATION;
+                        break;
+                    default:
+                        continue;
+                }
+                FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_DURATION_REPORTED,
+                        eventType, duration);
             }
         }
     }
@@ -528,7 +548,8 @@ public class BootReceiver extends BroadcastReceiver {
             Slog.e(TAG, "No value received for shutdown duration");
         }
 
-        StatsLog.write(StatsLog.SHUTDOWN_SEQUENCE_REPORTED, reboot, reason, start, duration);
+        FrameworkStatsLog.write(FrameworkStatsLog.SHUTDOWN_SEQUENCE_REPORTED, reboot, reason, start,
+                duration);
     }
 
     private static void logFsShutdownTime() {
@@ -555,16 +576,19 @@ public class BootReceiver extends BroadcastReceiver {
         Pattern pattern = Pattern.compile(LAST_SHUTDOWN_TIME_PATTERN, Pattern.MULTILINE);
         Matcher matcher = pattern.matcher(lines);
         if (matcher.find()) {
-            MetricsLogger.histogram(null, "boot_fs_shutdown_duration",
+            FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_DURATION_REPORTED,
+                    FrameworkStatsLog.BOOT_TIME_EVENT_DURATION__EVENT__SHUTDOWN_DURATION,
                     Integer.parseInt(matcher.group(1)));
-            MetricsLogger.histogram(null, "boot_fs_shutdown_umount_stat",
+            FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_ERROR_CODE_REPORTED,
+                    FrameworkStatsLog.BOOT_TIME_EVENT_ERROR_CODE__EVENT__SHUTDOWN_UMOUNT_STAT,
                     Integer.parseInt(matcher.group(2)));
             Slog.i(TAG, "boot_fs_shutdown," + matcher.group(1) + "," + matcher.group(2));
         } else { // not found
             // This can happen when a device has too much kernel log after file system unmount
             // ,exceeding maxReadSize. And having that much kernel logging can affect overall
             // performance as well. So it is better to fix the kernel to reduce the amount of log.
-            MetricsLogger.histogram(null, "boot_fs_shutdown_umount_stat",
+            FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_ERROR_CODE_REPORTED,
+                    FrameworkStatsLog.BOOT_TIME_EVENT_ERROR_CODE__EVENT__SHUTDOWN_UMOUNT_STAT,
                     UMOUNT_STATUS_NOT_AVAILABLE);
             Slog.w(TAG, "boot_fs_shutdown, string not found");
         }
@@ -674,7 +698,12 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
         stat = fixFsckFsStat(partition, stat, lines, startLineNumber, endLineNumber);
-        MetricsLogger.histogram(null, "boot_fs_stat_" + partition, stat);
+        if ("userdata".equals(partition) || "data".equals(partition)) {
+            FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_ERROR_CODE_REPORTED,
+                    FrameworkStatsLog
+                            .BOOT_TIME_EVENT_ERROR_CODE__EVENT__FS_MGR_FS_STAT_DATA_PARTITION,
+                    stat);
+        }
         Slog.i(TAG, "fs_stat, partition:" + partition + " stat:0x" + Integer.toHexString(stat));
     }
 

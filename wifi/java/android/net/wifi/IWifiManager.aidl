@@ -35,6 +35,7 @@ import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ISuggestionConnectionStatusListener;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ITxPacketCountListener;
+import android.net.wifi.IWifiConnectedNetworkScorer;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiConfiguration;
@@ -88,7 +89,15 @@ interface IWifiManager
 
     boolean disableNetwork(int netId, String packageName);
 
+    void allowAutojoinGlobal(boolean choice);
+
     void allowAutojoin(int netId, boolean choice);
+
+    void allowAutojoinPasspoint(String fqdn, boolean enableAutoJoin);
+
+    void setMacRandomizationSettingPasspointEnabled(String fqdn, boolean enable);
+
+    void setPasspointMeteredOverride(String fqdn, int meteredOverride);
 
     boolean startScan(String packageName, String featureId);
 
@@ -112,9 +121,11 @@ interface IWifiManager
 
     boolean is6GHzBandSupported();
 
-    boolean needs5GHzToAnyApBandConversion();
+    boolean isWifiStandardSupported(int standard);
 
     DhcpInfo getDhcpInfo();
+
+    void setScanAlwaysAvailable(boolean isAvailable);
 
     boolean isScanAlwaysAvailable();
 
@@ -172,8 +183,6 @@ interface IWifiManager
     void enableVerboseLogging(int verbose);
 
     int getVerboseLoggingLevel();
-
-    void enableWifiConnectivityManager(boolean enabled);
 
     void disableEphemeralNetwork(String SSID, String packageName);
 
@@ -248,4 +257,25 @@ interface IWifiManager
     void unregisterSuggestionConnectionStatusListener(int listenerIdentifier, String packageName);
 
     int calculateSignalLevel(int rssi);
+
+    List<WifiConfiguration> getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(in List<ScanResult> scanResults);
+
+    boolean setWifiConnectedNetworkScorer(in IBinder binder, in IWifiConnectedNetworkScorer scorer);
+
+    void clearWifiConnectedNetworkScorer();
+
+    /**
+     * Return the Map of {@link WifiNetworkSuggestion} and the list of <ScanResult>
+     */
+    Map getMatchingScanResults(in List<WifiNetworkSuggestion> networkSuggestions, in List<ScanResult> scanResults, String callingPackage, String callingFeatureId);
+
+    void setScanThrottleEnabled(boolean enable);
+
+    boolean isScanThrottleEnabled();
+
+    Map getAllMatchingPasspointProfilesForScanResults(in List<ScanResult> scanResult);
+
+    void setAutoWakeupEnabled(boolean enable);
+
+    boolean isAutoWakeupEnabled();
 }

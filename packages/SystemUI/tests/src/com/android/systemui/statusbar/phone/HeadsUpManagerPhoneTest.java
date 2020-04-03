@@ -33,9 +33,9 @@ import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.AlertingNotificationManager;
 import com.android.systemui.statusbar.AlertingNotificationManagerTest;
-import com.android.systemui.statusbar.NotificationEntryBuilder;
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.collection.NotificationEntryBuilder;
 import com.android.systemui.statusbar.policy.AccessibilityManagerWrapper;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 
@@ -57,21 +57,26 @@ public class HeadsUpManagerPhoneTest extends AlertingNotificationManagerTest {
     private HeadsUpManagerPhone mHeadsUpManager;
 
     @Mock private NotificationGroupManager mGroupManager;
-    @Mock private View mStatusBarWindowView;
+    @Mock private View mNotificationShadeWindowView;
     @Mock private VisualStabilityManager mVSManager;
     @Mock private StatusBar mBar;
     @Mock private StatusBarStateController mStatusBarStateController;
     @Mock private KeyguardBypassController mBypassController;
+    @Mock private ConfigurationControllerImpl mConfigurationController;
     private boolean mLivesPastNormalTime;
 
     private final class TestableHeadsUpManagerPhone extends HeadsUpManagerPhone {
-        TestableHeadsUpManagerPhone(Context context, View statusBarWindowView,
-                NotificationGroupManager groupManager, StatusBar bar,
+        TestableHeadsUpManagerPhone(
+                Context context,
+                NotificationGroupManager groupManager,
                 VisualStabilityManager vsManager,
                 StatusBarStateController statusBarStateController,
-                KeyguardBypassController keyguardBypassController) {
-            super(context, statusBarStateController, keyguardBypassController);
-            setUp(statusBarWindowView, groupManager, bar, vsManager);
+                KeyguardBypassController keyguardBypassController,
+                ConfigurationController configurationController
+        ) {
+            super(context, statusBarStateController, keyguardBypassController,
+                    groupManager, configurationController);
+            setup(vsManager);
             mMinimumDisplayTime = TEST_MINIMUM_DISPLAY_TIME;
             mAutoDismissNotificationDecay = TEST_AUTO_DISMISS_TIME;
         }
@@ -89,10 +94,10 @@ public class HeadsUpManagerPhoneTest extends AlertingNotificationManagerTest {
                 .thenReturn(TEST_AUTO_DISMISS_TIME);
         when(mVSManager.isReorderingAllowed()).thenReturn(true);
         mDependency.injectMockDependency(BubbleController.class);
-        mDependency.injectMockDependency(StatusBarWindowController.class);
+        mDependency.injectMockDependency(NotificationShadeWindowController.class);
         mDependency.injectMockDependency(ConfigurationController.class);
-        mHeadsUpManager = new TestableHeadsUpManagerPhone(mContext, mStatusBarWindowView,
-                mGroupManager, mBar, mVSManager, mStatusBarStateController, mBypassController);
+        mHeadsUpManager = new TestableHeadsUpManagerPhone(mContext, mGroupManager, mVSManager,
+                mStatusBarStateController, mBypassController, mConfigurationController);
         super.setUp();
         mHeadsUpManager.mHandler = mTestHandler;
     }

@@ -71,8 +71,8 @@ interface IBatteryStats {
 
     void noteSyncStart(String name, int uid);
     void noteSyncFinish(String name, int uid);
-    void noteJobStart(String name, int uid, int standbyBucket, int jobid);
-    void noteJobFinish(String name, int uid, int stopReason, int standbyBucket, int jobid);
+    void noteJobStart(String name, int uid);
+    void noteJobFinish(String name, int uid, int stopReason);
 
     void noteStartWakelock(int uid, int pid, String name, String historyName,
             int type, boolean unimportantForLogging);
@@ -133,7 +133,7 @@ interface IBatteryStats {
     void noteNetworkStatsEnabled();
     void noteDeviceIdleMode(int mode, String activeReason, int activeUid);
     void setBatteryState(int status, int health, int plugType, int level, int temp, int volt,
-            int chargeUAh, int chargeFullUAh);
+            int chargeUAh, int chargeFullUAh, long chargeTimeToFullSeconds);
     @UnsupportedAppUsage
     long getAwakeTimeBattery();
     long getAwakeTimePlugged();

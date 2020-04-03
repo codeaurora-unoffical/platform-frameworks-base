@@ -23,6 +23,7 @@ import android.os.SystemClock;
 import android.telephony.TelephonyManager;
 import android.view.WindowManagerPolicyConstants;
 
+import com.android.settingslib.fuelgauge.BatteryStatus;
 import com.android.systemui.statusbar.KeyguardIndicationController;
 
 import java.util.TimeZone;
@@ -42,7 +43,7 @@ public class KeyguardUpdateMonitorCallback {
      *
      * @param status current battery status
      */
-    public void onRefreshBatteryInfo(KeyguardUpdateMonitor.BatteryStatus status) { }
+    public void onRefreshBatteryInfo(BatteryStatus status) { }
 
     /**
      * Called once per minute or when the time changes.
@@ -238,7 +239,8 @@ public class KeyguardUpdateMonitorCallback {
      * @param userId the user id for which the biometric sample was authenticated
      * @param biometricSourceType
      */
-    public void onBiometricAuthenticated(int userId, BiometricSourceType biometricSourceType) { }
+    public void onBiometricAuthenticated(int userId, BiometricSourceType biometricSourceType,
+            boolean isStrongBiometric) { }
 
     /**
      * Called when biometric authentication provides help string (e.g. "Try again")
@@ -309,5 +311,10 @@ public class KeyguardUpdateMonitorCallback {
      * Called when authenticated biometrics are cleared.
      */
     public void onBiometricsCleared() { }
+
+    /**
+     * Called when the secondary lock screen requirement changes.
+     */
+    public void onSecondaryLockscreenRequirementChanged(int userId) { }
 
 }

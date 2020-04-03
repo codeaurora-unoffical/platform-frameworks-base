@@ -19,7 +19,7 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.text.TextUtils;
@@ -41,6 +41,36 @@ import java.util.Map;
  */
 public class WifiEnterpriseConfig implements Parcelable {
 
+    /** Key prefix for WAPI AS certificates. */
+    public static final String WAPI_AS_CERTIFICATE = "WAPIAS_";
+
+    /** Key prefix for WAPI user certificates. */
+    public static final String WAPI_USER_CERTIFICATE = "WAPIUSR_";
+
+    /**
+     * Intent extra: name for WAPI AS certificates
+     */
+    public static final String EXTRA_WAPI_AS_CERTIFICATE_NAME =
+            "android.net.wifi.extra.WAPI_AS_CERTIFICATE_NAME";
+
+    /**
+     * Intent extra: data for WAPI AS certificates
+     */
+    public static final String EXTRA_WAPI_AS_CERTIFICATE_DATA =
+            "android.net.wifi.extra.WAPI_AS_CERTIFICATE_DATA";
+
+    /**
+     * Intent extra: name for WAPI USER certificates
+     */
+    public static final String EXTRA_WAPI_USER_CERTIFICATE_NAME =
+            "android.net.wifi.extra.WAPI_USER_CERTIFICATE_NAME";
+
+    /**
+     * Intent extra: data for WAPI USER certificates
+     */
+    public static final String EXTRA_WAPI_USER_CERTIFICATE_DATA =
+            "android.net.wifi.extra.WAPI_USER_CERTIFICATE_DATA";
+
     /** @hide */
     public static final String EMPTY_VALUE         = "NULL";
     /** @hide */
@@ -61,6 +91,9 @@ public class WifiEnterpriseConfig implements Parcelable {
     public static final String DOM_SUFFIX_MATCH_KEY = "domain_suffix_match";
     /** @hide */
     public static final String OPP_KEY_CACHING     = "proactive_key_caching";
+    /** @hide */
+    public static final String EAP_ERP             = "eap_erp";
+
     /**
      * String representing the keystore OpenSSL ENGINE's ID.
      * @hide
@@ -130,6 +163,8 @@ public class WifiEnterpriseConfig implements Parcelable {
     public static final String PLMN_KEY            = "plmn";
     /** @hide */
     public static final String CA_CERT_ALIAS_DELIMITER = " ";
+    /** @hide */
+    public static final String WAPI_CERT_SUITE_KEY = "wapi_cert_suite";
 
     /**
      * Do not use OCSP stapling (TLS certificate status extension)
@@ -195,7 +230,8 @@ public class WifiEnterpriseConfig implements Parcelable {
     /**
      * Fields that have unquoted values in {@link #mFields}.
      */
-    private static final List<String> UNQUOTED_KEYS = Arrays.asList(ENGINE_KEY, OPP_KEY_CACHING);
+    private static final List<String> UNQUOTED_KEYS = Arrays.asList(ENGINE_KEY, OPP_KEY_CACHING,
+                                                                    EAP_ERP);
 
     @UnsupportedAppUsage
     private HashMap<String, String> mFields = new HashMap<String, String>();
@@ -348,9 +384,12 @@ public class WifiEnterpriseConfig implements Parcelable {
         public static final int AKA_PRIME = 6;
         /** Hotspot 2.0 r2 OSEN */
         public static final int UNAUTH_TLS = 7;
+        /** WAPI Certificate */
+        public static final int WAPI_CERT = 8;
         /** @hide */
         public static final String[] strings =
-                { "PEAP", "TLS", "TTLS", "PWD", "SIM", "AKA", "AKA'", "WFA-UNAUTH-TLS" };
+                { "PEAP", "TLS", "TTLS", "PWD", "SIM", "AKA", "AKA'", "WFA-UNAUTH-TLS",
+                        "WAPI_CERT" };
 
         /** Prevent initialization */
         private Eap() {}
@@ -443,7 +482,7 @@ public class WifiEnterpriseConfig implements Parcelable {
             return false;
         }
 
-        if (mEapMethod != Eap.TLS && mPhase2Method != Phase2.NONE) {
+        if (mEapMethod != Eap.TLS && mEapMethod != Eap.UNAUTH_TLS && mPhase2Method != Phase2.NONE) {
             boolean is_autheap = mEapMethod == Eap.TTLS && mPhase2Method == Phase2.GTC;
             String prefix = is_autheap ? Phase2.AUTHEAP_PREFIX : Phase2.AUTH_PREFIX;
             String value = convertToQuotedString(prefix + Phase2.strings[mPhase2Method]);
@@ -494,6 +533,10 @@ public class WifiEnterpriseConfig implements Parcelable {
     public void setEapMethod(int eapMethod) {
         switch (eapMethod) {
             /** Valid methods */
+            case Eap.WAPI_CERT:
+                mEapMethod = eapMethod;
+                setPhase2Method(Phase2.NONE);
+                break;
             case Eap.TLS:
             case Eap.UNAUTH_TLS:
                 setPhase2Method(Phase2.NONE);
@@ -816,11 +859,11 @@ public class WifiEnterpriseConfig implements Parcelable {
      * like /etc/ssl/certs. If configured, these certificates are added to the
      * list of trusted CAs. ca_cert may also be included in that case, but it is
      * not required.
-     * @param path The path for CA certificate files, or null/empty string to clear.
+     * @param path The path for CA certificate files, or empty string to clear.
      * @hide
      */
     @SystemApi
-    public void setCaPath(@Nullable String path) {
+    public void setCaPath(@NonNull String path) {
         setFieldValue(CA_PATH_KEY, path);
     }
 
@@ -841,11 +884,11 @@ public class WifiEnterpriseConfig implements Parcelable {
      * <p> See the {@link android.security.KeyChain} for details on installing or choosing
      * a certificate
      * </p>
-     * @param alias identifies the certificate, or null/empty string to clear.
+     * @param alias identifies the certificate, or empty string to clear.
      * @hide
      */
     @SystemApi
-    public void setClientCertificateAlias(@Nullable String alias) {
+    public void setClientCertificateAlias(@NonNull String alias) {
         setFieldValue(CLIENT_CERT_KEY, alias, CLIENT_CERT_PREFIX);
         setFieldValue(PRIVATE_KEY_ID_KEY, alias, USER_PRIVATE_KEY);
         // Also, set engine parameters
@@ -988,8 +1031,10 @@ public class WifiEnterpriseConfig implements Parcelable {
     }
 
     /**
-     * @hide
+     * Get the client private key as supplied in {@link #setClientKeyEntryWithCertificateChain}, or
+     * null if unset.
      */
+    @Nullable
     public PrivateKey getClientPrivateKey() {
         return mClientPrivateKey;
     }
@@ -1296,21 +1341,44 @@ public class WifiEnterpriseConfig implements Parcelable {
     }
 
     /**
-     * If the current authentication method needs SIM card.
-     * @return true if the credential information require SIM card for current authentication
+     * Utility method to determine whether the configuration's authentication method is SIM-based.
+     *
+     * @return true if the credential information requires SIM card for current authentication
      * method, otherwise it returns false.
-     * @hide
      */
-    public boolean requireSimCredential() {
+    public boolean isAuthenticationSimBased() {
         if (mEapMethod == Eap.SIM || mEapMethod == Eap.AKA || mEapMethod == Eap.AKA_PRIME) {
             return true;
         }
         if (mEapMethod == Eap.PEAP) {
-            if (mPhase2Method == Phase2.SIM || mPhase2Method == Phase2.AKA
-                    || mPhase2Method == Phase2.AKA_PRIME) {
-                return true;
-            }
+            return mPhase2Method == Phase2.SIM || mPhase2Method == Phase2.AKA
+                    || mPhase2Method == Phase2.AKA_PRIME;
         }
         return false;
+    }
+
+    /**
+     * Set the WAPI certificate suite name on wpa_supplicant.
+     *
+     * If this field is not specified, WAPI-CERT uses ASU ID from WAI packet
+     * as the certificate suite name automatically.
+     *
+     * @param wapiCertSuite The name for WAPI certificate suite, or empty string to clear.
+     * @hide
+     */
+    @SystemApi
+    public void setWapiCertSuite(@NonNull String wapiCertSuite) {
+        setFieldValue(WAPI_CERT_SUITE_KEY, wapiCertSuite);
+    }
+
+    /**
+     * Get the WAPI certificate suite name
+     * @return the certificate suite name
+     * @hide
+     */
+    @NonNull
+    @SystemApi
+    public String getWapiCertSuite() {
+        return getFieldValue(WAPI_CERT_SUITE_KEY);
     }
 }

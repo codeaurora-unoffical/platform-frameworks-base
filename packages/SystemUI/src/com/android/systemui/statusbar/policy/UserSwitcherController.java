@@ -60,7 +60,7 @@ import com.android.systemui.Prefs.Key;
 import com.android.systemui.R;
 import com.android.systemui.SystemUISecondaryUserService;
 import com.android.systemui.broadcast.BroadcastDispatcher;
-import com.android.systemui.dagger.qualifiers.MainHandler;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.qs.DetailAdapter;
 import com.android.systemui.qs.tiles.UserDetailView;
@@ -113,7 +113,7 @@ public class UserSwitcherController implements Dumpable {
 
     @Inject
     public UserSwitcherController(Context context, KeyguardStateController keyguardStateController,
-            @MainHandler Handler handler, ActivityStarter activityStarter,
+            @Main Handler handler, ActivityStarter activityStarter,
             BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mBroadcastDispatcher = broadcastDispatcher;
@@ -133,6 +133,8 @@ public class UserSwitcherController implements Dumpable {
         filter.addAction(Intent.ACTION_USER_UNLOCKED);
         mBroadcastDispatcher.registerReceiver(
                 mReceiver, filter, null /* handler */, UserHandle.SYSTEM);
+
+        mSimpleUserSwitcher = shouldUseSimpleUserSwitcher();
 
         mSecondaryUserServiceIntent = new Intent(context, SystemUISecondaryUserService.class);
 
@@ -234,8 +236,7 @@ public class UserSwitcherController implements Dumpable {
                                             picture, avatarSize, avatarSize, true);
                                 }
                             }
-                            int index = isCurrent ? 0 : records.size();
-                            records.add(index, new UserRecord(info, picture, false /* isGuest */,
+                            records.add(new UserRecord(info, picture, false /* isGuest */,
                                     isCurrent, false /* isAddUser */, false /* isRestricted */,
                                     switchToEnabled));
                         }
@@ -258,22 +259,19 @@ public class UserSwitcherController implements Dumpable {
                         && mUserManager.canAddMoreUsers();
                 boolean createIsRestricted = !addUsersWhenLocked;
 
-                if (!mSimpleUserSwitcher) {
-                    if (guestRecord == null) {
-                        if (canCreateGuest) {
-                            guestRecord = new UserRecord(null /* info */, null /* picture */,
-                                    true /* isGuest */, false /* isCurrent */,
-                                    false /* isAddUser */, createIsRestricted, canSwitchUsers);
-                            checkIfAddUserDisallowedByAdminOnly(guestRecord);
-                            records.add(guestRecord);
-                        }
-                    } else {
-                        int index = guestRecord.isCurrent ? 0 : records.size();
-                        records.add(index, guestRecord);
+                if (guestRecord == null) {
+                    if (canCreateGuest) {
+                        guestRecord = new UserRecord(null /* info */, null /* picture */,
+                                true /* isGuest */, false /* isCurrent */,
+                                false /* isAddUser */, createIsRestricted, canSwitchUsers);
+                        checkIfAddUserDisallowedByAdminOnly(guestRecord);
+                        records.add(guestRecord);
                     }
+                } else {
+                    records.add(guestRecord);
                 }
 
-                if (!mSimpleUserSwitcher && canCreateUser) {
+                if (canCreateUser) {
                     UserRecord addUserRecord = new UserRecord(null /* info */, null /* picture */,
                             false /* isGuest */, false /* isCurrent */, true /* isAddUser */,
                             createIsRestricted, canSwitchUsers);
@@ -562,8 +560,7 @@ public class UserSwitcherController implements Dumpable {
 
     private final ContentObserver mSettingsObserver = new ContentObserver(new Handler()) {
         public void onChange(boolean selfChange) {
-            mSimpleUserSwitcher = Settings.Global.getInt(mContext.getContentResolver(),
-                    SIMPLE_USER_SWITCHER_GLOBAL_SETTING, 0) != 0;
+            mSimpleUserSwitcher = shouldUseSimpleUserSwitcher();
             mAddUsersWhenLocked = Settings.Global.getInt(mContext.getContentResolver(),
                     Settings.Global.ADD_USERS_WHEN_LOCKED, 0) != 0;
             refreshUsers(UserHandle.USER_NULL);
@@ -579,6 +576,7 @@ public class UserSwitcherController implements Dumpable {
             final UserRecord u = mUsers.get(i);
             pw.print("    "); pw.println(u.toString());
         }
+        pw.println("mSimpleUserSwitcher=" + mSimpleUserSwitcher);
     }
 
     public String getCurrentUserName(Context context) {
@@ -715,6 +713,13 @@ public class UserSwitcherController implements Dumpable {
             record.isDisabledByAdmin = false;
             record.enforcedAdmin = null;
         }
+    }
+
+    private boolean shouldUseSimpleUserSwitcher() {
+        int defaultSimpleUserSwitcher = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_expandLockScreenUserSwitcher) ? 1 : 0;
+        return Settings.Global.getInt(mContext.getContentResolver(),
+                SIMPLE_USER_SWITCHER_GLOBAL_SETTING, defaultSimpleUserSwitcher) != 0;
     }
 
     public void startActivity(Intent intent) {

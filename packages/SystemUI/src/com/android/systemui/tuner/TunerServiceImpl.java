@@ -35,7 +35,7 @@ import com.android.internal.util.ArrayUtils;
 import com.android.systemui.DejankUtils;
 import com.android.systemui.DemoMode;
 import com.android.systemui.broadcast.BroadcastDispatcher;
-import com.android.systemui.dagger.qualifiers.MainHandler;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.qs.QSTileHost;
 import com.android.systemui.settings.CurrentUserTracker;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
@@ -82,7 +82,7 @@ public class TunerServiceImpl extends TunerService {
     /**
      */
     @Inject
-    public TunerServiceImpl(Context context, @MainHandler Handler mainHandler,
+    public TunerServiceImpl(Context context, @Main Handler mainHandler,
             LeakDetector leakDetector, BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mContentResolver = mContext.getContentResolver();
@@ -117,7 +117,7 @@ public class TunerServiceImpl extends TunerService {
             String blacklistStr = getValue(StatusBarIconController.ICON_BLACKLIST);
             if (blacklistStr != null) {
                 ArraySet<String> iconBlacklist =
-                        StatusBarIconController.getIconBlacklist(blacklistStr);
+                        StatusBarIconController.getIconBlacklist(mContext, blacklistStr);
 
                 iconBlacklist.add("rotate");
                 iconBlacklist.add("headset");
@@ -262,10 +262,13 @@ public class TunerServiceImpl extends TunerService {
         }
 
         @Override
-        public void onChange(boolean selfChange, Uri uri, int userId) {
+        public void onChange(boolean selfChange, Iterable<Uri> uris, int flags, int userId) {
             if (userId == ActivityManager.getCurrentUser()) {
-                reloadSetting(uri);
+                for (Uri u : uris) {
+                    reloadSetting(u);
+                }
             }
         }
+
     }
 }

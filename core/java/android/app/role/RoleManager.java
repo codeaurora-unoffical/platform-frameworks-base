@@ -42,6 +42,7 @@ import com.android.internal.util.Preconditions;
 import com.android.internal.util.function.pooled.PooledLambda;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
@@ -89,6 +90,7 @@ public final class RoleManager {
      * The name of the dialer role.
      *
      * @see Intent#ACTION_DIAL
+     * @see android.telecom.InCallService
      */
     public static final String ROLE_DIALER = "android.app.role.DIALER";
 
@@ -284,7 +286,7 @@ public final class RoleManager {
     @TestApi
     public List<String> getRoleHoldersAsUser(@NonNull String roleName, @NonNull UserHandle user) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
-        Preconditions.checkNotNull(user, "user cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
         try {
             return mService.getRoleHoldersAsUser(roleName, user.getIdentifier());
         } catch (RemoteException e) {
@@ -321,9 +323,9 @@ public final class RoleManager {
             @CallbackExecutor @NonNull Executor executor, @NonNull Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
-        Preconditions.checkNotNull(user, "user cannot be null");
-        Preconditions.checkNotNull(executor, "executor cannot be null");
-        Preconditions.checkNotNull(callback, "callback cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
+        Objects.requireNonNull(executor, "executor cannot be null");
+        Objects.requireNonNull(callback, "callback cannot be null");
         try {
             mService.addRoleHolderAsUser(roleName, packageName, flags, user.getIdentifier(),
                     createRemoteCallback(executor, callback));
@@ -360,9 +362,9 @@ public final class RoleManager {
             @CallbackExecutor @NonNull Executor executor, @NonNull Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
-        Preconditions.checkNotNull(user, "user cannot be null");
-        Preconditions.checkNotNull(executor, "executor cannot be null");
-        Preconditions.checkNotNull(callback, "callback cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
+        Objects.requireNonNull(executor, "executor cannot be null");
+        Objects.requireNonNull(callback, "callback cannot be null");
         try {
             mService.removeRoleHolderAsUser(roleName, packageName, flags, user.getIdentifier(),
                     createRemoteCallback(executor, callback));
@@ -397,9 +399,9 @@ public final class RoleManager {
             @NonNull UserHandle user, @CallbackExecutor @NonNull Executor executor,
             @NonNull Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
-        Preconditions.checkNotNull(user, "user cannot be null");
-        Preconditions.checkNotNull(executor, "executor cannot be null");
-        Preconditions.checkNotNull(callback, "callback cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
+        Objects.requireNonNull(executor, "executor cannot be null");
+        Objects.requireNonNull(callback, "callback cannot be null");
         try {
             mService.clearRoleHoldersAsUser(roleName, flags, user.getIdentifier(),
                     createRemoteCallback(executor, callback));
@@ -442,9 +444,9 @@ public final class RoleManager {
     @TestApi
     public void addOnRoleHoldersChangedListenerAsUser(@CallbackExecutor @NonNull Executor executor,
             @NonNull OnRoleHoldersChangedListener listener, @NonNull UserHandle user) {
-        Preconditions.checkNotNull(executor, "executor cannot be null");
-        Preconditions.checkNotNull(listener, "listener cannot be null");
-        Preconditions.checkNotNull(user, "user cannot be null");
+        Objects.requireNonNull(executor, "executor cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
         int userId = user.getIdentifier();
         synchronized (mListenersLock) {
             ArrayMap<OnRoleHoldersChangedListener, OnRoleHoldersChangedListenerDelegate> listeners =
@@ -488,8 +490,8 @@ public final class RoleManager {
     @TestApi
     public void removeOnRoleHoldersChangedListenerAsUser(
             @NonNull OnRoleHoldersChangedListener listener, @NonNull UserHandle user) {
-        Preconditions.checkNotNull(listener, "listener cannot be null");
-        Preconditions.checkNotNull(user, "user cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        Objects.requireNonNull(user, "user cannot be null");
         int userId = user.getIdentifier();
         synchronized (mListenersLock) {
             ArrayMap<OnRoleHoldersChangedListener, OnRoleHoldersChangedListenerDelegate> listeners =
@@ -529,7 +531,7 @@ public final class RoleManager {
     @SystemApi
     @TestApi
     public void setRoleNamesFromController(@NonNull List<String> roleNames) {
-        Preconditions.checkNotNull(roleNames, "roleNames cannot be null");
+        Objects.requireNonNull(roleNames, "roleNames cannot be null");
         try {
             mService.setRoleNamesFromController(roleNames);
         } catch (RemoteException e) {
@@ -629,9 +631,12 @@ public final class RoleManager {
      * {@link Manifest.permission#OBSERVE_ROLE_HOLDERS}, as required by
      * {@link android.provider.Telephony.Sms#getDefaultSmsPackage(Context)}
      *
+     * @param userId The user ID to get the default SMS package for.
+     * @return the package name of the default SMS app, or {@code null} if not configured.
      * @hide
      */
     @Nullable
+    @SystemApi
     public String getDefaultSmsPackage(@UserIdInt int userId) {
         try {
             return mService.getDefaultSmsPackage(userId);

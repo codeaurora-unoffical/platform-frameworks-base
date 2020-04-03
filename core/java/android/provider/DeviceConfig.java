@@ -111,6 +111,14 @@ public final class DeviceConfig {
     public static final String NAMESPACE_AUTOFILL = "autofill";
 
     /**
+     * Namespace for blobstore feature that allows apps to share data blobs.
+     *
+     * @hide
+     */
+    @SystemApi
+    public static final String NAMESPACE_BLOBSTORE = "blobstore";
+
+    /**
      * Namespace for all networking connectivity related features.
      *
      * @hide
@@ -333,6 +341,15 @@ public final class DeviceConfig {
     public static final String NAMESPACE_WINDOW_MANAGER = "window_manager";
 
     /**
+     * Namespace for window manager features accessible by native code and
+     * loaded once per boot.
+     *
+     * @hide
+     */
+    @SystemApi
+    public static final String NAMESPACE_WINDOW_MANAGER_NATIVE_BOOT = "window_manager_native_boot";
+
+    /**
      * List of namespaces which can be read without READ_DEVICE_CONFIG permission
      *
      * @hide
@@ -373,6 +390,14 @@ public final class DeviceConfig {
      * @hide
      */
     public static final String NAMESPACE_WIDGET = "widget";
+
+    /**
+     * Namespace for connectivity thermal power manager features.
+     *
+     * @hide
+     */
+    public static final String NAMESPACE_CONNECTIVITY_THERMAL_POWER_MANAGER =
+            "connectivity_thermal_power_manager";
 
     private static final Object sLock = new Object();
     @GuardedBy("sLock")
@@ -424,6 +449,7 @@ public final class DeviceConfig {
      * @hide
      */
     @SystemApi
+    @TestApi
     @NonNull
     @RequiresPermission(READ_DEVICE_CONFIG)
     public static Properties getProperties(@NonNull String namespace, @NonNull String ... names) {
@@ -593,6 +619,7 @@ public final class DeviceConfig {
      * @hide
      */
     @SystemApi
+    @TestApi
     @RequiresPermission(WRITE_DEVICE_CONFIG)
     public static boolean setProperties(@NonNull Properties properties) throws BadConfigException {
         ContentResolver contentResolver = ActivityThread.currentApplication().getContentResolver();
@@ -785,6 +812,14 @@ public final class DeviceConfig {
     }
 
     /**
+     * Returns list of namespaces that can be read without READ_DEVICE_CONFIG_PERMISSION;
+     * @hide
+     */
+    public static @NonNull List<String> getPublicNamespaces() {
+        return PUBLIC_NAMESPACES;
+    }
+
+    /**
      * Interface for monitoring changes to properties. Implementations will receive callbacks when
      * properties change, including a {@link Properties} object which contains a single namespace
      * and all of the properties which changed for that namespace. This includes properties which
@@ -817,6 +852,7 @@ public final class DeviceConfig {
      * @hide
      */
     @SystemApi
+    @TestApi
     public static class BadConfigException extends Exception {}
 
     /**

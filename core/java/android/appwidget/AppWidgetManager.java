@@ -23,9 +23,9 @@ import android.annotation.RequiresFeature;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemService;
-import android.annotation.UnsupportedAppUsage;
 import android.app.IServiceConnection;
 import android.app.PendingIntent;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -180,6 +180,16 @@ public class AppWidgetManager {
      * {@sample frameworks/base/tests/appwidgets/AppWidgetHostTest/src/com/android/tests/appwidgethost/AppWidgetHostActivity.java getExtra_EXTRA_APPWIDGET_ID}
      */
     public static final String EXTRA_APPWIDGET_ID = "appWidgetId";
+
+    /**
+     * A bundle extra that contains whether or not an app has finished restoring a widget.
+     * <p> After restore, the app should set OPTION_APPWIDGET_RESTORE_COMPLETED to true on its
+     * widgets followed by calling {@link #updateAppWidget} to update the views.
+     *
+     * @see #updateAppWidgetOptions(int, Bundle)
+     */
+    public static final String OPTION_APPWIDGET_RESTORE_COMPLETED = "appWidgetRestoreCompleted";
+
 
     /**
      * A bundle extra that contains the lower bound on the current width, in dips, of a widget instance.

@@ -18,19 +18,11 @@
 
 #include "FieldValue.h"
 
-#include <android/frameworks/stats/1.0/types.h>
-#include <android/os/StatsLogEventWrapper.h>
 #include <android/util/ProtoOutputStream.h>
-#include <log/log_read.h>
 #include <private/android_logger.h>
-#include <stats_event_list.h>
-#include <stats_event.h>
-#include <utils/Errors.h>
 
 #include <string>
 #include <vector>
-
-using namespace android::frameworks::stats::V1_0;
 
 namespace android {
 namespace os {
@@ -62,41 +54,43 @@ struct InstallTrainInfo {
     std::string trainName;
     int32_t status;
     std::vector<int64_t> experimentIds;
+    bool requiresStaging;
+    bool rollbackEnabled;
+    bool requiresLowLatencyMonitor;
 };
 
 /**
- * Wrapper for the log_msg structure.
+ * This class decodes the structured, serialized encoding of an atom into a
+ * vector of FieldValues.
  */
 class LogEvent {
 public:
     /**
-     * Read a LogEvent from the socket
+     * \param uid user id of the logging caller
+     * \param pid process id of the logging caller
      */
-    explicit LogEvent(uint8_t* msg, uint32_t len, uint32_t uid);
+    explicit LogEvent(int32_t uid, int32_t pid);
 
     /**
-     * Temp constructor to use for pulled atoms until we flip the socket schema.
+     * Parses the atomId, timestamp, and vector of values from a buffer
+     * containing the StatsEvent/AStatsEvent encoding of an atom.
+     *
+     * \param buf a buffer that begins at the start of the serialized atom (it
+     * should not include the android_log_header_t or the StatsEventTag)
+     * \param len size of the buffer
+     *
+     * \return success of the initialization
      */
-    explicit LogEvent(uint8_t* msg, uint32_t len, uint32_t uid, bool useNewSchema);
+    bool parseBuffer(uint8_t* buf, size_t len);
 
-    /**
-     * Creates LogEvent from StatsLogEventWrapper.
-     */
-    static void createLogEvents(const StatsLogEventWrapper& statsLogEventWrapper,
-                                std::vector<std::shared_ptr<LogEvent>>& logEvents);
-
-    /**
-     * Construct one LogEvent from a StatsLogEventWrapper with the i-th work chain. -1 if no chain.
-     */
-    explicit LogEvent(const StatsLogEventWrapper& statsLogEventWrapper, int workChainIndex);
+    // TODO(b/149590301): delete unused functions below once LogEvent uses the
+    // new socket schema within test code. Really we would like the only entry
+    // points into LogEvent to be the above constructor and parseBuffer functions.
 
     /**
      * Constructs a LogEvent with synthetic data for testing. Must call init() before reading.
      */
     explicit LogEvent(int32_t tagId, int64_t wallClockTimestampNs, int64_t elapsedTimestampNs);
-
-    // For testing. The timestamp is used as both elapsed real time and logd timestamp.
-    explicit LogEvent(int32_t tagId, int64_t timestampNs);
 
     // For testing. The timestamp is used as both elapsed real time and logd timestamp.
     explicit LogEvent(int32_t tagId, int64_t timestampNs, int32_t uid);
@@ -117,9 +111,6 @@ public:
                       const std::vector<uint8_t>& experimentIds, int32_t userId);
 
     explicit LogEvent(int64_t wallClockTimestampNs, int64_t elapsedTimestampNs,
-                      const VendorAtom& vendorAtom);
-
-    explicit LogEvent(int64_t wallClockTimestampNs, int64_t elapsedTimestampNs,
                       const InstallTrainInfo& installTrainInfo);
 
     ~LogEvent();
@@ -135,9 +126,17 @@ public:
      */
     inline int GetTagId() const { return mTagId; }
 
-    inline uint32_t GetUid() const {
-        return mLogUid;
-    }
+    /**
+     * Get the uid of the logging client.
+     * Returns -1 if the uid is unknown/has not been set.
+     */
+    inline int32_t GetUid() const { return mLogUid; }
+
+    /**
+     * Get the pid of the logging client.
+     * Returns -1 if the pid is unknown/has not been set.
+     */
+    inline int32_t GetPid() const { return mLogPid; }
 
     /**
      * Get the nth value, starting at 1.
@@ -150,6 +149,7 @@ public:
     const char* GetString(size_t key, status_t* err) const;
     bool GetBool(size_t key, status_t* err) const;
     float GetFloat(size_t key, status_t* err) const;
+    std::vector<uint8_t> GetStorage(size_t key, status_t* err) const;
 
     /**
      * Write test data to the LogEvent. This can only be used when the LogEvent is constructed
@@ -181,12 +181,6 @@ public:
     void ToProto(android::util::ProtoOutputStream& out) const;
 
     /**
-     * Used with the constructor where tag is passed in. Converts the log_event_list to read mode
-     * and prepares the list for reading.
-     */
-    void init();
-
-    /**
      * Set elapsed timestamp if the original timestamp is missing.
      */
     void setElapsedTimestampNs(int64_t timestampNs) {
@@ -212,12 +206,24 @@ public:
         return &mValues;
     }
 
-    bool isValid() {
-          return mValid;
-    }
-
     inline LogEvent makeCopy() {
         return LogEvent(*this);
+    }
+
+    template <class T>
+    status_t updateValue(size_t key, T& value, Type type) {
+        int field = getSimpleField(key);
+        for (auto& fieldValue : mValues) {
+            if (fieldValue.mField.getField() == field) {
+                if (fieldValue.mValue.getType() == type) {
+                    fieldValue.mValue = Value(value);
+                   return OK;
+               } else {
+                   return BAD_TYPE;
+                }
+            }
+        }
+        return BAD_INDEX;
     }
 
 private:
@@ -225,12 +231,6 @@ private:
      * Only use this if copy is absolutely needed.
      */
     LogEvent(const LogEvent&);
-
-
-    /**
-     * Parsing function for new encoding scheme.
-     */
-    void initNew();
 
     void parseInt32(int32_t* pos, int32_t depth, bool* last);
     void parseInt64(int32_t* pos, int32_t depth, bool* last);
@@ -242,13 +242,14 @@ private:
     void parseAttributionChain(int32_t* pos, int32_t depth, bool* last);
 
     /**
-     * mBuf is a pointer to the current location in the buffer being parsed.
-     * Because the buffer lives  on the StatsSocketListener stack, this pointer
-     * is only valid during the LogEvent constructor. It will be set to null at
-     * the end of initNew.
+     * The below three variables are only valid during the execution of
+     * parseBuffer. There are no guarantees about the state of these variables
+     * before/after.
+     *
+     * TODO (b/150312423): These shouldn't be member variables. We should pass
+     * them around as parameters.
      */
     uint8_t* mBuf;
-
     uint32_t mRemainingLen; // number of valid bytes left in the buffer being parsed
     bool mValid = true; // stores whether the event we received from the socket is valid
 
@@ -267,7 +268,15 @@ private:
             mValid = false;
             value = 0; // all primitive types can successfully cast 0
         } else {
-            value = *((T*)mBuf);
+            // When alignof(T) == 1, hopefully the compiler can optimize away
+            // this conditional as always true.
+            if ((reinterpret_cast<uintptr_t>(mBuf) % alignof(T)) == 0) {
+                // We're properly aligned, and can safely make this assignment.
+                value = *((T*)mBuf);
+            } else {
+                // We need to use memcpy.  It's slower, but safe.
+                memcpy(&value, mBuf, sizeof(T));
+            }
             mBuf += sizeof(T);
             mRemainingLen -= sizeof(T);
         }
@@ -289,11 +298,6 @@ private:
     uint8_t getTypeId(uint8_t typeInfo);
     uint8_t getNumAnnotations(uint8_t typeInfo);
 
-    /**
-     * Parses a log_msg into a LogEvent object.
-     */
-    void init(android_log_context context);
-
     // The items are naturally sorted in DFS order as we read them. this allows us to do fast
     // matching.
     std::vector<FieldValue> mValues;
@@ -309,9 +313,14 @@ private:
     // The elapsed timestamp set by statsd log writer.
     int64_t mElapsedTimestampNs;
 
+    // The atom tag of the event.
     int mTagId;
 
-    uint32_t mLogUid;
+    // The uid of the logging client (defaults to -1).
+    int32_t mLogUid = -1;
+
+    // The pid of the logging client (defaults to -1).
+    int32_t mLogPid = -1;
 };
 
 void writeExperimentIdsToProto(const std::vector<int64_t>& experimentIds, std::vector<uint8_t>* protoOut);

@@ -17,7 +17,6 @@
 package com.android.server.wm;
 
 import static android.app.ActivityManager.RECENT_WITH_EXCLUDED;
-import static android.app.ActivityTaskManager.SPLIT_SCREEN_CREATE_MODE_TOP_OR_LEFT;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
@@ -39,13 +38,14 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -84,6 +84,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Build/Install/Run:
@@ -117,7 +118,7 @@ public class RecentTasksTest extends ActivityTestsBase {
     public void setUp() throws Exception {
         mTaskPersister = new TestTaskPersister(mContext.getFilesDir());
         spyOn(mTaskPersister);
-        mDisplay = mRootActivityContainer.getDisplayContent(DEFAULT_DISPLAY);
+        mDisplay = mRootWindowContainer.getDisplayContent(DEFAULT_DISPLAY);
 
         // Set the recent tasks we should use for testing in this class.
         mRecentTasks = new TestRecentTasks(mService, mTaskPersister);
@@ -304,7 +305,7 @@ public class RecentTasksTest extends ActivityTestsBase {
         // other task
         Task task1 = createTaskBuilder(".Task1")
                 .setFlags(FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_MULTIPLE_TASK)
-                .setStack(mDisplay.getHomeStack()).build();
+                .setStack(mDisplay.getRootHomeTask()).build();
         Task task2 = createTaskBuilder(".Task1")
                 .setFlags(FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_MULTIPLE_TASK)
                 .setStack(mStack).build();
@@ -420,8 +421,39 @@ public class RecentTasksTest extends ActivityTestsBase {
     }
 
     @Test
+    public void testAddTasksHomeClearUntrackedTasks_expectFinish() {
+        // There may be multiple tasks with the same base intent by flags (FLAG_ACTIVITY_NEW_TASK |
+        // FLAG_ACTIVITY_MULTIPLE_TASK). If the previous task is still active, it should be removed
+        // because user may not be able to return to the task.
+        final String className = ".PermissionsReview";
+        final Function<Boolean, Task> taskBuilder = visible -> {
+            final Task task = createTaskBuilder(className).build();
+            // Make the task non-empty.
+            final ActivityRecord r = new ActivityBuilder(mService).setTask(task).build();
+            r.setVisibility(visible);
+            return task;
+        };
+
+        final Task task1 = taskBuilder.apply(false /* visible */);
+        mRecentTasks.add(task1);
+        final Task task2 = taskBuilder.apply(true /* visible */);
+        mRecentTasks.add(task2);
+        // Only the last task is kept in recents and the previous 2 tasks will becomes untracked
+        // tasks because their intents are identical.
+        mRecentTasks.add(createTaskBuilder(className).build());
+        // Go home to trigger the removal of untracked tasks.
+        mRecentTasks.add(createTaskBuilder(".Home").setStack(mDisplay.getRootHomeTask()).build());
+
+        // All activities in the invisible task should be finishing or removed.
+        assertNull(task1.getTopNonFinishingActivity());
+        // The visible task should not be affected.
+        assertNotNull(task2.getTopNonFinishingActivity());
+    }
+
+    @Test
     public void testUsersTasks() {
         mRecentTasks.setOnlyTestVisibleRange();
+        mRecentTasks.unloadUserDataFromMemoryLocked(TEST_USER_0_ID);
 
         // Setup some tasks for the users
         mTaskPersister.mUserTaskIdsOverride = new SparseBooleanArray();
@@ -773,7 +805,7 @@ public class RecentTasksTest extends ActivityTestsBase {
 
         ActivityStack stack = mTasks.get(2).getStack();
         stack.moveToFront("", mTasks.get(2));
-        doReturn(stack).when(mService.mRootActivityContainer).getTopDisplayFocusedStack();
+        doReturn(stack).when(mService.mRootWindowContainer).getTopDisplayFocusedStack();
 
         // Simulate the reset from the timeout
         mRecentTasks.resetFreezeTaskListReorderingOnTimeout();
@@ -792,7 +824,7 @@ public class RecentTasksTest extends ActivityTestsBase {
     public void testBackStackTasks_expectNoTrim() {
         mRecentTasks.setParameters(-1 /* min */, 1 /* max */, -1 /* ms */);
 
-        final ActivityStack homeStack = mDisplay.getHomeStack();
+        final ActivityStack homeStack = mDisplay.getRootHomeTask();
         final ActivityStack aboveHomeStack = mDisplay.createStack(
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */);
 
@@ -812,7 +844,7 @@ public class RecentTasksTest extends ActivityTestsBase {
 
         final ActivityStack behindHomeStack = mDisplay.createStack(
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */);
-        final ActivityStack homeStack = mDisplay.getHomeStack();
+        final ActivityStack homeStack = mDisplay.getRootHomeTask();
         final ActivityStack aboveHomeStack = mDisplay.createStack(
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */);
 
@@ -832,7 +864,7 @@ public class RecentTasksTest extends ActivityTestsBase {
     public void testOtherDisplayTasks_expectNoTrim() {
         mRecentTasks.setParameters(-1 /* min */, 1 /* max */, -1 /* ms */);
 
-        final ActivityStack homeStack = mDisplay.getHomeStack();
+        final ActivityStack homeStack = mDisplay.getRootHomeTask();
         final DisplayContent otherDisplay = addNewDisplayContentAt(DisplayContent.POSITION_TOP);
         final ActivityStack otherDisplayStack = otherDisplay.createStack(
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */);
@@ -945,10 +977,7 @@ public class RecentTasksTest extends ActivityTestsBase {
                 () -> mService.setTaskWindowingMode(taskId, WINDOWING_MODE_FULLSCREEN,
                         false/* toTop */));
         assertNotRestoreTask(
-                () -> mService.setTaskWindowingModeSplitScreenPrimary(taskId,
-                        SPLIT_SCREEN_CREATE_MODE_TOP_OR_LEFT,
-                        false /* toTop */, false /* animate */, null /* initialBounds */,
-                        true /* showRecents */));
+                () -> mService.setTaskWindowingModeSplitScreenPrimary(taskId, false /* toTop */));
     }
 
     @Test
@@ -991,6 +1020,29 @@ public class RecentTasksTest extends ActivityTestsBase {
         verify(controller, times(4)).notifyTaskListUpdated();
     }
 
+    @Test
+    public void testTaskInfo_expectNoExtras() {
+        doNothing().when(mRecentTasks).loadUserRecentsLocked(anyInt());
+        doReturn(true).when(mRecentTasks).isUserRunning(anyInt(), anyInt());
+
+        final Bundle data = new Bundle();
+        data.putInt("key", 100);
+        final Task task1 = createTaskBuilder(".Task").build();
+        final ActivityRecord r1 = new ActivityBuilder(mService)
+                .setTask(task1)
+                .setIntentExtras(data)
+                .build();
+        mRecentTasks.add(r1.getTask());
+
+        final List<RecentTaskInfo> infos = mRecentTasks.getRecentTasks(MAX_VALUE, 0 /* flags */,
+                true /* getTasksAllowed */, TEST_USER_0_ID, 0).getList();
+        assertTrue(infos.size() == 1);
+        for (int i = 0; i < infos.size(); i++)  {
+            final Bundle extras = infos.get(i).baseIntent.getExtras();
+            assertTrue(extras == null || extras.isEmpty());
+        }
+    }
+
     /**
      * Ensures that the raw recent tasks list is in the provided order. Note that the expected tasks
      * should be ordered from least to most recent.
@@ -1011,8 +1063,7 @@ public class RecentTasksTest extends ActivityTestsBase {
         doNothing().when(mRecentTasks).loadUserRecentsLocked(anyInt());
         doReturn(true).when(mRecentTasks).isUserRunning(anyInt(), anyInt());
         List<RecentTaskInfo> infos = mRecentTasks.getRecentTasks(MAX_VALUE, getRecentTaskFlags,
-                true /* getTasksAllowed */, false /* getDetailedTasks */,
-                TEST_USER_0_ID, 0).getList();
+                true /* getTasksAllowed */, TEST_USER_0_ID, 0).getList();
         assertTrue(expectedTasks.length == infos.size());
         for (int i = 0; i < infos.size(); i++)  {
             assertTrue(expectedTasks[i].mTaskId == infos.get(i).taskId);
@@ -1063,19 +1114,10 @@ public class RecentTasksTest extends ActivityTestsBase {
         assertSecurityException(expectCallable,
                 () -> mService.moveTaskToStack(0, INVALID_STACK_ID, true));
         assertSecurityException(expectCallable,
-                () -> mService.setTaskWindowingModeSplitScreenPrimary(0,
-                        SPLIT_SCREEN_CREATE_MODE_TOP_OR_LEFT, true, true, new Rect(), true));
-        assertSecurityException(expectCallable, () -> mService.dismissSplitScreenMode(true));
+                () -> mService.setTaskWindowingModeSplitScreenPrimary(0, true));
         assertSecurityException(expectCallable, () -> mService.dismissPip(true, 0));
         assertSecurityException(expectCallable,
                 () -> mService.moveTopActivityToPinnedStack(INVALID_STACK_ID, new Rect()));
-        assertSecurityException(expectCallable,
-                () -> mService.animateResizePinnedStack(INVALID_STACK_ID, new Rect(), -1));
-        assertSecurityException(expectCallable,
-                () -> mService.resizeDockedStack(new Rect(), new Rect(), new Rect(), new Rect(),
-                        new Rect()));
-        assertSecurityException(expectCallable,
-                () -> mService.resizePinnedStack(new Rect(), new Rect()));
         assertSecurityException(expectCallable, () -> mService.getAllStackInfos());
         assertSecurityException(expectCallable,
                 () -> mService.getStackInfo(WINDOWING_MODE_UNDEFINED, ACTIVITY_TYPE_UNDEFINED));
@@ -1309,11 +1351,9 @@ public class RecentTasksTest extends ActivityTestsBase {
 
         @Override
         ParceledListSlice<RecentTaskInfo> getRecentTasks(int maxNum, int flags,
-                boolean getTasksAllowed,
-                boolean getDetailedTasks, int userId, int callingUid) {
+                boolean getTasksAllowed, int userId, int callingUid) {
             mLastAllowed = getTasksAllowed;
-            return super.getRecentTasks(maxNum, flags, getTasksAllowed, getDetailedTasks, userId,
-                    callingUid);
+            return super.getRecentTasks(maxNum, flags, getTasksAllowed, userId, callingUid);
         }
 
         @Override
@@ -1327,7 +1367,7 @@ public class RecentTasksTest extends ActivityTestsBase {
 
         @Override
         void getTasks(int maxNum, List<RunningTaskInfo> list, int ignoreActivityType,
-                int ignoreWindowingMode, RootActivityContainer root,
+                int ignoreWindowingMode, RootWindowContainer root,
                 int callingUid, boolean allowed, boolean crossUser, ArraySet<Integer> profileIds) {
             mLastAllowed = allowed;
             super.getTasks(maxNum, list, ignoreActivityType, ignoreWindowingMode, root,

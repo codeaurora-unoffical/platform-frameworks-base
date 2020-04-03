@@ -18,7 +18,7 @@ package android.hardware.display;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.ParceledListSlice;
 import android.content.res.Resources;
@@ -594,6 +594,19 @@ public final class DisplayManagerGlobal {
     }
 
     /**
+     * Gets the last requested minimal post processing setting for the display with displayId.
+     *
+     * @hide
+     */
+    public boolean isMinimalPostProcessingRequested(int displayId) {
+        try {
+            return mDm.isMinimalPostProcessingRequested(displayId);
+        } catch (RemoteException ex) {
+            throw ex.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Temporarily sets the brightness of the display.
      * <p>
      * Requires the {@link android.Manifest.permission#CONTROL_DISPLAY_BRIGHTNESS} permission.
@@ -603,7 +616,7 @@ public final class DisplayManagerGlobal {
      *
      * @hide Requires signature permission.
      */
-    public void setTemporaryBrightness(int brightness) {
+    public void setTemporaryBrightness(float brightness) {
         try {
             mDm.setTemporaryBrightness(brightness);
         } catch (RemoteException ex) {

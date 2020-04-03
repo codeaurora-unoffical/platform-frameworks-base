@@ -455,6 +455,10 @@ public final class BinderProxy implements IBinder {
         return null;
     }
 
+    /** @hide */
+    @Override
+    public native @Nullable IBinder getExtension() throws RemoteException;
+
     /**
      * Perform a binder transaction on a proxy.
      *
@@ -631,10 +635,12 @@ public final class BinderProxy implements IBinder {
         }
     }
 
-    private static void sendDeathNotice(DeathRecipient recipient) {
-        if (false) Log.v("JavaBinder", "sendDeathNotice to " + recipient);
+    private static void sendDeathNotice(DeathRecipient recipient, IBinder binderProxy) {
+        if (false) {
+            Log.v("JavaBinder", "sendDeathNotice to " + recipient + " for " + binderProxy);
+        }
         try {
-            recipient.binderDied();
+            recipient.binderDied(binderProxy);
         } catch (RuntimeException exc) {
             Log.w("BinderNative", "Uncaught exception from death notification",
                     exc);

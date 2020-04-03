@@ -22,12 +22,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.DataLoaderParamsParcel;
+import android.content.pm.FileSystemControlParcel;
 import android.content.pm.IDataLoader;
 import android.content.pm.IDataLoaderManager;
 import android.content.pm.IDataLoaderStatusListener;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.UserHandle;
@@ -50,7 +51,7 @@ public class DataLoaderManagerService extends SystemService {
     private final DataLoaderManagerBinderService mBinderService;
     private final Object mLock = new Object();
     @GuardedBy("mLock")
-    private SparseArray<DataLoaderServiceConnection> mServiceConnections;
+    private SparseArray<DataLoaderServiceConnection> mServiceConnections = new SparseArray<>();
 
     public DataLoaderManagerService(Context context) {
         super(context);
@@ -65,30 +66,22 @@ public class DataLoaderManagerService extends SystemService {
 
     final class DataLoaderManagerBinderService extends IDataLoaderManager.Stub {
         @Override
-        public boolean initializeDataLoader(int dataLoaderId, Bundle params,
-                IDataLoaderStatusListener listener) {
+        public boolean initializeDataLoader(int dataLoaderId, DataLoaderParamsParcel params,
+                FileSystemControlParcel control, IDataLoaderStatusListener listener) {
             synchronized (mLock) {
-                if (mServiceConnections == null) {
-                    mServiceConnections = new SparseArray<>();
-                }
                 if (mServiceConnections.get(dataLoaderId) != null) {
                     Slog.e(TAG, "Data loader of ID=" + dataLoaderId + " already exists.");
                     return false;
                 }
             }
-            CharSequence packageNameSeq = params.getCharSequence("packageName");
-            if (packageNameSeq == null) {
-                Slog.e(TAG, "Must specify package name.");
-                return false;
-            }
-            String packageName = packageNameSeq.toString();
-            ComponentName dataLoaderComponent = getDataLoaderServiceName(packageName);
+            ComponentName componentName = new ComponentName(params.packageName, params.className);
+            ComponentName dataLoaderComponent = resolveDataLoaderComponentName(componentName);
             if (dataLoaderComponent == null) {
                 return false;
             }
             // Binds to the specific data loader service
             DataLoaderServiceConnection connection =
-                    new DataLoaderServiceConnection(dataLoaderId, params, listener);
+                    new DataLoaderServiceConnection(dataLoaderId, params, control, listener);
             Intent intent = new Intent();
             intent.setComponent(dataLoaderComponent);
             if (!mContext.bindServiceAsUser(intent, connection, Context.BIND_AUTO_CREATE,
@@ -103,22 +96,23 @@ public class DataLoaderManagerService extends SystemService {
         /**
          * Find the ComponentName of the data loader service provider, given its package name.
          *
-         * @param packageName the package name of the provider.
+         * @param componentName the name of the provider.
          * @return ComponentName of the data loader service provider. Null if provider not found.
          */
-        private @Nullable ComponentName getDataLoaderServiceName(String packageName) {
+        private @Nullable ComponentName resolveDataLoaderComponentName(
+                ComponentName componentName) {
             final PackageManager pm = mContext.getPackageManager();
             if (pm == null) {
                 Slog.e(TAG, "PackageManager is not available.");
                 return null;
             }
             Intent intent = new Intent(Intent.ACTION_LOAD_DATA);
-            intent.setPackage(packageName);
+            intent.setComponent(componentName);
             List<ResolveInfo> services =
                     pm.queryIntentServicesAsUser(intent, 0, UserHandle.getCallingUserId());
             if (services == null || services.isEmpty()) {
                 Slog.e(TAG,
-                        "Failed to find data loader service provider in package " + packageName);
+                        "Failed to find data loader service provider in " + componentName);
                 return null;
             }
 
@@ -128,23 +122,21 @@ public class DataLoaderManagerService extends SystemService {
             int numServices = services.size();
             for (int i = 0; i < numServices; i++) {
                 ResolveInfo ri = services.get(i);
-                ComponentName componentName = new ComponentName(
+                ComponentName resolved = new ComponentName(
                         ri.serviceInfo.packageName, ri.serviceInfo.name);
                 // There should only be one matching provider inside the given package.
                 // If there's more than one, return the first one found.
                 try {
-                    ApplicationInfo ai = pm.getApplicationInfo(componentName.getPackageName(), 0);
+                    ApplicationInfo ai = pm.getApplicationInfo(resolved.getPackageName(), 0);
                     if (checkLoader && !ai.isPrivilegedApp()) {
                         Slog.w(TAG,
-                                "Data loader: " + componentName.getPackageName()
-                                        + " is not a privileged app, skipping.");
+                                "Data loader: " + resolved + " is not a privileged app, skipping.");
                         continue;
                     }
-                    return componentName;
+                    return resolved;
                 } catch (PackageManager.NameNotFoundException ex) {
                     Slog.w(TAG,
-                            "Privileged data loader: " + componentName.getPackageName()
-                                    + " not found, skipping.");
+                            "Privileged data loader: " + resolved + " not found, skipping.");
                 }
 
             }
@@ -158,9 +150,6 @@ public class DataLoaderManagerService extends SystemService {
         @Override
         public @Nullable IDataLoader getDataLoader(int dataLoaderId) {
             synchronized (mLock) {
-                if (mServiceConnections == null) {
-                    return null;
-                }
                 DataLoaderServiceConnection serviceConnection = mServiceConnections.get(
                         dataLoaderId, null);
                 if (serviceConnection == null) {
@@ -176,9 +165,6 @@ public class DataLoaderManagerService extends SystemService {
         @Override
         public void destroyDataLoader(int dataLoaderId) {
             synchronized (mLock) {
-                if (mServiceConnections == null) {
-                    return;
-                }
                 DataLoaderServiceConnection serviceConnection = mServiceConnections.get(
                         dataLoaderId, null);
 
@@ -192,13 +178,16 @@ public class DataLoaderManagerService extends SystemService {
 
     class DataLoaderServiceConnection implements ServiceConnection {
         final int mId;
-        final Bundle mParams;
+        final DataLoaderParamsParcel mParams;
+        final FileSystemControlParcel mControl;
         final IDataLoaderStatusListener mListener;
         IDataLoader mDataLoader;
 
-        DataLoaderServiceConnection(int id, Bundle params, IDataLoaderStatusListener listener) {
+        DataLoaderServiceConnection(int id, DataLoaderParamsParcel params,
+                FileSystemControlParcel control, IDataLoaderStatusListener listener) {
             mId = id;
             mParams = params;
+            mControl = control;
             mListener = listener;
             mDataLoader = null;
         }
@@ -210,7 +199,7 @@ public class DataLoaderManagerService extends SystemService {
                 mServiceConnections.append(mId, this);
             }
             try {
-                mDataLoader.create(mId, mParams, mListener);
+                mDataLoader.create(mId, mParams, mControl, mListener);
             } catch (RemoteException e) {
                 Slog.e(TAG, "Failed to create data loader service.", e);
             }
@@ -236,11 +225,7 @@ public class DataLoaderManagerService extends SystemService {
         private void remove() {
             synchronized (mLock) {
                 mServiceConnections.remove(mId);
-                if (mServiceConnections.size() == 0) {
-                    mServiceConnections = null;
-                }
             }
-            mParams.clear();
         }
     }
 }

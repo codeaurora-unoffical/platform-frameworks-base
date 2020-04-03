@@ -16,21 +16,23 @@
 
 package android.service.wallpaper;
 
+import android.annotation.FloatRange;
 import android.annotation.Nullable;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.Service;
 import android.app.WallpaperColors;
 import android.app.WallpaperInfo;
 import android.app.WallpaperManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.PixelFormat;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManager;
@@ -47,7 +49,6 @@ import android.util.Log;
 import android.util.MergedConfiguration;
 import android.view.Display;
 import android.view.DisplayCutout;
-import android.view.DisplayInfo;
 import android.view.Gravity;
 import android.view.IWindowSession;
 import android.view.InputChannel;
@@ -121,6 +122,9 @@ public abstract class WallpaperService extends Service {
     private static final int MSG_WINDOW_MOVED = 10035;
     private static final int MSG_TOUCH_EVENT = 10040;
     private static final int MSG_REQUEST_WALLPAPER_COLORS = 10050;
+    private static final int MSG_SCALE = 10100;
+
+    private static final float MAX_SCALE = 1.15f;
 
     private static final int NOTIFY_COLORS_RATE_LIMIT_MS = 1000;
 
@@ -169,6 +173,7 @@ public abstract class WallpaperService extends Service {
         int mType;
         int mCurWidth;
         int mCurHeight;
+        float mZoom = 0f;
         int mWindowFlags = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         int mWindowPrivateFlags =
                 WindowManager.LayoutParams.PRIVATE_FLAG_WANTS_OFFSET_NOTIFICATIONS;
@@ -188,6 +193,7 @@ public abstract class WallpaperService extends Service {
         DisplayCutout mDispatchedDisplayCutout = DisplayCutout.NO_CUTOUT;
         final InsetsState mInsetsState = new InsetsState();
         final MergedConfiguration mMergedConfiguration = new MergedConfiguration();
+        private final Point mSurfaceSize = new Point();
 
         final WindowManager.LayoutParams mLayout
                 = new WindowManager.LayoutParams();
@@ -215,6 +221,9 @@ public abstract class WallpaperService extends Service {
         private int mDisplayState;
 
         SurfaceControl mSurfaceControl = new SurfaceControl();
+
+        // Unused relayout out-param
+        SurfaceControl mTmpSurfaceControl = new SurfaceControl();
 
         final BaseSurfaceHolder mSurfaceHolder = new BaseSurfaceHolder() {
             {
@@ -494,6 +503,15 @@ public abstract class WallpaperService extends Service {
         }
 
         /**
+         * Returns the current scale of the surface
+         * @hide
+         */
+        @VisibleForTesting
+        public float getZoom() {
+            return mZoom;
+        }
+
+        /**
          * Called once to initialize the engine.  After returning, the
          * engine's surface will be created by the framework.
          */
@@ -621,6 +639,16 @@ public abstract class WallpaperService extends Service {
         }
 
         /**
+         * Called when the zoom level of the wallpaper changed.
+         * This method will be called with the initial zoom level when the surface is created.
+         *
+         * @param zoom the zoom level, between 0 indicating fully zoomed in and 1 indicating fully
+         *             zoomed out.
+         */
+        public void onZoomChanged(@FloatRange(from = 0f, to = 1f) float zoom) {
+        }
+
+        /**
          * Notifies the engine that wallpaper colors changed significantly.
          * This will trigger a {@link #onComputeColors()} call.
          */
@@ -704,6 +732,7 @@ public abstract class WallpaperService extends Service {
             out.print(prefix); out.print("mConfiguration=");
                     out.println(mMergedConfiguration.getMergedConfiguration());
             out.print(prefix); out.print("mLayout="); out.println(mLayout);
+            out.print(prefix); out.print("mZoom="); out.println(mZoom);
             synchronized (mLock) {
                 out.print(prefix); out.print("mPendingXOffset="); out.print(mPendingXOffset);
                         out.print(" mPendingXOffset="); out.println(mPendingXOffset);
@@ -716,6 +745,37 @@ public abstract class WallpaperService extends Service {
                 if (mPendingMove != null) {
                     out.print(prefix); out.print("mPendingMove="); out.println(mPendingMove);
                 }
+            }
+        }
+
+        /**
+         * Set the wallpaper zoom to the given value. This value will be ignored when in ambient
+         * mode (and zoom will be reset to 0).
+         * @hide
+         * @param zoom between 0 and 1 (inclusive) indicating fully zoomed in to fully zoomed out
+         *              respectively.
+         */
+        @VisibleForTesting
+        public void setZoom(float zoom) {
+            if (DEBUG) {
+                Log.v(TAG, "set zoom received: " + zoom);
+            }
+            boolean updated = false;
+            synchronized (mLock) {
+                if (DEBUG) {
+                    Log.v(TAG, "mZoom: " + mZoom + " updated: " + zoom);
+                }
+                if (mIsInAmbientMode) {
+                    mZoom = 0;
+                }
+                if (Float.compare(zoom, mZoom) != 0) {
+                    mZoom = zoom;
+                    updated = true;
+                }
+            }
+            if (DEBUG) Log.v(TAG, "setZoom updated? " + updated);
+            if (updated && !mDestroyed) {
+                onZoomChanged(mZoom);
             }
         }
 
@@ -772,22 +832,8 @@ public abstract class WallpaperService extends Service {
                     mLayout.x = 0;
                     mLayout.y = 0;
 
-                    if (!fixedSize) {
-                        mLayout.width = myWidth;
-                        mLayout.height = myHeight;
-                    } else {
-                        // Force the wallpaper to cover the screen in both dimensions
-                        // only internal implementations like ImageWallpaper
-                        DisplayInfo displayInfo = new DisplayInfo();
-                        mDisplay.getDisplayInfo(displayInfo);
-                        final float layoutScale = Math.max(
-                                (float) displayInfo.logicalHeight / (float) myHeight,
-                                (float) displayInfo.logicalWidth / (float) myWidth);
-                        mLayout.height = (int) (myHeight * layoutScale);
-                        mLayout.width = (int) (myWidth * layoutScale);
-                        mWindowFlags |= WindowManager.LayoutParams.FLAG_SCALED;
-                    }
-
+                    mLayout.width = myWidth;
+                    mLayout.height = myHeight;
                     mLayout.format = mFormat;
 
                     mCurWindowFlags = mWindowFlags;
@@ -811,7 +857,7 @@ public abstract class WallpaperService extends Service {
                         // Add window
                         mLayout.type = mIWallpaperEngine.mWindowType;
                         mLayout.gravity = Gravity.START|Gravity.TOP;
-                        mLayout.setFitWindowInsetsTypes(0 /* types */);
+                        mLayout.setFitInsetsTypes(0 /* types */);
                         mLayout.setTitle(WallpaperService.this.getClass().getName());
                         mLayout.windowAnimations =
                                 com.android.internal.R.style.Animation_Wallpaper;
@@ -838,12 +884,13 @@ public abstract class WallpaperService extends Service {
                     } else {
                         mLayout.surfaceInsets.set(0, 0, 0, 0);
                     }
+
                     final int relayoutResult = mSession.relayout(
                         mWindow, mWindow.mSeq, mLayout, mWidth, mHeight,
                             View.VISIBLE, 0, -1, mWinFrame, mContentInsets,
                             mVisibleInsets, mStableInsets, mBackdropFrame,
                             mDisplayCutout, mMergedConfiguration, mSurfaceControl,
-                            mInsetsState);
+                            mInsetsState, mSurfaceSize, mTmpSurfaceControl);
                     if (mSurfaceControl.isValid()) {
                         mSurfaceHolder.mSurface.copyFrom(mSurfaceControl);
                         mSurfaceControl.release();
@@ -917,6 +964,7 @@ public abstract class WallpaperService extends Service {
                                     c.surfaceCreated(mSurfaceHolder);
                                 }
                             }
+                            onZoomChanged(0f);
                         }
 
                         redrawNeeded |= creating || (relayoutResult
@@ -1077,6 +1125,7 @@ public abstract class WallpaperService extends Service {
                 mIsInAmbientMode = inAmbientMode;
                 if (mCreated) {
                     onAmbientModeChanged(inAmbientMode, animationDuration);
+                    setZoom(0);
                 }
             }
         }
@@ -1351,6 +1400,11 @@ public abstract class WallpaperService extends Service {
             }
         }
 
+        public void setZoomOut(float scale) {
+            Message msg = mCaller.obtainMessageI(MSG_SCALE, Float.floatToIntBits(scale));
+            mCaller.sendMessage(msg);
+        }
+
         public void reportShown() {
             if (!mShownReported) {
                 mShownReported = true;
@@ -1422,6 +1476,9 @@ public abstract class WallpaperService extends Service {
                 }
                 case MSG_UPDATE_SURFACE:
                     mEngine.updateSurface(true, false, false);
+                    break;
+                case MSG_SCALE:
+                    mEngine.setZoom(Float.intBitsToFloat(message.arg1));
                     break;
                 case MSG_VISIBILITY_CHANGED:
                     if (DEBUG) Log.v(TAG, "Visibility change in " + mEngine

@@ -18,6 +18,7 @@
 
 #include <gtest/gtest_prod.h>
 #include "config/ConfigListener.h"
+#include "logd/LogEvent.h"
 #include "metrics/MetricsManager.h"
 #include "packages/UidMap.h"
 #include "external/StatsPullerManager.h"
@@ -196,6 +197,22 @@ private:
     // Handler over the isolated uid change event.
     void onIsolatedUidChangedEventLocked(const LogEvent& event);
 
+    // Handler over the binary push state changed event.
+    void onBinaryPushStateChangedEventLocked(LogEvent* event);
+
+    // Handler over the watchdog rollback occurred event.
+    void onWatchdogRollbackOccurredLocked(LogEvent* event);
+
+    // Updates train info on disk based on binary push state changed info and
+    // write disk info into parameters.
+    void getAndUpdateTrainInfoOnDisk(bool is_rollback, InstallTrainInfo* trainInfoIn);
+
+    // Gets experiment ids on disk for associated train and updates them
+    // depending on rollback type. Then writes them back to disk and returns
+    // them.
+    std::vector<int64_t> processWatchdogRollbackOccurred(const int32_t rollbackTypeIn,
+                                                          const string& packageName);
+
     // Reset all configs.
     void resetConfigsLocked(const int64_t timestampNs);
     // Reset the specified configs.
@@ -284,6 +301,10 @@ private:
     FRIEND_TEST(DurationMetricE2eTest, TestWithCondition);
     FRIEND_TEST(DurationMetricE2eTest, TestWithSlicedCondition);
     FRIEND_TEST(DurationMetricE2eTest, TestWithActivationAndSlicedCondition);
+
+    FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState);
+    FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState_WithDimensions);
+    FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState_WithIncorrectDimensions);
 };
 
 }  // namespace statsd

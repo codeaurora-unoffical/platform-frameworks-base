@@ -20,8 +20,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.biometrics.BiometricSourceType
 import android.provider.Settings
-import com.android.systemui.DumpController
 import com.android.systemui.Dumpable
+import com.android.systemui.dump.DumpManager
 import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.statusbar.NotificationLockscreenUserManager
 import com.android.systemui.statusbar.StatusBarState
@@ -33,16 +33,25 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class KeyguardBypassController : Dumpable {
+open class KeyguardBypassController : Dumpable {
 
     private val mKeyguardStateController: KeyguardStateController
     private val statusBarStateController: StatusBarStateController
     private var hasFaceFeature: Boolean
+    private var pendingUnlock: PendingUnlock? = null
 
     /**
+     * Pending unlock info:
+     *
      * The pending unlock type which is set if the bypass was blocked when it happened.
+     *
+     * Whether the pending unlock type is strong biometric or non-strong biometric
+     * (i.e. weak or convenience).
      */
-    private var pendingUnlockType: BiometricSourceType? = null
+    private data class PendingUnlock(
+        val pendingUnlockType: BiometricSourceType,
+        val isStrongBiometric: Boolean
+    )
 
     lateinit var unlockController: BiometricUnlockController
     var isPulseExpanding = false
@@ -72,7 +81,7 @@ class KeyguardBypassController : Dumpable {
         statusBarStateController: StatusBarStateController,
         lockscreenUserManager: NotificationLockscreenUserManager,
         keyguardStateController: KeyguardStateController,
-        dumpController: DumpController
+        dumpManager: DumpManager
     ) {
         this.mKeyguardStateController = keyguardStateController
         this.statusBarStateController = statusBarStateController
@@ -82,11 +91,11 @@ class KeyguardBypassController : Dumpable {
             return
         }
 
-        dumpController.registerDumpable("KeyguardBypassController", this)
+        dumpManager.registerDumpable("KeyguardBypassController", this)
         statusBarStateController.addCallback(object : StatusBarStateController.StateListener {
             override fun onStateChanged(newState: Int) {
                 if (newState != StatusBarState.KEYGUARD) {
-                    pendingUnlockType = null
+                    pendingUnlock = null
                 }
             }
         })
@@ -98,7 +107,12 @@ class KeyguardBypassController : Dumpable {
                 bypassEnabled = tunerService.getValue(key, dismissByDefault) != 0
             }
         }, Settings.Secure.FACE_UNLOCK_DISMISSES_KEYGUARD)
-        lockscreenUserManager.addUserChangedListener { pendingUnlockType = null }
+        lockscreenUserManager.addUserChangedListener(
+                object : NotificationLockscreenUserManager.UserChangedListener {
+                    override fun onUserChanged(userId: Int) {
+                        pendingUnlock = null
+                    }
+                })
     }
 
     /**
@@ -106,11 +120,14 @@ class KeyguardBypassController : Dumpable {
      *
      * @return false if we can not wake and unlock right now
      */
-    fun onBiometricAuthenticated(biometricSourceType: BiometricSourceType): Boolean {
+    fun onBiometricAuthenticated(
+        biometricSourceType: BiometricSourceType,
+        isStrongBiometric: Boolean
+    ): Boolean {
         if (bypassEnabled) {
             val can = canBypass()
             if (!can && (isPulseExpanding || qSExpanded)) {
-                pendingUnlockType = biometricSourceType
+                pendingUnlock = PendingUnlock(biometricSourceType, isStrongBiometric)
             }
             return can
         }
@@ -118,10 +135,12 @@ class KeyguardBypassController : Dumpable {
     }
 
     fun maybePerformPendingUnlock() {
-        if (pendingUnlockType != null) {
-            if (onBiometricAuthenticated(pendingUnlockType!!)) {
-                unlockController.startWakeAndUnlock(pendingUnlockType)
-                pendingUnlockType = null
+        if (pendingUnlock != null) {
+            if (onBiometricAuthenticated(pendingUnlock!!.pendingUnlockType,
+                            pendingUnlock!!.isStrongBiometric)) {
+                unlockController.startWakeAndUnlock(pendingUnlock!!.pendingUnlockType,
+                        pendingUnlock!!.isStrongBiometric)
+                pendingUnlock = null
             }
         }
     }
@@ -157,12 +176,17 @@ class KeyguardBypassController : Dumpable {
     }
 
     fun onStartedGoingToSleep() {
-        pendingUnlockType = null
+        pendingUnlock = null
     }
 
     override fun dump(fd: FileDescriptor, pw: PrintWriter, args: Array<out String>) {
         pw.println("KeyguardBypassController:")
-        pw.println("  pendingUnlockType: $pendingUnlockType")
+        if (pendingUnlock != null) {
+            pw.println("  mPendingUnlock.pendingUnlockType: ${pendingUnlock!!.pendingUnlockType}")
+            pw.println("  mPendingUnlock.isStrongBiometric: ${pendingUnlock!!.isStrongBiometric}")
+        } else {
+            pw.println("  mPendingUnlock: $pendingUnlock")
+        }
         pw.println("  bypassEnabled: $bypassEnabled")
         pw.println("  canBypass: ${canBypass()}")
         pw.println("  bouncerShowing: $bouncerShowing")

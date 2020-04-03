@@ -32,9 +32,11 @@ import android.graphics.Region;
 import android.os.Bundle;
 import android.os.IRemoteCallback;
 import android.os.ParcelFileDescriptor;
+import android.view.DisplayCutout;
 import android.view.IApplicationToken;
 import android.view.IAppTransitionAnimationSpecsFuture;
 import android.view.IDockedStackListener;
+import android.view.IDisplayWindowInsetsController;
 import android.view.IDisplayWindowListener;
 import android.view.IDisplayFoldListener;
 import android.view.IDisplayWindowRotationController;
@@ -49,6 +51,7 @@ import android.view.IWindowSession;
 import android.view.IWindowSessionCallback;
 import android.view.KeyEvent;
 import android.view.InputEvent;
+import android.view.InsetsState;
 import android.view.MagnificationSpec;
 import android.view.MotionEvent;
 import android.view.InputChannel;
@@ -94,6 +97,8 @@ interface IWindowManager
 
     IWindowSession openSession(in IWindowSessionCallback callback);
 
+    boolean useBLAST();
+
     @UnsupportedAppUsage
     void getInitialDisplaySize(int displayId, out Point size);
     @UnsupportedAppUsage
@@ -109,6 +114,22 @@ interface IWindowManager
 
     // These can only be called when holding the MANAGE_APP_TOKENS permission.
     void setEventDispatching(boolean enabled);
+
+    /** @return {@code true} if this binder is a registered window token. */
+    boolean isWindowToken(in IBinder binder);
+    /**
+     * Adds window token for a given type.
+     *
+     * @param token Token to be registered.
+     * @param type Window type to be used with this token.
+     * @param options A bundle used to pass window-related options.
+     * @param displayId The ID of the display where this token should be added.
+     * @param packageName The name of package to request to add window token.
+     * @return {@link WindowManagerGlobal#ADD_OKAY} if the addition was successful, an error code
+     *         otherwise.
+     */
+    int addWindowTokenWithOptions(IBinder token, int type, int displayId, in Bundle options,
+            String packageName);
     void addWindowToken(IBinder token, int type, int displayId);
     void removeWindowToken(IBinder token, int displayId);
     void prepareAppTransition(int transit, boolean alwaysKeepCurrent);
@@ -423,8 +444,7 @@ interface IWindowManager
     WindowContentFrameStats getWindowContentFrameStats(IBinder token);
 
     /**
-     * @return the dock side the current docked stack is at; must be one of the
-     *         WindowManagerGlobal.DOCKED_* values
+     * This is a no-op.
      */
     @UnsupportedAppUsage
     int getDockedStackSide();
@@ -436,25 +456,9 @@ interface IWindowManager
     void setDockedStackDividerTouchRegion(in Rect touchableRegion);
 
     /**
-     * Registers a listener that will be called when the dock divider changes its visibility or when
-     * the docked stack gets added/removed.
-     */
-    @UnsupportedAppUsage
-    void registerDockedStackListener(IDockedStackListener listener);
-
-    /**
      * Registers a listener that will be called when the pinned stack state changes.
      */
     void registerPinnedStackListener(int displayId, IPinnedStackListener listener);
-
-    /**
-     * Updates the dim layer used while resizing.
-     *
-     * @param visible Whether the dim layer should be visible.
-     * @param targetWindowingMode The windowing mode of the stack the dim layer should be placed on.
-     * @param alpha The translucency of the dim layer, between 0 and 1.
-     */
-    void setResizeDimLayer(boolean visible, int targetWindowingMode, float alpha);
 
     /**
      * Requests Keyboard Shortcuts from the displayed window.
@@ -539,12 +543,6 @@ interface IWindowManager
      * Returns true if window trace is enabled.
      */
     boolean isWindowTraceEnabled();
-
-    /**
-     * Requests that the WindowManager sends
-     * WindowManagerPolicyConstants#ACTION_USER_ACTIVITY_NOTIFICATION on the next user activity.
-     */
-    void requestUserActivityNotification();
 
     /**
      * Notify WindowManager that it should not override the info in DisplayManager for the specified
@@ -711,4 +709,29 @@ interface IWindowManager
      * @return true if the display was successfully mirrored.
      */
     boolean mirrorDisplay(int displayId, out SurfaceControl outSurfaceControl);
+
+    /**
+     * When in multi-window mode, the provided displayWindowInsetsController will control insets
+     * animations.
+     */
+    void setDisplayWindowInsetsController(
+            int displayId, in IDisplayWindowInsetsController displayWindowInsetsController);
+
+    /**
+     * Called when a remote process modifies insets on a display window container.
+     */
+    void modifyDisplayWindowInsets(int displayId, in InsetsState state);
+
+    /**
+     * Called to get the expected window insets.
+     * TODO(window-context): Remove when new insets flag is available.
+     */
+    void getWindowInsets(in WindowManager.LayoutParams attrs, int displayId,
+            out Rect outContentInsets, out Rect outStableInsets,
+            out DisplayCutout.ParcelableWrapper displayCutout);
+
+    /**
+     * Called to show global actions.
+     */
+    void showGlobalActions();
 }

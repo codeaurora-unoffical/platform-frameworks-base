@@ -16,16 +16,18 @@
 
 package com.android.server.location;
 
+import static com.android.internal.util.ConcurrentUtils.DIRECT_EXECUTOR;
+
 import android.annotation.Nullable;
-import android.content.Context;
 import android.location.Location;
-import android.os.WorkSource;
+import android.os.Bundle;
 
 import com.android.internal.location.ProviderProperties;
 import com.android.internal.location.ProviderRequest;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.Collections;
 
 /**
  * A mock location provider used by LocationManagerService to implement test providers.
@@ -34,41 +36,35 @@ import java.io.PrintWriter;
  */
 public class MockProvider extends AbstractLocationProvider {
 
-    private boolean mEnabled;
     @Nullable private Location mLocation;
 
-    public MockProvider(Context context,
-            LocationProviderManager locationProviderManager, ProviderProperties properties) {
-        super(context, locationProviderManager);
-
-        mEnabled = true;
-        mLocation = null;
-
+    public MockProvider(ProviderProperties properties) {
+        // using a direct executor is ok because this class has no locks that could deadlock
+        super(DIRECT_EXECUTOR, Collections.emptySet());
         setProperties(properties);
     }
 
-    /** Sets the enabled state of this mock provider. */
-    public void setEnabled(boolean enabled) {
-        mEnabled = enabled;
-        super.setEnabled(enabled);
+    /** Sets the allowed state of this mock provider. */
+    public void setProviderAllowed(boolean allowed) {
+        setAllowed(allowed);
     }
 
     /** Sets the location to report for this mock provider. */
-    public void setLocation(Location l) {
-        mLocation = new Location(l);
-        if (!mLocation.isFromMockProvider()) {
-            mLocation.setIsFromMockProvider(true);
-        }
-        if (mEnabled) {
-            reportLocation(mLocation);
-        }
+    public void setProviderLocation(Location l) {
+        Location location = new Location(l);
+        location.setIsFromMockProvider(true);
+        mLocation = location;
+        reportLocation(location);
     }
+
+    @Override
+    public void onSetRequest(ProviderRequest request) {}
+
+    @Override
+    protected void onExtraCommand(int uid, int pid, String command, Bundle extras) {}
 
     @Override
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
-        pw.println("last location=" + mLocation);
+        pw.println("last mock location=" + mLocation);
     }
-
-    @Override
-    public void onSetRequest(ProviderRequest request, WorkSource source) {}
 }

@@ -116,12 +116,33 @@ public final class WifiNetworkSuggestion implements Parcelable {
         /**
          * Whether this network is shared credential with user to allow user manually connect.
          */
-        private boolean mIsUserAllowed;
+        private boolean mIsSharedWithUser;
 
         /**
-         * Whether the setIsUserAllowedToManuallyConnect have been called.
+         * Whether the setCredentialSharedWithUser have been called.
          */
-        private boolean mIsUserAllowedBeenSet;
+        private boolean mIsSharedWithUserSet;
+
+        /**
+         * Whether this network is initialized with auto-join enabled (the default) or not.
+         */
+        private boolean mIsInitialAutojoinEnabled;
+
+        /**
+         * Pre-shared key for use with WAPI-PSK networks.
+         */
+        private @Nullable String mWapiPskPassphrase;
+
+        /**
+         * The enterprise configuration details specifying the EAP method,
+         * certificates and other settings associated with the WAPI networks.
+         */
+        private @Nullable WifiEnterpriseConfig mWapiEnterpriseConfig;
+
+        /**
+         * Whether this network will be brought up as untrusted (TRUSTED capability bit removed).
+         */
+        private boolean mIsNetworkUntrusted;
 
         public Builder() {
             mSsid = null;
@@ -136,10 +157,14 @@ public final class WifiNetworkSuggestion implements Parcelable {
             mIsAppInteractionRequired = false;
             mIsUserInteractionRequired = false;
             mIsMetered = false;
-            mIsUserAllowed = true;
-            mIsUserAllowedBeenSet = false;
+            mIsSharedWithUser = true;
+            mIsSharedWithUserSet = false;
+            mIsInitialAutojoinEnabled = true;
             mPriority = UNASSIGNED_PRIORITY;
             mCarrierId = TelephonyManager.UNKNOWN_CARRIER_ID;
+            mWapiPskPassphrase = null;
+            mWapiEnterpriseConfig = null;
+            mIsNetworkUntrusted = false;
         }
 
         /**
@@ -294,6 +319,39 @@ public final class WifiNetworkSuggestion implements Parcelable {
         }
 
         /**
+         * Set the ASCII WAPI passphrase for this network. Needed for authenticating to
+         * WAPI-PSK networks.
+         *
+         * @param passphrase passphrase of the network.
+         * @return Instance of {@link Builder} to enable chaining of the builder method.
+         * @throws IllegalArgumentException if the passphrase is not ASCII encodable.
+         *
+         */
+        public @NonNull Builder setWapiPassphrase(@NonNull String passphrase) {
+            checkNotNull(passphrase);
+            final CharsetEncoder asciiEncoder = StandardCharsets.US_ASCII.newEncoder();
+            if (!asciiEncoder.canEncode(passphrase)) {
+                throw new IllegalArgumentException("passphrase not ASCII encodable");
+            }
+            mWapiPskPassphrase = passphrase;
+            return this;
+        }
+
+        /**
+         * Set the associated enterprise configuration for this network. Needed for authenticating
+         * to WAPI-CERT networks. See {@link WifiEnterpriseConfig} for description.
+         *
+         * @param enterpriseConfig Instance of {@link WifiEnterpriseConfig}.
+         * @return Instance of {@link Builder} to enable chaining of the builder method.
+         */
+        public @NonNull Builder setWapiEnterpriseConfig(
+                @NonNull WifiEnterpriseConfig enterpriseConfig) {
+            checkNotNull(enterpriseConfig);
+            mWapiEnterpriseConfig = new WifiEnterpriseConfig(enterpriseConfig);
+            return this;
+        }
+
+        /**
          * Specifies whether this represents a hidden network.
          * <p>
          * <li>If not set, defaults to false (i.e not a hidden network).</li>
@@ -385,13 +443,55 @@ public final class WifiNetworkSuggestion implements Parcelable {
          * <li>If not set, defaults to true (i.e. allow user to manually connect) for secure
          * networks and false for open networks.</li>
          *
-         * @param isAllowed {@code true} to indicate that the credentials may be used by the user to
+         * @param isShared {@code true} to indicate that the credentials may be used by the user to
          *                              manually connect to the network, {@code false} otherwise.
          * @return Instance of {@link Builder} to enable chaining of the builder method.
          */
-        public @NonNull Builder setIsUserAllowedToManuallyConnect(boolean isAllowed) {
-            mIsUserAllowed = isAllowed;
-            mIsUserAllowedBeenSet = true;
+        public @NonNull Builder setCredentialSharedWithUser(boolean isShared) {
+            mIsSharedWithUser = isShared;
+            mIsSharedWithUserSet = true;
+            return this;
+        }
+
+        /**
+         * Specifies whether the suggestion is created with auto-join enabled or disabled. The
+         * user may modify the auto-join configuration of a suggestion directly once the device
+         * associates to the network.
+         * <p>
+         * If auto-join is initialized as disabled the user may still be able to manually connect
+         * to the network. Therefore, disabling auto-join only makes sense if
+         * {@link #setCredentialSharedWithUser(boolean)} is set to true (the default) which
+         * itself implies a secure (non-open) network.
+         * <p>
+         * If not set, defaults to true (i.e. auto-join is initialized as enabled).
+         *
+         * @param enabled true for initializing with auto-join enabled (the default), false to
+         *                initializing with auto-join disabled.
+         * @return Instance of {@link Builder} to enable chaining of the builder method.
+         */
+        public @NonNull Builder setIsInitialAutojoinEnabled(boolean enabled) {
+            mIsInitialAutojoinEnabled = enabled;
+            return this;
+        }
+
+        /**
+         * Specifies whether the system will bring up the network (if selected) as untrusted. An
+         * untrusted network has its {@link android.net.NetworkCapabilities#NET_CAPABILITY_TRUSTED}
+         * capability removed. The Wi-Fi network selection process may use this information to
+         * influence priority of the suggested network for Wi-Fi network selection (most likely to
+         * reduce it). The connectivity service may use this information to influence the overall
+         * network configuration of the device.
+         * <p>
+         * <li> An untrusted network's credentials may not be shared with the user using
+         * {@link #setCredentialSharedWithUser(boolean)}.</li>
+         * <li> If not set, defaults to false (i.e. network is trusted).</li>
+         *
+         * @param isUntrusted Boolean indicating whether the network should be brought up untrusted
+         *                    (if true) or trusted (if false).
+         * @return Instance of {@link Builder} to enable chaining of the builder method.
+         */
+        public @NonNull Builder setUntrusted(boolean isUntrusted) {
+            mIsNetworkUntrusted = isUntrusted;
             return this;
         }
 
@@ -413,6 +513,13 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 configuration.enterpriseConfig = mWpa3EnterpriseConfig;
             } else if (mIsEnhancedOpen) { // OWE network
                 configuration.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OWE);
+            } else if (!TextUtils.isEmpty(mWapiPskPassphrase)) { // WAPI-PSK network.
+                configuration.setSecurityParams(WifiConfiguration.SECURITY_TYPE_WAPI_PSK);
+                // WifiConfiguration.preSharedKey needs quotes around ASCII password.
+                configuration.preSharedKey = "\"" + mWapiPskPassphrase + "\"";
+            } else if (mWapiEnterpriseConfig != null) { // WAPI-CERT network
+                configuration.setSecurityParams(WifiConfiguration.SECURITY_TYPE_WAPI_CERT);
+                configuration.enterpriseConfig = mWapiEnterpriseConfig;
             } else { // Open network
                 configuration.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OPEN);
             }
@@ -446,23 +553,28 @@ public final class WifiNetworkSuggestion implements Parcelable {
             numSecurityTypes += mIsEnhancedOpen ? 1 : 0;
             numSecurityTypes += !TextUtils.isEmpty(mWpa2PskPassphrase) ? 1 : 0;
             numSecurityTypes += !TextUtils.isEmpty(mWpa3SaePassphrase) ? 1 : 0;
+            numSecurityTypes += !TextUtils.isEmpty(mWapiPskPassphrase) ? 1 : 0;
             numSecurityTypes += mWpa2EnterpriseConfig != null ? 1 : 0;
             numSecurityTypes += mWpa3EnterpriseConfig != null ? 1 : 0;
+            numSecurityTypes += mWapiEnterpriseConfig != null ? 1 : 0;
             numSecurityTypes += mPasspointConfiguration != null ? 1 : 0;
             if (numSecurityTypes > 1) {
                 throw new IllegalStateException("only one of setIsEnhancedOpen, setWpa2Passphrase,"
-                        + "setWpa3Passphrase, setWpa2EnterpriseConfig, setWpa3EnterpriseConfig"
-                        + "or setPasspointConfig can be invoked for network suggestion");
+                        + " setWpa3Passphrase, setWpa2EnterpriseConfig, setWpa3EnterpriseConfig"
+                        + " setWapiPassphrase, setWapiCertSuite, setIsWapiCertSuiteAuto"
+                        + " or setPasspointConfig can be invoked for network suggestion");
             }
         }
 
         private WifiConfiguration buildWifiConfigurationForPasspoint() {
             WifiConfiguration wifiConfiguration = new WifiConfiguration();
             wifiConfiguration.FQDN = mPasspointConfiguration.getHomeSp().getFqdn();
+            wifiConfiguration.setPasspointUniqueId(mPasspointConfiguration.getUniqueId());
             wifiConfiguration.priority = mPriority;
             wifiConfiguration.meteredOverride =
                     mIsMetered ? WifiConfiguration.METERED_OVERRIDE_METERED
                             : WifiConfiguration.METERED_OVERRIDE_NONE;
+            wifiConfiguration.trusted = !mIsNetworkUntrusted;
             mPasspointConfiguration.setCarrierId(mCarrierId);
             return wifiConfiguration;
         }
@@ -532,7 +644,6 @@ public final class WifiNetworkSuggestion implements Parcelable {
                             + "suggestion with Passpoint configuration");
                 }
                 wifiConfiguration = buildWifiConfigurationForPasspoint();
-
             } else {
                 if (mSsid == null) {
                     throw new IllegalStateException("setSsid should be invoked for suggestion");
@@ -547,20 +658,34 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 }
                 wifiConfiguration = buildWifiConfiguration();
                 if (wifiConfiguration.isOpenNetwork()) {
-                    if (mIsUserAllowedBeenSet && mIsUserAllowed) {
+                    if (mIsSharedWithUserSet && mIsSharedWithUser) {
                         throw new IllegalStateException("Open network should not be "
-                                + "setIsUserAllowedToManuallyConnect to true");
+                                + "setCredentialSharedWithUser to true");
                     }
-                    mIsUserAllowed = false;
+                    mIsSharedWithUser = false;
                 }
             }
-
+            if (!mIsSharedWithUser && !mIsInitialAutojoinEnabled) {
+                throw new IllegalStateException("Should have not a network with both "
+                        + "setCredentialSharedWithUser and "
+                        + "setIsAutojoinEnabled set to false");
+            }
+            if (mIsNetworkUntrusted) {
+                if (mIsSharedWithUserSet && mIsSharedWithUser) {
+                    throw new IllegalStateException("Should not be both"
+                            + "setCredentialSharedWithUser and +"
+                            + "setIsNetworkAsUntrusted to true");
+                }
+                mIsSharedWithUser = false;
+            }
             return new WifiNetworkSuggestion(
                     wifiConfiguration,
                     mPasspointConfiguration,
                     mIsAppInteractionRequired,
                     mIsUserInteractionRequired,
-                    mIsUserAllowed);
+                    mIsSharedWithUser,
+                    mIsInitialAutojoinEnabled,
+                    mIsNetworkUntrusted);
         }
     }
 
@@ -568,12 +693,14 @@ public final class WifiNetworkSuggestion implements Parcelable {
      * Network configuration for the provided network.
      * @hide
      */
+    @NonNull
     public final WifiConfiguration wifiConfiguration;
 
     /**
      * Passpoint configuration for the provided network.
      * @hide
      */
+    @Nullable
     public final PasspointConfiguration passpointConfiguration;
 
     /**
@@ -587,6 +714,7 @@ public final class WifiNetworkSuggestion implements Parcelable {
      * @hide
      */
     public final boolean isUserInteractionRequired;
+
     /**
      * Whether app share credential with the user, allow user use provided credential to
      * connect network manually.
@@ -594,13 +722,28 @@ public final class WifiNetworkSuggestion implements Parcelable {
      */
     public final boolean isUserAllowedToManuallyConnect;
 
+    /**
+     * Whether the suggestion will be initialized as auto-joined or not.
+     * @hide
+     */
+    public final boolean isInitialAutoJoinEnabled;
+
+    /**
+     * Whether this network will be brought up as untrusted (TRUSTED capability bit removed).
+     * @hide
+     */
+    public final boolean isNetworkUntrusted;
+
+
     /** @hide */
     public WifiNetworkSuggestion() {
-        this.wifiConfiguration = null;
+        this.wifiConfiguration = new WifiConfiguration();
         this.passpointConfiguration = null;
         this.isAppInteractionRequired = false;
         this.isUserInteractionRequired = false;
         this.isUserAllowedToManuallyConnect = true;
+        this.isInitialAutoJoinEnabled = true;
+        this.isNetworkUntrusted = false;
     }
 
     /** @hide */
@@ -608,7 +751,9 @@ public final class WifiNetworkSuggestion implements Parcelable {
                                  @Nullable PasspointConfiguration passpointConfiguration,
                                  boolean isAppInteractionRequired,
                                  boolean isUserInteractionRequired,
-                                 boolean isUserAllowedToManuallyConnect) {
+                                 boolean isUserAllowedToManuallyConnect,
+                                 boolean isInitialAutoJoinEnabled,
+                                 boolean isNetworkUntrusted) {
         checkNotNull(networkConfiguration);
         this.wifiConfiguration = networkConfiguration;
         this.passpointConfiguration = passpointConfiguration;
@@ -616,6 +761,8 @@ public final class WifiNetworkSuggestion implements Parcelable {
         this.isAppInteractionRequired = isAppInteractionRequired;
         this.isUserInteractionRequired = isUserInteractionRequired;
         this.isUserAllowedToManuallyConnect = isUserAllowedToManuallyConnect;
+        this.isInitialAutoJoinEnabled = isInitialAutoJoinEnabled;
+        this.isNetworkUntrusted = isNetworkUntrusted;
     }
 
     public static final @NonNull Creator<WifiNetworkSuggestion> CREATOR =
@@ -627,7 +774,9 @@ public final class WifiNetworkSuggestion implements Parcelable {
                             in.readParcelable(null), // PasspointConfiguration
                             in.readBoolean(), // isAppInteractionRequired
                             in.readBoolean(), // isUserInteractionRequired
-                            in.readBoolean()  // isSharedCredentialWithUser
+                            in.readBoolean(), // isSharedCredentialWithUser
+                            in.readBoolean(),  // isAutojoinEnabled
+                            in.readBoolean()
                     );
                 }
 
@@ -649,12 +798,14 @@ public final class WifiNetworkSuggestion implements Parcelable {
         dest.writeBoolean(isAppInteractionRequired);
         dest.writeBoolean(isUserInteractionRequired);
         dest.writeBoolean(isUserAllowedToManuallyConnect);
+        dest.writeBoolean(isInitialAutoJoinEnabled);
+        dest.writeBoolean(isNetworkUntrusted);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(wifiConfiguration.SSID, wifiConfiguration.BSSID,
-                wifiConfiguration.allowedKeyManagement, wifiConfiguration.FQDN);
+                wifiConfiguration.allowedKeyManagement, wifiConfiguration.getKey());
     }
 
     /**
@@ -677,7 +828,8 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 && TextUtils.equals(this.wifiConfiguration.BSSID, lhs.wifiConfiguration.BSSID)
                 && Objects.equals(this.wifiConfiguration.allowedKeyManagement,
                 lhs.wifiConfiguration.allowedKeyManagement)
-                && TextUtils.equals(this.wifiConfiguration.FQDN, lhs.wifiConfiguration.FQDN);
+                && TextUtils.equals(this.wifiConfiguration.getKey(),
+                lhs.wifiConfiguration.getKey());
     }
 
     @Override
@@ -688,8 +840,124 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 .append(", FQDN=").append(wifiConfiguration.FQDN)
                 .append(", isAppInteractionRequired=").append(isAppInteractionRequired)
                 .append(", isUserInteractionRequired=").append(isUserInteractionRequired)
-                .append(", isUserAllowedToManuallyConnect=").append(isUserAllowedToManuallyConnect)
+                .append(", isCredentialSharedWithUser=").append(isUserAllowedToManuallyConnect)
+                .append(", isInitialAutoJoinEnabled=").append(isInitialAutoJoinEnabled)
+                .append(", isUnTrusted=").append(isNetworkUntrusted)
                 .append(" ]");
         return sb.toString();
+    }
+
+    /**
+     * Get the {@link WifiConfiguration} associated with this Suggestion.
+     * @hide
+     */
+    @SystemApi
+    @NonNull
+    public WifiConfiguration getWifiConfiguration() {
+        return wifiConfiguration;
+    }
+
+    /**
+     * Get the BSSID, or null if unset.
+     * @see Builder#setBssid(MacAddress)
+     */
+    @Nullable
+    public MacAddress getBssid() {
+        if (wifiConfiguration.BSSID == null) {
+            return null;
+        }
+        return MacAddress.fromString(wifiConfiguration.BSSID);
+    }
+
+    /** @see Builder#setCredentialSharedWithUser(boolean) */
+    public boolean isCredentialSharedWithUser() {
+        return isUserAllowedToManuallyConnect;
+    }
+
+    /** @see Builder#setIsAppInteractionRequired(boolean) */
+    public boolean isAppInteractionRequired() {
+        return isAppInteractionRequired;
+    }
+
+    /** @see Builder#setIsEnhancedOpen(boolean)  */
+    public boolean isEnhancedOpen() {
+        return wifiConfiguration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.OWE);
+    }
+
+    /** @see Builder#setIsHiddenSsid(boolean)  */
+    public boolean isHiddenSsid() {
+        return wifiConfiguration.hiddenSSID;
+    }
+
+    /** @see Builder#setIsInitialAutojoinEnabled(boolean)  */
+    public boolean isInitialAutojoinEnabled() {
+        return isInitialAutoJoinEnabled;
+    }
+
+    /** @see Builder#setIsMetered(boolean)  */
+    public boolean isMetered() {
+        return wifiConfiguration.meteredOverride == WifiConfiguration.METERED_OVERRIDE_METERED;
+    }
+
+    /** @see Builder#setIsUserInteractionRequired(boolean)  */
+    public boolean isUserInteractionRequired() {
+        return isUserInteractionRequired;
+    }
+
+    /**
+     * Get the {@link PasspointConfiguration} associated with this Suggestion, or null if this
+     * Suggestion is not for a Passpoint network.
+     */
+    @Nullable
+    public PasspointConfiguration getPasspointConfig() {
+        return passpointConfiguration;
+    }
+
+    /** @see Builder#setPriority(int)  */
+    @IntRange(from = 0)
+    public int getPriority() {
+        return wifiConfiguration.priority;
+    }
+
+    /**
+     * Return the SSID of the network, or null if this is a Passpoint network.
+     * @see Builder#setSsid(String)
+     */
+    @Nullable
+    public String getSsid() {
+        if (wifiConfiguration.SSID == null) {
+            return null;
+        }
+        return WifiInfo.sanitizeSsid(wifiConfiguration.SSID);
+    }
+
+    /** @see Builder#setUntrusted(boolean)  */
+    public boolean isUntrusted() {
+        return isNetworkUntrusted;
+    }
+
+    /**
+     * Get the WifiEnterpriseConfig, or null if unset.
+     * @see Builder#setWapiEnterpriseConfig(WifiEnterpriseConfig)
+     * @see Builder#setWpa2EnterpriseConfig(WifiEnterpriseConfig)
+     * @see Builder#setWpa3EnterpriseConfig(WifiEnterpriseConfig)
+     */
+    @Nullable
+    public WifiEnterpriseConfig getEnterpriseConfig() {
+        return wifiConfiguration.enterpriseConfig;
+    }
+
+    /**
+     * Get the passphrase, or null if unset.
+     * @see Builder#setWapiPassphrase(String)
+     * @see Builder#setWpa2Passphrase(String)
+     * @see Builder#setWpa3Passphrase(String)
+     */
+    @Nullable
+    public String getPassphrase() {
+        if (wifiConfiguration.preSharedKey == null) {
+            return null;
+        }
+        return WifiInfo.removeDoubleQuotes(wifiConfiguration.preSharedKey);
     }
 }

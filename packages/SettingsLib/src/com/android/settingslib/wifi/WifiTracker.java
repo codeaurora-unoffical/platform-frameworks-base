@@ -226,7 +226,7 @@ public class WifiTracker implements LifecycleObserver, OnStart, OnStop, OnDestro
         mConnectivityManager = connectivityManager;
 
         // check if verbose logging developer option has been turned on or off
-        sVerboseLogging = mWifiManager != null && (mWifiManager.getVerboseLoggingLevel() > 0);
+        sVerboseLogging = mWifiManager != null && mWifiManager.isVerboseLoggingEnabled();
 
         mFilter = filter;
 
@@ -361,7 +361,7 @@ public class WifiTracker implements LifecycleObserver, OnStart, OnStop, OnDestro
         mNetworkScoreManager.registerNetworkScoreCache(
                 NetworkKey.TYPE_WIFI,
                 mScoreCache,
-                NetworkScoreManager.CACHE_FILTER_SCAN_RESULTS);
+                NetworkScoreManager.SCORE_FILTER_SCAN_RESULTS);
     }
 
     private void requestScoresForNetworkKeys(Collection<NetworkKey> keys) {
@@ -606,7 +606,7 @@ public class WifiTracker implements LifecycleObserver, OnStart, OnStop, OnDestro
 
             List<ScanResult> cachedScanResults = new ArrayList<>(mScanResultCache.values());
 
-            // Add a unique Passpoint AccessPoint for each Passpoint profile's FQDN.
+            // Add a unique Passpoint AccessPoint for each Passpoint profile's unique identifier.
             accessPoints.addAll(updatePasspointAccessPoints(
                     mWifiManager.getAllMatchingWifiConfigs(cachedScanResults), cachedAccessPoints));
 

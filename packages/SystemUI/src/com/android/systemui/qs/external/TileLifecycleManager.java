@@ -42,6 +42,7 @@ import com.android.systemui.broadcast.BroadcastDispatcher;
 
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Manages the lifecycle of a TileService.
@@ -84,7 +85,8 @@ public class TileLifecycleManager extends BroadcastReceiver implements
     private int mBindTryCount;
     private int mBindRetryDelay = DEFAULT_BIND_RETRY_DELAY;
     private boolean mBound;
-    boolean mReceiverRegistered;
+    private AtomicBoolean mPackageReceiverRegistered = new AtomicBoolean(false);
+    private AtomicBoolean mUserReceiverRegistered = new AtomicBoolean(false);
     private boolean mUnbindImmediate;
     private TileChangeListener mChangeListener;
     // Return value from bindServiceAsUser, determines whether safe to call unbind.
@@ -139,16 +141,16 @@ public class TileLifecycleManager extends BroadcastReceiver implements
     /**
      * Determines whether the associated TileService is a Boolean Tile.
      *
-     * @return true if {@link TileService#META_DATA_BOOLEAN_TILE} is set to {@code true} for this
+     * @return true if {@link TileService#META_DATA_TOGGLEABLE_TILE} is set to {@code true} for this
      *         tile
-     * @see TileService#META_DATA_BOOLEAN_TILE
+     * @see TileService#META_DATA_TOGGLEABLE_TILE
      */
-    public boolean isBooleanTile() {
+    public boolean isToggleableTile() {
         try {
             ServiceInfo info = mPackageManagerAdapter.getServiceInfo(mIntent.getComponent(),
                     PackageManager.MATCH_UNINSTALLED_PACKAGES | PackageManager.GET_META_DATA);
             return info.metaData != null
-                    && info.metaData.getBoolean(TileService.META_DATA_BOOLEAN_TILE, false);
+                    && info.metaData.getBoolean(TileService.META_DATA_TOGGLEABLE_TILE, false);
         } catch (PackageManager.NameNotFoundException e) {
             return false;
         }
@@ -274,9 +276,10 @@ public class TileLifecycleManager extends BroadcastReceiver implements
 
     public void handleDestroy() {
         if (DEBUG) Log.d(TAG, "handleDestroy");
-        if (mReceiverRegistered) {
+        if (mPackageReceiverRegistered.get() || mUserReceiverRegistered.get()) {
             stopPackageListening();
         }
+        mChangeListener = null;
     }
 
     private void handleDeath() {
@@ -310,17 +313,31 @@ public class TileLifecycleManager extends BroadcastReceiver implements
         IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
         filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
         filter.addDataScheme("package");
-        mContext.registerReceiverAsUser(this, mUser, filter, null, mHandler);
+        try {
+            mPackageReceiverRegistered.set(true);
+            mContext.registerReceiverAsUser(this, mUser, filter, null, mHandler);
+        } catch (Exception ex) {
+            mPackageReceiverRegistered.set(false);
+            Log.e(TAG, "Could not register package receiver", ex);
+        }
         filter = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
-        mBroadcastDispatcher.registerReceiver(this, filter, mHandler, mUser);
-        mReceiverRegistered = true;
+        try {
+            mUserReceiverRegistered.set(true);
+            mBroadcastDispatcher.registerReceiverWithHandler(this, filter, mHandler, mUser);
+        } catch (Exception ex) {
+            mUserReceiverRegistered.set(false);
+            Log.e(TAG, "Could not register unlock receiver", ex);
+        }
     }
 
     private void stopPackageListening() {
         if (DEBUG) Log.d(TAG, "stopPackageListening");
-        mContext.unregisterReceiver(this);
-        mBroadcastDispatcher.unregisterReceiver(this);
-        mReceiverRegistered = false;
+        if (mUserReceiverRegistered.compareAndSet(true, false)) {
+            mBroadcastDispatcher.unregisterReceiver(this);
+        }
+        if (mPackageReceiverRegistered.compareAndSet(true, false)) {
+            mContext.unregisterReceiver(this);
+        }
     }
 
     public void setTileChangeListener(TileChangeListener changeListener) {

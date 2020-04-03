@@ -17,6 +17,8 @@
 #define LOG_NDEBUG 0
 #define LOG_TAG "BootAnimation"
 
+#include <vector>
+
 #include <stdint.h>
 #include <inttypes.h>
 #include <sys/inotify.h>
@@ -40,10 +42,10 @@
 
 #include <android-base/properties.h>
 
+#include <ui/DisplayConfig.h>
 #include <ui/PixelFormat.h>
 #include <ui/Rect.h>
 #include <ui/Region.h>
-#include <ui/DisplayInfo.h>
 
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
@@ -80,6 +82,10 @@ static const char OEM_SHUTDOWNANIMATION_FILE[] = "/oem/media/shutdownanimation.z
 static const char PRODUCT_SHUTDOWNANIMATION_FILE[] = "/product/media/shutdownanimation.zip";
 static const char SYSTEM_SHUTDOWNANIMATION_FILE[] = "/system/media/shutdownanimation.zip";
 
+static constexpr const char* PRODUCT_USERSPACE_REBOOT_ANIMATION_FILE = "/product/media/userspace-reboot.zip";
+static constexpr const char* OEM_USERSPACE_REBOOT_ANIMATION_FILE = "/oem/media/userspace-reboot.zip";
+static constexpr const char* SYSTEM_USERSPACE_REBOOT_ANIMATION_FILE = "/system/media/userspace-reboot.zip";
+
 static const char SYSTEM_DATA_DIR_PATH[] = "/data/system";
 static const char SYSTEM_TIME_DIR_NAME[] = "time";
 static const char SYSTEM_TIME_DIR_PATH[] = "/data/system/time";
@@ -100,6 +106,7 @@ static constexpr size_t FONT_NUM_ROWS = FONT_NUM_CHARS / FONT_NUM_COLS;
 static const int TEXT_CENTER_VALUE = INT_MAX;
 static const int TEXT_MISSING_VALUE = INT_MIN;
 static const char EXIT_PROP_NAME[] = "service.bootanim.exit";
+static const char DISPLAYS_PROP_NAME[] = "persist.service.bootanim.displays";
 static const int ANIM_ENTRY_NAME_MAX = ANIM_PATH_MAX + 1;
 static constexpr size_t TEXT_POS_LEN_MAX = 16;
 
@@ -276,25 +283,28 @@ status_t BootAnimation::readyToRun() {
 
     mDisplayToken = SurfaceComposerClient::getInternalDisplayToken();
     if (mDisplayToken == nullptr)
-        return -1;
+        return NAME_NOT_FOUND;
 
-    DisplayInfo dinfo;
-    status_t status = SurfaceComposerClient::getDisplayInfo(mDisplayToken, &dinfo);
-    if (status)
-        return -1;
+    DisplayConfig displayConfig;
+    const status_t error =
+            SurfaceComposerClient::getActiveDisplayConfig(mDisplayToken, &displayConfig);
+    if (error != NO_ERROR)
+        return error;
+
+    const ui::Size& resolution = displayConfig.resolution;
 
     // create the native surface
     sp<SurfaceControl> control = session()->createSurface(String8("BootAnimation"),
-            dinfo.w, dinfo.h, PIXEL_FORMAT_RGB_565);
+            resolution.getWidth(), resolution.getHeight(), PIXEL_FORMAT_RGB_565);
 
     SurfaceComposerClient::Transaction t;
 
     // this guest property specifies multi-display IDs to show the boot animation
     // multiple ids can be set with comma (,) as separator, for example:
-    // setprop boot.animation.displays 19260422155234049,19261083906282754
+    // setprop persist.boot.animation.displays 19260422155234049,19261083906282754
     Vector<uint64_t> physicalDisplayIds;
     char displayValue[PROPERTY_VALUE_MAX] = "";
-    property_get("boot.animation.displays", displayValue, "");
+    property_get(DISPLAYS_PROP_NAME, displayValue, "");
     bool isValid = displayValue[0] != '\0';
     if (isValid) {
         char *p = displayValue;
@@ -306,7 +316,7 @@ status_t BootAnimation::readyToRun() {
             p ++;
         }
         if (!isValid)
-            SLOGE("Invalid syntax for the value of system prop: boot.animation.displays");
+            SLOGE("Invalid syntax for the value of system prop: %s", DISPLAYS_PROP_NAME);
     }
     if (isValid) {
         std::istringstream stream(displayValue);
@@ -383,6 +393,16 @@ bool BootAnimation::preloadAnimation() {
     return false;
 }
 
+bool BootAnimation::findBootAnimationFileInternal(const std::vector<std::string> &files) {
+    for (const std::string& f : files) {
+        if (access(f.c_str(), R_OK) == 0) {
+            mZipFileName = f.c_str();
+            return true;
+        }
+    }
+    return false;
+}
+
 void BootAnimation::findBootAnimationFile() {
     // If the device has encryption turned on or is in process
     // of being encrypted we show the encrypted boot animation.
@@ -393,28 +413,33 @@ void BootAnimation::findBootAnimationFile() {
         !strcmp("trigger_restart_min_framework", decrypt);
 
     if (!mShuttingDown && encryptedAnimation) {
-        static const char* encryptedBootFiles[] =
-            {PRODUCT_ENCRYPTED_BOOTANIMATION_FILE, SYSTEM_ENCRYPTED_BOOTANIMATION_FILE};
-        for (const char* f : encryptedBootFiles) {
-            if (access(f, R_OK) == 0) {
-                mZipFileName = f;
-                return;
-            }
+        static const std::vector<std::string> encryptedBootFiles = {
+            PRODUCT_ENCRYPTED_BOOTANIMATION_FILE, SYSTEM_ENCRYPTED_BOOTANIMATION_FILE,
+        };
+        if (findBootAnimationFileInternal(encryptedBootFiles)) {
+            return;
         }
     }
 
     const bool playDarkAnim = android::base::GetIntProperty("ro.boot.theme", 0) == 1;
-    static const char* bootFiles[] =
-        {APEX_BOOTANIMATION_FILE, playDarkAnim ? PRODUCT_BOOTANIMATION_DARK_FILE : PRODUCT_BOOTANIMATION_FILE,
-         OEM_BOOTANIMATION_FILE, SYSTEM_BOOTANIMATION_FILE};
-    static const char* shutdownFiles[] =
-        {PRODUCT_SHUTDOWNANIMATION_FILE, OEM_SHUTDOWNANIMATION_FILE, SYSTEM_SHUTDOWNANIMATION_FILE, ""};
+    static const std::vector<std::string> bootFiles = {
+        APEX_BOOTANIMATION_FILE, playDarkAnim ? PRODUCT_BOOTANIMATION_DARK_FILE : PRODUCT_BOOTANIMATION_FILE,
+        OEM_BOOTANIMATION_FILE, SYSTEM_BOOTANIMATION_FILE
+    };
+    static const std::vector<std::string> shutdownFiles = {
+        PRODUCT_SHUTDOWNANIMATION_FILE, OEM_SHUTDOWNANIMATION_FILE, SYSTEM_SHUTDOWNANIMATION_FILE, ""
+    };
+    static const std::vector<std::string> userspaceRebootFiles = {
+        PRODUCT_USERSPACE_REBOOT_ANIMATION_FILE, OEM_USERSPACE_REBOOT_ANIMATION_FILE,
+        SYSTEM_USERSPACE_REBOOT_ANIMATION_FILE,
+    };
 
-    for (const char* f : (!mShuttingDown ? bootFiles : shutdownFiles)) {
-        if (access(f, R_OK) == 0) {
-            mZipFileName = f;
-            return;
-        }
+    if (android::base::GetBoolProperty("sys.init.userspace_reboot.in_progress", false)) {
+        findBootAnimationFileInternal(userspaceRebootFiles);
+    } else if (mShuttingDown) {
+        findBootAnimationFileInternal(shutdownFiles);
+    } else {
+        findBootAnimationFileInternal(bootFiles);
     }
 }
 
@@ -1113,7 +1138,7 @@ void BootAnimation::handleViewport(nsecs_t timestep) {
         SurfaceComposerClient::Transaction t;
         t.setPosition(mFlingerSurfaceControl, 0, -mTargetInset)
                 .setCrop(mFlingerSurfaceControl, Rect(0, mTargetInset, mWidth, mHeight));
-        t.setDisplayProjection(mDisplayToken, 0 /* orientation */, layerStackRect, displayRect);
+        t.setDisplayProjection(mDisplayToken, ui::ROTATION_0, layerStackRect, displayRect);
         t.apply();
 
         mTargetInset = mCurrentInset = 0;

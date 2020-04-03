@@ -16,28 +16,32 @@
 
 #pragma once
 
-#include <gui/Surface.h>
+#include <android-base/unique_fd.h>
+#include <apex/window.h>
+#include <utils/Errors.h>
 #include <utils/Macros.h>
 #include <utils/StrongPointer.h>
 
 #include <memory>
+#include <mutex>
 
 namespace android::uirenderer::renderthread {
 
-class ReliableSurface : public ANativeObjectBase<ANativeWindow, ReliableSurface, RefBase> {
+class ReliableSurface {
     PREVENT_COPY_AND_ASSIGN(ReliableSurface);
 
 public:
-    ReliableSurface(sp<Surface>&& surface);
+    ReliableSurface(ANativeWindow* window);
     ~ReliableSurface();
 
+    // Performs initialization that is not safe to do in the constructor.
+    // For instance, registering ANativeWindow interceptors with ReliableSurface
+    // passed as the data pointer is not safe.
+    void init();
+
+    ANativeWindow* getNativeWindow() { return mWindow; }
+
     int reserveNext();
-
-    void allocateBuffers() { mSurface->allocateBuffers(); }
-
-    int query(int what, int* value) const { return mSurface->query(what, value); }
-
-    uint64_t getNextFrameNumber() const { return mSurface->getNextFrameNumber(); }
 
     int getAndClearError() {
         int ret = mBufferQueueState;
@@ -45,28 +49,13 @@ public:
         return ret;
     }
 
-    status_t getFrameTimestamps(uint64_t frameNumber,
-            nsecs_t* outRequestedPresentTime, nsecs_t* outAcquireTime,
-            nsecs_t* outLatchTime, nsecs_t* outFirstRefreshStartTime,
-            nsecs_t* outLastRefreshStartTime, nsecs_t* outGlCompositionDoneTime,
-            nsecs_t* outDisplayPresentTime, nsecs_t* outDequeueReadyTime,
-            nsecs_t* outReleaseTime) {
-        return mSurface->getFrameTimestamps(frameNumber, outRequestedPresentTime, outAcquireTime,
-            outLatchTime, outFirstRefreshStartTime, outLastRefreshStartTime,
-            outGlCompositionDoneTime, outDisplayPresentTime, outDequeueReadyTime, outReleaseTime);
-    }
-
-    void enableFrameTimestamps(bool enable) {
-        return mSurface->enableFrameTimestamps(enable);
-    }
-
 private:
-    const sp<Surface> mSurface;
+    ANativeWindow* mWindow;
 
     mutable std::mutex mMutex;
 
     uint64_t mUsage = AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER;
-    PixelFormat mFormat = PIXEL_FORMAT_RGBA_8888;
+    AHardwareBuffer_Format mFormat = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
     std::unique_ptr<AHardwareBuffer, void (*)(AHardwareBuffer*)> mScratchBuffer{
             nullptr, AHardwareBuffer_release};
     ANativeWindowBuffer* mReservedBuffer = nullptr;
@@ -78,27 +67,20 @@ private:
     ANativeWindowBuffer* acquireFallbackBuffer(int error);
     void clearReservedBuffer();
 
-    void perform(int operation, va_list args);
-    int cancelBuffer(ANativeWindowBuffer* buffer, int fenceFd);
-    int dequeueBuffer(ANativeWindowBuffer** buffer, int* fenceFd);
-    int queueBuffer(ANativeWindowBuffer* buffer, int fenceFd);
+    // ANativeWindow hooks. When an ANativeWindow_* method is called on the
+    // underlying ANativeWindow, these methods will intercept the original call.
+    // For example, an EGL driver would call into these hooks instead of the
+    // original methods.
+    static int hook_cancelBuffer(ANativeWindow* window, ANativeWindow_cancelBufferFn cancelBuffer,
+                                 void* data, ANativeWindowBuffer* buffer, int fenceFd);
+    static int hook_dequeueBuffer(ANativeWindow* window,
+                                  ANativeWindow_dequeueBufferFn dequeueBuffer, void* data,
+                                  ANativeWindowBuffer** buffer, int* fenceFd);
+    static int hook_queueBuffer(ANativeWindow* window, ANativeWindow_queueBufferFn queueBuffer,
+                                void* data, ANativeWindowBuffer* buffer, int fenceFd);
 
-    static Surface* getWrapped(const ANativeWindow*);
-
-    // ANativeWindow hooks
-    static int hook_cancelBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fenceFd);
-    static int hook_dequeueBuffer(ANativeWindow* window, ANativeWindowBuffer** buffer,
-                                  int* fenceFd);
-    static int hook_queueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fenceFd);
-
-    static int hook_perform(ANativeWindow* window, int operation, ...);
-    static int hook_query(const ANativeWindow* window, int what, int* value);
-    static int hook_setSwapInterval(ANativeWindow* window, int interval);
-
-    static int hook_cancelBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer* buffer);
-    static int hook_dequeueBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer** buffer);
-    static int hook_lockBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer* buffer);
-    static int hook_queueBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer* buffer);
+    static int hook_perform(ANativeWindow* window, ANativeWindow_performFn perform, void* data,
+                            int operation, va_list args);
 };
 
 };  // namespace android::uirenderer::renderthread

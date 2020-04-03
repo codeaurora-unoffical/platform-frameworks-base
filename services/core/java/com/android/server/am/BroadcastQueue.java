@@ -16,6 +16,9 @@
 
 package com.android.server.am;
 
+import static android.os.Process.ZYGOTE_POLICY_FLAG_EMPTY;
+import static android.os.Process.ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE;
+
 import static com.android.server.am.ActivityManagerDebugConfig.*;
 
 import android.app.ActivityManager;
@@ -47,9 +50,10 @@ import android.permission.IPermissionManager;
 import android.util.EventLog;
 import android.util.Slog;
 import android.util.SparseIntArray;
-import android.util.StatsLog;
 import android.util.TimeUtils;
 import android.util.proto.ProtoOutputStream;
+
+import com.android.internal.util.FrameworkStatsLog;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -647,10 +651,10 @@ public final class BroadcastQueue {
                 skip = true;
             } else {
                 final int opCode = AppOpsManager.permissionToOpCode(filter.requiredPermission);
-                // TODO moltmann: Set featureId from caller
                 if (opCode != AppOpsManager.OP_NONE
-                        && mService.mAppOpsService.noteOperation(opCode, r.callingUid,
-                                r.callerPackage, null) != AppOpsManager.MODE_ALLOWED) {
+                        && mService.getAppOpsManager().noteOpNoThrow(opCode, r.callingUid,
+                        r.callerPackage, r.callerFeatureId, "")
+                        != AppOpsManager.MODE_ALLOWED) {
                     Slog.w(TAG, "Appop Denial: broadcasting "
                             + r.intent.toString()
                             + " from " + r.callerPackage + " (pid="
@@ -680,10 +684,9 @@ public final class BroadcastQueue {
                     break;
                 }
                 int appOp = AppOpsManager.permissionToOpCode(requiredPermission);
-                // TODO moltmann: Set componentId from caller
                 if (appOp != AppOpsManager.OP_NONE && appOp != r.appOp
-                        && mService.mAppOpsService.noteOperation(appOp,
-                        filter.receiverList.uid, filter.packageName, null)
+                        && mService.getAppOpsManager().noteOpNoThrow(appOp,
+                        filter.receiverList.uid, filter.packageName, filter.featureId, "")
                         != AppOpsManager.MODE_ALLOWED) {
                     Slog.w(TAG, "Appop Denial: receiving "
                             + r.intent.toString()
@@ -713,10 +716,9 @@ public final class BroadcastQueue {
                 skip = true;
             }
         }
-        // TODO moltmann: Set componentId from caller
         if (!skip && r.appOp != AppOpsManager.OP_NONE
-                && mService.mAppOpsService.noteOperation(r.appOp,
-                filter.receiverList.uid, filter.packageName, null)
+                && mService.getAppOpsManager().noteOpNoThrow(r.appOp,
+                filter.receiverList.uid, filter.packageName, filter.featureId, "")
                 != AppOpsManager.MODE_ALLOWED) {
             Slog.w(TAG, "Appop Denial: receiving "
                     + r.intent.toString()
@@ -862,7 +864,8 @@ public final class BroadcastQueue {
         if (callerForeground && receiverRecord.intent.getComponent() != null) {
             IIntentSender target = mService.mPendingIntentController.getIntentSender(
                     ActivityManager.INTENT_SENDER_BROADCAST, receiverRecord.callerPackage,
-                    receiverRecord.callingUid, receiverRecord.userId, null, null, 0,
+                    receiverRecord.callerFeatureId, receiverRecord.callingUid,
+                    receiverRecord.userId, null, null, 0,
                     new Intent[]{receiverRecord.intent},
                     new String[]{receiverRecord.intent.resolveType(mService.mContext
                             .getContentResolver())},
@@ -1255,8 +1258,8 @@ public final class BroadcastQueue {
             r.dispatchClockTime = System.currentTimeMillis();
 
             if (mLogLatencyMetrics) {
-                StatsLog.write(
-                        StatsLog.BROADCAST_DISPATCH_LATENCY_REPORTED,
+                FrameworkStatsLog.write(
+                        FrameworkStatsLog.BROADCAST_DISPATCH_LATENCY_REPORTED,
                         r.dispatchClockTime - r.enqueueClockTime);
             }
 
@@ -1370,10 +1373,9 @@ public final class BroadcastQueue {
             skip = true;
         } else if (!skip && info.activityInfo.permission != null) {
             final int opCode = AppOpsManager.permissionToOpCode(info.activityInfo.permission);
-            // TODO moltmann: Set componentId from caller
             if (opCode != AppOpsManager.OP_NONE
-                    && mService.mAppOpsService.noteOperation(opCode, r.callingUid,
-                            r.callerPackage, null) != AppOpsManager.MODE_ALLOWED) {
+                    && mService.getAppOpsManager().noteOpNoThrow(opCode, r.callingUid, r.callerPackage,
+                    r.callerFeatureId, "") != AppOpsManager.MODE_ALLOWED) {
                 Slog.w(TAG, "Appop Denial: broadcasting "
                         + r.intent.toString()
                         + " from " + r.callerPackage + " (pid="
@@ -1409,10 +1411,10 @@ public final class BroadcastQueue {
                     break;
                 }
                 int appOp = AppOpsManager.permissionToOpCode(requiredPermission);
-                // TODO moltmann: Set componentId from caller
                 if (appOp != AppOpsManager.OP_NONE && appOp != r.appOp
-                        && mService.mAppOpsService.noteOperation(appOp,
-                        info.activityInfo.applicationInfo.uid, info.activityInfo.packageName, null)
+                        && mService.getAppOpsManager().noteOpNoThrow(appOp,
+                        info.activityInfo.applicationInfo.uid, info.activityInfo.packageName,
+                        null /* default featureId */, "")
                         != AppOpsManager.MODE_ALLOWED) {
                     Slog.w(TAG, "Appop Denial: receiving "
                             + r.intent + " to "
@@ -1426,10 +1428,10 @@ public final class BroadcastQueue {
                 }
             }
         }
-        // TODO moltmann: Set componentId from caller
         if (!skip && r.appOp != AppOpsManager.OP_NONE
-                && mService.mAppOpsService.noteOperation(r.appOp,
-                info.activityInfo.applicationInfo.uid, info.activityInfo.packageName, null)
+                && mService.getAppOpsManager().noteOpNoThrow(r.appOp,
+                info.activityInfo.applicationInfo.uid, info.activityInfo.packageName,
+                null  /* default featureId */, "")
                 != AppOpsManager.MODE_ALLOWED) {
             Slog.w(TAG, "Appop Denial: receiving "
                     + r.intent + " to "
@@ -1594,7 +1596,9 @@ public final class BroadcastQueue {
                     + receiverUid);
         }
 
-        if (brOptions != null && brOptions.getTemporaryAppWhitelistDuration() > 0) {
+        final boolean isActivityCapable =
+                (brOptions != null && brOptions.getTemporaryAppWhitelistDuration() > 0);
+        if (isActivityCapable) {
             scheduleTempWhitelistLocked(receiverUid,
                     brOptions.getTemporaryAppWhitelistDuration(), r);
         }
@@ -1649,6 +1653,7 @@ public final class BroadcastQueue {
                 info.activityInfo.applicationInfo, true,
                 r.intent.getFlags() | Intent.FLAG_FROM_BACKGROUND,
                 new HostingRecord("broadcast", r.curComponent),
+                isActivityCapable ? ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE : ZYGOTE_POLICY_FLAG_EMPTY,
                 (r.intent.getFlags()&Intent.FLAG_RECEIVER_BOOT_UPGRADE) != 0, false, false))
                         == null) {
             // Ah, this recipient is unavailable.  Finish it if necessary,

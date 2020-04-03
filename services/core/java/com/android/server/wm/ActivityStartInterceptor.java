@@ -34,6 +34,7 @@ import static android.content.pm.ApplicationInfo.FLAG_SUSPENDED;
 
 import static com.android.server.pm.PackageManagerService.PLATFORM_PACKAGE_NAME;
 
+import android.annotation.Nullable;
 import android.app.ActivityOptions;
 import android.app.KeyguardManager;
 import android.app.admin.DevicePolicyManagerInternal;
@@ -52,6 +53,7 @@ import android.os.UserHandle;
 import android.os.UserManager;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.app.BlockedAppActivity;
 import com.android.internal.app.HarmfulAppWarningActivity;
 import com.android.internal.app.SuspendedAppActivity;
 import com.android.internal.app.UnlaunchableAppActivity;
@@ -69,7 +71,7 @@ class ActivityStartInterceptor {
 
     private final ActivityTaskManagerService mService;
     private final ActivityStackSupervisor mSupervisor;
-    private final RootActivityContainer mRootActivityContainer;
+    private final RootWindowContainer mRootWindowContainer;
     private final Context mServiceContext;
 
     // UserManager cannot be final as it's not ready when this class is instantiated during boot
@@ -84,6 +86,7 @@ class ActivityStartInterceptor {
     private int mUserId;
     private int mStartFlags;
     private String mCallingPackage;
+    private @Nullable String mCallingFeatureId;
 
     /*
      * Per-intent states that were load from ActivityStarter and are subject to modifications
@@ -102,15 +105,15 @@ class ActivityStartInterceptor {
 
     ActivityStartInterceptor(
             ActivityTaskManagerService service, ActivityStackSupervisor supervisor) {
-        this(service, supervisor, service.mRootActivityContainer, service.mContext);
+        this(service, supervisor, service.mRootWindowContainer, service.mContext);
     }
 
     @VisibleForTesting
     ActivityStartInterceptor(ActivityTaskManagerService service, ActivityStackSupervisor supervisor,
-            RootActivityContainer root, Context context) {
+            RootWindowContainer root, Context context) {
         mService = service;
         mSupervisor = supervisor;
-        mRootActivityContainer = root;
+        mRootWindowContainer = root;
         mServiceContext = context;
     }
 
@@ -119,19 +122,20 @@ class ActivityStartInterceptor {
      * method should not be changed during intercept.
      */
     void setStates(int userId, int realCallingPid, int realCallingUid, int startFlags,
-            String callingPackage) {
+            String callingPackage, @Nullable String callingFeatureId) {
         mRealCallingPid = realCallingPid;
         mRealCallingUid = realCallingUid;
         mUserId = userId;
         mStartFlags = startFlags;
         mCallingPackage = callingPackage;
+        mCallingFeatureId = callingFeatureId;
     }
 
     private IntentSender createIntentSenderForOriginalIntent(int callingUid, int flags) {
         Bundle activityOptions = deferCrossProfileAppsAnimationIfNecessary();
         final IIntentSender target = mService.getIntentSenderLocked(
-                INTENT_SENDER_ACTIVITY, mCallingPackage, callingUid, mUserId, null /*token*/,
-                null /*resultCode*/, 0 /*requestCode*/,
+                INTENT_SENDER_ACTIVITY, mCallingPackage, mCallingFeatureId, callingUid, mUserId,
+                null /*token*/, null /*resultCode*/, 0 /*requestCode*/,
                 new Intent[] { mIntent }, new String[] { mResolvedType },
                 flags, activityOptions);
         return new IntentSender(target);
@@ -166,12 +170,20 @@ class ActivityStartInterceptor {
             // no user action can undo this.
             return true;
         }
+        if (interceptLockTaskModeViolationPackageIfNeeded()) {
+            return true;
+        }
         if (interceptHarmfulAppIfNeeded()) {
             // If the app has a "harmful app" warning associated with it, we should ask to uninstall
             // before issuing the work challenge.
             return true;
         }
         return interceptWorkProfileChallengeIfNeeded();
+    }
+
+    private boolean hasCrossProfileAnimation() {
+        return mActivityOptions != null
+                && mActivityOptions.getAnimationType() == ANIM_OPEN_CROSS_PROFILE_APPS;
     }
 
     /**
@@ -181,8 +193,7 @@ class ActivityStartInterceptor {
      * @return the activity option used to start the original intent.
      */
     private Bundle deferCrossProfileAppsAnimationIfNecessary() {
-        if (mActivityOptions != null
-                && mActivityOptions.getAnimationType() == ANIM_OPEN_CROSS_PROFILE_APPS) {
+        if (hasCrossProfileAnimation()) {
             mActivityOptions = null;
             return ActivityOptions.makeOpenCrossProfileAppsAnimation().toBundle();
         }
@@ -251,8 +262,32 @@ class ActivityStartInterceptor {
         }
         final SuspendDialogInfo dialogInfo = pmi.getSuspendedDialogInfo(suspendedPackage,
                 suspendingPackage, mUserId);
+        final Bundle crossProfileOptions = hasCrossProfileAnimation()
+                ? ActivityOptions.makeOpenCrossProfileAppsAnimation().toBundle()
+                : null;
+        final IntentSender target = createIntentSenderForOriginalIntent(mCallingUid,
+                FLAG_IMMUTABLE);
         mIntent = SuspendedAppActivity.createSuspendedAppInterceptIntent(suspendedPackage,
-                suspendingPackage, dialogInfo, mUserId);
+                suspendingPackage, dialogInfo, crossProfileOptions, target, mUserId);
+        mCallingPid = mRealCallingPid;
+        mCallingUid = mRealCallingUid;
+        mResolvedType = null;
+        mRInfo = mSupervisor.resolveIntent(mIntent, mResolvedType, mUserId, 0, mRealCallingUid);
+        mAInfo = mSupervisor.resolveActivity(mIntent, mRInfo, mStartFlags, null /*profilerInfo*/);
+        return true;
+    }
+
+    private boolean interceptLockTaskModeViolationPackageIfNeeded() {
+        if (mAInfo == null || mAInfo.applicationInfo == null) {
+            return false;
+        }
+        LockTaskController controller = mService.getLockTaskController();
+        String packageName = mAInfo.applicationInfo.packageName;
+        int lockTaskLaunchMode = ActivityRecord.getLockTaskLaunchMode(mAInfo, mActivityOptions);
+        if (controller.isActivityAllowed(mUserId, packageName, lockTaskLaunchMode)) {
+            return false;
+        }
+        mIntent = BlockedAppActivity.createIntent(mUserId, mAInfo.applicationInfo.packageName);
         mCallingPid = mRealCallingPid;
         mCallingUid = mRealCallingUid;
         mResolvedType = null;
@@ -301,7 +336,8 @@ class ActivityStartInterceptor {
                 FLAG_CANCEL_CURRENT | FLAG_ONE_SHOT | FLAG_IMMUTABLE);
         final KeyguardManager km = (KeyguardManager) mServiceContext
                 .getSystemService(KEYGUARD_SERVICE);
-        final Intent newIntent = km.createConfirmDeviceCredentialIntent(null, null, userId);
+        final Intent newIntent = km.createConfirmDeviceCredentialIntent(null, null, userId,
+                true /* disallowBiometricsIfPolicyExists */);
         if (newIntent == null) {
             return null;
         }

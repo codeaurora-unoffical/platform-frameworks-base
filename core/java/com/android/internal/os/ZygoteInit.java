@@ -19,8 +19,11 @@ package com.android.internal.os;
 import static android.system.OsConstants.S_IRWXG;
 import static android.system.OsConstants.S_IRWXO;
 
-import android.annotation.UnsupportedAppUsage;
+import static com.android.internal.util.FrameworkStatsLog.BOOT_TIME_EVENT_ELAPSED_TIME__EVENT__SECONDARY_ZYGOTE_INIT_START;
+import static com.android.internal.util.FrameworkStatsLog.BOOT_TIME_EVENT_ELAPSED_TIME__EVENT__ZYGOTE_INIT_START;
+
 import android.app.ApplicationLoaders;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.SharedLibraryInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
@@ -52,7 +55,7 @@ import android.util.TimingsTraceLog;
 import android.webkit.WebViewFactory;
 import android.widget.TextView;
 
-import com.android.internal.logging.MetricsLogger;
+import com.android.internal.util.FrameworkStatsLog;
 import com.android.internal.util.Preconditions;
 
 import dalvik.system.DexFile;
@@ -653,17 +656,18 @@ public class ZygoteInit {
         String classPathForElement = "";
         boolean compiledSomething = false;
         for (String classPathElement : classPathElements) {
-            // System server is fully AOTed and never profiled
-            // for profile guided compilation.
+            // We default to the verify filter because the compilation will happen on /data and
+            // system server cannot load executable code outside /system.
             String systemServerFilter = SystemProperties.get(
-                    "dalvik.vm.systemservercompilerfilter", "speed");
+                    "dalvik.vm.systemservercompilerfilter", "verify");
 
+            String classLoaderContext =
+                        getSystemServerClassLoaderContext(classPathForElement);
             int dexoptNeeded;
             try {
                 dexoptNeeded = DexFile.getDexOptNeeded(
                         classPathElement, instructionSet, systemServerFilter,
-                        null /* classLoaderContext */, false /* newProfile */,
-                        false /* downgrade */);
+                        classLoaderContext, false /* newProfile */, false /* downgrade */);
             } catch (FileNotFoundException ignored) {
                 // Do not add to the classpath.
                 Log.w(TAG, "Missing classpath element for system server: " + classPathElement);
@@ -684,8 +688,6 @@ public class ZygoteInit {
                 final String compilerFilter = systemServerFilter;
                 final String uuid = StorageManager.UUID_PRIVATE_INTERNAL;
                 final String seInfo = null;
-                final String classLoaderContext =
-                        getSystemServerClassLoaderContext(classPathForElement);
                 final int targetSdkVersion = 0;  // SystemServer targets the system's SDK version
                 try {
                     installd.dexopt(classPathElement, Process.SYSTEM_UID, packageName,
@@ -788,6 +790,10 @@ public class ZygoteInit {
             Zygote.applyDebuggerSystemProperty(parsedArgs);
             Zygote.applyInvokeWithSystemProperty(parsedArgs);
 
+            /* Enable pointer tagging in the system server unconditionally. Hardware support for
+             * this is present in all ARMv8 CPUs; this flag has no effect on other platforms. */
+            parsedArgs.mRuntimeFlags |= Zygote.MEMORY_TAG_LEVEL_TBI;
+
             if (shouldProfileSystemServer()) {
                 parsedArgs.mRuntimeFlags |= Zygote.PROFILE_SYSTEM_SERVER;
             }
@@ -860,11 +866,10 @@ public class ZygoteInit {
 
         Runnable caller;
         try {
-            // Report Zygote start time to tron unless it is a runtime restart
-            if (!"1".equals(SystemProperties.get("sys.boot_completed"))) {
-                MetricsLogger.histogram(null, "boot_zygote_init",
-                        (int) SystemClock.elapsedRealtime());
-            }
+            // Store now for StatsLogging later.
+            final long startTime = SystemClock.elapsedRealtime();
+            final boolean isRuntimeRestarted = "1".equals(
+                    SystemProperties.get("sys.boot_completed"));
 
             String bootTimeTag = Process.is64Bit() ? "Zygote64Timing" : "Zygote32Timing";
             TimingsTraceLog bootTimingsTraceLog = new TimingsTraceLog(bootTimeTag,
@@ -891,6 +896,17 @@ public class ZygoteInit {
             }
 
             final boolean isPrimaryZygote = zygoteSocketName.equals(Zygote.PRIMARY_SOCKET_NAME);
+            if (!isRuntimeRestarted) {
+                if (isPrimaryZygote) {
+                    FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_ELAPSED_TIME_REPORTED,
+                            BOOT_TIME_EVENT_ELAPSED_TIME__EVENT__ZYGOTE_INIT_START,
+                            startTime);
+                } else if (zygoteSocketName.equals(Zygote.SECONDARY_SOCKET_NAME)) {
+                    FrameworkStatsLog.write(FrameworkStatsLog.BOOT_TIME_EVENT_ELAPSED_TIME_REPORTED,
+                            BOOT_TIME_EVENT_ELAPSED_TIME__EVENT__SECONDARY_ZYGOTE_INIT_START,
+                            startTime);
+                }
+            }
 
             if (abiList == null) {
                 throw new RuntimeException("No ABI list supplied.");
@@ -914,10 +930,6 @@ public class ZygoteInit {
             bootTimingsTraceLog.traceEnd(); // PostZygoteInitGC
 
             bootTimingsTraceLog.traceEnd(); // ZygoteInit
-            // Disable tracing so that forked processes do not inherit stale tracing tags from
-            // Zygote.
-            Trace.setTracingEnabled(false, 0);
-
 
             Zygote.initNativeState(isPrimaryZygote);
 

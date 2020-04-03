@@ -18,26 +18,28 @@ package android.telephony;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
-import android.annotation.SystemApi;
 import android.annotation.TestApi;
+import android.compat.Compatibility;
+import android.compat.annotation.ChangeId;
+import android.compat.annotation.EnabledAfter;
 import android.content.Context;
-import android.net.LinkProperties;
-import android.net.NetworkCapabilities;
 import android.os.Binder;
-import android.os.Bundle;
+import android.os.Build;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.telephony.Annotation.ApnType;
 import android.telephony.Annotation.CallState;
 import android.telephony.Annotation.DataActivityType;
 import android.telephony.Annotation.DataFailureCause;
-import android.telephony.Annotation.DataState;
+import android.telephony.Annotation.DisconnectCauses;
 import android.telephony.Annotation.NetworkType;
 import android.telephony.Annotation.PreciseCallStates;
+import android.telephony.Annotation.PreciseDisconnectCauses;
 import android.telephony.Annotation.RadioPowerState;
 import android.telephony.Annotation.SimActivationState;
 import android.telephony.Annotation.SrvccState;
 import android.telephony.data.ApnSetting;
+import android.telephony.emergency.EmergencyNumber;
 import android.telephony.ims.ImsReasonInfo;
 import android.util.Log;
 
@@ -59,7 +61,7 @@ import java.util.concurrent.Executor;
  *
  * @hide
  */
-@SystemApi
+@TestApi
 public class TelephonyRegistryManager {
 
     private static final String TAG = "TelephonyRegistryManager";
@@ -199,6 +201,42 @@ public class TelephonyRegistryManager {
     }
 
     /**
+     * To check the SDK version for {@link #listenForSubscriber}.
+     */
+    @ChangeId
+    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.P)
+    private static final long LISTEN_CODE_CHANGE = 147600208L;
+
+    /**
+     * Listen for incoming subscriptions
+     * @param subId Subscription ID
+     * @param pkg Package name
+     * @param featureId Feature ID
+     * @param listener Listener providing callback
+     * @param events Events
+     * @param notifyNow Whether to notify instantly
+     */
+    public void listenForSubscriber(int subId, @NonNull String pkg, @NonNull String featureId,
+            @NonNull PhoneStateListener listener, int events, boolean notifyNow) {
+        try {
+            // subId from PhoneStateListener is deprecated Q on forward, use the subId from
+            // TelephonyManager instance. Keep using subId from PhoneStateListener for pre-Q.
+            if (Compatibility.isChangeEnabled(LISTEN_CODE_CHANGE)) {
+                // Since mSubId in PhoneStateListener is deprecated from Q on forward, this is
+                // the only place to set mSubId and its for "informational" only.
+                listener.mSubId = (events == PhoneStateListener.LISTEN_NONE)
+                        ? SubscriptionManager.INVALID_SUBSCRIPTION_ID : subId;
+            } else if (listener.mSubId != null) {
+                subId = listener.mSubId;
+            }
+            sRegistry.listenForSubscriber(
+                    subId, pkg, featureId, listener.callback, events, notifyNow);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Informs the system of an intentional upcoming carrier network change by a carrier app.
      * This call only used to allow the system to provide alternative UI while telephony is
      * performing an action that may result in intentional, temporary network lack of connectivity.
@@ -229,11 +267,9 @@ public class TelephonyRegistryManager {
      * invalid.
      * @param state latest call state. e.g, offhook, ringing
      * @param incomingNumber incoming phone number.
-     *
-     * @hide
      */
     public void notifyCallStateChanged(int subId, int slotIndex, @CallState int state,
-            String incomingNumber) {
+            @Nullable String incomingNumber) {
         try {
             sRegistry.notifyCallState(slotIndex, subId, state, incomingNumber);
         } catch (RemoteException ex) {
@@ -248,7 +284,6 @@ public class TelephonyRegistryManager {
      * @param incomingNumber incoming phone number.
      * @hide
      */
-    @SystemApi
     @TestApi
     @RequiresPermission(android.Manifest.permission.MODIFY_PHONE_STATE)
     public void notifyCallStateChangedForAllSubscriptions(@CallState int state,
@@ -261,16 +296,38 @@ public class TelephonyRegistryManager {
     }
 
     /**
+     * Notify {@link SubscriptionInfo} change.
+     * @hide
+     */
+    public void notifySubscriptionInfoChanged() {
+        try {
+            sRegistry.notifySubscriptionInfoChanged();
+        } catch (RemoteException ex) {
+            // system server crash
+        }
+    }
+
+    /**
+     * Notify opportunistic {@link SubscriptionInfo} change.
+     * @hide
+     */
+    public void notifyOpportunisticSubscriptionInfoChanged() {
+        try {
+            sRegistry.notifyOpportunisticSubscriptionInfoChanged();
+        } catch (RemoteException ex) {
+            // system server crash
+        }
+    }
+
+    /**
      * Notify {@link ServiceState} update on certain subscription.
      *
      * @param subId for which the service state changed.
      * @param slotIndex for which the service state changed. Can be derived from subId except
      * subId is invalid.
      * @param state service state e.g, in service, out of service or roaming status.
-     *
-     * @hide
      */
-    public void notifyServiceStateChanged(int subId, int slotIndex, ServiceState state) {
+    public void notifyServiceStateChanged(int subId, int slotIndex, @NonNull ServiceState state) {
         try {
             sRegistry.notifyServiceStateForPhoneId(slotIndex, subId, state);
         } catch (RemoteException ex) {
@@ -285,11 +342,9 @@ public class TelephonyRegistryManager {
      * @param slotIndex for which the signalstrength changed. Can be derived from subId except when
      * subId is invalid.
      * @param signalStrength e.g, signalstrength level {@see SignalStrength#getLevel()}
-     *
-     * @hide
      */
     public void notifySignalStrengthChanged(int subId, int slotIndex,
-        SignalStrength signalStrength) {
+            @NonNull SignalStrength signalStrength) {
         try {
             sRegistry.notifySignalStrengthForPhoneId(slotIndex, subId, signalStrength);
         } catch (RemoteException ex) {
@@ -306,8 +361,6 @@ public class TelephonyRegistryManager {
      * except when subId is invalid.
      * @param msgWaitingInd {@code true} indicates there is message-waiting indicator, {@code false}
      * otherwise.
-     *
-     * @hide
      */
     public void notifyMessageWaitingChanged(int subId, int slotIndex, boolean msgWaitingInd) {
         try {
@@ -323,8 +376,6 @@ public class TelephonyRegistryManager {
      * @param subId for which call forwarding status changed.
      * @param callForwardInd {@code true} indicates there is call forwarding, {@code false}
      * otherwise.
-     *
-     * @hide
      */
     public void notifyCallForwardingChanged(int subId, boolean callForwardInd) {
         try {
@@ -340,8 +391,6 @@ public class TelephonyRegistryManager {
      * @param subId for which data activity state changed.
      * @param dataActivityType indicates the latest data activity type e.g, {@link
      * TelephonyManager#DATA_ACTIVITY_IN}
-     *
-     * @hide
      */
     public void notifyDataActivityChanged(int subId, @DataActivityType int dataActivityType) {
         try {
@@ -357,27 +406,17 @@ public class TelephonyRegistryManager {
      * @param subId for which data connection state changed.
      * @param slotIndex for which data connections state changed. Can be derived from subId except
      * when subId is invalid.
-     * @param state latest data connection state, e.g,
-     * @param isDataConnectivityPossible indicates if data is allowed
-     * @param apn the APN {@link ApnSetting#getApnName()} of this data connection.
-     * @param apnType the apnType, "ims" for IMS APN, "emergency" for EMERGENCY APN.
-     * @param linkProperties {@link LinkProperties} associated with this data connection.
-     * @param networkCapabilities {@link NetworkCapabilities} associated with this data connection.
-     * @param networkType associated with this data connection.
-     * @param roaming {@code true} indicates in roaming, {@false} otherwise.
-     * @see TelephonyManager#DATA_DISCONNECTED
-     * @see TelephonyManager#isDataConnectivityPossible()
+     * @param apnType the apn type bitmask, defined with {@code ApnSetting#TYPE_*} flags.
+     * @param preciseState the PreciseDataConnectionState
      *
-     * @hide
+     * @see android.telephony.PreciseDataConnection
+     * @see TelephonyManager#DATA_DISCONNECTED
      */
-    public void notifyDataConnectionForSubscriber(int slotIndex, int subId, @DataState int state,
-        boolean isDataConnectivityPossible,
-        @ApnType String apn, String apnType, LinkProperties linkProperties,
-        NetworkCapabilities networkCapabilities, int networkType, boolean roaming) {
+    public void notifyDataConnectionForSubscriber(int slotIndex, int subId,
+            @ApnType int apnType, @Nullable PreciseDataConnectionState preciseState) {
         try {
-            sRegistry.notifyDataConnectionForSubscriber(slotIndex, subId, state,
-                isDataConnectivityPossible,
-                apn, apnType, linkProperties, networkCapabilities, networkType, roaming);
+            sRegistry.notifyDataConnectionForSubscriber(
+                    slotIndex, subId, apnType, preciseState);
         } catch (RemoteException ex) {
             // system process is dead
         }
@@ -391,10 +430,8 @@ public class TelephonyRegistryManager {
      * subId is invalid.
      * @param callQuality Information about call quality e.g, call quality level
      * @param networkType associated with this data connection. e.g, LTE
-     *
-     * @hide
      */
-    public void notifyCallQualityChanged(int subId, int slotIndex, CallQuality callQuality,
+    public void notifyCallQualityChanged(int subId, int slotIndex, @NonNull CallQuality callQuality,
         @NetworkType int networkType) {
         try {
             sRegistry.notifyCallQualityChanged(callQuality, slotIndex, subId, networkType);
@@ -409,12 +446,40 @@ public class TelephonyRegistryManager {
      * @param subId for which emergency number list changed.
      * @param slotIndex for which emergency number list changed. Can be derived from subId except
      * when subId is invalid.
-     *
-     * @hide
      */
     public void notifyEmergencyNumberList(int subId, int slotIndex) {
         try {
             sRegistry.notifyEmergencyNumberList(slotIndex, subId);
+        } catch (RemoteException ex) {
+            // system process is dead
+        }
+    }
+
+    /**
+     * Notify outgoing emergency call.
+     * @param phoneId Sender phone ID.
+     * @param subId Sender subscription ID.
+     * @param emergencyNumber Emergency number.
+     */
+    public void notifyOutgoingEmergencyCall(int phoneId, int subId,
+            @NonNull EmergencyNumber emergencyNumber) {
+        try {
+            sRegistry.notifyOutgoingEmergencyCall(phoneId, subId, emergencyNumber);
+        } catch (RemoteException ex) {
+            // system process is dead
+        }
+    }
+
+    /**
+     * Notify outgoing emergency SMS.
+     * @param phoneId Sender phone ID.
+     * @param subId Sender subscription ID.
+     * @param emergencyNumber Emergency number.
+     */
+    public void notifyOutgoingEmergencySms(int phoneId, int subId,
+            @NonNull EmergencyNumber emergencyNumber) {
+        try {
+            sRegistry.notifyOutgoingEmergencySms(phoneId, subId, emergencyNumber);
         } catch (RemoteException ex) {
             // system process is dead
         }
@@ -427,8 +492,6 @@ public class TelephonyRegistryManager {
      * @param slotIndex for which radio power state changed. Can be derived from subId except when
      * subId is invalid.
      * @param radioPowerState the current modem radio state.
-     *
-     * @hide
      */
     public void notifyRadioPowerStateChanged(int subId, int slotIndex,
         @RadioPowerState int radioPowerState) {
@@ -443,10 +506,8 @@ public class TelephonyRegistryManager {
      * Notify {@link PhoneCapability} changed.
      *
      * @param phoneCapability the capability of the modem group.
-     *
-     * @hide
      */
-    public void notifyPhoneCapabilityChanged(PhoneCapability phoneCapability) {
+    public void notifyPhoneCapabilityChanged(@NonNull PhoneCapability phoneCapability) {
         try {
             sRegistry.notifyPhoneCapabilityChanged(phoneCapability);
         } catch (RemoteException ex) {
@@ -475,8 +536,6 @@ public class TelephonyRegistryManager {
      * @param slotIndex for which data activation state changed. Can be derived from subId except
      * when subId is invalid.
      * @param activationState sim activation state e.g, activated.
-     *
-     * @hide
      */
     public void notifyDataActivationStateChanged(int subId, int slotIndex,
         @SimActivationState int activationState) {
@@ -496,8 +555,6 @@ public class TelephonyRegistryManager {
      * @param slotIndex for which voice activation state changed. Can be derived from subId except
      * subId is invalid.
      * @param activationState sim activation state e.g, activated.
-     *
-     * @hide
      */
     public void notifyVoiceActivationStateChanged(int subId, int slotIndex,
         @SimActivationState int activationState) {
@@ -517,8 +574,6 @@ public class TelephonyRegistryManager {
      * @param slotIndex for which mobile data state has changed. Can be derived from subId except
      * when subId is invalid.
      * @param state {@code true} indicates mobile data is enabled/on. {@code false} otherwise.
-     *
-     * @hide
      */
     public void notifyUserMobileDataStateChanged(int slotIndex, int subId, boolean state) {
         try {
@@ -529,17 +584,18 @@ public class TelephonyRegistryManager {
     }
 
     /**
-     * TODO: this is marked as deprecated, can we move this one safely?
+     * Notify display info changed.
      *
-     * @param subId
-     * @param slotIndex
-     * @param rawData
-     *
-     * @hide
+     * @param slotIndex The SIM slot index for which display info has changed. Can be
+     * derived from {@code subscriptionId} except when {@code subscriptionId} is invalid, such as
+     * when the device is in emergency-only mode.
+     * @param subscriptionId Subscription id for which display network info has changed.
+     * @param displayInfo The display info.
      */
-    public void notifyOemHookRawEventForSubscriber(int subId, int slotIndex, byte[] rawData) {
+    public void notifyDisplayInfoChanged(int slotIndex, int subscriptionId,
+                                         @NonNull DisplayInfo displayInfo) {
         try {
-            sRegistry.notifyOemHookRawEventForSubscriber(slotIndex, subId, rawData);
+            sRegistry.notifyDisplayInfoChanged(slotIndex, subscriptionId, displayInfo);
         } catch (RemoteException ex) {
             // system process is dead
         }
@@ -550,10 +606,8 @@ public class TelephonyRegistryManager {
      *
      * @param subId for which ims call disconnect.
      * @param imsReasonInfo the reason for ims call disconnect.
-     *
-     * @hide
      */
-    public void notifyImsDisconnectCause(int subId, ImsReasonInfo imsReasonInfo) {
+    public void notifyImsDisconnectCause(int subId, @NonNull ImsReasonInfo imsReasonInfo) {
         try {
             sRegistry.notifyImsDisconnectCause(subId, imsReasonInfo);
         } catch (RemoteException ex) {
@@ -567,14 +621,12 @@ public class TelephonyRegistryManager {
      * @param subId for which data connection failed.
      * @param slotIndex for which data conenction failed. Can be derived from subId except when
      * subId is invalid.
-     * @param apnType the apnType, "ims" for IMS APN, "emergency" for EMERGENCY APN.
+     * @param apnType the apn type bitmask, defined with {@code ApnSetting#TYPE_*} flags.
      * @param apn the APN {@link ApnSetting#getApnName()} of this data connection.
      * @param failCause data fail cause.
-     *
-     * @hide
      */
-    public void notifyPreciseDataConnectionFailed(int subId, int slotIndex, String apnType,
-        String apn, @DataFailureCause int failCause) {
+    public void notifyPreciseDataConnectionFailed(int subId, int slotIndex, @ApnType int apnType,
+            @Nullable String apn, @DataFailureCause int failCause) {
         try {
             sRegistry.notifyPreciseDataConnectionFailed(slotIndex, subId, apnType, apn, failCause);
         } catch (RemoteException ex) {
@@ -588,28 +640,10 @@ public class TelephonyRegistryManager {
      *
      * @param subId for which srvcc state changed.
      * @param state srvcc state
-     *
-     * @hide
      */
     public void notifySrvccStateChanged(int subId, @SrvccState int state) {
         try {
             sRegistry.notifySrvccStateChanged(subId, state);
-        } catch (RemoteException ex) {
-            // system process is dead
-        }
-    }
-
-    /**
-     * Notify over the air sim provisioning(OTASP) mode changed on certain subscription.
-     *
-     * @param subId for which otasp mode changed.
-     * @param otaspMode latest mode for OTASP e.g, OTASP needed.
-     *
-     * @hide
-     */
-    public void notifyOtaspChanged(int subId, int otaspMode) {
-        try {
-            sRegistry.notifyOtaspChanged(subId, otaspMode);
         } catch (RemoteException ex) {
             // system process is dead
         }
@@ -625,8 +659,6 @@ public class TelephonyRegistryManager {
      * @param ringCallPreciseState ringCall state.
      * @param foregroundCallPreciseState foreground call state.
      * @param backgroundCallPreciseState background call state.
-     *
-     * @hide
      */
     public void notifyPreciseCallState(int subId, int slotIndex,
             @PreciseCallStates int ringCallPreciseState,
@@ -644,16 +676,15 @@ public class TelephonyRegistryManager {
      * Notify call disconnect causes which contains {@link DisconnectCause} and {@link
      * android.telephony.PreciseDisconnectCause}.
      *
-     * @param subId for which call disconnected.
      * @param slotIndex for which call disconnected. Can be derived from subId except when subId is
      * invalid.
+     * @param subId for which call disconnected.
      * @param cause {@link DisconnectCause} for the disconnected call.
      * @param preciseCause {@link android.telephony.PreciseDisconnectCause} for the disconnected
      * call.
-     *
-     * @hide
      */
-    public void notifyDisconnectCause(int slotIndex, int subId, int cause, int preciseCause) {
+    public void notifyDisconnectCause(int slotIndex, int subId, @DisconnectCauses int cause,
+            @PreciseDisconnectCauses int preciseCause) {
         try {
             sRegistry.notifyDisconnectCause(slotIndex, subId, cause, preciseCause);
         } catch (RemoteException ex) {
@@ -662,29 +693,12 @@ public class TelephonyRegistryManager {
     }
 
     /**
-     * Notify data connection failed on certain subscription.
+     * Notify {@link android.telephony.CellLocation} changed.
      *
-     * @param subId for which data connection failed.
-     * @param slotIndex for which data conenction faled. Can be derived from subId except when subId
-     * is invalid.
-     * @param apnType the apnType, "ims" for IMS APN, "emergency" for EMERGENCY APN. Note each data
-     * connection can support multiple anyTypes.
-     *
-     * @hide
+     * <p>To be compatible with {@link TelephonyRegistry}, use {@link CellIdentity} which is
+     * parcelable, and convert to CellLocation in client code.
      */
-    public void notifyDataConnectionFailed(int subId, int slotIndex, String apnType) {
-        try {
-            sRegistry.notifyDataConnectionFailedForSubscriber(slotIndex, subId, apnType);
-        } catch (RemoteException ex) {
-            // system process is dead
-        }
-    }
-
-    /**
-     * TODO change from bundle to CellLocation?
-     * @hide
-     */
-    public void notifyCellLocation(int subId, Bundle cellLocation) {
+    public void notifyCellLocation(int subId, @NonNull CellIdentity cellLocation) {
         try {
             sRegistry.notifyCellLocationForSubscriber(subId, cellLocation);
         } catch (RemoteException ex) {
@@ -698,10 +712,8 @@ public class TelephonyRegistryManager {
      *
      * @param subId for which cellinfo changed.
      * @param cellInfo A list of cellInfo associated with the given subscription.
-     *
-     * @hide
      */
-    public void notifyCellInfoChanged(int subId, List<CellInfo> cellInfo) {
+    public void notifyCellInfoChanged(int subId, @NonNull List<CellInfo> cellInfo) {
         try {
             sRegistry.notifyCellInfoForSubscriber(subId, cellInfo);
         } catch (RemoteException ex) {
@@ -710,8 +722,8 @@ public class TelephonyRegistryManager {
     }
 
     /**
-     * @param activeDataSubId
-     * @hide
+     * Notify that the active data subscription ID has changed.
+     * @param activeDataSubId The new subscription ID for active data
      */
     public void notifyActiveDataSubIdChanged(int activeDataSubId) {
         try {
@@ -720,4 +732,53 @@ public class TelephonyRegistryManager {
 
         }
     }
+
+    /**
+     * Report that Registration or a Location/Routing/Tracking Area update has failed.
+     *
+     * @param slotIndex for which call disconnected. Can be derived from subId except when subId is
+     * invalid.
+     * @param subId for which cellinfo changed.
+     * @param cellIdentity the CellIdentity, which must include the globally unique identifier
+     *        for the cell (for example, all components of the CGI or ECGI).
+     * @param chosenPlmn a 5 or 6 digit alphanumeric PLMN (MCC|MNC) among those broadcast by the
+     *         cell that was chosen for the failed registration attempt.
+     * @param domain DOMAIN_CS, DOMAIN_PS or both in case of a combined procedure.
+     * @param causeCode the primary failure cause code of the procedure.
+     *        For GSM/UMTS (MM), values are in TS 24.008 Sec 10.5.95
+     *        For GSM/UMTS (GMM), values are in TS 24.008 Sec 10.5.147
+     *        For LTE (EMM), cause codes are TS 24.301 Sec 9.9.3.9
+     *        For NR (5GMM), cause codes are TS 24.501 Sec 9.11.3.2
+     *        Integer.MAX_VALUE if this value is unused.
+     * @param additionalCauseCode the cause code of any secondary/combined procedure if appropriate.
+     *        For UMTS, if a combined attach succeeds for PS only, then the GMM cause code shall be
+     *        included as an additionalCauseCode. For LTE (ESM), cause codes are in
+     *        TS 24.301 9.9.4.4. Integer.MAX_VALUE if this value is unused.
+     */
+    public void notifyRegistrationFailed(int slotIndex, int subId,
+            @NonNull CellIdentity cellIdentity, @NonNull String chosenPlmn,
+            int domain, int causeCode, int additionalCauseCode) {
+        try {
+            sRegistry.notifyRegistrationFailed(slotIndex, subId, cellIdentity,
+                    chosenPlmn, domain, causeCode, additionalCauseCode);
+        } catch (RemoteException ex) {
+        }
+    }
+
+    /**
+     * Notify {@link BarringInfo} has changed for a specific subscription.
+     *
+     * @param slotIndex for the phone object that got updated barring info.
+     * @param subId for which the BarringInfo changed.
+     * @param barringInfo updated BarringInfo.
+     */
+    public void notifyBarringInfoChanged(
+            int slotIndex, int subId, @NonNull BarringInfo barringInfo) {
+        try {
+            sRegistry.notifyBarringInfoChanged(slotIndex, subId, barringInfo);
+        } catch (RemoteException ex) {
+            // system server crash
+        }
+    }
+
 }

@@ -442,13 +442,17 @@ public class DisplayRotation {
         final int lastOrientation = mLastOrientation;
         final int rotation = rotationForOrientation(lastOrientation, oldRotation);
         ProtoLog.v(WM_DEBUG_ORIENTATION,
-                "Computed rotation=%d for display id=%d based on lastOrientation=%d and "
-                        + "oldRotation=%d",
-                rotation, displayId, lastOrientation, oldRotation);
+                "Computed rotation=%s (%d) for display id=%d based on lastOrientation=%s (%d) and "
+                        + "oldRotation=%s (%d)",
+                Surface.rotationToString(rotation), rotation,
+                displayId,
+                ActivityInfo.screenOrientationToString(lastOrientation), lastOrientation,
+                Surface.rotationToString(oldRotation), oldRotation);
 
         ProtoLog.v(WM_DEBUG_ORIENTATION,
-                "Display id=%d selected orientation %d, got rotation %d", displayId,
-                        lastOrientation, rotation);
+                "Display id=%d selected orientation %s (%d), got rotation %s (%d)", displayId,
+                ActivityInfo.screenOrientationToString(lastOrientation), lastOrientation,
+                Surface.rotationToString(rotation), rotation);
 
         if (oldRotation == rotation) {
             // No change.
@@ -480,9 +484,11 @@ public class DisplayRotation {
             prepareNormalRotationAnimation();
         }
 
-        // The display is frozen now, give a remote handler (system ui) some time to reposition
-        // things.
-        startRemoteRotation(oldRotation, mRotation);
+        // TODO(b/147469351): Remove the restriction.
+        if (mDisplayContent.mFixedRotationLaunchingApp == null) {
+            // Give a remote handler (system ui) some time to reposition things.
+            startRemoteRotation(oldRotation, mRotation);
+        }
 
         return true;
     }
@@ -521,8 +527,16 @@ public class DisplayRotation {
             }
             mService.mH.removeCallbacks(mDisplayRotationHandlerTimeout);
             mIsWaitingForRemoteRotation = false;
-            mDisplayContent.sendNewConfiguration();
-            mService.mAtmService.applyContainerTransaction(t);
+            mService.mAtmService.deferWindowLayout();
+            try {
+                mDisplayContent.sendNewConfiguration();
+                if (t != null) {
+                    mService.mAtmService.mTaskOrganizerController.applyContainerTransaction(t,
+                            null /* organizer */);
+                }
+            } finally {
+                mService.mAtmService.continueWindowLayout();
+            }
         }
     }
 
@@ -544,6 +558,12 @@ public class DisplayRotation {
 
     @VisibleForTesting
     boolean shouldRotateSeamlessly(int oldRotation, int newRotation, boolean forceUpdate) {
+        // Display doesn't need to be frozen because application has been started in correct
+        // rotation already, so the rest of the windows can use seamless rotation.
+        if (mDisplayContent.mFixedRotationLaunchingApp != null) {
+            return true;
+        }
+
         final WindowState w = mDisplayPolicy.getTopFullscreenOpaqueWindow();
         if (w == null || w != mDisplayContent.mCurrentFocus) {
             return false;
@@ -578,7 +598,7 @@ public class DisplayRotation {
 
         // In the presence of the PINNED stack or System Alert windows we unfortunately can not
         // seamlessly rotate.
-        if (mDisplayContent.hasPinnedStack() || mDisplayContent.hasAlertWindowSurfaces()) {
+        if (mDisplayContent.hasPinnedTask() || mDisplayContent.hasAlertWindowSurfaces()) {
             return false;
         }
 
@@ -997,18 +1017,22 @@ public class DisplayRotation {
      * Given an orientation constant, returns the appropriate surface rotation, taking into account
      * sensors, docking mode, rotation lock, and other factors.
      *
-     * @param orientation An orientation constant, such as
-     *                    {@link ActivityInfo#SCREEN_ORIENTATION_LANDSCAPE}.
+     * @param orientation  An orientation constant, such as
+     *                     {@link ActivityInfo#SCREEN_ORIENTATION_LANDSCAPE}.
      * @param lastRotation The most recently used rotation.
      * @return The surface rotation to use.
      */
     @VisibleForTesting
-    int rotationForOrientation(int orientation, int lastRotation) {
-        ProtoLog.v(WM_DEBUG_ORIENTATION, "rotationForOrientation(orient=%d, last=%d); user=%d %s",
-                    orientation, lastRotation, mUserRotation,
-                    mUserRotationMode == WindowManagerPolicy.USER_ROTATION_LOCKED
-                            ? "USER_ROTATION_LOCKED" : ""
-                        );
+    @Surface.Rotation
+    int rotationForOrientation(@ScreenOrientation int orientation,
+            @Surface.Rotation int lastRotation) {
+        ProtoLog.v(WM_DEBUG_ORIENTATION,
+                "rotationForOrientation(orient=%s (%d), last=%s (%d)); user=%s (%d) %s",
+                ActivityInfo.screenOrientationToString(orientation), orientation,
+                Surface.rotationToString(lastRotation), lastRotation,
+                Surface.rotationToString(mUserRotation), mUserRotation,
+                mUserRotationMode == WindowManagerPolicy.USER_ROTATION_LOCKED
+                        ? "USER_ROTATION_LOCKED" : "");
 
         if (isFixedToUserRotation()) {
             return mUserRotation;

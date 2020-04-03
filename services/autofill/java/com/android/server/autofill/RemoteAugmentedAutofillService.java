@@ -36,6 +36,8 @@ import android.os.IBinder;
 import android.os.ICancellationSignal;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.service.autofill.Dataset;
+import android.service.autofill.InlinePresentation;
 import android.service.autofill.augmented.AugmentedAutofillService;
 import android.service.autofill.augmented.IAugmentedAutofillService;
 import android.service.autofill.augmented.IFillCallback;
@@ -45,17 +47,22 @@ import android.view.autofill.AutofillId;
 import android.view.autofill.AutofillManager;
 import android.view.autofill.AutofillValue;
 import android.view.autofill.IAutoFillManagerClient;
+import android.view.inputmethod.InlineSuggestionsRequest;
+import android.view.inputmethod.InlineSuggestionsResponse;
 
 import com.android.internal.infra.AbstractRemoteService;
 import com.android.internal.infra.AndroidFuture;
 import com.android.internal.infra.ServiceConnector;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.os.IResultReceiver;
+import com.android.server.autofill.ui.InlineSuggestionFactory;
 
+import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 final class RemoteAugmentedAutofillService
         extends ServiceConnector.Impl<IAugmentedAutofillService> {
@@ -65,6 +72,7 @@ final class RemoteAugmentedAutofillService
     private final int mIdleUnbindTimeoutMs;
     private final int mRequestTimeoutMs;
     private final ComponentName mComponentName;
+    private final RemoteAugmentedAutofillServiceCallbacks mCallbacks;
 
     RemoteAugmentedAutofillService(Context context, ComponentName serviceName,
             int userId, RemoteAugmentedAutofillServiceCallbacks callbacks,
@@ -77,6 +85,7 @@ final class RemoteAugmentedAutofillService
         mIdleUnbindTimeoutMs = idleUnbindTimeoutMs;
         mRequestTimeoutMs = requestTimeoutMs;
         mComponentName = serviceName;
+        mCallbacks = callbacks;
 
         // Bind right away.
         connect();
@@ -136,7 +145,11 @@ final class RemoteAugmentedAutofillService
      */
     public void onRequestAutofillLocked(int sessionId, @NonNull IAutoFillManagerClient client,
             int taskId, @NonNull ComponentName activityComponent, @NonNull AutofillId focusedId,
-            @Nullable AutofillValue focusedValue) {
+            @Nullable AutofillValue focusedValue,
+            @Nullable InlineSuggestionsRequest inlineSuggestionsRequest,
+            @Nullable Function<InlineSuggestionsResponse, Boolean> inlineSuggestionsCallback,
+            @NonNull Runnable onErrorCallback,
+            @Nullable RemoteInlineSuggestionRenderService remoteRenderService) {
         long requestTime = SystemClock.elapsedRealtime();
         AtomicReference<ICancellationSignal> cancellationRef = new AtomicReference<>();
 
@@ -150,9 +163,16 @@ final class RemoteAugmentedAutofillService
                     final IBinder realClient = resultData
                             .getBinder(AutofillManager.EXTRA_AUGMENTED_AUTOFILL_CLIENT);
                     service.onFillRequest(sessionId, realClient, taskId, activityComponent,
-                            focusedId, focusedValue, requestTime, new IFillCallback.Stub() {
+                            focusedId, focusedValue, requestTime, inlineSuggestionsRequest,
+                            new IFillCallback.Stub() {
                                 @Override
-                                public void onSuccess() {
+                                public void onSuccess(@Nullable List<Dataset> inlineSuggestionsData,
+                                        @Nullable List<InlinePresentation> inlineActions) {
+                                    mCallbacks.resetLastResponse();
+                                    maybeRequestShowInlineSuggestions(sessionId,
+                                            inlineSuggestionsRequest, inlineSuggestionsData,
+                                            inlineActions, focusedId, inlineSuggestionsCallback,
+                                            client, onErrorCallback, remoteRenderService);
                                     requestAutofill.complete(null);
                                 }
 
@@ -214,6 +234,43 @@ final class RemoteAugmentedAutofillService
         });
     }
 
+    private void maybeRequestShowInlineSuggestions(int sessionId,
+            @Nullable InlineSuggestionsRequest request,
+            @Nullable List<Dataset> inlineSuggestionsData,
+            @Nullable List<InlinePresentation> inlineActions, @NonNull AutofillId focusedId,
+            @Nullable Function<InlineSuggestionsResponse, Boolean> inlineSuggestionsCallback,
+            @NonNull IAutoFillManagerClient client, @NonNull Runnable onErrorCallback,
+            @Nullable RemoteInlineSuggestionRenderService remoteRenderService) {
+        if (inlineSuggestionsData == null || inlineSuggestionsData.isEmpty()
+                || inlineSuggestionsCallback == null || request == null
+                || remoteRenderService == null) {
+            return;
+        }
+        mCallbacks.setLastResponse(sessionId);
+
+        final InlineSuggestionsResponse inlineSuggestionsResponse =
+                InlineSuggestionFactory.createAugmentedInlineSuggestionsResponse(
+                        request, inlineSuggestionsData, inlineActions, focusedId, mContext,
+                        dataset -> {
+                            mCallbacks.logAugmentedAutofillSelected(sessionId,
+                                    dataset.getId());
+                            try {
+                                client.autofill(sessionId, dataset.getFieldIds(),
+                                        dataset.getFieldValues());
+                            } catch (RemoteException e) {
+                                Slog.w(TAG, "Encounter exception autofilling the values");
+                            }
+                        }, onErrorCallback, remoteRenderService);
+
+        if (inlineSuggestionsResponse == null) {
+            Slog.w(TAG, "InlineSuggestionFactory created null response");
+            return;
+        }
+        if (inlineSuggestionsCallback.apply(inlineSuggestionsResponse)) {
+            mCallbacks.logAugmentedAutofillShown(sessionId);
+        }
+    }
+
     @Override
     public String toString() {
         return "RemoteAugmentedAutofillService["
@@ -229,8 +286,12 @@ final class RemoteAugmentedAutofillService
 
     public interface RemoteAugmentedAutofillServiceCallbacks
             extends AbstractRemoteService.VultureCallback<RemoteAugmentedAutofillService> {
-        // NOTE: so far we don't need to notify the callback implementation (an inner class on
-        // AutofillManagerServiceImpl) of the request results (success, timeouts, etc..), so this
-        // callback interface is empty.
+        void resetLastResponse();
+
+        void setLastResponse(int sessionId);
+
+        void logAugmentedAutofillShown(int sessionId);
+
+        void logAugmentedAutofillSelected(int sessionId, @Nullable String suggestionId);
     }
 }

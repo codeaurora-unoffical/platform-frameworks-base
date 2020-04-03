@@ -32,7 +32,7 @@ import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.Size;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.Bitmap;
 import android.graphics.ColorSpace;
 import android.graphics.GraphicBuffer;
@@ -41,6 +41,7 @@ import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.Region;
+import android.hardware.display.DeviceProductInfo;
 import android.hardware.display.DisplayedContentSample;
 import android.hardware.display.DisplayedContentSamplingAttributes;
 import android.os.Build;
@@ -122,10 +123,14 @@ public final class SurfaceControl implements Parcelable {
     private static native void nativeSetColor(long transactionObj, long nativeObject, float[] color);
     private static native void nativeSetFlags(long transactionObj, long nativeObject,
             int flags, int mask);
+    private static native void nativeSetFrameRateSelectionPriority(long transactionObj,
+            long nativeObject, int priority);
     private static native void nativeSetWindowCrop(long transactionObj, long nativeObject,
             int l, int t, int r, int b);
     private static native void nativeSetCornerRadius(long transactionObj, long nativeObject,
             float cornerRadius);
+    private static native void nativeSetBackgroundBlurRadius(long transactionObj, long nativeObject,
+            int blurRadius);
     private static native void nativeSetLayerStack(long transactionObj, long nativeObject,
             int layerStack);
 
@@ -148,7 +153,8 @@ public final class SurfaceControl implements Parcelable {
             int L, int T, int R, int B);
     private static native void nativeSetDisplaySize(long transactionObj, IBinder displayToken,
             int width, int height);
-    private static native SurfaceControl.PhysicalDisplayInfo[] nativeGetDisplayConfigs(
+    private static native SurfaceControl.DisplayInfo nativeGetDisplayInfo(IBinder displayToken);
+    private static native SurfaceControl.DisplayConfig[] nativeGetDisplayConfigs(
             IBinder displayToken);
     private static native DisplayedContentSamplingAttributes
             nativeGetDisplayedContentSamplingAttributes(IBinder displayToken);
@@ -157,12 +163,10 @@ public final class SurfaceControl implements Parcelable {
     private static native DisplayedContentSample nativeGetDisplayedContentSample(
             IBinder displayToken, long numFrames, long timestamp);
     private static native int nativeGetActiveConfig(IBinder displayToken);
-    private static native boolean nativeSetActiveConfig(IBinder displayToken, int id);
-    private static native boolean nativeSetAllowedDisplayConfigs(IBinder displayToken,
-                                                                 int[] allowedConfigs);
-    private static native int[] nativeGetAllowedDisplayConfigs(IBinder displayToken);
     private static native boolean nativeSetDesiredDisplayConfigSpecs(IBinder displayToken,
             SurfaceControl.DesiredDisplayConfigSpecs desiredDisplayConfigSpecs);
+    private static native SurfaceControl.DesiredDisplayConfigSpecs
+            nativeGetDesiredDisplayConfigSpecs(IBinder displayToken);
     private static native int[] nativeGetDisplayColorModes(IBinder displayToken);
     private static native SurfaceControl.DisplayPrimaries nativeGetDisplayNativePrimaries(
             IBinder displayToken);
@@ -170,6 +174,8 @@ public final class SurfaceControl implements Parcelable {
     private static native int nativeGetActiveColorMode(IBinder displayToken);
     private static native boolean nativeSetActiveColorMode(IBinder displayToken,
             int colorMode);
+    private static native void nativeSetAutoLowLatencyMode(IBinder displayToken, boolean on);
+    private static native void nativeSetGameContentType(IBinder displayToken, boolean on);
     private static native void nativeSetDisplayPowerMode(
             IBinder displayToken, int mode);
     private static native void nativeDeferTransactionUntil(long transactionObj, long nativeObject,
@@ -187,6 +193,9 @@ public final class SurfaceControl implements Parcelable {
 
     private static native Display.HdrCapabilities nativeGetHdrCapabilities(IBinder displayToken);
 
+    private static native boolean nativeGetAutoLowLatencyModeSupport(IBinder displayToken);
+    private static native boolean nativeGetGameContentTypeSupport(IBinder displayToken);
+
     private static native void nativeSetInputWindowInfo(long transactionObj, long nativeObject,
             InputWindowHandle handle);
 
@@ -203,6 +212,9 @@ public final class SurfaceControl implements Parcelable {
             float shadowRadius);
     private static native void nativeSetGlobalShadowSettings(@Size(4) float[] ambientColor,
             @Size(4) float[] spotColor, float lightPosY, float lightPosZ, float lightRadius);
+
+    private static native void nativeSetFrameRate(
+            long transactionObj, long nativeObject, float frameRate, int compatibility);
 
     private final CloseGuard mCloseGuard = CloseGuard.get();
     private String mName;
@@ -310,14 +322,12 @@ public final class SurfaceControl implements Parcelable {
     public static final int FX_SURFACE_NORMAL   = 0x00000000;
 
     /**
-     * Surface creation flag: Creates a Dim surface.
-     * Everything behind this surface is dimmed by the amount specified
-     * in {@link Transaction#setAlpha(SurfaceControl, float)}.  It is an error to lock a Dim
-     * surface, since it doesn't have a backing store.
+     * Surface creation flag: Creates a effect surface which
+     * represents a solid color and or shadows.
      *
      * @hide
      */
-    public static final int FX_SURFACE_DIM = 0x00020000;
+    public static final int FX_SURFACE_EFFECT = 0x00020000;
 
     /**
      * Surface creation flag: Creates a container surface.
@@ -410,6 +420,9 @@ public final class SurfaceControl implements Parcelable {
         if (mNativeObject != 0) {
             release();
         }
+      	if (nativeObject != 0) {
+            mCloseGuard.open("release");
+        }
         mNativeObject = nativeObject;
     }
 
@@ -442,10 +455,16 @@ public final class SurfaceControl implements Parcelable {
     public static final int METADATA_TASK_ID = 3;
 
     /**
+     * The style of mouse cursor and hotspot.
+     * @hide
+     */
+    public static final int METADATA_MOUSE_CURSOR = 4;
+
+    /**
      * Accessibility ID to allow association between surfaces and accessibility tree.
      * @hide
      */
-    public static final int METADATA_ACCESSIBILITY_ID = 4;
+    public static final int METADATA_ACCESSIBILITY_ID = 5;
 
     /**
      * A wrapper around GraphicBuffer that contains extra information about how to
@@ -667,6 +686,22 @@ public final class SurfaceControl implements Parcelable {
         }
 
         /**
+         * Set the initial visibility for the SurfaceControl.
+         *
+         * @param hidden Whether the Surface is initially HIDDEN.
+         * @hide
+         */
+        @NonNull
+        public Builder setHidden(boolean hidden) {
+            if (hidden) {
+                mFlags |= HIDDEN;
+            } else {
+                mFlags &= ~HIDDEN;
+            }
+            return this;
+        }
+
+        /**
          * Set a parent surface for our new SurfaceControl.
          *
          * Child surfaces are constrained to the onscreen region of their parent.
@@ -706,11 +741,11 @@ public final class SurfaceControl implements Parcelable {
          */
         public Builder setColorLayer() {
             unsetBufferSize();
-            return setFlags(FX_SURFACE_DIM, FX_SURFACE_MASK);
+            return setFlags(FX_SURFACE_EFFECT, FX_SURFACE_MASK);
         }
 
         private boolean isColorLayerSet() {
-            return  (mFlags & FX_SURFACE_DIM) == FX_SURFACE_DIM;
+            return  (mFlags & FX_SURFACE_EFFECT) == FX_SURFACE_EFFECT;
         }
 
         /**
@@ -779,8 +814,7 @@ public final class SurfaceControl implements Parcelable {
      * @param name     The surface name, must not be null.
      * @param w        The surface initial width.
      * @param h        The surface initial height.
-     * @param flags    The surface creation flags.  Should always include {@link #HIDDEN}
-     *                 in the creation flags.
+     * @param flags    The surface creation flags.
      * @param metadata Initial metadata.
      * @throws throws OutOfResourcesException If the SurfaceControl cannot be created.
      */
@@ -789,15 +823,6 @@ public final class SurfaceControl implements Parcelable {
                     throws OutOfResourcesException, IllegalArgumentException {
         if (name == null) {
             throw new IllegalArgumentException("name must not be null");
-        }
-
-        if ((flags & SurfaceControl.HIDDEN) == 0) {
-            Log.w(TAG, "Surfaces should always be created with the HIDDEN flag set "
-                    + "to ensure that they are not made visible prematurely before "
-                    + "all of the surface's properties have been configured.  "
-                    + "Set the other properties and make the surface visible within "
-                    + "a transaction.  New surface name: " + name,
-                    new Throwable());
         }
 
         mName = name;
@@ -845,14 +870,12 @@ public final class SurfaceControl implements Parcelable {
 
     private SurfaceControl(Parcel in) {
         readFromParcel(in);
-        mCloseGuard.open("release");
     }
 
     /**
      * @hide
      */
     public SurfaceControl() {
-        mCloseGuard.open("release");
     }
 
     public void readFromParcel(Parcel in) {
@@ -950,8 +973,8 @@ public final class SurfaceControl implements Parcelable {
         if (mNativeObject != 0) {
             nativeRelease(mNativeObject);
             mNativeObject = 0;
+            mCloseGuard.close();
         }
-        mCloseGuard.close();
     }
 
     /**
@@ -1256,140 +1279,64 @@ public final class SurfaceControl implements Parcelable {
                 Integer.toHexString(System.identityHashCode(this));
     }
 
-    /*
-     * set display parameters.
-     * needs to be inside open/closeTransaction block
-     */
-
     /**
-     * Describes the properties of a physical display known to surface flinger.
+     * Immutable information about physical display.
+     *
      * @hide
      */
-    public static final class PhysicalDisplayInfo {
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
-        public int width;
-
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
-        public int height;
-
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
-        public float refreshRate;
-
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
+    public static final class DisplayInfo {
+        public boolean isInternal;
         public float density;
+        public boolean secure;
+        public DeviceProductInfo deviceProductInfo;
 
+        @Override
+        public String toString() {
+            return "DisplayInfo{isInternal=" + isInternal
+                    + ", density=" + density
+                    + ", secure=" + secure
+                    + ", deviceProductInfo=" + deviceProductInfo + "}";
+        }
+    }
+
+    /**
+     * Configuration supported by physical display.
+     *
+     * @hide
+     */
+    public static final class DisplayConfig {
         /**
-         * @hide
+         * Invalid display config id.
          */
-        @UnsupportedAppUsage
+        public static final int INVALID_DISPLAY_CONFIG_ID = -1;
+
+        public int width;
+        public int height;
         public float xDpi;
-
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
         public float yDpi;
 
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
-        public boolean secure;
-
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
+        public float refreshRate;
         public long appVsyncOffsetNanos;
-
-        /**
-         * @hide
-         */
-        @UnsupportedAppUsage
         public long presentationDeadlineNanos;
 
         /**
-         * @hide
+         * The config group ID this config is associated to.
+         * Configs in the same group are similar from vendor's perspective and switching between
+         * configs within the same group can be done seamlessly in most cases.
+         * @see: android.hardware.graphics.composer@2.4::IComposerClient::Attribute::CONFIG_GROUP
          */
-        @UnsupportedAppUsage
-        public PhysicalDisplayInfo() {
-        }
+        public int configGroup;
 
-        /**
-         * @hide
-         */
-        public PhysicalDisplayInfo(PhysicalDisplayInfo other) {
-            copyFrom(other);
-        }
-
-        /**
-         * @hide
-         */
-        @Override
-        public boolean equals(Object o) {
-            return o instanceof PhysicalDisplayInfo && equals((PhysicalDisplayInfo)o);
-        }
-
-        /**
-         * @hide
-         */
-        public boolean equals(PhysicalDisplayInfo other) {
-            return other != null
-                    && width == other.width
-                    && height == other.height
-                    && refreshRate == other.refreshRate
-                    && density == other.density
-                    && xDpi == other.xDpi
-                    && yDpi == other.yDpi
-                    && secure == other.secure
-                    && appVsyncOffsetNanos == other.appVsyncOffsetNanos
-                    && presentationDeadlineNanos == other.presentationDeadlineNanos;
-        }
-
-        /**
-         * @hide
-         */
-        @Override
-        public int hashCode() {
-            return 0; // don't care
-        }
-
-        /**
-         * @hide
-         */
-        public void copyFrom(PhysicalDisplayInfo other) {
-            width = other.width;
-            height = other.height;
-            refreshRate = other.refreshRate;
-            density = other.density;
-            xDpi = other.xDpi;
-            yDpi = other.yDpi;
-            secure = other.secure;
-            appVsyncOffsetNanos = other.appVsyncOffsetNanos;
-            presentationDeadlineNanos = other.presentationDeadlineNanos;
-        }
-
-        /**
-         * @hide
-         */
         @Override
         public String toString() {
-            return "PhysicalDisplayInfo{" + width + " x " + height + ", " + refreshRate + " fps, "
-                    + "density " + density + ", " + xDpi + " x " + yDpi + " dpi, secure " + secure
-                    + ", appVsyncOffset " + appVsyncOffsetNanos
-                    + ", bufferDeadline " + presentationDeadlineNanos + "}";
+            return "DisplayConfig{width=" + width
+                    + ", height=" + height
+                    + ", xDpi=" + xDpi
+                    + ", yDpi=" + yDpi
+                    + ", refreshRate=" + refreshRate
+                    + ", appVsyncOffsetNanos=" + appVsyncOffsetNanos
+                    + ", presentationDeadlineNanos=" + presentationDeadlineNanos
+                    + ", configGroup=" + configGroup + "}";
         }
     }
 
@@ -1406,8 +1353,17 @@ public final class SurfaceControl implements Parcelable {
     /**
      * @hide
      */
-    @UnsupportedAppUsage
-    public static SurfaceControl.PhysicalDisplayInfo[] getDisplayConfigs(IBinder displayToken) {
+    public static SurfaceControl.DisplayInfo getDisplayInfo(IBinder displayToken) {
+        if (displayToken == null) {
+            throw new IllegalArgumentException("displayToken must not be null");
+        }
+        return nativeGetDisplayInfo(displayToken);
+    }
+
+    /**
+     * @hide
+     */
+    public static SurfaceControl.DisplayConfig[] getDisplayConfigs(IBinder displayToken) {
         if (displayToken == null) {
             throw new IllegalArgumentException("displayToken must not be null");
         }
@@ -1464,68 +1420,60 @@ public final class SurfaceControl implements Parcelable {
 
 
     /**
-     * @hide
-     */
-    public static boolean setActiveConfig(IBinder displayToken, int id) {
-        if (displayToken == null) {
-            throw new IllegalArgumentException("displayToken must not be null");
-        }
-        return nativeSetActiveConfig(displayToken, id);
-    }
-
-    /**
-     * @hide
-     */
-    public static boolean setAllowedDisplayConfigs(IBinder displayToken, int[] allowedConfigs) {
-        if (displayToken == null) {
-            throw new IllegalArgumentException("displayToken must not be null");
-        }
-        if (allowedConfigs == null) {
-            throw new IllegalArgumentException("allowedConfigs must not be null");
-        }
-
-        return nativeSetAllowedDisplayConfigs(displayToken, allowedConfigs);
-    }
-
-    /**
-     * @hide
-     */
-    public static int[] getAllowedDisplayConfigs(IBinder displayToken) {
-        if (displayToken == null) {
-            throw new IllegalArgumentException("displayToken must not be null");
-        }
-        return nativeGetAllowedDisplayConfigs(displayToken);
-    }
-
-    /**
      * Contains information about desired display configuration.
      *
      * @hide
      */
     public static final class DesiredDisplayConfigSpecs {
-        /**
-         * @hide
-         */
-        public int mDefaultModeId;
+        public int defaultConfig;
+        public float minRefreshRate;
+        public float maxRefreshRate;
 
-        /**
-         * @hide
-         */
-        public float mMinRefreshRate;
+        public DesiredDisplayConfigSpecs() {}
 
-        /**
-         * @hide
-         */
-        public float mMaxRefreshRate;
+        public DesiredDisplayConfigSpecs(DesiredDisplayConfigSpecs other) {
+            copyFrom(other);
+        }
 
-        /**
-         * @hide
-         */
         public DesiredDisplayConfigSpecs(
-                int defaultModeId, float minRefreshRate, float maxRefreshRate) {
-            mDefaultModeId = defaultModeId;
-            mMinRefreshRate = minRefreshRate;
-            mMaxRefreshRate = maxRefreshRate;
+                int defaultConfig, float minRefreshRate, float maxRefreshRate) {
+            this.defaultConfig = defaultConfig;
+            this.minRefreshRate = minRefreshRate;
+            this.maxRefreshRate = maxRefreshRate;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof DesiredDisplayConfigSpecs && equals((DesiredDisplayConfigSpecs) o);
+        }
+
+        /**
+         * Tests for equality.
+         */
+        public boolean equals(DesiredDisplayConfigSpecs other) {
+            return other != null && defaultConfig == other.defaultConfig
+                    && minRefreshRate == other.minRefreshRate
+                    && maxRefreshRate == other.maxRefreshRate;
+        }
+
+        @Override
+        public int hashCode() {
+            return 0; // don't care
+        }
+
+        /**
+         * Copies the supplied object's values to this object.
+         */
+        public void copyFrom(DesiredDisplayConfigSpecs other) {
+            defaultConfig = other.defaultConfig;
+            minRefreshRate = other.minRefreshRate;
+            maxRefreshRate = other.maxRefreshRate;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("defaultConfig=%d min=%.0f max=%.0f", defaultConfig,
+                    minRefreshRate, maxRefreshRate);
         }
     }
 
@@ -1539,6 +1487,18 @@ public final class SurfaceControl implements Parcelable {
         }
 
         return nativeSetDesiredDisplayConfigSpecs(displayToken, desiredDisplayConfigSpecs);
+    }
+
+    /**
+     * @hide
+     */
+    public static SurfaceControl.DesiredDisplayConfigSpecs getDesiredDisplayConfigSpecs(
+            IBinder displayToken) {
+        if (displayToken == null) {
+            throw new IllegalArgumentException("displayToken must not be null");
+        }
+
+        return nativeGetDesiredDisplayConfigSpecs(displayToken);
     }
 
     /**
@@ -1670,6 +1630,28 @@ public final class SurfaceControl implements Parcelable {
     /**
      * @hide
      */
+    public static void setAutoLowLatencyMode(IBinder displayToken, boolean on) {
+        if (displayToken == null) {
+            throw new IllegalArgumentException("displayToken must not be null");
+        }
+
+        nativeSetAutoLowLatencyMode(displayToken, on);
+    }
+
+    /**
+     * @hide
+     */
+    public static void setGameContentType(IBinder displayToken, boolean on) {
+        if (displayToken == null) {
+            throw new IllegalArgumentException("displayToken must not be null");
+        }
+
+        nativeSetGameContentType(displayToken, on);
+    }
+
+    /**
+     * @hide
+     */
     @UnsupportedAppUsage
     public static void setDisplayProjection(IBinder displayToken,
             int orientation, Rect layerStackRect, Rect displayRect) {
@@ -1721,6 +1703,28 @@ public final class SurfaceControl implements Parcelable {
     /**
      * @hide
      */
+    public static boolean getAutoLowLatencyModeSupport(IBinder displayToken) {
+        if (displayToken == null) {
+            throw new IllegalArgumentException("displayToken must not be null");
+        }
+
+        return nativeGetAutoLowLatencyModeSupport(displayToken);
+    }
+
+    /**
+     * @hide
+     */
+    public static boolean getGameContentTypeSupport(IBinder displayToken) {
+        if (displayToken == null) {
+            throw new IllegalArgumentException("displayToken must not be null");
+        }
+
+        return nativeGetGameContentTypeSupport(displayToken);
+    }
+
+    /**
+     * @hide
+     */
     @UnsupportedAppUsage
     public static IBinder createDisplay(String name, boolean secure) {
         if (name == null) {
@@ -1755,7 +1759,7 @@ public final class SurfaceControl implements Parcelable {
     }
 
     /**
-     * TODO(116025192): Remove this stopgap once framework is display-agnostic.
+     * TODO(b/116025192): Remove this stopgap once framework is display-agnostic.
      *
      * @hide
      */
@@ -2090,6 +2094,14 @@ public final class SurfaceControl implements Parcelable {
 
         private final ArrayMap<SurfaceControl, Point> mResizedSurfaces = new ArrayMap<>();
         Runnable mFreeNativeResources;
+        private static final float[] INVALID_COLOR = {-1, -1, -1};
+
+        /**
+         * @hide
+         */
+        protected void checkPreconditions(SurfaceControl sc) {
+            sc.checkNotReleased();
+        }
 
         /**
          * Open a new transaction object. The transaction may be filed with commands to
@@ -2155,12 +2167,25 @@ public final class SurfaceControl implements Parcelable {
          */
         @NonNull
         public Transaction setVisibility(@NonNull SurfaceControl sc, boolean visible) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             if (visible) {
                 return show(sc);
             } else {
                 return hide(sc);
             }
+        }
+
+        /**
+         * This information is passed to SurfaceFlinger to decide which window should have a
+         * priority when deciding about the refresh rate of the display. All windows have the
+         * lowest priority by default.
+         * @hide
+         */
+        @NonNull
+        public Transaction setFrameRateSelectionPriority(@NonNull SurfaceControl sc, int priority) {
+            sc.checkNotReleased();
+            nativeSetFrameRateSelectionPriority(mNativeObject, sc.mNativeObject, priority);
+            return this;
         }
 
         /**
@@ -2172,7 +2197,7 @@ public final class SurfaceControl implements Parcelable {
          */
         @UnsupportedAppUsage
         public Transaction show(SurfaceControl sc) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetFlags(mNativeObject, sc.mNativeObject, 0, SURFACE_HIDDEN);
             return this;
         }
@@ -2186,7 +2211,7 @@ public final class SurfaceControl implements Parcelable {
          */
         @UnsupportedAppUsage
         public Transaction hide(SurfaceControl sc) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetFlags(mNativeObject, sc.mNativeObject, SURFACE_HIDDEN, SURFACE_HIDDEN);
             return this;
         }
@@ -2196,7 +2221,7 @@ public final class SurfaceControl implements Parcelable {
          */
         @UnsupportedAppUsage
         public Transaction setPosition(SurfaceControl sc, float x, float y) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetPosition(mNativeObject, sc.mNativeObject, x, y);
             return this;
         }
@@ -2213,7 +2238,7 @@ public final class SurfaceControl implements Parcelable {
         @NonNull
         public Transaction setBufferSize(@NonNull SurfaceControl sc,
                 @IntRange(from = 0) int w, @IntRange(from = 0) int h) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             mResizedSurfaces.put(sc, new Point(w, h));
             nativeSetSize(mNativeObject, sc.mNativeObject, w, h);
             return this;
@@ -2231,7 +2256,7 @@ public final class SurfaceControl implements Parcelable {
         @NonNull
         public Transaction setLayer(@NonNull SurfaceControl sc,
                 @IntRange(from = Integer.MIN_VALUE, to = Integer.MAX_VALUE) int z) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetLayer(mNativeObject, sc.mNativeObject, z);
             return this;
         }
@@ -2240,7 +2265,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setRelativeLayer(SurfaceControl sc, SurfaceControl relativeTo, int z) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetRelativeLayer(mNativeObject, sc.mNativeObject, relativeTo.mNativeObject, z);
             return this;
         }
@@ -2249,7 +2274,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setTransparentRegionHint(SurfaceControl sc, Region transparentRegion) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetTransparentRegionHint(mNativeObject,
                     sc.mNativeObject, transparentRegion);
             return this;
@@ -2265,7 +2290,7 @@ public final class SurfaceControl implements Parcelable {
         @NonNull
         public Transaction setAlpha(@NonNull SurfaceControl sc,
                 @FloatRange(from = 0.0, to = 1.0) float alpha) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetAlpha(mNativeObject, sc.mNativeObject, alpha);
             return this;
         }
@@ -2274,7 +2299,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setInputWindowInfo(SurfaceControl sc, InputWindowHandle handle) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetInputWindowInfo(mNativeObject, sc.mNativeObject, handle);
             return this;
         }
@@ -2304,7 +2329,7 @@ public final class SurfaceControl implements Parcelable {
         @NonNull
         public Transaction setGeometry(@NonNull SurfaceControl sc, @Nullable Rect sourceCrop,
                 @Nullable Rect destFrame, @Surface.Rotation int orientation) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetGeometry(mNativeObject, sc.mNativeObject, sourceCrop, destFrame, orientation);
             return this;
         }
@@ -2315,7 +2340,7 @@ public final class SurfaceControl implements Parcelable {
         @UnsupportedAppUsage
         public Transaction setMatrix(SurfaceControl sc,
                 float dsdx, float dtdx, float dtdy, float dsdy) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetMatrix(mNativeObject, sc.mNativeObject,
                     dsdx, dtdx, dtdy, dsdy);
             return this;
@@ -2349,7 +2374,7 @@ public final class SurfaceControl implements Parcelable {
          */
         public Transaction setColorTransform(SurfaceControl sc, @Size(9) float[] matrix,
                 @Size(3) float[] translation) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetColorTransform(mNativeObject, sc.mNativeObject, matrix, translation);
             return this;
         }
@@ -2361,7 +2386,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setColorSpaceAgnostic(SurfaceControl sc, boolean agnostic) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetColorSpaceAgnostic(mNativeObject, sc.mNativeObject, agnostic);
             return this;
         }
@@ -2378,7 +2403,7 @@ public final class SurfaceControl implements Parcelable {
          */
         @UnsupportedAppUsage
         public Transaction setWindowCrop(SurfaceControl sc, Rect crop) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             if (crop != null) {
                 nativeSetWindowCrop(mNativeObject, sc.mNativeObject,
                         crop.left, crop.top, crop.right, crop.bottom);
@@ -2399,7 +2424,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setWindowCrop(SurfaceControl sc, int width, int height) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetWindowCrop(mNativeObject, sc.mNativeObject, 0, 0, width, height);
             return this;
         }
@@ -2413,9 +2438,23 @@ public final class SurfaceControl implements Parcelable {
          */
         @UnsupportedAppUsage
         public Transaction setCornerRadius(SurfaceControl sc, float cornerRadius) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetCornerRadius(mNativeObject, sc.mNativeObject, cornerRadius);
 
+            return this;
+        }
+
+        /**
+         * Sets the background blur radius of the {@link SurfaceControl}.
+         *
+         * @param sc SurfaceControl.
+         * @param radius Blur radius in pixels.
+         * @return itself.
+         * @hide
+         */
+        public Transaction setBackgroundBlurRadius(SurfaceControl sc, int radius) {
+            checkPreconditions(sc);
+            nativeSetBackgroundBlurRadius(mNativeObject, sc.mNativeObject, radius);
             return this;
         }
 
@@ -2424,7 +2463,7 @@ public final class SurfaceControl implements Parcelable {
          */
         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.O)
         public Transaction setLayerStack(SurfaceControl sc, int layerStack) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetLayerStack(mNativeObject, sc.mNativeObject, layerStack);
             return this;
         }
@@ -2438,7 +2477,7 @@ public final class SurfaceControl implements Parcelable {
             if (frameNumber < 0) {
                 return this;
             }
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeDeferTransactionUntil(mNativeObject, sc.mNativeObject, barrier.mNativeObject,
                     frameNumber);
             return this;
@@ -2447,13 +2486,14 @@ public final class SurfaceControl implements Parcelable {
         /**
          * @hide
          */
+        @Deprecated
         @UnsupportedAppUsage
         public Transaction deferTransactionUntilSurface(SurfaceControl sc, Surface barrierSurface,
                 long frameNumber) {
             if (frameNumber < 0) {
                 return this;
             }
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeDeferTransactionUntilSurface(mNativeObject, sc.mNativeObject,
                     barrierSurface.mNativeObject, frameNumber);
             return this;
@@ -2463,7 +2503,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction reparentChildren(SurfaceControl sc, SurfaceControl newParent) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeReparentChildren(mNativeObject, sc.mNativeObject, newParent.mNativeObject);
             return this;
         }
@@ -2480,7 +2520,7 @@ public final class SurfaceControl implements Parcelable {
         @NonNull
         public Transaction reparent(@NonNull SurfaceControl sc,
                 @Nullable SurfaceControl newParent) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             long otherObject = 0;
             if (newParent != null) {
                 newParent.checkNotReleased();
@@ -2494,7 +2534,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction detachChildren(SurfaceControl sc) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSeverChildren(mNativeObject, sc.mNativeObject);
             return this;
         }
@@ -2503,21 +2543,32 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setOverrideScalingMode(SurfaceControl sc, int overrideScalingMode) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetOverrideScalingMode(mNativeObject, sc.mNativeObject,
                     overrideScalingMode);
             return this;
         }
 
         /**
-         * Sets a color for the Surface.
-         * @param color A float array with three values to represent r, g, b in range [0..1]
+         * Fills the surface with the specified color.
+         * @param color A float array with three values to represent r, g, b in range [0..1]. An
+         * invalid color will remove the color fill.
          * @hide
          */
         @UnsupportedAppUsage
         public Transaction setColor(SurfaceControl sc, @Size(3) float[] color) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetColor(mNativeObject, sc.mNativeObject, color);
+            return this;
+        }
+
+        /**
+         * Removes color fill.
+        * @hide
+        */
+        public Transaction unsetColor(SurfaceControl sc) {
+            checkPreconditions(sc);
+            nativeSetColor(mNativeObject, sc.mNativeObject, INVALID_COLOR);
             return this;
         }
 
@@ -2527,7 +2578,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setSecure(SurfaceControl sc, boolean isSecure) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             if (isSecure) {
                 nativeSetFlags(mNativeObject, sc.mNativeObject, SECURE, SECURE);
             } else {
@@ -2542,7 +2593,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setOpaque(SurfaceControl sc, boolean isOpaque) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             if (isOpaque) {
                 nativeSetFlags(mNativeObject, sc.mNativeObject, SURFACE_OPAQUE, SURFACE_OPAQUE);
             } else {
@@ -2657,7 +2708,7 @@ public final class SurfaceControl implements Parcelable {
          * @hide
          */
         public Transaction setMetadata(SurfaceControl sc, int key, Parcel data) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetMetadata(mNativeObject, sc.mNativeObject, key, data);
             return this;
         }
@@ -2680,8 +2731,39 @@ public final class SurfaceControl implements Parcelable {
           * @hide
           */
         public Transaction setShadowRadius(SurfaceControl sc, float shadowRadius) {
-            sc.checkNotReleased();
+            checkPreconditions(sc);
             nativeSetShadowRadius(mNativeObject, sc.mNativeObject, shadowRadius);
+            return this;
+        }
+
+        /**
+         * Sets the intended frame rate for the surface {@link SurfaceControl}.
+         *
+         * On devices that are capable of running the display at different refresh rates, the system
+         * may choose a display refresh rate to better match this surface's frame rate. Usage of
+         * this API won't directly affect the application's frame production pipeline. However,
+         * because the system may change the display refresh rate, calls to this function may result
+         * in changes to Choreographer callback timings, and changes to the time interval at which
+         * the system releases buffers back to the application.
+         *
+         * @param sc The SurfaceControl to specify the frame rate of.
+         * @param frameRate The intended frame rate for this surface, in frames per second. 0 is a
+         *                  special value that indicates the app will accept the system's choice for
+         *                  the display frame rate, which is the default behavior if this function
+         *                  isn't called. The frameRate param does *not* need to be a valid refresh
+         *                  rate for this device's display - e.g., it's fine to pass 30fps to a
+         *                  device that can only run the display at 60fps.
+         * @param compatibility The frame rate compatibility of this surface. The compatibility
+         *                      value may influence the system's choice of display frame rate. See
+         *                      the Surface.FRAME_RATE_COMPATIBILITY_* values for more info.
+         * @return This transaction object.
+         */
+        @NonNull
+        public Transaction setFrameRate(@NonNull SurfaceControl sc,
+                @FloatRange(from = 0.0) float frameRate,
+                @Surface.FrameRateCompatibility int compatibility) {
+            checkPreconditions(sc);
+            nativeSetFrameRate(mNativeObject, sc.mNativeObject, frameRate, compatibility);
             return this;
         }
 
@@ -2762,5 +2844,28 @@ public final class SurfaceControl implements Parcelable {
                         return new Transaction[size];
                     }
                 };
+    }
+
+    /**
+     * A debugging utility subclass of SurfaceControl.Transaction. At construction
+     * you can pass in a monitor object, and all the other methods will throw an exception
+     * if the monitor is not held when they are called.
+     * @hide
+     */
+    public static class LockDebuggingTransaction extends SurfaceControl.Transaction {
+        Object mMonitor;
+
+        public LockDebuggingTransaction(Object o) {
+            mMonitor = o;
+        }
+
+        @Override
+        protected void checkPreconditions(SurfaceControl sc) {
+            super.checkPreconditions(sc);
+            if (!Thread.holdsLock(mMonitor)) {
+                throw new RuntimeException(
+                        "Unlocked access to synchronized SurfaceControl.Transaction");
+            }
+        }
     }
 }

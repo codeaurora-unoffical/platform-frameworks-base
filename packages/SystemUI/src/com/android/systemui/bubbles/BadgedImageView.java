@@ -16,22 +16,14 @@
 package com.android.systemui.bubbles;
 
 import android.annotation.Nullable;
-import android.app.Notification;
 import android.content.Context;
-import android.content.pm.LauncherApps;
 import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Matrix;
 import android.graphics.Path;
 import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
-import android.graphics.drawable.Icon;
 import android.util.AttributeSet;
 import android.util.PathParser;
 import android.widget.ImageView;
 
-import com.android.internal.graphics.ColorUtils;
-import com.android.launcher3.icons.BitmapInfo;
 import com.android.launcher3.icons.DotRenderer;
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
@@ -46,9 +38,9 @@ import com.android.systemui.R;
 public class BadgedImageView extends ImageView {
 
     /** Same value as Launcher3 dot code */
-    private static final float WHITE_SCRIM_ALPHA = 0.54f;
+    public static final float WHITE_SCRIM_ALPHA = 0.54f;
     /** Same as value in Launcher3 IconShape */
-    private static final int DEFAULT_PATH_SIZE = 100;
+    public static final int DEFAULT_PATH_SIZE = 100;
 
     static final int DOT_STATE_DEFAULT = 0;
     static final int DOT_STATE_SUPPRESSED_FOR_FLYOUT = 1;
@@ -57,10 +49,9 @@ public class BadgedImageView extends ImageView {
     // Flyout gets shown before the dot
     private int mCurrentDotState = DOT_STATE_SUPPRESSED_FOR_FLYOUT;
 
-    private Bubble mBubble;
-    private BubbleIconFactory mBubbleIconFactory;
+    private BubbleViewProvider mBubble;
 
-    private int mIconBitmapSize;
+    private int mBubbleBitmapSize;
     private DotRenderer mDotRenderer;
     private DotRenderer.DrawParams mDrawParams;
     private boolean mOnLeft;
@@ -86,12 +77,24 @@ public class BadgedImageView extends ImageView {
     public BadgedImageView(Context context, AttributeSet attrs, int defStyleAttr,
             int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
-        mIconBitmapSize = getResources().getDimensionPixelSize(R.dimen.bubble_icon_bitmap_size);
+        mBubbleBitmapSize = getResources().getDimensionPixelSize(R.dimen.bubble_bitmap_size);
         mDrawParams = new DotRenderer.DrawParams();
 
         Path iconPath = PathParser.createPathFromPathData(
                 getResources().getString(com.android.internal.R.string.config_icon_mask));
-        mDotRenderer = new DotRenderer(mIconBitmapSize, iconPath, DEFAULT_PATH_SIZE);
+        mDotRenderer = new DotRenderer(mBubbleBitmapSize, iconPath, DEFAULT_PATH_SIZE);
+    }
+
+    /**
+     * Updates the view with provided info.
+     */
+    public void update(BubbleViewProvider bubble) {
+        mBubble = bubble;
+        setImageBitmap(bubble.getBadgedImage());
+        setDotState(DOT_STATE_SUPPRESSED_FOR_FLYOUT);
+        mDotColor = bubble.getDotColor();
+        drawDot(bubble.getDotPath());
+        animateDot();
     }
 
     @Override
@@ -140,18 +143,10 @@ public class BadgedImageView extends ImageView {
     }
 
     /**
-     * The colour to use for the dot.
-     */
-    void setDotColor(int color) {
-        mDotColor = ColorUtils.setAlphaComponent(color, 255 /* alpha */);
-        invalidate();
-    }
-
-    /**
      * @param iconPath The new icon path to use when calculating dot position.
      */
     void drawDot(Path iconPath) {
-        mDotRenderer = new DotRenderer(mIconBitmapSize, iconPath, DEFAULT_PATH_SIZE);
+        mDotRenderer = new DotRenderer(mBubbleBitmapSize, iconPath, DEFAULT_PATH_SIZE);
         invalidate();
     }
 
@@ -187,39 +182,11 @@ public class BadgedImageView extends ImageView {
     }
 
     /**
-     * Populates this view with a bubble.
-     * <p>
-     * This should only be called when a new bubble is being set on the view, updates to the
-     * current bubble should use {@link #update(Bubble)}.
-     *
-     * @param bubble the bubble to display in this view.
-     */
-    public void setBubble(Bubble bubble) {
-        mBubble = bubble;
-    }
-
-    /**
-     * @param factory Factory for creating normalized bubble icons.
-     */
-    public void setBubbleIconFactory(BubbleIconFactory factory) {
-        mBubbleIconFactory = factory;
-    }
-
-    /**
      * The key for the {@link Bubble} associated with this view, if one exists.
      */
     @Nullable
     public String getKey() {
         return (mBubble != null) ? mBubble.getKey() : null;
-    }
-
-    /**
-     * Updates the UI based on the bubble, updates badge and animates messages as needed.
-     */
-    public void update(Bubble bubble) {
-        mBubble = bubble;
-        setDotState(DOT_STATE_SUPPRESSED_FOR_FLYOUT);
-        updateViews();
     }
 
     int getDotColor() {
@@ -276,48 +243,5 @@ public class BadgedImageView extends ImageView {
                         after.run();
                     }
                 }).start();
-    }
-
-    void updateViews() {
-        if (mBubble == null || mBubbleIconFactory == null) {
-            return;
-        }
-
-        Drawable bubbleDrawable = getBubbleDrawable(mContext);
-        BitmapInfo badgeBitmapInfo = mBubbleIconFactory.getBadgedBitmap(mBubble);
-        BitmapInfo bubbleBitmapInfo = mBubbleIconFactory.getBubbleBitmap(bubbleDrawable,
-                badgeBitmapInfo);
-        setImageBitmap(bubbleBitmapInfo.icon);
-
-        // Update badge.
-        mDotColor = ColorUtils.blendARGB(badgeBitmapInfo.color, Color.WHITE, WHITE_SCRIM_ALPHA);
-        setDotColor(mDotColor);
-
-        // Update dot.
-        Path iconPath = PathParser.createPathFromPathData(
-                getResources().getString(com.android.internal.R.string.config_icon_mask));
-        Matrix matrix = new Matrix();
-        float scale = mBubbleIconFactory.getNormalizer().getScale(bubbleDrawable,
-                null /* outBounds */, null /* path */, null /* outMaskShape */);
-        float radius = BadgedImageView.DEFAULT_PATH_SIZE / 2f;
-        matrix.setScale(scale /* x scale */, scale /* y scale */, radius /* pivot x */,
-                radius /* pivot y */);
-        iconPath.transform(matrix);
-        drawDot(iconPath);
-
-        animateDot();
-    }
-
-    Drawable getBubbleDrawable(Context context) {
-        if (mBubble.getShortcutInfo() != null && mBubble.usingShortcutInfo()) {
-            LauncherApps launcherApps =
-                    (LauncherApps) getContext().getSystemService(Context.LAUNCHER_APPS_SERVICE);
-            int density = getContext().getResources().getConfiguration().densityDpi;
-            return launcherApps.getShortcutIconDrawable(mBubble.getShortcutInfo(), density);
-        } else {
-            Notification.BubbleMetadata metadata = mBubble.getEntry().getBubbleMetadata();
-            Icon ic = metadata.getIcon();
-            return ic.loadDrawable(context);
-        }
     }
 }

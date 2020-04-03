@@ -17,7 +17,6 @@
 package android.telephony;
 
 import android.annotation.NonNull;
-import android.annotation.SystemApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -51,6 +50,7 @@ public final class PhoneCapability implements Parcelable {
         logicalModemList.add(modemInfo1);
         DEFAULT_SSSS_CAPABILITY = new PhoneCapability(1, 1, 0, logicalModemList, false);
     }
+
     /** @hide */
     public final int maxActiveVoiceCalls;
     /** @hide */
@@ -117,7 +117,7 @@ public final class PhoneCapability implements Parcelable {
     /**
      * {@link Parcelable#describeContents}
      */
-    public @Parcelable.ContentsFlags int describeContents() {
+    public int describeContents() {
         return 0;
     }
 

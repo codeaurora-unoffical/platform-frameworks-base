@@ -20,6 +20,7 @@ import static android.app.NotificationManager.IMPORTANCE_DEFAULT;
 import static android.app.NotificationManager.IMPORTANCE_HIGH;
 import static android.app.NotificationManager.IMPORTANCE_LOW;
 import static android.service.notification.Adjustment.KEY_IMPORTANCE;
+import static android.service.notification.Adjustment.KEY_NOT_CONVERSATION;
 import static android.service.notification.NotificationListenerService.Ranking.USER_SENTIMENT_NEGATIVE;
 import static android.service.notification.NotificationListenerService.Ranking.USER_SENTIMENT_NEUTRAL;
 import static android.service.notification.NotificationListenerService.Ranking.USER_SENTIMENT_POSITIVE;
@@ -38,15 +39,19 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.IActivityManager;
 import android.app.Notification;
 import android.app.Notification.Builder;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.Person;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ShortcutInfo;
 import android.graphics.Color;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
@@ -58,6 +63,7 @@ import android.os.UserHandle;
 import android.provider.Settings;
 import android.service.notification.Adjustment;
 import android.service.notification.StatusBarNotification;
+import android.util.FeatureFlagUtils;
 import android.widget.RemoteViews;
 
 import androidx.test.filters.SmallTest;
@@ -83,6 +89,7 @@ public class NotificationRecordTest extends UiServiceTestCase {
 
     private final Context mMockContext = mock(Context.class);
     @Mock private PackageManager mPm;
+    @Mock private ContentResolver mContentResolver;
 
     private final String pkg = PKG_N_MR1;
     private final int uid = 9583;
@@ -116,6 +123,9 @@ public class NotificationRecordTest extends UiServiceTestCase {
 
         when(mMockContext.getResources()).thenReturn(getContext().getResources());
         when(mMockContext.getPackageManager()).thenReturn(mPm);
+        when(mMockContext.getContentResolver()).thenReturn(mContentResolver);
+        Settings.Global.putString(mContentResolver,
+                FeatureFlagUtils.NOTIF_CONVO_BYPASS_SHORTCUT_REQ, "false");
         ApplicationInfo appInfo = new ApplicationInfo();
         appInfo.targetSdkVersion = Build.VERSION_CODES.O;
         when(mMockContext.getApplicationInfo()).thenReturn(appInfo);
@@ -189,6 +199,18 @@ public class NotificationRecordTest extends UiServiceTestCase {
         if (customHeadsUp) {
             builder.setCustomHeadsUpContentView(mock(RemoteViews.class));
         }
+
+        Notification n = builder.build();
+        return new StatusBarNotification(pkg, pkg, id1, tag1, uid, uid, n, mUser, null, uid);
+    }
+
+    private StatusBarNotification getMessagingStyleNotification() {
+        final Builder builder = new Builder(mMockContext)
+                .setContentTitle("foo")
+                .setSmallIcon(android.R.drawable.sym_def_app_icon);
+
+        Person person = new Person.Builder().setName("Bob").build();
+        builder.setStyle(new Notification.MessagingStyle(person));
 
         Notification n = builder.build();
         return new StatusBarNotification(pkg, pkg, id1, tag1, uid, uid, n, mUser, null, uid);
@@ -1094,5 +1116,61 @@ public class NotificationRecordTest extends UiServiceTestCase {
         NotificationRecord record = new NotificationRecord(mMockContext, sbn, channel);
 
         assertTrue("false negative detection", record.hasUndecoratedRemoteView());
+    }
+
+    @Test
+    public void testIsConversation() {
+        StatusBarNotification sbn = getMessagingStyleNotification();
+        NotificationRecord record = new NotificationRecord(mMockContext, sbn, channel);
+        record.setShortcutInfo(mock(ShortcutInfo.class));
+
+        assertTrue(record.isConversation());
+    }
+
+    @Test
+    public void testIsConversation_nullShortcut() {
+        StatusBarNotification sbn = getMessagingStyleNotification();
+        NotificationRecord record = new NotificationRecord(mMockContext, sbn, channel);
+        record.setShortcutInfo(null);
+
+        assertFalse(record.isConversation());
+    }
+
+    @Test
+    public void testIsConversation_bypassShortcutFlagEnabled() {
+        Settings.Global.putString(mContentResolver,
+                FeatureFlagUtils.NOTIF_CONVO_BYPASS_SHORTCUT_REQ, "true");
+        StatusBarNotification sbn = getMessagingStyleNotification();
+        NotificationRecord record = new NotificationRecord(mMockContext, sbn, channel);
+        record.setShortcutInfo(null);
+
+        assertTrue(record.isConversation());
+    }
+
+    @Test
+    public void testIsConversation_channelDemoted() {
+        StatusBarNotification sbn = getMessagingStyleNotification();
+        channel.setDemoted(true);
+        NotificationRecord record = new NotificationRecord(mMockContext, sbn, channel);
+        record.setShortcutInfo(mock(ShortcutInfo.class));
+
+        assertFalse(record.isConversation());
+    }
+
+    @Test
+    public void testIsConversation_withAdjustmentOverride() {
+        StatusBarNotification sbn = getMessagingStyleNotification();
+        NotificationRecord record = new NotificationRecord(mMockContext, sbn, channel);
+        record.setShortcutInfo(mock(ShortcutInfo.class));
+
+        Bundle bundle = new Bundle();
+        bundle.putBoolean(KEY_NOT_CONVERSATION, true);
+        Adjustment adjustment = new Adjustment(
+                PKG_O, record.getKey(), bundle, "", record.getUser().getIdentifier());
+
+        record.addAdjustment(adjustment);
+        record.applyAdjustments();
+
+        assertFalse(record.isConversation());
     }
 }

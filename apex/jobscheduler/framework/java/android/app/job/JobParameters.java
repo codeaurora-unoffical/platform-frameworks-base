@@ -18,8 +18,7 @@ package android.app.job;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
-import android.app.job.IJobCallback;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ClipData;
 import android.net.Network;
 import android.net.Uri;
@@ -49,6 +48,14 @@ public class JobParameters implements Parcelable {
     public static final int REASON_DEVICE_IDLE = JobProtoEnums.STOP_REASON_DEVICE_IDLE; // 4.
     /** @hide */
     public static final int REASON_DEVICE_THERMAL = JobProtoEnums.STOP_REASON_DEVICE_THERMAL; // 5.
+    /**
+     * The job is in the {@link android.app.usage.UsageStatsManager#STANDBY_BUCKET_RESTRICTED}
+     * bucket.
+     *
+     * @hide
+     */
+    public static final int REASON_RESTRICTED_BUCKET =
+            JobProtoEnums.STOP_REASON_RESTRICTED_BUCKET; // 6.
 
     /**
      * All the stop reason codes. This should be regarded as an immutable array at runtime.
@@ -66,22 +73,24 @@ public class JobParameters implements Parcelable {
             REASON_TIMEOUT,
             REASON_DEVICE_IDLE,
             REASON_DEVICE_THERMAL,
+            REASON_RESTRICTED_BUCKET,
     };
 
     /**
      * @hide
-     * @deprecated use {@link #getReasonCodeDescription(int)}
      */
-    @Deprecated
-    public static String getReasonName(int reason) {
-        switch (reason) {
+    // TODO(142420609): make it @SystemApi for mainline
+    @NonNull
+    public static String getReasonCodeDescription(int reasonCode) {
+        switch (reasonCode) {
             case REASON_CANCELED: return "canceled";
             case REASON_CONSTRAINTS_NOT_SATISFIED: return "constraints";
             case REASON_PREEMPT: return "preempt";
             case REASON_TIMEOUT: return "timeout";
             case REASON_DEVICE_IDLE: return "device_idle";
             case REASON_DEVICE_THERMAL: return "thermal";
-            default: return "unknown:" + reason;
+            case REASON_RESTRICTED_BUCKET: return "restricted_bucket";
+            default: return "unknown:" + reasonCode;
         }
     }
 
@@ -90,13 +99,6 @@ public class JobParameters implements Parcelable {
     @NonNull
     public static int[] getJobStopReasonCodes() {
         return JOB_STOP_REASON_CODES;
-    }
-
-    /** @hide */
-    // @SystemApi TODO make it a system api for mainline
-    @NonNull
-    public static String getReasonCodeDescription(int reasonCode) {
-        return getReasonName(reasonCode);
     }
 
     @UnsupportedAppUsage

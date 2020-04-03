@@ -39,7 +39,8 @@ public class NetworkControllerWifiTest extends NetworkControllerBaseTest {
 
         setWifiState(true, testSsid);
         setWifiLevel(0);
-        verifyLastWifiIcon(true, WifiIcons.WIFI_SIGNAL_STRENGTH[0][0]);
+        // Connected, but still not validated - does not show
+        verifyLastWifiIcon(false, WifiIcons.WIFI_SIGNAL_STRENGTH[0][0]);
 
         for (int testLevel = 0; testLevel < WifiIcons.WIFI_LEVEL_COUNT; testLevel++) {
             setWifiLevel(testLevel);
@@ -47,7 +48,8 @@ public class NetworkControllerWifiTest extends NetworkControllerBaseTest {
             setConnectivityViaBroadcast(NetworkCapabilities.TRANSPORT_WIFI, true, true);
             verifyLastWifiIcon(true, WifiIcons.WIFI_SIGNAL_STRENGTH[1][testLevel]);
             setConnectivityViaBroadcast(NetworkCapabilities.TRANSPORT_WIFI, false, true);
-            verifyLastWifiIcon(true, WifiIcons.WIFI_SIGNAL_STRENGTH[0][testLevel]);
+            // Icon does not show if not validated
+            verifyLastWifiIcon(false, WifiIcons.WIFI_SIGNAL_STRENGTH[0][testLevel]);
         }
     }
 
@@ -132,7 +134,7 @@ public class NetworkControllerWifiTest extends NetworkControllerBaseTest {
         verifyLastWifiIcon(true, WifiIcons.WIFI_SIGNAL_STRENGTH[1][testLevel]);
 
         setConnectivityViaCallback(NetworkCapabilities.TRANSPORT_WIFI, false, true);
-        verifyLastWifiIcon(true, WifiIcons.WIFI_SIGNAL_STRENGTH[0][testLevel]);
+        verifyLastWifiIcon(false, WifiIcons.WIFI_SIGNAL_STRENGTH[0][testLevel]);
     }
 
     @Test

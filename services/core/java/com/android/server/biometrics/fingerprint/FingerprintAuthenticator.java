@@ -38,7 +38,7 @@ public final class FingerprintAuthenticator extends IBiometricAuthenticator.Stub
             String opPackageName, int cookie, int callingUid, int callingPid, int callingUserId)
             throws RemoteException {
         mFingerprintService.prepareForAuthentication(token, sessionId, userId, wrapperReceiver,
-                opPackageName, cookie, callingUid, callingPid, callingUserId);
+                opPackageName, cookie, callingUid, callingPid, callingUserId, null /* windowId */);
     }
 
     @Override
@@ -71,5 +71,10 @@ public final class FingerprintAuthenticator extends IBiometricAuthenticator.Stub
     @Override
     public void setActiveUser(int uid) throws RemoteException {
         mFingerprintService.setActiveUser(uid);
+    }
+
+    @Override
+    public long getAuthenticatorId() throws RemoteException {
+        return mFingerprintService.getAuthenticatorId();
     }
 }

@@ -49,15 +49,6 @@ public class QuickStepContract {
     public static final String NAV_BAR_MODE_GESTURAL_OVERLAY =
             WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL_OVERLAY;
 
-    // Action sent by a system app to switch to gesture nav
-    public static final String ACTION_ENABLE_GESTURE_NAV =
-            "com.android.systemui.ENABLE_GESTURE_NAV";
-    // Action for the intent to receive the result
-    public static final String ACTION_ENABLE_GESTURE_NAV_RESULT =
-            "com.android.systemui.action.ENABLE_GESTURE_NAV_RESULT";
-    // Extra containing the pending intent to receive the result
-    public static final String EXTRA_RESULT_INTENT = "com.android.systemui.EXTRA_RESULT_INTENT";
-
     // Overview is disabled, either because the device is in lock task mode, or because the device
     // policy has disabled the feature
     public static final int SYSUI_STATE_SCREEN_PINNING = 1 << 0;
@@ -85,6 +76,8 @@ public class QuickStepContract {
     // The notification panel is expanded and interactive (either locked or unlocked), and the
     // quick settings is not expanded
     public static final int SYSUI_STATE_QUICK_SETTINGS_EXPANDED = 1 << 11;
+    // Winscope tracing is enabled
+    public static final int SYSUI_STATE_TRACING_ENABLED = 1 << 12;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef({SYSUI_STATE_SCREEN_PINNING,
@@ -98,7 +91,8 @@ public class QuickStepContract {
             SYSUI_STATE_STATUS_BAR_KEYGUARD_SHOWING_OCCLUDED,
             SYSUI_STATE_OVERVIEW_DISABLED,
             SYSUI_STATE_HOME_DISABLED,
-            SYSUI_STATE_SEARCH_DISABLED
+            SYSUI_STATE_SEARCH_DISABLED,
+            SYSUI_STATE_TRACING_ENABLED
     })
     public @interface SystemUiStateFlags {}
 
@@ -117,6 +111,7 @@ public class QuickStepContract {
         str.add((flags & SYSUI_STATE_BOUNCER_SHOWING) != 0 ? "bouncer_visible" : "");
         str.add((flags & SYSUI_STATE_A11Y_BUTTON_CLICKABLE) != 0 ? "a11y_click" : "");
         str.add((flags & SYSUI_STATE_A11Y_BUTTON_LONG_CLICKABLE) != 0 ? "a11y_long_click" : "");
+        str.add((flags & SYSUI_STATE_TRACING_ENABLED) != 0 ? "tracing" : "");
         return str.toString();
     }
 

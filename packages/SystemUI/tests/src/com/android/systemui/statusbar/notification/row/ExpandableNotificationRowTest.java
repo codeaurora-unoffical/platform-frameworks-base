@@ -19,9 +19,8 @@ package com.android.systemui.statusbar.notification.row;
 import static android.app.NotificationManager.IMPORTANCE_DEFAULT;
 
 import static com.android.systemui.statusbar.NotificationEntryHelper.modifyRanking;
-import static com.android.systemui.statusbar.notification.row.NotificationContentInflater.FLAG_CONTENT_VIEW_ALL;
-import static com.android.systemui.statusbar.notification.row.NotificationContentInflater.FLAG_CONTENT_VIEW_HEADS_UP;
-import static com.android.systemui.statusbar.notification.row.NotificationContentInflater.FLAG_CONTENT_VIEW_PUBLIC;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.FLAG_CONTENT_VIEW_ALL;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.FLAG_CONTENT_VIEW_HEADS_UP;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -40,7 +39,6 @@ import static org.mockito.Mockito.when;
 import android.app.AppOpsManager;
 import android.app.NotificationChannel;
 import android.testing.AndroidTestingRunner;
-import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 import android.util.ArraySet;
 import android.view.NotificationHeaderView;
@@ -51,7 +49,6 @@ import androidx.test.filters.SmallTest;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
-import com.android.systemui.statusbar.NotificationTestHelper;
 import com.android.systemui.statusbar.notification.AboveShelfChangedListener;
 import com.android.systemui.statusbar.notification.stack.NotificationChildrenContainer;
 
@@ -81,7 +78,7 @@ public class ExpandableNotificationRowTest extends SysuiTestCase {
 
     @Before
     public void setUp() throws Exception {
-        com.android.systemui.util.Assert.sMainLooper = TestableLooper.get(this).getLooper();
+        allowTestableLooperAsMainThread();
         mNotificationTestHelper = new NotificationTestHelper(mContext, mDependency);
         mGroupRow = mNotificationTestHelper.createGroup();
         mGroupRow.setHeadsUpAnimatingAwayListener(
@@ -147,15 +144,6 @@ public class ExpandableNotificationRowTest extends SysuiTestCase {
     }
 
     @Test
-    public void setNeedsRedactionSetsInflationFlag() throws Exception {
-        ExpandableNotificationRow row = mNotificationTestHelper.createRow();
-
-        row.setNeedsRedaction(true);
-
-        assertTrue(row.getNotificationInflater().isInflationFlagSet(FLAG_CONTENT_VIEW_PUBLIC));
-    }
-
-    @Test
     public void setNeedsRedactionFreesViewWhenFalse() throws Exception {
         ExpandableNotificationRow row = mNotificationTestHelper.createRow(FLAG_CONTENT_VIEW_ALL);
         row.setNeedsRedaction(true);
@@ -205,9 +193,8 @@ public class ExpandableNotificationRowTest extends SysuiTestCase {
     @Test
     public void testClickSound() throws Exception {
         assertTrue("Should play sounds by default.", mGroupRow.isSoundEffectsEnabled());
-        StatusBarStateController mock = mock(StatusBarStateController.class);
+        StatusBarStateController mock = mNotificationTestHelper.getStatusBarStateController();
         when(mock.isDozing()).thenReturn(true);
-        mGroupRow.setStatusBarStateController(mock);
         mGroupRow.setSecureStateProvider(()-> false);
         assertFalse("Shouldn't play sounds when dark and trusted.",
                 mGroupRow.isSoundEffectsEnabled());

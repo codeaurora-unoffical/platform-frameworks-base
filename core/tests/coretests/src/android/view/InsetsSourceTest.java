@@ -16,6 +16,7 @@
 
 package android.view;
 
+import static android.view.InsetsState.ITYPE_IME;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 
 import static org.junit.Assert.assertEquals;
@@ -44,10 +45,12 @@ import org.junit.runner.RunWith;
 public class InsetsSourceTest {
 
     private InsetsSource mSource = new InsetsSource(ITYPE_NAVIGATION_BAR);
+    private InsetsSource mImeSource = new InsetsSource(ITYPE_IME);
 
     @Before
     public void setUp() {
         mSource.setVisible(true);
+        mImeSource.setVisible(true);
     }
 
     @Test
@@ -91,6 +94,14 @@ public class InsetsSourceTest {
     }
 
     @Test
+    public void testCalculateInsets_ime_leftCutout() {
+        mImeSource.setFrame(new Rect(100, 400, 500, 500));
+        Insets insets = mImeSource.calculateInsets(new Rect(0, 0, 500, 500),
+                false /* ignoreVisibility */);
+        assertEquals(Insets.of(0, 0, 0, 100), insets);
+    }
+
+    @Test
     public void testCalculateInsets_invisible() {
         mSource.setFrame(new Rect(0, 0, 500, 100));
         mSource.setVisible(false);
@@ -107,6 +118,31 @@ public class InsetsSourceTest {
                 true /* ignoreVisibility */);
         assertEquals(Insets.of(0, 100, 0, 0), insets);
     }
+
+    @Test
+    public void testCalculateVisibleInsets_default() {
+        mSource.setFrame(new Rect(0, 0, 500, 100));
+        Insets insets = mSource.calculateVisibleInsets(new Rect(100, 0, 500, 500));
+        assertEquals(Insets.of(0, 100, 0, 0), insets);
+    }
+
+    @Test
+    public void testCalculateVisibleInsets_override() {
+        mSource.setFrame(new Rect(0, 0, 500, 100));
+        mSource.setVisibleFrame(new Rect(0, 0, 500, 200));
+        Insets insets = mSource.calculateVisibleInsets(new Rect(100, 0, 500, 500));
+        assertEquals(Insets.of(0, 200, 0, 0), insets);
+    }
+
+    @Test
+    public void testCalculateVisibleInsets_invisible() {
+        mSource.setFrame(new Rect(0, 0, 500, 100));
+        mSource.setVisibleFrame(new Rect(0, 0, 500, 200));
+        mSource.setVisible(false);
+        Insets insets = mSource.calculateVisibleInsets(new Rect(100, 0, 500, 500));
+        assertEquals(Insets.of(0, 0, 0, 0), insets);
+    }
+
 
     // Parcel and equals already tested via InsetsStateTest
 }

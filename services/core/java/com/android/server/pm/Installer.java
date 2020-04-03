@@ -28,6 +28,7 @@ import android.os.IBinder.DeathRecipient;
 import android.os.IInstalld;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.storage.CrateMetadata;
 import android.text.format.DateUtils;
 import android.util.Slog;
 
@@ -233,12 +234,12 @@ public class Installer extends SystemService {
     }
 
     public void moveCompleteApp(String fromUuid, String toUuid, String packageName,
-            String dataAppName, int appId, String seInfo, int targetSdkVersion)
-            throws InstallerException {
+            int appId, String seInfo, int targetSdkVersion,
+            String fromCodePath) throws InstallerException {
         if (!checkBeforeRemote()) return;
         try {
-            mInstalld.moveCompleteApp(fromUuid, toUuid, packageName, dataAppName, appId, seInfo,
-                    targetSdkVersion);
+            mInstalld.moveCompleteApp(fromUuid, toUuid, packageName, appId, seInfo,
+                    targetSdkVersion, fromCodePath);
         } catch (Exception e) {
             throw InstallerException.from(e);
         }
@@ -288,6 +289,43 @@ public class Installer extends SystemService {
         if (!checkBeforeRemote()) return new long[6];
         try {
             return mInstalld.getExternalSize(uuid, userId, flags, appIds);
+        } catch (Exception e) {
+            throw InstallerException.from(e);
+        }
+    }
+
+    /**
+     * To get all of the CrateMetadata of the crates for the specified user app by the installd.
+     *
+     * @param uuid the UUID
+     * @param packageNames the application package names
+     * @param userId the user id
+     * @return the array of CrateMetadata
+     */
+    @Nullable
+    public CrateMetadata[] getAppCrates(@NonNull String uuid, @NonNull String[] packageNames,
+            @UserIdInt int userId) throws InstallerException {
+        if (!checkBeforeRemote()) return null;
+        try {
+            return mInstalld.getAppCrates(uuid, packageNames, userId);
+        } catch (Exception e) {
+            throw InstallerException.from(e);
+        }
+    }
+
+    /**
+     * To retrieve all of the CrateMetadata of the crate for the specified user app by the installd.
+     *
+     * @param uuid the UUID
+     * @param userId the user id
+     * @return the array of CrateMetadata
+     */
+    @Nullable
+    public CrateMetadata[] getUserCrates(String uuid, @UserIdInt int userId)
+            throws InstallerException {
+        if (!checkBeforeRemote()) return null;
+        try {
+            return mInstalld.getUserCrates(uuid, userId);
         } catch (Exception e) {
             throw InstallerException.from(e);
         }
@@ -407,16 +445,6 @@ public class Installer extends SystemService {
         if (!checkBeforeRemote()) return;
         try {
             mInstalld.destroyUserData(uuid, userId, flags);
-        } catch (Exception e) {
-            throw InstallerException.from(e);
-        }
-    }
-
-    public void markBootComplete(String instructionSet) throws InstallerException {
-        assertValidInstructionSet(instructionSet);
-        if (!checkBeforeRemote()) return;
-        try {
-            mInstalld.markBootComplete(instructionSet);
         } catch (Exception e) {
             throw InstallerException.from(e);
         }
@@ -575,6 +603,30 @@ public class Installer extends SystemService {
         if (!checkBeforeRemote()) return false;
         try {
             return mInstalld.isQuotaSupported(volumeUuid);
+        } catch (Exception e) {
+            throw InstallerException.from(e);
+        }
+    }
+
+    /**
+     * Bind mount private volume CE and DE mirror storage.
+     */
+    public void tryMountDataMirror(String volumeUuid) throws InstallerException {
+        if (!checkBeforeRemote()) return;
+        try {
+            mInstalld.tryMountDataMirror(volumeUuid);
+        } catch (Exception e) {
+            throw InstallerException.from(e);
+        }
+    }
+
+    /**
+     * Unmount private volume CE and DE mirror storage.
+     */
+    public void onPrivateVolumeRemoved(String volumeUuid) throws InstallerException {
+        if (!checkBeforeRemote()) return;
+        try {
+            mInstalld.onPrivateVolumeRemoved(volumeUuid);
         } catch (Exception e) {
             throw InstallerException.from(e);
         }

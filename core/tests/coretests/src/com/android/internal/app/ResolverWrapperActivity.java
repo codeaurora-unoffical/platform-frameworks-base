@@ -17,12 +17,14 @@
 package com.android.internal.app;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.os.Bundle;
 import android.os.UserHandle;
 
 import com.android.internal.app.chooser.TargetInfo;
@@ -45,8 +47,28 @@ public class ResolverWrapperActivity extends ResolverActivity {
                 filterLastUsed, createListController(userHandle), useLayoutForBrowsables, this);
     }
 
+    @Override
+    protected AbstractMultiProfilePagerAdapter createMultiProfilePagerAdapter(
+            Intent[] initialIntents, List<ResolveInfo> rList, boolean filterLastUsed) {
+        AbstractMultiProfilePagerAdapter multiProfilePagerAdapter =
+                super.createMultiProfilePagerAdapter(initialIntents, rList, filterLastUsed);
+        multiProfilePagerAdapter.setInjector(sOverrides.multiPagerAdapterInjector);
+        return multiProfilePagerAdapter;
+    }
+
     ResolverWrapperAdapter getAdapter() {
         return (ResolverWrapperAdapter) mMultiProfilePagerAdapter.getActiveListAdapter();
+    }
+
+    ResolverListAdapter getPersonalListAdapter() {
+        return ((ResolverListAdapter) mMultiProfilePagerAdapter.getAdapterForIndex(0));
+    }
+
+    ResolverListAdapter getWorkListAdapter() {
+        if (mMultiProfilePagerAdapter.getInactiveListAdapter() == null) {
+            return null;
+        }
+        return ((ResolverListAdapter) mMultiProfilePagerAdapter.getAdapterForIndex(1));
     }
 
     @Override
@@ -68,7 +90,12 @@ public class ResolverWrapperActivity extends ResolverActivity {
 
     @Override
     protected ResolverListController createListController(UserHandle userHandle) {
-        return sOverrides.resolverListController;
+        if (userHandle == UserHandle.SYSTEM) {
+            when(sOverrides.resolverListController.getUserHandle()).thenReturn(UserHandle.SYSTEM);
+            return sOverrides.resolverListController;
+        }
+        when(sOverrides.workResolverListController.getUserHandle()).thenReturn(userHandle);
+        return sOverrides.workResolverListController;
     }
 
     @Override
@@ -77,6 +104,20 @@ public class ResolverWrapperActivity extends ResolverActivity {
             return sOverrides.createPackageManager.apply(super.getPackageManager());
         }
         return super.getPackageManager();
+    }
+
+    protected UserHandle getCurrentUserHandle() {
+        return mMultiProfilePagerAdapter.getCurrentUserHandle();
+    }
+
+    @Override
+    protected UserHandle getWorkProfileUserHandle() {
+        return sOverrides.workProfileUserHandle;
+    }
+
+    @Override
+    public void startActivityAsUser(Intent intent, Bundle options, UserHandle user) {
+        super.startActivityAsUser(intent, options, user);
     }
 
     /**
@@ -89,13 +130,40 @@ public class ResolverWrapperActivity extends ResolverActivity {
         public Function<PackageManager, PackageManager> createPackageManager;
         public Function<TargetInfo, Boolean> onSafelyStartCallback;
         public ResolverListController resolverListController;
+        public ResolverListController workResolverListController;
         public Boolean isVoiceInteraction;
+        public UserHandle workProfileUserHandle;
+        public boolean hasCrossProfileIntents;
+        public boolean isQuietModeEnabled;
+        public AbstractMultiProfilePagerAdapter.Injector multiPagerAdapterInjector;
 
         public void reset() {
             onSafelyStartCallback = null;
             isVoiceInteraction = null;
             createPackageManager = null;
             resolverListController = mock(ResolverListController.class);
+            workResolverListController = mock(ResolverListController.class);
+            workProfileUserHandle = null;
+            hasCrossProfileIntents = true;
+            isQuietModeEnabled = false;
+            multiPagerAdapterInjector = new AbstractMultiProfilePagerAdapter.Injector() {
+                @Override
+                public boolean hasCrossProfileIntents(List<Intent> intents, int sourceUserId,
+                        int targetUserId) {
+                    return hasCrossProfileIntents;
+                }
+
+                @Override
+                public boolean isQuietModeEnabled(UserHandle workProfileUserHandle) {
+                    return isQuietModeEnabled;
+                }
+
+                @Override
+                public void requestQuietModeEnabled(boolean enabled,
+                        UserHandle workProfileUserHandle) {
+                    isQuietModeEnabled = enabled;
+                }
+            };
         }
     }
 }

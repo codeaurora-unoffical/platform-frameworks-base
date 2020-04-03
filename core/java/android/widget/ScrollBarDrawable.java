@@ -18,7 +18,7 @@ package android.widget;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
 import android.graphics.PixelFormat;
@@ -138,7 +138,7 @@ public class ScrollBarDrawable extends Drawable implements Drawable.Callback {
         }
 
         final Rect r = getBounds();
-        if (canvas.quickReject(r.left, r.top, r.right, r.bottom, Canvas.EdgeType.AA)) {
+        if (canvas.quickReject(r.left, r.top, r.right, r.bottom)) {
             return;
         }
 

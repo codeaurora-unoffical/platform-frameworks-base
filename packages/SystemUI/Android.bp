@@ -42,6 +42,7 @@ android_library {
         "res",
     ],
     static_libs: [
+        "WindowManager-Shell",
         "SystemUIPluginLib",
         "SystemUISharedLib",
         "SettingsLib",
@@ -68,10 +69,6 @@ android_library {
     ],
     manifest: "AndroidManifest.xml",
 
-    libs: [
-        "telephony-common",
-    ],
-
     kotlincflags: ["-Xjvm-default=enable"],
 
     plugins: ["dagger2-compiler-2.19"],
@@ -80,7 +77,7 @@ android_library {
 filegroup {
     name: "SystemUI-tests-utils",
     srcs: [
-        "tests/src/com/android/systemui/statusbar/NotificationEntryBuilder.java",
+        "tests/src/com/android/systemui/statusbar/notification/collection/NotificationEntryBuilder.java",
         "tests/src/com/android/systemui/statusbar/RankingBuilder.java",
         "tests/src/com/android/systemui/statusbar/SbnBuilder.java",
     ],
@@ -89,7 +86,9 @@ filegroup {
 
 android_library {
     name: "SystemUI-tests",
-    manifest: "tests/AndroidManifest.xml",
+    manifest: "tests/AndroidManifest-base.xml",
+    additional_manifests: ["tests/AndroidManifest.xml"],
+
     resource_dirs: [
         "tests/res",
         "res-product",
@@ -135,7 +134,6 @@ android_library {
     ],
     libs: [
         "android.test.runner",
-        "telephony-common",
         "android.test.base",
     ],
     kotlincflags: ["-Xjvm-default=enable"],
@@ -154,17 +152,13 @@ android_app {
     resource_dirs: [],
 
     platform_apis: true,
-    product_specific: true,
+    system_ext_specific: true,
     certificate: "platform",
     privileged: true,
 
     optimize: {
         proguard_flags_files: ["proguard.flags"],
     },
-
-    libs: [
-        "telephony-common",
-    ],
 
     kotlincflags: ["-Xjvm-default=enable"],
 

@@ -15,6 +15,7 @@
  */
 package android.hardware.face;
 
+import android.hardware.biometrics.IBiometricNativeHandle;
 import android.hardware.biometrics.IBiometricServiceReceiverInternal;
 import android.hardware.biometrics.IBiometricServiceLockoutResetCallback;
 import android.hardware.face.IFaceServiceReceiver;
@@ -51,6 +52,10 @@ interface IFaceService {
 
     // Start face enrollment
     void enroll(int userId, IBinder token, in byte [] cryptoToken, IFaceServiceReceiver receiver,
+            String opPackageName, in int [] disabledFeatures, in IBiometricNativeHandle windowId);
+
+    // Start remote face enrollment
+    void enrollRemotely(int userId, IBinder token, in byte [] cryptoToken, IFaceServiceReceiver receiver,
             String opPackageName, in int [] disabledFeatures);
 
     // Cancel enrollment in progress
@@ -85,7 +90,7 @@ interface IFaceService {
     // long getHardwareDevice(int i);
 
     // Gets the authenticator ID for face
-    long getAuthenticatorId(String opPackageName);
+    long getAuthenticatorId();
 
     // Reset the lockout when user authenticates with strong auth (e.g. PIN, pattern or password)
     void resetLockout(in byte [] token);
@@ -105,4 +110,7 @@ interface IFaceService {
     void getFeature(int userId, int feature, IFaceServiceReceiver receiver, String opPackageName);
 
     void userActivity();
+
+    // Initialize the OEM configured biometric strength
+    void initConfiguredStrength(int strength);
 }

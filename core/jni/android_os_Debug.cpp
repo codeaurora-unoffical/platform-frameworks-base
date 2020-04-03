@@ -43,12 +43,14 @@
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/ScopedUtfChars.h>
 #include "jni.h"
+#include <dmabufinfo/dmabufinfo.h>
 #include <meminfo/procmeminfo.h>
 #include <meminfo/sysmeminfo.h>
 #include <memtrack/memtrack.h>
 #include <memunreachable/memunreachable.h>
 #include <android-base/strings.h>
 #include "android_os_Debug.h"
+#include <vintf/VintfObject.h>
 
 namespace android
 {
@@ -191,7 +193,8 @@ static int read_memtrack_memory(struct memtrack_proc* p, int pid,
 {
     int err = memtrack_proc_get(p, pid);
     if (err != 0) {
-        ALOGW("failed to get memory consumption info: %d", err);
+        // The memtrack HAL may not be available, do not log to avoid flooding
+        // logcat.
         return err;
     }
 
@@ -235,7 +238,7 @@ static int read_memtrack_memory(int pid, struct graphics_memory_pss* graphics_me
     return err;
 }
 
-static void load_maps(int pid, stats_t* stats, bool* foundSwapPss)
+static bool load_maps(int pid, stats_t* stats, bool* foundSwapPss)
 {
     *foundSwapPss = false;
     uint64_t prev_end = 0;
@@ -259,6 +262,8 @@ static void load_maps(int pid, stats_t* stats, bool* foundSwapPss)
         } else if (base::StartsWith(name, "[anon:libc_malloc]")) {
             which_heap = HEAP_NATIVE;
         } else if (base::StartsWith(name, "[anon:scudo:")) {
+            which_heap = HEAP_NATIVE;
+        } else if (base::StartsWith(name, "[anon:GWP-ASan")) {
             which_heap = HEAP_NATIVE;
         } else if (base::StartsWith(name, "[stack")) {
             which_heap = HEAP_STACK;
@@ -405,17 +410,19 @@ static void load_maps(int pid, stats_t* stats, bool* foundSwapPss)
         }
     };
 
-    meminfo::ForEachVmaFromFile(smaps_path, vma_scan);
+    return meminfo::ForEachVmaFromFile(smaps_path, vma_scan);
 }
 
-static void android_os_Debug_getDirtyPagesPid(JNIEnv *env, jobject clazz,
+static jboolean android_os_Debug_getDirtyPagesPid(JNIEnv *env, jobject clazz,
         jint pid, jobject object)
 {
     bool foundSwapPss;
     stats_t stats[_NUM_HEAP];
     memset(&stats, 0, sizeof(stats));
 
-    load_maps(pid, stats, &foundSwapPss);
+    if (!load_maps(pid, stats, &foundSwapPss)) {
+        return JNI_FALSE;
+    }
 
     struct graphics_memory_pss graphics_mem;
     if (read_memtrack_memory(pid, &graphics_mem) == 0) {
@@ -460,7 +467,7 @@ static void android_os_Debug_getDirtyPagesPid(JNIEnv *env, jobject clazz,
 
     jint* otherArray = (jint*)env->GetPrimitiveArrayCritical(otherIntArray, 0);
     if (otherArray == NULL) {
-        return;
+        return JNI_FALSE;
     }
 
     int j=0;
@@ -477,6 +484,7 @@ static void android_os_Debug_getDirtyPagesPid(JNIEnv *env, jobject clazz,
     }
 
     env->ReleasePrimitiveArrayCritical(otherIntArray, otherArray, 0);
+    return JNI_TRUE;
 }
 
 static void android_os_Debug_getDirtyPages(JNIEnv *env, jobject clazz, jobject object)
@@ -506,6 +514,8 @@ static jlong android_os_Debug_getPssPid(JNIEnv *env, jobject clazz, jint pid,
         rss += stats.rss;
         swapPss = stats.swap_pss;
         pss += swapPss; // Also in swap, those pages would be accounted as Pss without SWAP
+    } else {
+        return 0;
     }
 
     if (outUssSwapPssRss != NULL) {
@@ -560,6 +570,7 @@ enum {
     MEMINFO_VMALLOC_USED,
     MEMINFO_PAGE_TABLES,
     MEMINFO_KERNEL_STACK,
+    MEMINFO_KERNEL_RECLAIMABLE,
     MEMINFO_COUNT
 };
 
@@ -780,6 +791,76 @@ static jlong android_os_Debug_getFreeZramKb(JNIEnv* env, jobject clazz) {
     return zramFreeKb;
 }
 
+static jlong android_os_Debug_getIonHeapsSizeKb(JNIEnv* env, jobject clazz) {
+    jlong heapsSizeKb = 0;
+    uint64_t size;
+
+    if (meminfo::ReadIonHeapsSizeKb(&size)) {
+        heapsSizeKb = size;
+    }
+
+    return heapsSizeKb;
+}
+
+static jlong android_os_Debug_getIonPoolsSizeKb(JNIEnv* env, jobject clazz) {
+    jlong poolsSizeKb = 0;
+    uint64_t size;
+
+    if (meminfo::ReadIonPoolsSizeKb(&size)) {
+        poolsSizeKb = size;
+    }
+
+    return poolsSizeKb;
+}
+
+static jlong android_os_Debug_getIonMappedSizeKb(JNIEnv* env, jobject clazz) {
+    jlong ionPss = 0;
+    std::vector<dmabufinfo::DmaBuffer> dmabufs;
+
+    std::unique_ptr<DIR, int (*)(DIR*)> dir(opendir("/proc"), closedir);
+    if (!dir) {
+        LOG(ERROR) << "Failed to open /proc directory";
+        return false;
+    }
+
+    struct dirent* dent;
+    while ((dent = readdir(dir.get()))) {
+        if (dent->d_type != DT_DIR) continue;
+
+        int pid = atoi(dent->d_name);
+        if (pid == 0) {
+            continue;
+        }
+
+        if (!AppendDmaBufInfo(pid, &dmabufs, false)) {
+            LOG(ERROR) << "Failed to read maps for pid " << pid;
+        }
+    }
+
+    for (const dmabufinfo::DmaBuffer& buf : dmabufs) {
+        ionPss += buf.size() / 1024;
+    }
+
+    return ionPss;
+}
+
+static jboolean android_os_Debug_isVmapStack(JNIEnv *env, jobject clazz)
+{
+    static enum {
+        CONFIG_UNKNOWN,
+        CONFIG_SET,
+        CONFIG_UNSET,
+    } cfg_state = CONFIG_UNKNOWN;
+
+    if (cfg_state == CONFIG_UNKNOWN) {
+        const std::map<std::string, std::string> configs =
+            vintf::VintfObject::GetInstance()->getRuntimeInfo()->kernelConfigs();
+        std::map<std::string, std::string>::const_iterator it = configs.find("CONFIG_VMAP_STACK");
+        cfg_state = (it != configs.end() && it->second == "y") ? CONFIG_SET : CONFIG_UNSET;
+    }
+    return cfg_state == CONFIG_SET;
+}
+
 /*
  * JNI registration.
  */
@@ -793,7 +874,7 @@ static const JNINativeMethod gMethods[] = {
             (void*) android_os_Debug_getNativeHeapFreeSize },
     { "getMemoryInfo",          "(Landroid/os/Debug$MemoryInfo;)V",
             (void*) android_os_Debug_getDirtyPages },
-    { "getMemoryInfo",          "(ILandroid/os/Debug$MemoryInfo;)V",
+    { "getMemoryInfo",          "(ILandroid/os/Debug$MemoryInfo;)Z",
             (void*) android_os_Debug_getDirtyPagesPid },
     { "getPss",                 "()J",
             (void*) android_os_Debug_getPss },
@@ -823,6 +904,14 @@ static const JNINativeMethod gMethods[] = {
             (void*)android_os_Debug_getUnreachableMemory },
     { "getZramFreeKb", "()J",
             (void*)android_os_Debug_getFreeZramKb },
+    { "getIonHeapsSizeKb", "()J",
+            (void*)android_os_Debug_getIonHeapsSizeKb },
+    { "getIonPoolsSizeKb", "()J",
+            (void*)android_os_Debug_getIonPoolsSizeKb },
+    { "getIonMappedSizeKb", "()J",
+            (void*)android_os_Debug_getIonMappedSizeKb },
+    { "isVmapStack", "()Z",
+            (void*)android_os_Debug_isVmapStack },
 };
 
 int register_android_os_Debug(JNIEnv *env)

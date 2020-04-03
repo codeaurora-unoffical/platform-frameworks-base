@@ -22,7 +22,7 @@ import static java.lang.annotation.RetentionPolicy.SOURCE;
 
 import android.annotation.IntDef;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.Matrix;
 import android.os.Build;
 import android.os.Parcel;
@@ -1541,12 +1541,16 @@ public final class MotionEvent extends InputEvent implements Parcelable {
     @FastNative
     private static native float nativeGetAxisValue(long nativePtr,
             int axis, int pointerIndex, int historyPos);
+    @FastNative
+    private static native void nativeTransform(long nativePtr, Matrix matrix);
 
     // -------------- @CriticalNative ----------------------
 
     @CriticalNative
     private static native long nativeCopy(long destNativePtr, long sourceNativePtr,
             boolean keepHistory);
+    @CriticalNative
+    private static native int nativeGetId(long nativePtr);
     @CriticalNative
     private static native int nativeGetDeviceId(long nativePtr);
     @CriticalNative
@@ -1614,8 +1618,6 @@ public final class MotionEvent extends InputEvent implements Parcelable {
 
     @CriticalNative
     private static native void nativeScale(long nativePtr, float scale);
-    @CriticalNative
-    private static native void nativeTransform(long nativePtr, long matrix);
 
     private MotionEvent() {
     }
@@ -2022,6 +2024,12 @@ public final class MotionEvent extends InputEvent implements Parcelable {
         if (scale != 1.0f) {
             nativeScale(mNativePtr, scale);
         }
+    }
+
+    /** @hide */
+    @Override
+    public int getId() {
+        return nativeGetId(mNativePtr);
     }
 
     /** {@inheritDoc} */
@@ -3210,7 +3218,7 @@ public final class MotionEvent extends InputEvent implements Parcelable {
             throw new IllegalArgumentException("matrix must not be null");
         }
 
-        nativeTransform(mNativePtr, matrix.native_instance);
+        nativeTransform(mNativePtr, matrix);
     }
 
     /**

@@ -19,7 +19,7 @@ package android.view;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
@@ -1209,6 +1209,7 @@ public class ViewDebug {
         ByteArrayOutputStream baOut = new ByteArrayOutputStream();
 
         final ViewHierarchyEncoder encoder = new ViewHierarchyEncoder(baOut);
+        encoder.setUserPropertiesEnabled(false);
         encoder.addProperty("window:left", view.mAttachInfo.mWindowLeft);
         encoder.addProperty("window:top", view.mAttachInfo.mWindowTop);
         view.encode(encoder);

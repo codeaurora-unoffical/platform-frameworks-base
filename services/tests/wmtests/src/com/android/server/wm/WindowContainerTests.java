@@ -21,6 +21,7 @@ import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSET;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+import static android.view.WindowManager.TRANSIT_TASK_OPEN;
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.any;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.anyFloat;
@@ -33,6 +34,7 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.spy;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.times;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
+import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_APP_TRANSITION;
 import static com.android.server.wm.WindowContainer.AnimationFlags.CHILDREN;
 import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
@@ -49,11 +51,18 @@ import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.IBinder;
+import android.os.RemoteException;
 import android.platform.test.annotations.Presubmit;
+import android.view.IRemoteAnimationFinishedCallback;
+import android.view.IRemoteAnimationRunner;
+import android.view.RemoteAnimationAdapter;
+import android.view.RemoteAnimationTarget;
 import android.view.SurfaceControl;
 import android.view.SurfaceSession;
 
 import androidx.test.filters.SmallTest;
+
+import com.android.server.wm.SurfaceAnimator.OnAnimationFinishedCallback;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -761,6 +770,89 @@ public class WindowContainerTests extends WindowTestsBase {
 
         Mockito.doReturn(true).when(root).handlesOrientationChangeFromDescendant();
         assertTrue(child.handlesOrientationChangeFromDescendant());
+    }
+
+    @Test
+    public void testOnDisplayChanged() {
+        final ActivityStack stack = createTaskStackOnDisplay(mDisplayContent);
+        final Task task = createTaskInStack(stack, 0 /* userId */);
+        final ActivityRecord activity =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task);
+
+        final DisplayContent newDc = createNewDisplay();
+        mDisplayContent.removeStack(stack);
+        newDc.setStackOnDisplay(stack, POSITION_TOP);
+
+        verify(stack).onDisplayChanged(newDc);
+        verify(task).onDisplayChanged(newDc);
+        verify(activity).onDisplayChanged(newDc);
+        assertEquals(newDc, stack.mDisplayContent);
+        assertEquals(newDc, task.mDisplayContent);
+        assertEquals(newDc, activity.mDisplayContent);
+    }
+
+    @Test
+    public void testTaskCanApplyAnimation() {
+        final ActivityStack stack = createTaskStackOnDisplay(mDisplayContent);
+        final Task task = createTaskInStack(stack, 0 /* userId */);
+        final ActivityRecord activity =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task);
+        verifyWindowContainerApplyAnimation(task, activity);
+    }
+
+    @Test
+    public void testStackCanApplyAnimation() {
+        final ActivityStack stack = createTaskStackOnDisplay(mDisplayContent);
+        final ActivityRecord activity = WindowTestUtils.createActivityRecordInTask(mDisplayContent,
+                createTaskInStack(stack, 0 /* userId */));
+        verifyWindowContainerApplyAnimation(stack, activity);
+    }
+
+    private void verifyWindowContainerApplyAnimation(WindowContainer wc, ActivityRecord act) {
+        // Initial remote animation for app transition.
+        final RemoteAnimationAdapter adapter = new RemoteAnimationAdapter(
+                new IRemoteAnimationRunner.Stub() {
+                    @Override
+                    public void onAnimationStart(RemoteAnimationTarget[] apps,
+                            RemoteAnimationTarget[] wallpapers,
+                            IRemoteAnimationFinishedCallback finishedCallback) {
+                        try {
+                            finishedCallback.onAnimationFinished();
+                        } catch (RemoteException e) {
+                            e.printStackTrace();
+                        }
+                    }
+
+                    @Override
+                    public void onAnimationCancelled() {
+                    }
+                }, 0, 0, false);
+        adapter.setCallingPidUid(123, 456);
+        wc.getDisplayContent().prepareAppTransition(TRANSIT_TASK_OPEN, false);
+        wc.getDisplayContent().mAppTransition.overridePendingAppTransitionRemote(adapter);
+        spyOn(wc);
+        doReturn(true).when(wc).okToAnimate();
+        final OnAnimationFinishedCallback onAnimationFinishedCallback =
+                mock(OnAnimationFinishedCallback.class);
+
+        // Make sure animating state is as expected after applied animation.
+        assertTrue(wc.applyAnimation(null, TRANSIT_TASK_OPEN, true, false,
+                onAnimationFinishedCallback));
+        assertEquals(wc.getTopMostActivity(), act);
+        assertTrue(wc.isAnimating());
+        assertTrue(act.isAnimating(PARENTS));
+        verify(onAnimationFinishedCallback, times(0)).onAnimationFinished(
+                eq(ANIMATION_TYPE_APP_TRANSITION), any());
+
+        // Make sure animation finish callback will be received and reset animating state after
+        // animation finish.
+        wc.getDisplayContent().mAppTransition.goodToGo(TRANSIT_TASK_OPEN, act,
+                mDisplayContent.mOpeningApps);
+        verify(wc).onAnimationFinished(eq(ANIMATION_TYPE_APP_TRANSITION), any());
+        assertFalse(wc.isAnimating());
+        assertFalse(act.isAnimating(PARENTS));
+        verify(onAnimationFinishedCallback, times(1)).onAnimationFinished(
+                eq(ANIMATION_TYPE_APP_TRANSITION), any());
     }
 
     /* Used so we can gain access to some protected members of the {@link WindowContainer} class */

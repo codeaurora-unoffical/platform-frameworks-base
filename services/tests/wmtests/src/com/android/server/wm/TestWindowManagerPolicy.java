@@ -17,7 +17,7 @@
 package com.android.server.wm;
 
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_STARTING;
-import static android.view.WindowManager.LayoutParams.TYPE_STATUS_BAR;
+import static android.view.WindowManager.LayoutParams.TYPE_NOTIFICATION_SHADE;
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
@@ -75,13 +75,9 @@ class TestWindowManagerPolicy implements WindowManagerPolicy {
     }
 
     @Override
-    public int checkAddPermission(WindowManager.LayoutParams attrs, int[] outAppOp) {
+    public int checkAddPermission(int type, boolean isRoundedCornerOverlay, String packageName,
+            int[] outAppOp) {
         return 0;
-    }
-
-    @Override
-    public boolean checkShowToOwnerOnly(WindowManager.LayoutParams attrs) {
-        return false;
     }
 
     @Override
@@ -96,7 +92,7 @@ class TestWindowManagerPolicy implements WindowManagerPolicy {
 
     @Override
     public boolean isKeyguardHostWindow(WindowManager.LayoutParams attrs) {
-        return attrs.type == TYPE_STATUS_BAR;
+        return attrs.type == TYPE_NOTIFICATION_SHADE;
     }
 
     @Override
@@ -268,6 +264,11 @@ class TestWindowManagerPolicy implements WindowManagerPolicy {
     }
 
     @Override
+    public boolean isKeyguardShowing() {
+        return mKeyguardShowingAndNotOccluded;
+    }
+
+    @Override
     public boolean isKeyguardShowingAndNotOccluded() {
         return mKeyguardShowingAndNotOccluded;
     }
@@ -403,10 +404,6 @@ class TestWindowManagerPolicy implements WindowManagerPolicy {
     @Override
     public boolean canDismissBootAnimation() {
         return true;
-    }
-
-    @Override
-    public void requestUserActivityNotification() {
     }
 
     @Override

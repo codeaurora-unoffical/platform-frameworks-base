@@ -38,6 +38,8 @@ import android.util.Slog;
 import android.view.accessibility.AccessibilityEvent;
 
 import com.android.internal.util.ArrayUtils;
+import com.android.server.LocalServices;
+import com.android.server.wm.ActivityTaskManagerInternal;
 
 import libcore.util.EmptyArray;
 
@@ -86,6 +88,7 @@ public class AccessibilitySecurityPolicy {
 
     private final AccessibilityUserManager mAccessibilityUserManager;
     private AccessibilityWindowManager mAccessibilityWindowManager;
+    private final ActivityTaskManagerInternal mAtmInternal;
 
     /**
      * Constructor for AccessibilityManagerService.
@@ -97,6 +100,7 @@ public class AccessibilitySecurityPolicy {
         mPackageManager = mContext.getPackageManager();
         mUserManager = (UserManager) mContext.getSystemService(Context.USER_SERVICE);
         mAppOpsManager = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
+        mAtmInternal = LocalServices.getService(ActivityTaskManagerInternal.class);
     }
 
     /**
@@ -326,6 +330,19 @@ public class AccessibilitySecurityPolicy {
     }
 
     /**
+     * Checks if a service can take screenshot.
+     *
+     * @param service The service requesting access
+     *
+     * @return Whether ot not the service may take screenshot
+     */
+    public boolean canTakeScreenshotLocked(
+            @NonNull AbstractAccessibilityServiceConnection service) {
+        return (service.getCapabilities()
+                & AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) != 0;
+    }
+
+    /**
      * Returns the parent userId of the profile according to the specified userId.
      *
      * @param userId The userId to check
@@ -426,7 +443,8 @@ public class AccessibilitySecurityPolicy {
                 return false;
             }
         }
-        if (windowId == mAccessibilityWindowManager.getActiveWindowId(userId)) {
+        if (mAccessibilityWindowManager.resolveParentWindowIdLocked(windowId)
+                == mAccessibilityWindowManager.getActiveWindowId(userId)) {
             return true;
         }
         return mAccessibilityWindowManager.findA11yWindowInfoByIdLocked(windowId) != null;
@@ -535,5 +553,27 @@ public class AccessibilitySecurityPolicy {
         } finally {
             Binder.restoreCallingIdentity(identityToken);
         }
+    }
+
+    /**
+     * Enforcing permission check to IPC caller or grant it if it's not through IPC.
+     *
+     * @param permission The permission to check
+     */
+    public void enforceCallingOrSelfPermission(@NonNull String permission) {
+        if (mContext.checkCallingOrSelfPermission(permission)
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Caller does not hold permission "
+                    + permission);
+        }
+    }
+
+    /**
+     * Enforcing permission check to IPC caller or grant it if it's recents.
+     *
+     * @param permission The permission to check
+     */
+    public void enforceCallerIsRecentsOrHasPermission(@NonNull String permission, String func) {
+        mAtmInternal.enforceCallerIsRecentsOrHasPermission(permission, func);
     }
 }

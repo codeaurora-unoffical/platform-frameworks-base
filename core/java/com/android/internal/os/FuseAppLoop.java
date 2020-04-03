@@ -18,20 +18,23 @@ package com.android.internal.os;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
-import android.os.ProxyFileDescriptorCallback;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Handler;
 import android.os.Message;
 import android.os.ParcelFileDescriptor;
+import android.os.ProxyFileDescriptorCallback;
 import android.system.ErrnoException;
 import android.system.OsConstants;
 import android.util.Log;
 import android.util.SparseArray;
+
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.util.Preconditions;
+
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ThreadFactory;
 
 public class FuseAppLoop implements Handler.Callback {
@@ -92,8 +95,8 @@ public class FuseAppLoop implements Handler.Callback {
     public int registerCallback(@NonNull ProxyFileDescriptorCallback callback,
             @NonNull Handler handler) throws FuseUnavailableMountException {
         synchronized (mLock) {
-            Preconditions.checkNotNull(callback);
-            Preconditions.checkNotNull(handler);
+            Objects.requireNonNull(callback);
+            Objects.requireNonNull(handler);
             Preconditions.checkState(
                     mCallbackMap.size() < Integer.MAX_VALUE - MIN_INODE, "Too many opened files.");
             Preconditions.checkArgument(
@@ -333,8 +336,8 @@ public class FuseAppLoop implements Handler.Callback {
         boolean opened;
 
         CallbackEntry(ProxyFileDescriptorCallback callback, Handler handler) {
-            this.callback = Preconditions.checkNotNull(callback);
-            this.handler = Preconditions.checkNotNull(handler);
+            this.callback = Objects.requireNonNull(callback);
+            this.handler = Objects.requireNonNull(handler);
         }
 
         long getThreadId() {
@@ -368,7 +371,7 @@ public class FuseAppLoop implements Handler.Callback {
 
         void stopUsing(long threadId) {
             final BytesMapEntry entry = mEntries.get(threadId);
-            Preconditions.checkNotNull(entry);
+            Objects.requireNonNull(entry);
             entry.counter--;
             if (entry.counter <= 0) {
                 mEntries.remove(threadId);

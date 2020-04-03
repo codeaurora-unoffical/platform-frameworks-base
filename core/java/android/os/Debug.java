@@ -18,8 +18,8 @@ package android.os;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.AppGlobals;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.util.Log;
 
@@ -1888,10 +1888,13 @@ public final class Debug
     /**
      * Note: currently only works when the requested pid has the same UID
      * as the caller.
+     *
+     * @return true if the meminfo was read successfully, false if not (i.e., given pid has gone).
+     *
      * @hide
      */
     @UnsupportedAppUsage
-    public static native void getMemoryInfo(int pid, MemoryInfo memoryInfo);
+    public static native boolean getMemoryInfo(int pid, MemoryInfo memoryInfo);
 
     /**
      * Retrieves the PSS memory used by the process as given by the
@@ -1904,6 +1907,8 @@ public final class Debug
      * array of up to 3 entries to also receive (up to 3 values in order): the Uss and SwapPss and
      * Rss (only filled in as of {@link android.os.Build.VERSION_CODES#P}) of the process, and
      * another array to also retrieve the separate memtrack size.
+     *
+     * @return The PSS memory usage, or 0 if failed to retrieve (i.e., given pid has gone).
      * @hide
      */
     public static native long getPss(int pid, long[] outUssSwapPssRss, long[] outMemtrack);
@@ -1938,8 +1943,14 @@ public final class Debug
     public static final int MEMINFO_PAGE_TABLES = 13;
     /** @hide */
     public static final int MEMINFO_KERNEL_STACK = 14;
+    /**
+     * Note: MEMINFO_KRECLAIMABLE includes MEMINFO_SLAB_RECLAIMABLE (see KReclaimable field
+     * description in kernel documentation).
+     * @hide
+     */
+    public static final int MEMINFO_KRECLAIMABLE = 15;
     /** @hide */
-    public static final int MEMINFO_COUNT = 15;
+    public static final int MEMINFO_COUNT = 16;
 
     /**
      * Retrieves /proc/meminfo.  outSizes is filled with fields
@@ -2561,4 +2572,35 @@ public final class Debug
      * @hide
      */
     public static native long getZramFreeKb();
+
+    /**
+     * Return memory size in kilobytes allocated for ION heaps.
+     *
+     * @hide
+     */
+    public static native long getIonHeapsSizeKb();
+
+    /**
+     * Return memory size in kilobytes allocated for ION pools.
+     *
+     * @hide
+     */
+    public static native long getIonPoolsSizeKb();
+
+    /**
+     * Return ION memory mapped by processes in kB.
+     * Notes:
+     *  * Warning: Might impact performance as it reads /proc/<pid>/maps files for each process.
+     *
+     * @hide
+     */
+    public static native long getIonMappedSizeKb();
+
+    /**
+     * Return whether virtually-mapped kernel stacks are enabled (CONFIG_VMAP_STACK).
+     * Note: caller needs config_gz read sepolicy permission
+     *
+     * @hide
+     */
+    public static native boolean isVmapStack();
 }

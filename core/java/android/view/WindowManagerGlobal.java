@@ -18,8 +18,8 @@ package android.view;
 
 import android.animation.ValueAnimator;
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
@@ -55,6 +55,8 @@ import java.util.ArrayList;
  */
 public final class WindowManagerGlobal {
     private static final String TAG = "WindowManager";
+
+    private static boolean sUseBLASTAdapter = false;
 
     /**
      * The user is navigating with keys (not the touch screen), so
@@ -184,6 +186,7 @@ public final class WindowManagerGlobal {
                     if (sWindowManagerService != null) {
                         ValueAnimator.setDurationScale(
                                 sWindowManagerService.getCurrentAnimatorScale());
+                        sUseBLASTAdapter = sWindowManagerService.useBLAST();
                     }
                 } catch (RemoteException e) {
                     throw e.rethrowFromSystemServer();
@@ -223,6 +226,13 @@ public final class WindowManagerGlobal {
         synchronized (WindowManagerGlobal.class) {
             return sWindowSession;
         }
+    }
+
+    /**
+     * Whether or not to use BLAST for ViewRootImpl
+     */
+    public static boolean useBLAST() {
+        return sUseBLASTAdapter;
     }
 
     @UnsupportedAppUsage
@@ -481,11 +491,8 @@ public final class WindowManagerGlobal {
         ViewRootImpl root = mRoots.get(index);
         View view = root.getView();
 
-        if (view != null) {
-            InputMethodManager imm = view.getContext().getSystemService(InputMethodManager.class);
-            if (imm != null) {
-                imm.windowDismissed(mViews.get(index).getWindowToken());
-            }
+        if (root != null) {
+            root.getImeFocusController().onWindowDismissed();
         }
         boolean deferred = root.die(immediate);
         if (view != null) {

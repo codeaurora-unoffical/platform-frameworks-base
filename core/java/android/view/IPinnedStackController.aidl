@@ -25,24 +25,8 @@ import android.graphics.Rect;
  * @hide
  */
 interface IPinnedStackController {
-
-    /**
-     * Notifies the controller that the PiP is currently minimized.
-     */
-    oneway void setIsMinimized(boolean isMinimized);
-
     /**
      * @return what WM considers to be the current device rotation.
      */
     int getDisplayRotation();
-
-    /**
-     * Notifies the controller to actually start the PiP animation.
-     * The bounds would be calculated based on the last save reentry fraction internally.
-     * {@param destinationBounds} is the stack bounds of the final PiP window
-     * and {@param sourceRectHint} is the source bounds hint used when entering picture-in-picture,
-     * expect the same bound passed via IPinnedStackListener#onPrepareAnimation.
-     * {@param animationDuration} suggests the animation duration transitioning to PiP window.
-     */
-    void startAnimation(in Rect destinationBounds, in Rect sourceRectHint, int animationDuration);
 }

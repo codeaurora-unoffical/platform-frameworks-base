@@ -16,13 +16,12 @@
 
 package android.hardware.camera2.impl;
 
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.ImageFormat;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraMetadata;
-import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.marshal.MarshalQueryable;
@@ -30,7 +29,6 @@ import android.hardware.camera2.marshal.MarshalRegistry;
 import android.hardware.camera2.marshal.Marshaler;
 import android.hardware.camera2.marshal.impl.MarshalQueryableArray;
 import android.hardware.camera2.marshal.impl.MarshalQueryableBlackLevelPattern;
-import android.hardware.camera2.marshal.impl.MarshalQueryableCapabilityAndMaxSize;
 import android.hardware.camera2.marshal.impl.MarshalQueryableBoolean;
 import android.hardware.camera2.marshal.impl.MarshalQueryableColorSpaceTransform;
 import android.hardware.camera2.marshal.impl.MarshalQueryableEnum;
@@ -50,12 +48,11 @@ import android.hardware.camera2.marshal.impl.MarshalQueryableSizeF;
 import android.hardware.camera2.marshal.impl.MarshalQueryableStreamConfiguration;
 import android.hardware.camera2.marshal.impl.MarshalQueryableStreamConfigurationDuration;
 import android.hardware.camera2.marshal.impl.MarshalQueryableString;
-import android.hardware.camera2.params.CapabilityAndMaxSize;
+import android.hardware.camera2.params.Capability;
 import android.hardware.camera2.params.Face;
 import android.hardware.camera2.params.HighSpeedVideoConfiguration;
 import android.hardware.camera2.params.LensShadingMap;
 import android.hardware.camera2.params.MandatoryStreamCombination;
-import android.hardware.camera2.params.MandatoryStreamCombination.MandatoryStreamInformation;
 import android.hardware.camera2.params.OisSample;
 import android.hardware.camera2.params.RecommendedStreamConfiguration;
 import android.hardware.camera2.params.RecommendedStreamConfigurationMap;
@@ -71,9 +68,8 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.ServiceSpecificException;
 import android.util.Log;
+import android.util.Range;
 import android.util.Size;
-
-import com.android.internal.util.Preconditions;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -81,6 +77,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Implementation of camera metadata marshal/unmarshal across Binder to
@@ -240,6 +237,11 @@ public class CameraMetadataNative implements Parcelable {
          *
          * <p>This value is looked up the first time, and cached subsequently.</p>
          *
+         * <p>This function may be called without cacheTag() if this is not a vendor key.
+         * If this is a vendor key, cacheTag() must be called first before getTag() can
+         * be called. Otherwise, mVendorId could be default (Long.MAX_VALUE) and vendor
+         * tag lookup could fail.</p>
+         *
          * @return The tag numeric value corresponding to the string
          */
         @UnsupportedAppUsage
@@ -249,6 +251,27 @@ public class CameraMetadataNative implements Parcelable {
                 mHasTag = true;
             }
             return mTag;
+        }
+
+        /**
+         * Whether this key's tag is cached.
+         *
+         * @hide
+         */
+        @UnsupportedAppUsage
+        public final boolean hasTag() {
+            return mHasTag;
+        }
+
+        /**
+         * Cache this key's tag.
+         *
+         * @hide
+         */
+        @UnsupportedAppUsage
+        public final void cacheTag(int tag) {
+            mHasTag = true;
+            mTag = tag;
         }
 
         /**
@@ -406,7 +429,7 @@ public class CameraMetadataNative implements Parcelable {
      * @return the field corresponding to the {@code key}, or {@code null} if no value was set
      */
     public <T> T get(Key<T> key) {
-        Preconditions.checkNotNull(key, "key must not be null");
+        Objects.requireNonNull(key, "key must not be null");
 
         // Check if key has been overridden to use a wrapper class on the java side.
         GetCommand g = sGetCommandMap.get(key);
@@ -523,7 +546,13 @@ public class CameraMetadataNative implements Parcelable {
     }
 
     private <T> T getBase(Key<T> key) {
-        int tag = nativeGetTagFromKeyLocal(key.getName());
+        int tag;
+        if (key.hasTag()) {
+            tag = key.getTag();
+        } else {
+            tag = nativeGetTagFromKeyLocal(key.getName());
+            key.cacheTag(tag);
+        }
         byte[] values = readValues(tag);
         if (values == null) {
             // If the key returns null, use the fallback key if exists.
@@ -591,6 +620,16 @@ public class CameraMetadataNative implements Parcelable {
                         return (T) metadata.getMandatoryStreamCombinations();
                     }
                 });
+        sGetCommandMap.put(
+                CameraCharacteristics.SCALER_MANDATORY_CONCURRENT_STREAM_COMBINATIONS.getNativeKey(),
+                        new GetCommand() {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    public <T> T getValue(CameraMetadataNative metadata, Key<T> key) {
+                        return (T) metadata.getMandatoryConcurrentStreamCombinations();
+                    }
+                });
+
         sGetCommandMap.put(
                 CameraCharacteristics.CONTROL_MAX_REGIONS_AE.getNativeKey(), new GetCommand() {
                     @Override
@@ -1218,7 +1257,8 @@ public class CameraMetadataNative implements Parcelable {
         return ret;
     }
 
-    private MandatoryStreamCombination[] getMandatoryStreamCombinations() {
+    private MandatoryStreamCombination[] getMandatoryStreamCombinationsHelper(
+            boolean getConcurrent) {
         int[] capabilities = getBase(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
         ArrayList<Integer> caps = new ArrayList<Integer>();
         caps.ensureCapacity(capabilities.length);
@@ -1228,7 +1268,13 @@ public class CameraMetadataNative implements Parcelable {
         int hwLevel = getBase(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
         MandatoryStreamCombination.Builder build = new MandatoryStreamCombination.Builder(
                 mCameraId, hwLevel, mDisplaySize, caps, getStreamConfigurationMap());
-        List<MandatoryStreamCombination> combs = build.getAvailableMandatoryStreamCombinations();
+
+        List<MandatoryStreamCombination> combs = null;
+        if (getConcurrent) {
+            combs = build.getAvailableMandatoryConcurrentStreamCombinations();
+        } else {
+            combs = build.getAvailableMandatoryStreamCombinations();
+        }
         if ((combs != null) && (!combs.isEmpty())) {
             MandatoryStreamCombination[] combArray = new MandatoryStreamCombination[combs.size()];
             combArray = combs.toArray(combArray);
@@ -1236,6 +1282,17 @@ public class CameraMetadataNative implements Parcelable {
         }
 
         return null;
+    }
+
+    private MandatoryStreamCombination[] getMandatoryConcurrentStreamCombinations() {
+        if (!mHasMandatoryConcurrentStreams) {
+            return null;
+        }
+        return getMandatoryStreamCombinationsHelper(true);
+    }
+
+    private MandatoryStreamCombination[] getMandatoryStreamCombinations() {
+        return getMandatoryStreamCombinationsHelper(false);
     }
 
     private StreamConfigurationMap getStreamConfigurationMap() {
@@ -1385,22 +1442,57 @@ public class CameraMetadataNative implements Parcelable {
         return samples;
     }
 
-    private CapabilityAndMaxSize[] getBokehCapabilities() {
-        CapabilityAndMaxSize[] bcs = getBase(
-                CameraCharacteristics.CONTROL_AVAILABLE_BOKEH_CAPABILITIES);
+    private Capability[] getBokehCapabilities() {
+        int[] bokehMaxSizes = getBase(CameraCharacteristics.CONTROL_AVAILABLE_BOKEH_MAX_SIZES);
+        float[] bokehZoomRanges = getBase(
+                CameraCharacteristics.CONTROL_AVAILABLE_BOKEH_ZOOM_RATIO_RANGES);
+        Range<Float> zoomRange = getBase(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+        float maxDigitalZoom = getBase(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
 
-        if (bcs != null) {
-            for (CapabilityAndMaxSize bc : bcs) {
-                if (bc.getMode() < CameraMetadata.CONTROL_BOKEH_MODE_OFF ||
-                        bc.getMode() > CameraMetadata.CONTROL_BOKEH_MODE_CONTINUOUS) {
-                    throw new AssertionError(String.format(
-                            "bokehMode %d is out of valid range [%d, %d]", bc.getMode(),
-                            CameraMetadata.CONTROL_BOKEH_MODE_OFF,
-                            CameraMetadata.CONTROL_BOKEH_MODE_CONTINUOUS));
-                }
+        if (bokehMaxSizes == null) {
+            return null;
+        }
+        if (bokehMaxSizes.length % 3 != 0) {
+            throw new AssertionError("availableBokehMaxSizes must be tuples of " +
+                    "[mode, width, height]");
+        }
+        int numBokehModes = bokehMaxSizes.length / 3;
+        int numBokehZoomRanges = 0;
+        if (bokehZoomRanges != null) {
+            if (bokehZoomRanges.length % 2 != 0) {
+                throw new AssertionError("availableBokehZoomRanges must be tuples of " +
+                        "[minZoom, maxZoom]");
+            }
+            numBokehZoomRanges = bokehZoomRanges.length / 2;
+            if (numBokehModes - numBokehZoomRanges != 1) {
+                throw new AssertionError("Number of bokeh zoom ranges must be 1 less than " +
+                        "number of supported bokeh modes");
             }
         }
-        return bcs;
+
+        float bokehOffMinZoomRatio = 1.0f;
+        float bokehOffMaxZoomRatio = maxDigitalZoom;
+        if (zoomRange != null) {
+            bokehOffMinZoomRatio = zoomRange.getLower();
+            bokehOffMaxZoomRatio = zoomRange.getUpper();
+        }
+
+        Capability[] capabilities = new Capability[numBokehModes];
+        for (int i = 0, j = 0; i < numBokehModes; i++) {
+            int mode = bokehMaxSizes[3 * i];
+            int width = bokehMaxSizes[3 * i + 1];
+            int height = bokehMaxSizes[3 * i + 2];
+            if (mode != CameraMetadata.CONTROL_BOKEH_MODE_OFF && j < numBokehZoomRanges) {
+                capabilities[i] = new Capability(mode, width, height, bokehZoomRanges[2 * j],
+                        bokehZoomRanges[2 * j + 1]);
+                j++;
+            } else {
+                capabilities[i] = new Capability(mode, width, height, bokehOffMinZoomRatio,
+                        bokehOffMaxZoomRatio);
+            }
+        }
+
+        return capabilities;
     }
 
     private <T> void setBase(CameraCharacteristics.Key<T> key, T value) {
@@ -1416,7 +1508,13 @@ public class CameraMetadataNative implements Parcelable {
     }
 
     private <T> void setBase(Key<T> key, T value) {
-        int tag = nativeGetTagFromKeyLocal(key.getName());
+        int tag;
+        if (key.hasTag()) {
+            tag = key.getTag();
+        } else {
+            tag = nativeGetTagFromKeyLocal(key.getName());
+            key.cacheTag(tag);
+        }
         if (value == null) {
             // Erase the entry
             writeValues(tag, /*src*/null);
@@ -1544,6 +1642,7 @@ public class CameraMetadataNative implements Parcelable {
     }
 
     private int mCameraId = -1;
+    private boolean mHasMandatoryConcurrentStreams = false;
     private Size mDisplaySize = new Size(0, 0);
 
     /**
@@ -1558,6 +1657,18 @@ public class CameraMetadataNative implements Parcelable {
     }
 
     /**
+     * Set the current camera Id.
+     *
+     * @param hasMandatoryConcurrentStreams whether the metadata advertises mandatory concurrent
+     *        streams.
+     *
+     * @hide
+     */
+    public void setHasMandatoryConcurrentStreams(boolean hasMandatoryConcurrentStreams) {
+        mHasMandatoryConcurrentStreams = hasMandatoryConcurrentStreams;
+    }
+
+    /**
      * Set the current display size.
      *
      * @param displaySize The current display size.
@@ -1569,7 +1680,7 @@ public class CameraMetadataNative implements Parcelable {
     }
 
     @UnsupportedAppUsage
-    private long mMetadataPtr; // native CameraMetadata*
+    private long mMetadataPtr; // native std::shared_ptr<CameraMetadata>*
 
     private native long nativeAllocate();
     private native long nativeAllocateCopy(CameraMetadataNative other)
@@ -1612,6 +1723,7 @@ public class CameraMetadataNative implements Parcelable {
     public void swap(CameraMetadataNative other) {
         nativeSwap(other);
         mCameraId = other.mCameraId;
+        mHasMandatoryConcurrentStreams = other.mHasMandatoryConcurrentStreams;
         mDisplaySize = other.mDisplaySize;
     }
 
@@ -1631,6 +1743,15 @@ public class CameraMetadataNative implements Parcelable {
         return nativeIsEmpty();
     }
 
+
+    /**
+     * Retrieves the pointer to the native CameraMetadata as a Java long.
+     *
+     * @hide
+     */
+    public long getMetadataPtr() {
+        return mMetadataPtr;
+    }
 
     /**
      * Return a list containing keys of the given key class for all defined vendor tags.
@@ -1780,7 +1901,6 @@ public class CameraMetadataNative implements Parcelable {
                 new MarshalQueryableBlackLevelPattern(),
                 new MarshalQueryableHighSpeedVideoConfiguration(),
                 new MarshalQueryableRecommendedStreamConfiguration(),
-                new MarshalQueryableCapabilityAndMaxSize(),
 
                 // generic parcelable marshaler (MUST BE LAST since it has lowest priority)
                 new MarshalQueryableParcelable(),

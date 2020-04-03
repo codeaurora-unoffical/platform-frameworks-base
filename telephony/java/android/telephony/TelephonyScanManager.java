@@ -19,7 +19,6 @@ package android.telephony;
 import static com.android.internal.util.Preconditions.checkNotNull;
 
 import android.annotation.Nullable;
-import android.content.Context;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
@@ -29,10 +28,10 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.Parcelable;
 import android.os.RemoteException;
-import android.os.ServiceManager;
 import android.util.SparseArray;
 
 import com.android.internal.telephony.ITelephony;
+import com.android.telephony.Rlog;
 
 import java.util.Arrays;
 import java.util.List;
@@ -234,6 +233,9 @@ public final class TelephonyScanManager {
 
     private ITelephony getITelephony() {
         return ITelephony.Stub.asInterface(
-            ServiceManager.getService(Context.TELEPHONY_SERVICE));
+            TelephonyFrameworkInitializer
+                    .getTelephonyServiceManager()
+                    .getTelephonyServiceRegisterer()
+                    .get());
     }
 }

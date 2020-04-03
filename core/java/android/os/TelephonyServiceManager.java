@@ -18,6 +18,7 @@ package android.os;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
+import android.content.Context;
 
 /**
  * Provides a way to register and obtain the system service binder objects managed by the telephony
@@ -38,7 +39,7 @@ public class TelephonyServiceManager {
     /**
      * A class that exposes the methods to register and obtain each system service.
      */
-    public final class ServiceRegisterer {
+    public static final class ServiceRegisterer {
         private final String mServiceName;
 
         /**
@@ -51,8 +52,8 @@ public class TelephonyServiceManager {
         /**
          * Register a system server binding object for a service.
          */
-        public void register(@NonNull IBinder binder) {
-            ServiceManager.addService(mServiceName, binder);
+        public void register(@NonNull IBinder service) {
+            ServiceManager.addService(mServiceName, service);
         }
 
         /**
@@ -114,25 +115,86 @@ public class TelephonyServiceManager {
      */
     @NonNull
     public ServiceRegisterer getTelephonyServiceRegisterer() {
-        return new ServiceRegisterer("phone");
+        return new ServiceRegisterer(Context.TELEPHONY_SERVICE);
     }
 
+    /**
+     * Returns {@link ServiceRegisterer} for the telephony IMS service.
+     */
+    @NonNull
+    public ServiceRegisterer getTelephonyImsServiceRegisterer() {
+        return new ServiceRegisterer(Context.TELEPHONY_IMS_SERVICE);
+    }
 
-// TODO: Add more services...
-//
-//    /**
-//     * Returns {@link ServiceRegisterer} for the "subscription" service.
-//     */
-//    @NonNull
-//    public ServiceRegisterer getSubscriptionServiceRegisterer() {
-//        return new ServiceRegisterer("isub");
-//    }
-//
-//    /**
-//     * Returns {@link ServiceRegisterer} for the "SMS" service.
-//     */
-//    @NonNull
-//    public ServiceRegisterer getSmsServiceRegisterer() {
-//        return new ServiceRegisterer("isms");
-//    }
+    /**
+     * Returns {@link ServiceRegisterer} for the telephony RCS message service.
+     */
+    @NonNull
+    public ServiceRegisterer getTelephonyRcsMessageServiceRegisterer() {
+        return new ServiceRegisterer(Context.TELEPHONY_RCS_MESSAGE_SERVICE);
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the subscription service.
+     */
+    @NonNull
+    public ServiceRegisterer getSubscriptionServiceRegisterer() {
+        return new ServiceRegisterer("isub");
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the phone sub service.
+     */
+    @NonNull
+    public ServiceRegisterer getPhoneSubServiceRegisterer() {
+        return new ServiceRegisterer("iphonesubinfo");
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the opportunistic network service.
+     */
+    @NonNull
+    public ServiceRegisterer getOpportunisticNetworkServiceRegisterer() {
+        return new ServiceRegisterer("ions");
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the carrier config service.
+     */
+    @NonNull
+    public ServiceRegisterer getCarrierConfigServiceRegisterer() {
+        return new ServiceRegisterer(Context.CARRIER_CONFIG_SERVICE);
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the "SMS" service.
+     */
+    @NonNull
+    public ServiceRegisterer getSmsServiceRegisterer() {
+        return new ServiceRegisterer("isms");
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the eUICC controller service.
+     */
+    @NonNull
+    public ServiceRegisterer getEuiccControllerService() {
+        return new ServiceRegisterer("econtroller");
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the eUICC card controller service.
+     */
+    @NonNull
+    public ServiceRegisterer getEuiccCardControllerServiceRegisterer() {
+        return new ServiceRegisterer("euicc_card_controller");
+    }
+
+    /**
+     * Returns {@link ServiceRegisterer} for the ICC phone book service.
+     */
+    @NonNull
+    public ServiceRegisterer getIccPhoneBookServiceRegisterer() {
+        return new ServiceRegisterer("simphonebook");
+    }
 }

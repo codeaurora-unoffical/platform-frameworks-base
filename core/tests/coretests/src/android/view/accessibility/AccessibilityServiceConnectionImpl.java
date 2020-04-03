@@ -22,6 +22,10 @@ import android.content.pm.ParceledListSlice;
 import android.graphics.Region;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.RemoteCallback;
+
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Stub implementation of IAccessibilityServiceConnection so each test doesn't need to implement
@@ -83,6 +87,10 @@ public class AccessibilityServiceConnectionImpl extends IAccessibilityServiceCon
         return false;
     }
 
+    public List<AccessibilityNodeInfo.AccessibilityAction> getSystemActions() {
+        return Collections.emptyList();
+    }
+
     public void disableSelf() {}
 
     public void setOnKeyEventResult(boolean handled, int sequence) {}
@@ -124,6 +132,10 @@ public class AccessibilityServiceConnectionImpl extends IAccessibilityServiceCon
 
     public void setSoftKeyboardCallbackEnabled(boolean enabled) {}
 
+    public boolean switchToInputMethod(String imeId) {
+        return false;
+    }
+
     public boolean isAccessibilityButtonAvailable() {
         return false;
     }
@@ -139,4 +151,16 @@ public class AccessibilityServiceConnectionImpl extends IAccessibilityServiceCon
     public IBinder getOverlayWindowToken(int displayId) {
         return null;
     }
+
+    public int getWindowIdForLeashToken(IBinder token) {
+        return -1;
+    }
+
+    public boolean takeScreenshot(int displayId, RemoteCallback callback) {
+        return false;
+    }
+
+    public void setTouchExplorationPassthroughRegion(int displayId, Region region) {}
+
+    public void setGestureDetectionPassthroughRegion(int displayId, Region region) {}
 }

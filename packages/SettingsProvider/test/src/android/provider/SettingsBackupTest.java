@@ -31,6 +31,7 @@ import android.provider.settings.backup.SecureSettings;
 import android.provider.settings.backup.SystemSettings;
 
 import androidx.test.filters.SmallTest;
+import androidx.test.filters.Suppress;
 import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.Test;
@@ -87,6 +88,7 @@ public class SettingsBackupTest {
                     Settings.System.VOLUME_ACCESSIBILITY, // used internally, changing value will
                                                           // not change volume
                     Settings.System.VOLUME_ALARM, // deprecated since API 2?
+                    Settings.System.VOLUME_ASSISTANT, // candidate for backup?
                     Settings.System.VOLUME_BLUETOOTH_SCO, // deprecated since API 2?
                     Settings.System.VOLUME_MASTER, // candidate for backup?
                     Settings.System.VOLUME_MUSIC, // deprecated since API 2?
@@ -97,7 +99,9 @@ public class SettingsBackupTest {
                     Settings.System.WHEN_TO_MAKE_WIFI_CALLS, // bug?
                     Settings.System.WINDOW_ORIENTATION_LISTENER_LOG, // used for debugging only
                     Settings.System.MIN_REFRESH_RATE, // depends on hardware capabilities
-                    Settings.System.PEAK_REFRESH_RATE // depends on hardware capabilities
+                    Settings.System.PEAK_REFRESH_RATE, // depends on hardware capabilities
+                    Settings.System.SCREEN_BRIGHTNESS_FLOAT,
+                    Settings.System.SCREEN_BRIGHTNESS_FOR_VR_FLOAT
                     );
 
     private static final Set<String> BACKUP_BLACKLISTED_GLOBAL_SETTINGS =
@@ -107,6 +111,7 @@ public class SettingsBackupTest {
                     Settings.Global.ADAPTIVE_BATTERY_MANAGEMENT_ENABLED,
                     Settings.Global.ADB_ALLOWED_CONNECTION_TIME,
                     Settings.Global.ADB_ENABLED,
+                    Settings.Global.ADB_WIFI_ENABLED,
                     Settings.Global.ADD_USERS_WHEN_LOCKED,
                     Settings.Global.AIRPLANE_MODE_ON,
                     Settings.Global.AIRPLANE_MODE_RADIOS,
@@ -194,6 +199,7 @@ public class SettingsBackupTest {
                     Settings.Global.CERT_PIN_UPDATE_CONTENT_URL,
                     Settings.Global.CERT_PIN_UPDATE_METADATA_URL,
                     Settings.Global.COMPATIBILITY_MODE,
+                    Settings.Global.COMMON_CRITERIA_MODE,
                     Settings.Global.CONNECTIVITY_CHANGE_DELAY,
                     Settings.Global.CONNECTIVITY_METRICS_BUFFER_SIZE,
                     Settings.Global.CONNECTIVITY_SAMPLING_INTERVAL_IN_SECONDS,
@@ -215,7 +221,6 @@ public class SettingsBackupTest {
                     Settings.Global.DEFAULT_DNS_SERVER,
                     Settings.Global.DEFAULT_INSTALL_LOCATION,
                     Settings.Global.DEFAULT_RESTRICT_BACKGROUND_DATA,
-                    Settings.Global.DEFAULT_USER_ID_TO_BOOT_INTO,
                     Settings.Global.DESK_DOCK_SOUND,
                     Settings.Global.DESK_UNDOCK_SOUND,
                     Settings.Global.DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT,
@@ -223,6 +228,7 @@ public class SettingsBackupTest {
                     Settings.Global.DEVELOPMENT_FORCE_RESIZABLE_ACTIVITIES,
                     Settings.Global.DEVELOPMENT_FORCE_RTL,
                     Settings.Global.DEVELOPMENT_ENABLE_SIZECOMPAT_FREEFORM,
+                    Settings.Global.DEVELOPMENT_RENDER_SHADOWS_IN_COMPOSITOR,
                     Settings.Global.DEVICE_DEMO_MODE,
                     Settings.Global.DEVICE_IDLE_CONSTANTS,
                     Settings.Global.BATTERY_SAVER_ADAPTIVE_CONSTANTS,
@@ -262,6 +268,7 @@ public class SettingsBackupTest {
                     Settings.Global.DYNAMIC_POWER_SAVINGS_DISABLE_THRESHOLD,
                     Settings.Global.SMART_REPLIES_IN_NOTIFICATIONS_FLAGS,
                     Settings.Global.SMART_SUGGESTIONS_IN_NOTIFICATIONS_FLAGS,
+                    Settings.Global.ENHANCED_CONNECTIVITY_ENABLED,
                     Settings.Global.ENHANCED_4G_MODE_ENABLED,
                     Settings.Global.EPHEMERAL_COOKIE_MAX_SIZE_BYTES,
                     Settings.Global.ERROR_LOGCAT_PREFIX,
@@ -276,6 +283,7 @@ public class SettingsBackupTest {
                     Settings.Global.FORCED_APP_STANDBY_FOR_SMALL_BATTERY_ENABLED,
                     Settings.Global.WIFI_ON_WHEN_PROXY_DISCONNECTED,
                     Settings.Global.FSTRIM_MANDATORY_INTERVAL,
+                    Settings.Global.FOREGROUND_SERVICE_STARTS_LOGGING_ENABLED,
                     Settings.Global.GLOBAL_HTTP_PROXY_EXCLUSION_LIST,
                     Settings.Global.GLOBAL_HTTP_PROXY_HOST,
                     Settings.Global.GLOBAL_HTTP_PROXY_PAC,
@@ -369,7 +377,6 @@ public class SettingsBackupTest {
                     Settings.Global.NETWORK_WATCHLIST_LAST_REPORT_TIME,
                     Settings.Global.NETWORK_PREFERENCE,
                     Settings.Global.NETWORK_RECOMMENDATIONS_PACKAGE,
-                    Settings.Global.NETWORK_RECOMMENDATION_REQUEST_TIMEOUT_MS,
                     Settings.Global.NETWORK_SCORER_APP,
                     Settings.Global.NETWORK_SCORING_PROVISIONED,
                     Settings.Global.NETWORK_SCORING_UI_ENABLED,
@@ -523,8 +530,6 @@ public class SettingsBackupTest {
                     Settings.Global.WIFI_BADGING_THRESHOLDS,
                     Settings.Global.WIFI_BOUNCE_DELAY_OVERRIDE_MS,
                     Settings.Global.WIFI_COUNTRY_CODE,
-                    Settings.Global.WIFI_DATA_STALL_MIN_TX_BAD,
-                    Settings.Global.WIFI_DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX,
                     Settings.Global.WIFI_DEVICE_OWNER_CONFIGS_LOCKDOWN,
                     Settings.Global.WIFI_DISPLAY_CERTIFICATION_ON,
                     Settings.Global.WIFI_DISPLAY_ON,
@@ -534,11 +539,6 @@ public class SettingsBackupTest {
                     Settings.Global.WIFI_FRAMEWORK_SCAN_INTERVAL_MS,
                     Settings.Global.WIFI_FREQUENCY_BAND,
                     Settings.Global.WIFI_IDLE_MS,
-                    Settings.Global.WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED,
-                    Settings.Global.WIFI_LINK_SPEED_METRICS_ENABLED,
-                    Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED,
-                    Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED,
-                    Settings.Global.WIFI_LINK_PROBING_ENABLED,
                     Settings.Global.WIFI_MAX_DHCP_RETRY_COUNT,
                     Settings.Global.WIFI_MOBILE_DATA_TRANSITION_WAKELOCK_TIMEOUT_MS,
                     Settings.Global.WIFI_NETWORK_SHOW_RSSI,
@@ -547,15 +547,12 @@ public class SettingsBackupTest {
                     Settings.Global.WIFI_ON,
                     Settings.Global.WIFI_P2P_DEVICE_NAME,
                     Settings.Global.WIFI_P2P_PENDING_FACTORY_RESET,
-                    Settings.Global.WIFI_RTT_BACKGROUND_EXEC_GAP_MS,
-                    Settings.Global.WIFI_SAVED_STATE,
                     Settings.Global.WIFI_SCAN_ALWAYS_AVAILABLE,
                     Settings.Global.WIFI_SCAN_INTERVAL_WHEN_P2P_CONNECTED_MS,
                     Settings.Global.WIFI_SCAN_THROTTLE_ENABLED,
                     Settings.Global.WIFI_SCORE_PARAMS,
                     Settings.Global.WIFI_SLEEP_POLICY,
                     Settings.Global.WIFI_SUPPLICANT_SCAN_INTERVAL_MS,
-                    Settings.Global.WIFI_SUSPEND_OPTIMIZATIONS_ENABLED,
                     Settings.Global.WIFI_VERBOSE_LOGGING_ENABLED,
                     Settings.Global.WIFI_WATCHDOG_ON,
                     Settings.Global.WIMAX_NETWORKS_AVAILABLE_NOTIFICATION_ON,
@@ -571,7 +568,6 @@ public class SettingsBackupTest {
                     Settings.Global.CHAINED_BATTERY_ATTRIBUTION_ENABLED,
                     Settings.Global.HIDDEN_API_BLACKLIST_EXEMPTIONS,
                     Settings.Global.BACKUP_AGENT_TIMEOUT_PARAMETERS,
-                    Settings.Global.BACKUP_MULTI_USER_ENABLED,
                     Settings.Global.ISOLATED_STORAGE_LOCAL,
                     Settings.Global.ISOLATED_STORAGE_REMOTE,
                     Settings.Global.APPOP_HISTORY_PARAMETERS,
@@ -584,7 +580,9 @@ public class SettingsBackupTest {
                     Settings.Global.ENABLED_SUBSCRIPTION_FOR_SLOT,
                     Settings.Global.MODEM_STACK_ENABLED_FOR_SLOT,
                     Settings.Global.POWER_BUTTON_LONG_PRESS,
-                    Settings.Global.POWER_BUTTON_VERY_LONG_PRESS);
+                    Settings.Global.POWER_BUTTON_VERY_LONG_PRESS,
+                    Settings.Global.INTEGRITY_CHECK_INCLUDES_RULE_PROVIDER,
+                    Settings.Global.ADVANCED_BATTERY_USAGE_AMOUNT);
 
     private static final Set<String> BACKUP_BLACKLISTED_SECURE_SETTINGS =
              newHashSet(
@@ -734,7 +732,11 @@ public class SettingsBackupTest {
                  Settings.Secure.DOZE_WAKE_LOCK_SCREEN_GESTURE,
                  Settings.Secure.DOZE_WAKE_DISPLAY_GESTURE,
                  Settings.Secure.FACE_UNLOCK_RE_ENROLL,
-                 Settings.Secure.TAP_GESTURE);
+                 Settings.Secure.TAP_GESTURE,
+                 Settings.Secure.NEARBY_SHARING_COMPONENT, // not user configurable
+                 Settings.Secure.WINDOW_MAGNIFICATION,
+                 Settings.Secure.ACCESSIBILITY_SHORTCUT_TARGET_MAGNIFICATION_CONTROLLER,
+                 Settings.Secure.SUPPRESS_DOZE);
 
     @Test
     public void systemSettingsBackedUpOrBlacklisted() {
@@ -753,6 +755,7 @@ public class SettingsBackupTest {
     }
 
     @Test
+    @Suppress //("b/148236308")
     public void secureSettingsBackedUpOrBlacklisted() {
         HashSet<String> keys = new HashSet<String>();
         Collections.addAll(keys, SecureSettings.SETTINGS_TO_BACKUP);

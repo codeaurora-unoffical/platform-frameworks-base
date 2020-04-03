@@ -25,7 +25,7 @@ import android.accessibilityservice.IAccessibilityServiceConnection;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.graphics.Bitmap;
 import android.graphics.Point;
 import android.graphics.Rect;
@@ -1272,6 +1272,11 @@ public final class UiAutomation {
 
                 @Override
                 public void onInterrupt() {
+                    /* do nothing */
+                }
+
+                @Override
+                public void onSystemActionsChanged() {
                     /* do nothing */
                 }
 

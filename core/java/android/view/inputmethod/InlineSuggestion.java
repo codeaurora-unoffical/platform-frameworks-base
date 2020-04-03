@@ -19,18 +19,21 @@ package android.view.inputmethod;
 import android.annotation.CallbackExecutor;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.TestApi;
 import android.content.Context;
 import android.os.AsyncTask;
+import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.RemoteException;
 import android.util.Size;
 import android.util.Slog;
-import android.view.SurfaceControl;
+import android.view.SurfaceControlViewHost;
 import android.view.View;
 import android.view.inline.InlineContentView;
 import android.view.inline.InlinePresentationSpec;
 
 import com.android.internal.util.DataClass;
+import com.android.internal.util.Parcelling;
 import com.android.internal.view.inline.IInlineContentCallback;
 import com.android.internal.view.inline.IInlineContentProvider;
 
@@ -61,15 +64,49 @@ public final class InlineSuggestion implements Parcelable {
     private final @Nullable IInlineContentProvider mContentProvider;
 
     /**
+     * Used to keep a strong reference to the callback so it doesn't get garbage collected.
+     *
+     * @hide
+     */
+    @DataClass.ParcelWith(InlineContentCallbackImplParceling.class)
+    private @Nullable InlineContentCallbackImpl mInlineContentCallback;
+
+    /**
+     * Creates a new {@link InlineSuggestion}, for testing purpose.
+     *
+     * @hide
+     */
+    @TestApi
+    @NonNull
+    public static InlineSuggestion newInlineSuggestion(@NonNull InlineSuggestionInfo info) {
+        return new InlineSuggestion(info, null, /* inlineContentCallback */ null);
+    }
+
+    /**
+     * Creates a new {@link InlineSuggestion}.
+     *
+     * @hide
+     */
+    public InlineSuggestion(
+            @NonNull InlineSuggestionInfo info,
+            @Nullable IInlineContentProvider contentProvider) {
+        this(info, contentProvider, /* inlineContentCallback */ null);
+    }
+
+
+
+    /**
      * Inflates a view with the content of this suggestion at a specific size.
      * The size must be between the {@link InlinePresentationSpec#getMinSize() min size}
      * and the {@link InlinePresentationSpec#getMaxSize() max size} of the presentation
-     * spec returned by {@link InlineSuggestionInfo#getPresentationSpec()}. If an invalid
-     * argument is passed an exception is thrown.
+     * spec returned by {@link InlineSuggestionInfo#getPresentationSpec()}.
      *
      * @param context Context in which to inflate the view.
      * @param size The size at which to inflate the suggestion.
      * @param callback Callback for receiving the inflated view.
+     *
+     * @throws IllegalArgumentException If an invalid argument is passed.
+     * @throws IllegalStateException if this method is already called.
      */
     public void inflate(@NonNull Context context, @NonNull Size size,
             @NonNull @CallbackExecutor Executor callbackExecutor,
@@ -81,24 +118,28 @@ public final class InlineSuggestion implements Parcelable {
             throw new IllegalArgumentException("size not between min:"
                     + minSize + " and max:" + maxSize);
         }
+        mInlineContentCallback = getInlineContentCallback(context, callbackExecutor, callback);
         AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
             if (mContentProvider == null) {
                 callback.accept(/* view */ null);
                 return;
             }
-            // TODO(b/137800469): keep a strong reference to the contentCallback so it doesn't
-            //  get GC'd. Also add a isInflated() method and make sure the view can only be
-            //  inflated once.
             try {
-                InlineContentCallbackImpl contentCallback = new InlineContentCallbackImpl(context,
-                        callbackExecutor, callback);
                 mContentProvider.provideContent(size.getWidth(), size.getHeight(),
-                        new InlineContentCallbackWrapper(contentCallback));
+                        new InlineContentCallbackWrapper(mInlineContentCallback));
             } catch (RemoteException e) {
                 Slog.w(TAG, "Error creating suggestion content surface: " + e);
                 callback.accept(/* view */ null);
             }
         });
+    }
+
+    private synchronized InlineContentCallbackImpl getInlineContentCallback(Context context,
+            Executor callbackExecutor, Consumer<View> callback) {
+        if (mInlineContentCallback != null) {
+            throw new IllegalStateException("Already called #inflate()");
+        }
+        return new InlineContentCallbackImpl(context, callbackExecutor, callback);
     }
 
     private static final class InlineContentCallbackWrapper extends IInlineContentCallback.Stub {
@@ -110,7 +151,7 @@ public final class InlineSuggestion implements Parcelable {
         }
 
         @Override
-        public void onContent(SurfaceControl content) {
+        public void onContent(SurfaceControlViewHost.SurfacePackage content) {
             final InlineContentCallbackImpl callbackImpl = mCallbackImpl.get();
             if (callbackImpl != null) {
                 callbackImpl.onContent(content);
@@ -132,13 +173,29 @@ public final class InlineSuggestion implements Parcelable {
             mCallback = callback;
         }
 
-        public void onContent(SurfaceControl content) {
+        public void onContent(SurfaceControlViewHost.SurfacePackage content) {
             if (content == null) {
                 mCallbackExecutor.execute(() -> mCallback.accept(/* view */null));
             } else {
                 mCallbackExecutor.execute(
                         () -> mCallback.accept(new InlineContentView(mContext, content)));
             }
+        }
+    }
+
+    /**
+     * This class used to provide parcelling logic for InlineContentCallbackImpl. It's intended to
+     * make this parcelling a no-op, since it can't be parceled and we don't need to parcel it.
+     */
+    private static class InlineContentCallbackImplParceling implements
+            Parcelling<InlineContentCallbackImpl> {
+        @Override
+        public void parcel(InlineContentCallbackImpl item, Parcel dest, int parcelFlags) {
+        }
+
+        @Override
+        public InlineContentCallbackImpl unparcel(Parcel source) {
+            return null;
         }
     }
 
@@ -160,16 +217,20 @@ public final class InlineSuggestion implements Parcelable {
     /**
      * Creates a new InlineSuggestion.
      *
+     * @param inlineContentCallback
+     *   Used to keep a strong reference to the callback so it doesn't get garbage collected.
      * @hide
      */
     @DataClass.Generated.Member
     public InlineSuggestion(
             @NonNull InlineSuggestionInfo info,
-            @Nullable IInlineContentProvider contentProvider) {
+            @Nullable IInlineContentProvider contentProvider,
+            @Nullable InlineContentCallbackImpl inlineContentCallback) {
         this.mInfo = info;
         com.android.internal.util.AnnotationValidations.validate(
                 NonNull.class, null, mInfo);
         this.mContentProvider = contentProvider;
+        this.mInlineContentCallback = inlineContentCallback;
 
         // onConstructed(); // You can define this method to get a callback
     }
@@ -177,6 +238,16 @@ public final class InlineSuggestion implements Parcelable {
     @DataClass.Generated.Member
     public @NonNull InlineSuggestionInfo getInfo() {
         return mInfo;
+    }
+
+    /**
+     * Used to keep a strong reference to the callback so it doesn't get garbage collected.
+     *
+     * @hide
+     */
+    @DataClass.Generated.Member
+    public @Nullable InlineContentCallbackImpl getInlineContentCallback() {
+        return mInlineContentCallback;
     }
 
     @Override
@@ -187,7 +258,8 @@ public final class InlineSuggestion implements Parcelable {
 
         return "InlineSuggestion { " +
                 "info = " + mInfo + ", " +
-                "contentProvider = " + mContentProvider +
+                "contentProvider = " + mContentProvider + ", " +
+                "inlineContentCallback = " + mInlineContentCallback +
         " }";
     }
 
@@ -205,7 +277,8 @@ public final class InlineSuggestion implements Parcelable {
         //noinspection PointlessBooleanExpression
         return true
                 && java.util.Objects.equals(mInfo, that.mInfo)
-                && java.util.Objects.equals(mContentProvider, that.mContentProvider);
+                && java.util.Objects.equals(mContentProvider, that.mContentProvider)
+                && java.util.Objects.equals(mInlineContentCallback, that.mInlineContentCallback);
     }
 
     @Override
@@ -217,20 +290,34 @@ public final class InlineSuggestion implements Parcelable {
         int _hash = 1;
         _hash = 31 * _hash + java.util.Objects.hashCode(mInfo);
         _hash = 31 * _hash + java.util.Objects.hashCode(mContentProvider);
+        _hash = 31 * _hash + java.util.Objects.hashCode(mInlineContentCallback);
         return _hash;
+    }
+
+    @DataClass.Generated.Member
+    static Parcelling<InlineContentCallbackImpl> sParcellingForInlineContentCallback =
+            Parcelling.Cache.get(
+                    InlineContentCallbackImplParceling.class);
+    static {
+        if (sParcellingForInlineContentCallback == null) {
+            sParcellingForInlineContentCallback = Parcelling.Cache.put(
+                    new InlineContentCallbackImplParceling());
+        }
     }
 
     @Override
     @DataClass.Generated.Member
-    public void writeToParcel(@NonNull android.os.Parcel dest, int flags) {
+    public void writeToParcel(@NonNull Parcel dest, int flags) {
         // You can override field parcelling by defining methods like:
         // void parcelFieldName(Parcel dest, int flags) { ... }
 
         byte flg = 0;
         if (mContentProvider != null) flg |= 0x2;
+        if (mInlineContentCallback != null) flg |= 0x4;
         dest.writeByte(flg);
         dest.writeTypedObject(mInfo, flags);
         if (mContentProvider != null) dest.writeStrongInterface(mContentProvider);
+        sParcellingForInlineContentCallback.parcel(mInlineContentCallback, dest, flags);
     }
 
     @Override
@@ -240,18 +327,20 @@ public final class InlineSuggestion implements Parcelable {
     /** @hide */
     @SuppressWarnings({"unchecked", "RedundantCast"})
     @DataClass.Generated.Member
-    /* package-private */ InlineSuggestion(@NonNull android.os.Parcel in) {
+    /* package-private */ InlineSuggestion(@NonNull Parcel in) {
         // You can override field unparcelling by defining methods like:
         // static FieldType unparcelFieldName(Parcel in) { ... }
 
         byte flg = in.readByte();
         InlineSuggestionInfo info = (InlineSuggestionInfo) in.readTypedObject(InlineSuggestionInfo.CREATOR);
         IInlineContentProvider contentProvider = (flg & 0x2) == 0 ? null : IInlineContentProvider.Stub.asInterface(in.readStrongBinder());
+        InlineContentCallbackImpl inlineContentCallback = sParcellingForInlineContentCallback.unparcel(in);
 
         this.mInfo = info;
         com.android.internal.util.AnnotationValidations.validate(
                 NonNull.class, null, mInfo);
         this.mContentProvider = contentProvider;
+        this.mInlineContentCallback = inlineContentCallback;
 
         // onConstructed(); // You can define this method to get a callback
     }
@@ -265,16 +354,16 @@ public final class InlineSuggestion implements Parcelable {
         }
 
         @Override
-        public InlineSuggestion createFromParcel(@NonNull android.os.Parcel in) {
+        public InlineSuggestion createFromParcel(@NonNull Parcel in) {
             return new InlineSuggestion(in);
         }
     };
 
     @DataClass.Generated(
-            time = 1574446220398L,
+            time = 1581929285156L,
             codegenVersion = "1.0.14",
             sourceFile = "frameworks/base/core/java/android/view/inputmethod/InlineSuggestion.java",
-            inputSignatures = "private static final  java.lang.String TAG\nprivate final @android.annotation.NonNull android.view.inputmethod.InlineSuggestionInfo mInfo\nprivate final @android.annotation.Nullable com.android.internal.view.inline.IInlineContentProvider mContentProvider\npublic  void inflate(android.content.Context,android.util.Size,java.util.concurrent.Executor,java.util.function.Consumer<android.view.View>)\nclass InlineSuggestion extends java.lang.Object implements [android.os.Parcelable]\n@com.android.internal.util.DataClass(genEqualsHashCode=true, genToString=true, genHiddenConstDefs=true, genHiddenConstructor=true)")
+            inputSignatures = "private static final  java.lang.String TAG\nprivate final @android.annotation.NonNull android.view.inputmethod.InlineSuggestionInfo mInfo\nprivate final @android.annotation.Nullable com.android.internal.view.inline.IInlineContentProvider mContentProvider\nprivate @com.android.internal.util.DataClass.ParcelWith(android.view.inputmethod.InlineSuggestion.InlineContentCallbackImplParceling.class) @android.annotation.Nullable android.view.inputmethod.InlineSuggestion.InlineContentCallbackImpl mInlineContentCallback\npublic static @android.annotation.TestApi @android.annotation.NonNull android.view.inputmethod.InlineSuggestion newInlineSuggestion(android.view.inputmethod.InlineSuggestionInfo)\npublic  void inflate(android.content.Context,android.util.Size,java.util.concurrent.Executor,java.util.function.Consumer<android.view.View>)\nprivate synchronized  android.view.inputmethod.InlineSuggestion.InlineContentCallbackImpl getInlineContentCallback(android.content.Context,java.util.concurrent.Executor,java.util.function.Consumer<android.view.View>)\nclass InlineSuggestion extends java.lang.Object implements [android.os.Parcelable]\n@com.android.internal.util.DataClass(genEqualsHashCode=true, genToString=true, genHiddenConstDefs=true, genHiddenConstructor=true)")
     @Deprecated
     private void __metadata() {}
 

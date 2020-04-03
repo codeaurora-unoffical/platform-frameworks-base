@@ -33,6 +33,7 @@ import android.util.TimingsTraceLog;
 
 import com.android.systemui.dagger.ContextComponentHelper;
 import com.android.systemui.dagger.SystemUIRootComponent;
+import com.android.systemui.dump.DumpManager;
 import com.android.systemui.util.NotificationChannels;
 
 import java.lang.reflect.Constructor;
@@ -56,6 +57,7 @@ public class SystemUIApplication extends Application implements
     private SystemUI[] mServices;
     private boolean mServicesStarted;
     private SystemUIAppComponentFactory.ContextAvailableCallback mContextAvailableCallback;
+    private SystemUIRootComponent mRootComponent;
 
     public SystemUIApplication() {
         super();
@@ -72,9 +74,9 @@ public class SystemUIApplication extends Application implements
                 Trace.TRACE_TAG_APP);
         log.traceBegin("DependencyInjection");
         mContextAvailableCallback.onContextAvailable(this);
-        SystemUIRootComponent root = SystemUIFactory.getInstance().getRootComponent();
-        mComponentHelper = root.getContextComponentHelper();
-        mBootCompleteCache = root.provideBootCacheImpl();
+        mRootComponent = SystemUIFactory.getInstance().getRootComponent();
+        mComponentHelper = mRootComponent.getContextComponentHelper();
+        mBootCompleteCache = mRootComponent.provideBootCacheImpl();
         log.traceEnd();
 
         // Set the application theme that is inherited by all services. Note that setting the
@@ -170,6 +172,8 @@ public class SystemUIApplication extends Application implements
             }
         }
 
+        final DumpManager dumpManager = mRootComponent.createDumpManager();
+
         Log.v(TAG, "Starting SystemUI services for user " +
                 Process.myUserHandle().getIdentifier() + ".");
         TimingsTraceLog log = new TimingsTraceLog("SystemUIBootTiming",
@@ -208,8 +212,10 @@ public class SystemUIApplication extends Application implements
             if (mBootCompleteCache.isBootComplete()) {
                 mServices[i].onBootCompleted();
             }
+
+            dumpManager.registerDumpable(mServices[i].getClass().getName(), mServices[i]);
         }
-        Dependency.get(InitController.class).executePostInitTasks();
+        mRootComponent.getInitController().executePostInitTasks();
         log.traceEnd();
 
         mServicesStarted = true;
@@ -218,11 +224,7 @@ public class SystemUIApplication extends Application implements
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         if (mServicesStarted) {
-            SystemUIFactory
-                    .getInstance()
-                    .getRootComponent()
-                    .getConfigurationController()
-                    .onConfigurationChanged(newConfig);
+            mRootComponent.getConfigurationController().onConfigurationChanged(newConfig);
             int len = mServices.length;
             for (int i = 0; i < len; i++) {
                 if (mServices[i] != null) {

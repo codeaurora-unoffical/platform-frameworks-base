@@ -17,11 +17,13 @@
 package com.android.systemui.statusbar.notification.row;
 
 import static com.android.systemui.statusbar.notification.ActivityLaunchAnimator.ExpandAnimationParameters;
-import static com.android.systemui.statusbar.notification.row.NotificationContentInflater.FLAG_CONTENT_VIEW_HEADS_UP;
-import static com.android.systemui.statusbar.notification.row.NotificationContentInflater.FLAG_CONTENT_VIEW_PUBLIC;
-import static com.android.systemui.statusbar.notification.row.NotificationContentInflater.InflationCallback;
 import static com.android.systemui.statusbar.notification.row.NotificationContentView.VISIBLE_TYPE_CONTRACTED;
+import static com.android.systemui.statusbar.notification.row.NotificationContentView.VISIBLE_TYPE_EXPANDED;
 import static com.android.systemui.statusbar.notification.row.NotificationContentView.VISIBLE_TYPE_HEADSUP;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.FLAG_CONTENT_VIEW_CONTRACTED;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.FLAG_CONTENT_VIEW_EXPANDED;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.FLAG_CONTENT_VIEW_HEADS_UP;
+import static com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.FLAG_CONTENT_VIEW_PUBLIC;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
@@ -29,6 +31,7 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator.AnimatorUpdateListener;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.content.Context;
 import android.content.pm.PackageInfo;
@@ -43,7 +46,6 @@ import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.SystemClock;
 import android.service.notification.StatusBarNotification;
 import android.util.ArraySet;
 import android.util.AttributeSet;
@@ -64,7 +66,6 @@ import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
 import android.widget.Chronometer;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
-import android.widget.RemoteViews;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
@@ -74,11 +75,11 @@ import com.android.internal.widget.CachingIconView;
 import com.android.systemui.Dependency;
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
+import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.PluginListener;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin.MenuItem;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
-import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.RemoteInputController;
 import com.android.systemui.statusbar.StatusBarIconView;
@@ -88,7 +89,7 @@ import com.android.systemui.statusbar.notification.NotificationUtils;
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.logging.NotificationCounters;
-import com.android.systemui.statusbar.notification.row.NotificationContentInflater.InflationFlag;
+import com.android.systemui.statusbar.notification.row.NotificationRowContentBinder.InflationFlag;
 import com.android.systemui.statusbar.notification.row.wrapper.NotificationViewWrapper;
 import com.android.systemui.statusbar.notification.stack.AmbientState;
 import com.android.systemui.statusbar.notification.stack.AnimationProperties;
@@ -124,8 +125,10 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     private static final String TAG = "ExpandableNotifRow";
     public static final float DEFAULT_HEADER_VISIBLE_AMOUNT = 1.0f;
     private static final long RECENTLY_ALERTED_THRESHOLD_MS = TimeUnit.SECONDS.toMillis(30);
+
     private boolean mUpdateBackgroundOnUpdate;
     private boolean mNotificationTranslationFinished = false;
+
     /**
      * Listener for when {@link ExpandableNotificationRow} is laid out.
      */
@@ -137,9 +140,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     private StatusBarStateController mStatusbarStateController;
     private KeyguardBypassController mBypassController;
     private LayoutListener mLayoutListener;
-    private final NotificationContentInflater mNotificationInflater;
+    private RowContentBindStage mRowContentBindStage;
     private int mIconTransformContentShift;
-    private int mIconTransformContentShiftNoIcon;
     private int mMaxHeadsUpHeightBeforeN;
     private int mMaxHeadsUpHeightBeforeP;
     private int mMaxHeadsUpHeight;
@@ -149,6 +151,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     private int mNotificationMinHeight;
     private int mNotificationMinHeightLarge;
     private int mNotificationMinHeightMedia;
+    private int mNotificationMinHeightMessaging;
     private int mNotificationMaxHeight;
     private int mIncreasedPaddingBetweenElements;
     private int mNotificationLaunchHeight;
@@ -199,6 +202,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     private NotificationGuts mGuts;
     private NotificationEntry mEntry;
     private String mAppName;
+    private FalsingManager mFalsingManager;
 
     /**
      * Whether or not the notification is using the heads up view and should peek from the top.
@@ -232,6 +236,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     private ExpandableNotificationRow mNotificationParent;
     private OnExpandClickListener mOnExpandClickListener;
     private View.OnClickListener mOnAppOpsClickListener;
+    private boolean mIsChildInGroup;
 
     // Listener will be called when receiving a long click event.
     // Use #setLongPressPosition to optionally assign positional data with the long press.
@@ -306,10 +311,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     private boolean mHeadsupDisappearRunning;
     private View mChildAfterViewWhenDismissed;
     private View mGroupParentWhenDismissed;
-    private float mContentTransformationAmount;
     private boolean mIconsVisible = true;
     private boolean mAboveShelf;
-    private boolean mIsLastChild;
     private Runnable mOnDismissRunnable;
     private boolean mIsLowPriority;
     private boolean mIsColorized;
@@ -444,24 +447,34 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     }
 
     /**
-     * Inflate views based off the inflation flags set. Inflation happens asynchronously.
-     */
-    public void inflateViews() {
-        mNotificationInflater.inflateNotificationViews();
-    }
-
-    /**
      * Marks a content view as freeable, setting it so that future inflations do not reinflate
      * and ensuring that the view is freed when it is safe to remove.
+     *
+     * TODO: This should be moved to the respective coordinator and call
+     * {@link RowContentBindParams#freeContentViews} directly after disappear animation
+     * finishes instead of depending on binding API to know when it's "safe".
      *
      * @param inflationFlag flag corresponding to the content view to be freed
      */
     public void freeContentViewWhenSafe(@InflationFlag int inflationFlag) {
         // View should not be reinflated in the future
-        updateInflationFlag(inflationFlag, false);
-        Runnable freeViewRunnable = () ->
-                mNotificationInflater.freeNotificationView(inflationFlag);
+        Runnable freeViewRunnable = () -> {
+            // Possible for notification to be removed after free request.
+            if (!isRemoved()) {
+                RowContentBindParams params = mRowContentBindStage.getStageParams(mEntry);
+                params.freeContentViews(inflationFlag);
+                mRowContentBindStage.requestRebind(mEntry, null /* callback */);
+            }
+        };
         switch (inflationFlag) {
+            case FLAG_CONTENT_VIEW_CONTRACTED:
+                getPrivateLayout().performWhenContentInactive(VISIBLE_TYPE_CONTRACTED,
+                        freeViewRunnable);
+                break;
+            case FLAG_CONTENT_VIEW_EXPANDED:
+                getPrivateLayout().performWhenContentInactive(VISIBLE_TYPE_EXPANDED,
+                        freeViewRunnable);
+                break;
             case FLAG_CONTENT_VIEW_HEADS_UP:
                 getPrivateLayout().performWhenContentInactive(VISIBLE_TYPE_HEADSUP,
                         freeViewRunnable);
@@ -475,30 +488,11 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     }
 
     /**
-     * Update whether or not a content view should be inflated.
-     *
-     * @param flag the flag corresponding to the content view
-     * @param shouldInflate true if it should be inflated, false if it should not
-     */
-    public void updateInflationFlag(@InflationFlag int flag, boolean shouldInflate) {
-        mNotificationInflater.updateInflationFlag(flag, shouldInflate);
-    }
-
-    /**
-     * Whether or not a content view should be inflated.
-     *
-     * @param flag the flag corresponding to the content view
-     * @return true if the flag is set, false otherwise
-     */
-    public boolean isInflationFlagSet(@InflationFlag int flag) {
-        return mNotificationInflater.isInflationFlagSet(flag);
-    }
-
-    /**
      * Caches whether or not this row contains a system notification. Note, this is only cached
      * once per notification as the packageInfo can't technically change for a notification row.
      */
     private void cacheIsSystemNotification() {
+        //TODO: This probably shouldn't be in ExpandableNotificationRow
         if (mEntry != null && mEntry.mIsSystemNotification == null) {
             if (mSystemNotificationAsyncTask.getStatus() == AsyncTask.Status.PENDING) {
                 // Run async task once, only if it hasn't already been executed. Note this is
@@ -646,10 +640,16 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
                 && expandedView.findViewById(com.android.internal.R.id.media_actions) != null;
         boolean showCompactMediaSeekbar = mMediaManager.getShowCompactMediaSeekbar();
 
+        Class<? extends Notification.Style> style =
+                mEntry.getSbn().getNotification().getNotificationStyle();
+        boolean isMessagingLayout = Notification.MessagingStyle.class.equals(style);
+
         if (customView && beforeP && !mIsSummaryWithChildren) {
             minHeight = beforeN ? mNotificationMinHeightBeforeN : mNotificationMinHeightBeforeP;
         } else if (isMediaLayout && showCompactMediaSeekbar) {
             minHeight = mNotificationMinHeightMedia;
+        } else if (isMessagingLayout) {
+            minHeight = mNotificationMinHeightMessaging;
         } else if (mUseIncreasedCollapsedHeight && layout == mPrivateLayout) {
             minHeight = mNotificationMinHeightLarge;
         } else {
@@ -715,21 +715,13 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         return mIsHeadsUp || mHeadsupDisappearRunning;
     }
 
-
-    public void setGroupManager(NotificationGroupManager groupManager) {
-        mGroupManager = groupManager;
-        mPrivateLayout.setGroupManager(groupManager);
-    }
-
     public void setRemoteInputController(RemoteInputController r) {
         mPrivateLayout.setRemoteInputController(r);
     }
 
-    public void setAppName(String appName) {
-        mAppName = appName;
-        if (mMenuRow != null && mMenuRow.getMenuView() != null) {
-            mMenuRow.setAppName(mAppName);
-        }
+
+    String getAppName() {
+        return mAppName;
     }
 
     public void addChildNotification(ExpandableNotificationRow row) {
@@ -813,15 +805,22 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
      * @param parent the new parent notification
      */
     public void setIsChildInGroup(boolean isChildInGroup, ExpandableNotificationRow parent) {
-        boolean childInGroup = StatusBar.ENABLE_CHILD_NOTIFICATIONS && isChildInGroup;
         if (mExpandAnimationRunning && !isChildInGroup && mNotificationParent != null) {
             mNotificationParent.setChildIsExpanding(false);
             mNotificationParent.setExtraWidthForClipping(0.0f);
             mNotificationParent.setMinimumHeightForClipping(0);
         }
-        mNotificationParent = childInGroup ? parent : null;
-        mPrivateLayout.setIsChildInGroup(childInGroup);
-        mNotificationInflater.setIsChildInGroup(childInGroup);
+        mNotificationParent = isChildInGroup ? parent : null;
+        mPrivateLayout.setIsChildInGroup(isChildInGroup);
+        // TODO: Move inflation logic out of this call
+        if (mIsChildInGroup != isChildInGroup) {
+            mIsChildInGroup = isChildInGroup;
+            if (!isRemoved() && mIsLowPriority) {
+                RowContentBindParams params = mRowContentBindStage.getStageParams(mEntry);
+                params.setUseLowPriority(mIsLowPriority);
+                mRowContentBindStage.requestRebind(mEntry, null /* callback */);
+            }
+        }
         resetBackgroundAlpha();
         updateBackgroundForGroupState();
         updateClickAndFocus();
@@ -1071,10 +1070,6 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         return mPrivateLayout.getContractedNotificationHeader();
     }
 
-    public void setOnExpandClickListener(OnExpandClickListener onExpandClickListener) {
-        mOnExpandClickListener = onExpandClickListener;
-    }
-
     public void setLongPressListener(LongPressListener longPressListener) {
         mLongPressListener = longPressListener;
     }
@@ -1097,10 +1092,6 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         }
     }
 
-    public void setHeadsUpManager(HeadsUpManager headsUpManager) {
-        mHeadsUpManager = headsUpManager;
-    }
-
     public HeadsUpManager getHeadsUpManager() {
         return mHeadsUpManager;
     }
@@ -1110,20 +1101,6 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             ((NotificationGuts.GutsContent) item.getGutsView()).setGutsParent(mGuts);
             mGuts.setGutsContent((NotificationGuts.GutsContent) item.getGutsView());
         }
-    }
-
-    @Override
-    protected void onAttachedToWindow() {
-        super.onAttachedToWindow();
-        mEntry.setInitializationTime(SystemClock.elapsedRealtime());
-        Dependency.get(PluginManager.class).addPluginListener(this,
-                NotificationMenuRowPlugin.class, false /* Allow multiple */);
-    }
-
-    @Override
-    protected void onDetachedFromWindow() {
-        super.onDetachedFromWindow();
-        Dependency.get(PluginManager.class).removePluginListener(this);
     }
 
     @Override
@@ -1138,6 +1115,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         mMenuRow = plugin;
         if (mMenuRow.shouldUseDefaultMenuItems()) {
             ArrayList<MenuItem> items = new ArrayList<>();
+            items.add(NotificationMenuRow.createConversationItem(mContext));
             items.add(NotificationMenuRow.createInfoItem(mContext));
             items.add(NotificationMenuRow.createSnoozeItem(mContext));
             items.add(NotificationMenuRow.createAppOpsItem(mContext));
@@ -1151,7 +1129,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     @Override
     public void onPluginDisconnected(NotificationMenuRowPlugin plugin) {
         boolean existed = mMenuRow.getMenuView() != null;
-        mMenuRow = new NotificationMenuRow(mContext); // Back to default
+        mMenuRow = new NotificationMenuRow(mContext);
         if (existed) {
             createMenu();
         }
@@ -1225,13 +1203,19 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             l.reInflateViews();
         }
         mEntry.getSbn().clearPackageContext();
-        mNotificationInflater.clearCachesAndReInflate();
+        // TODO: Move content inflation logic out of this call
+        RowContentBindParams params = mRowContentBindStage.getStageParams(mEntry);
+        params.setNeedsReinflation(true);
+        mRowContentBindStage.requestRebind(mEntry, null /* callback */);
     }
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         if (mMenuRow != null && mMenuRow.getMenuView() != null) {
             mMenuRow.onConfigurationChanged();
+        }
+        if (mImageResolver != null) {
+            mImageResolver.updateMaxImageSizes();
         }
     }
 
@@ -1461,7 +1445,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         return mIsBlockingHelperShowing && mNotificationTranslationFinished;
     }
 
-    public void setOnDismissRunnable(Runnable onDismissRunnable) {
+    void setOnDismissRunnable(Runnable onDismissRunnable) {
         mOnDismissRunnable = onDismissRunnable;
     }
 
@@ -1517,18 +1501,19 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         updateIconVisibilities();
     }
 
-    private void updateContentTransformation() {
+    @Override
+    protected void updateContentTransformation() {
         if (mExpandAnimationRunning) {
             return;
         }
-        float contentAlpha;
-        float translationY = -mContentTransformationAmount * mIconTransformContentShift;
-        if (mIsLastChild) {
-            contentAlpha = 1.0f - mContentTransformationAmount;
-            contentAlpha = Math.min(contentAlpha / 0.5f, 1.0f);
-            contentAlpha = Interpolators.ALPHA_OUT.getInterpolation(contentAlpha);
-            translationY *= 0.4f;
-        } else {
+        super.updateContentTransformation();
+    }
+
+    @Override
+    protected void applyContentTransformation(float contentAlpha, float translationY) {
+        super.applyContentTransformation(contentAlpha, translationY);
+        if (!mIsLastChild) {
+            // Don't fade views unless we're last
             contentAlpha = 1.0f;
         }
         for (NotificationContentView l : mLayouts) {
@@ -1579,7 +1564,6 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     public void setIsLowPriority(boolean isLowPriority) {
         mIsLowPriority = isLowPriority;
         mPrivateLayout.setIsLowPriority(isLowPriority);
-        mNotificationInflater.setIsLowPriority(mIsLowPriority);
         if (mChildrenContainer != null) {
             mChildrenContainer.setIsLowPriority(isLowPriority);
         }
@@ -1589,38 +1573,28 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         return mIsLowPriority;
     }
 
-    public void setUseIncreasedCollapsedHeight(boolean use) {
+    public void setUsesIncreasedCollapsedHeight(boolean use) {
         mUseIncreasedCollapsedHeight = use;
-        mNotificationInflater.setUsesIncreasedHeight(use);
     }
 
-    public void setUseIncreasedHeadsUpHeight(boolean use) {
+    public void setUsesIncreasedHeadsUpHeight(boolean use) {
         mUseIncreasedHeadsUpHeight = use;
-        mNotificationInflater.setUsesIncreasedHeadsUpHeight(use);
-    }
-
-    public void setRemoteViewClickHandler(RemoteViews.OnClickHandler remoteViewClickHandler) {
-        mNotificationInflater.setRemoteViewClickHandler(remoteViewClickHandler);
-    }
-
-    public void setInflationCallback(InflationCallback callback) {
-        mNotificationInflater.setInflationCallback(callback);
     }
 
     public void setNeedsRedaction(boolean needsRedaction) {
+        // TODO: Move inflation logic out of this call and remove this method
         if (mNeedsRedaction != needsRedaction) {
             mNeedsRedaction = needsRedaction;
-            updateInflationFlag(FLAG_CONTENT_VIEW_PUBLIC, needsRedaction /* shouldInflate */);
-            mNotificationInflater.updateNeedsRedaction(needsRedaction);
-            if (!needsRedaction) {
-                freeContentViewWhenSafe(FLAG_CONTENT_VIEW_PUBLIC);
+            if (!isRemoved()) {
+                RowContentBindParams params = mRowContentBindStage.getStageParams(mEntry);
+                if (needsRedaction) {
+                    params.requireContentViews(FLAG_CONTENT_VIEW_PUBLIC);
+                } else {
+                    params.freeContentViews(FLAG_CONTENT_VIEW_PUBLIC);
+                }
+                mRowContentBindStage.requestRebind(mEntry, null /* callback */);
             }
         }
-    }
-
-    @VisibleForTesting
-    public NotificationContentInflater getNotificationInflater() {
-        return mNotificationInflater;
     }
 
     public interface ExpansionLogger {
@@ -1629,19 +1603,43 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
 
     public ExpandableNotificationRow(Context context, AttributeSet attrs) {
         super(context, attrs);
-        mNotificationInflater = new NotificationContentInflater(this);
         mMenuRow = new NotificationMenuRow(mContext);
         mImageResolver = new NotificationInlineImageResolver(context,
                 new NotificationInlineImageCache());
-        mMediaManager = Dependency.get(NotificationMediaManager.class);
         initDimens();
     }
 
-    public void setBypassController(KeyguardBypassController bypassController) {
+    /**
+     * Initialize row.
+     */
+    public void initialize(
+            String appName,
+            String notificationKey,
+            ExpansionLogger logger,
+            KeyguardBypassController bypassController,
+            NotificationGroupManager groupManager,
+            HeadsUpManager headsUpManager,
+            RowContentBindStage rowContentBindStage,
+            OnExpandClickListener onExpandClickListener,
+            NotificationMediaManager notificationMediaManager,
+            OnAppOpsClickListener onAppOpsClickListener,
+            FalsingManager falsingManager,
+            StatusBarStateController statusBarStateController) {
+        mAppName = appName;
+        if (mMenuRow != null && mMenuRow.getMenuView() != null) {
+            mMenuRow.setAppName(mAppName);
+        }
+        mLogger = logger;
+        mLoggingKey = notificationKey;
         mBypassController = bypassController;
-    }
-
-    public void setStatusBarStateController(StatusBarStateController statusBarStateController) {
+        mGroupManager = groupManager;
+        mPrivateLayout.setGroupManager(groupManager);
+        mHeadsUpManager = headsUpManager;
+        mRowContentBindStage = rowContentBindStage;
+        mOnExpandClickListener = onExpandClickListener;
+        mMediaManager = notificationMediaManager;
+        setAppOpsOnClickListener(onAppOpsClickListener);
+        mFalsingManager = falsingManager;
         mStatusbarStateController = statusBarStateController;
     }
 
@@ -1656,6 +1654,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
                 R.dimen.notification_min_height_increased);
         mNotificationMinHeightMedia = NotificationUtils.getFontScaledHeight(mContext,
                 R.dimen.notification_min_height_media);
+        mNotificationMinHeightMessaging = NotificationUtils.getFontScaledHeight(mContext,
+                R.dimen.notification_min_height_messaging);
         mNotificationMaxHeight = NotificationUtils.getFontScaledHeight(mContext,
                 R.dimen.notification_max_height);
         mMaxHeadsUpHeightBeforeN = NotificationUtils.getFontScaledHeight(mContext,
@@ -1670,8 +1670,6 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         Resources res = getResources();
         mIncreasedPaddingBetweenElements = res.getDimensionPixelSize(
                 R.dimen.notification_divider_height_increased);
-        mIconTransformContentShiftNoIcon = res.getDimensionPixelSize(
-                R.dimen.notification_icon_transform_content_shift);
         mEnableNonGroupedNotificationExpand =
                 res.getBoolean(R.bool.config_enableNonGroupedNotificationExpand);
         mShowGroupBackgroundWhenExpanded =
@@ -1687,6 +1685,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
      */
     public void reset() {
         mShowingPublicInitialized = false;
+        unDismiss();
+        resetTranslation();
         onHeightReset();
         requestLayout();
     }
@@ -1731,7 +1731,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         return mOnAppOpsClickListener;
     }
 
-    public void setAppOpsOnClickListener(ExpandableNotificationRow.OnAppOpsClickListener l) {
+    void setAppOpsOnClickListener(ExpandableNotificationRow.OnAppOpsClickListener l) {
         mOnAppOpsClickListener = v -> {
             createMenu();
             NotificationMenuRowPlugin provider = getProvider();
@@ -2133,6 +2133,11 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     }
 
     @Override
+    public StatusBarIconView getShelfIcon() {
+        return getEntry().expandedIcon;
+    }
+
+    @Override
     protected boolean shouldClipToActualHeight() {
         return super.shouldClipToActualHeight() && !mExpandAnimationRunning;
     }
@@ -2200,7 +2205,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
      * @param allowChildExpansion whether a call to this method allows expanding children
      */
     public void setUserExpanded(boolean userExpanded, boolean allowChildExpansion) {
-        getFalsingManager().setNotificationExpanded();
+        mFalsingManager.setNotificationExpanded();
         if (mIsSummaryWithChildren && !shouldShowPublic() && allowChildExpansion
                 && !mChildrenContainer.showingAsLowPriority()) {
             final boolean wasExpanded = mGroupManager.isGroupExpanded(mEntry.getSbn());
@@ -2354,8 +2359,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     }
 
     private void onChildrenCountChanged() {
-        mIsSummaryWithChildren = StatusBar.ENABLE_CHILD_NOTIFICATIONS
-                && mChildrenContainer != null && mChildrenContainer.getNotificationChildCount() > 0;
+        mIsSummaryWithChildren = mChildrenContainer != null
+                && mChildrenContainer.getNotificationChildCount() > 0;
         if (mIsSummaryWithChildren && mChildrenContainer.getHeaderView() == null) {
             mChildrenContainer.recreateNotificationHeader(mExpandClickListener
             );
@@ -2468,8 +2473,13 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             CachingIconView icon = notificationHeader.getIcon();
             mIconTransformContentShift = getRelativeTopPadding(icon) + icon.getHeight();
         } else {
-            mIconTransformContentShift = mIconTransformContentShiftNoIcon;
+            mIconTransformContentShift = mContentShift;
         }
+    }
+
+    @Override
+    protected float getContentTransformationShift() {
+        return mIconTransformContentShift;
     }
 
     @Override
@@ -2875,11 +2885,6 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             return mChildrenContainer.getPositionInLinearLayout(childRow);
         }
         return 0;
-    }
-
-    public void setExpansionLogger(ExpansionLogger logger, String key) {
-        mLogger = logger;
-        mLoggingKey = key;
     }
 
     public void onExpandedByGesture(boolean userExpanded) {

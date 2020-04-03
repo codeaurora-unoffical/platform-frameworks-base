@@ -1,18 +1,18 @@
 /*
-** Copyright 2007, The Android Open Source Project
-**
-** Licensed under the Apache License, Version 2.0 (the "License");
-** you may not use this file except in compliance with the License.
-** You may obtain a copy of the License at
-**
-**     http://www.apache.org/licenses/LICENSE-2.0
-**
-** Unless required by applicable law or agreed to in writing, software
-** distributed under the License is distributed on an "AS IS" BASIS,
-** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-** See the License for the specific language governing permissions and
-** limitations under the License.
-*/
+ * Copyright 2007, The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 package com.android.internal.telephony;
 
@@ -22,7 +22,7 @@ import android.os.Bundle;
 import com.android.internal.telephony.SmsRawData;
 
 /**
- * Interface for applications to access the ICC phone book.
+ * Service interface to handle SMS API requests
  *
  * See also SmsManager.java.
  */
@@ -145,10 +145,13 @@ interface ISms {
      *   be automatically persisted in the SMS db. It only affects messages sent
      *   by a non-default SMS app. Currently only the carrier app can set this
      *   parameter to false to skip auto message persistence.
+     * @param messageId An id that uniquely identifies the message requested to be sent.
+     *   Used for logging and diagnostics purposes. The id may be 0.
      */
     void sendTextForSubscriber(in int subId, String callingPkg, in String destAddr,
             in String scAddr, in String text, in PendingIntent sentIntent,
-            in PendingIntent deliveryIntent, in boolean persistMessageForNonDefaultSmsApp);
+            in PendingIntent deliveryIntent, in boolean persistMessageForNonDefaultSmsApp,
+            in long messageId);
 
     /**
      * Send an SMS. Internal use only.
@@ -270,11 +273,14 @@ interface ISms {
      *   be automatically persisted in the SMS db. It only affects messages sent
      *   by a non-default SMS app. Currently only the carrier app can set this
      *   parameter to false to skip auto message persistence.
+     * @param messageId An id that uniquely identifies the message requested to be sent.
+     *   Used for logging and diagnostics purposes. The id may be 0.
      */
     void sendMultipartTextForSubscriber(in int subId, String callingPkg,
             in String destinationAddress, in String scAddress,
             in List<String> parts, in List<PendingIntent> sentIntents,
-            in List<PendingIntent> deliveryIntents, in boolean persistMessageForNonDefaultSmsApp);
+            in List<PendingIntent> deliveryIntents, in boolean persistMessageForNonDefaultSmsApp,
+            in long messageId);
 
     /**
      * Send a multi-part text based SMS with options using Subscription Id.
@@ -542,6 +548,13 @@ interface ISms {
                 in List<PendingIntent> deliveryIntents);
 
     /**
+     * Get carrier-dependent configuration values.
+     *
+     * @param subId the subscription Id
+     */
+    Bundle getCarrierConfigValuesForSubscriber(int subId);
+
+    /**
      * Create an app-only incoming SMS request for the calling package.
      *
      * If an incoming text contains the token returned by this method the provided
@@ -594,4 +607,12 @@ interface ISms {
      * @return true for success, false otherwise.
      */
     boolean setSmscAddressOnIccEfForSubscriber(String smsc, int subId, String callingPackage);
+
+    /**
+     * Get the capacity count of sms on Icc card.
+     *
+     * @param subId for subId which getSmsCapacityOnIcc is queried.
+     * @return capacity of ICC
+     */
+    int getSmsCapacityOnIccForSubscriber(int subId);
 }

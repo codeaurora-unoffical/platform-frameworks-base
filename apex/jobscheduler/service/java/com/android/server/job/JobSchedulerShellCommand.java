@@ -66,6 +66,10 @@ public final class JobSchedulerShellCommand extends BasicShellCommandHandler {
                     return getJobState(pw);
                 case "heartbeat":
                     return doHeartbeat(pw);
+                case "reset-execution-quota":
+                    return resetExecutionQuota(pw);
+                case "reset-schedule-quota":
+                    return resetScheduleQuota(pw);
                 case "trigger-dock-state":
                     return triggerDockState(pw);
                 default:
@@ -342,6 +346,52 @@ public final class JobSchedulerShellCommand extends BasicShellCommandHandler {
 
         pw.println("Heartbeat command is no longer supported");
         return -1;
+    }
+
+    private int resetExecutionQuota(PrintWriter pw) throws Exception {
+        checkPermission("reset execution quota");
+
+        int userId = UserHandle.USER_SYSTEM;
+
+        String opt;
+        while ((opt = getNextOption()) != null) {
+            switch (opt) {
+                case "-u":
+                case "--user":
+                    userId = UserHandle.parseUserArg(getNextArgRequired());
+                    break;
+
+                default:
+                    pw.println("Error: unknown option '" + opt + "'");
+                    return -1;
+            }
+        }
+
+        if (userId == UserHandle.USER_CURRENT) {
+            userId = ActivityManager.getCurrentUser();
+        }
+
+        final String pkgName = getNextArgRequired();
+
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            mInternal.resetExecutionQuota(pkgName, userId);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+        return 0;
+    }
+
+    private int resetScheduleQuota(PrintWriter pw) throws Exception {
+        checkPermission("reset schedule quota");
+
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            mInternal.resetScheduleQuota();
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+        return 0;
     }
 
     private int triggerDockState(PrintWriter pw) throws Exception {

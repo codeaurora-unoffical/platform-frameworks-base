@@ -38,7 +38,6 @@ import android.util.Slog;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.ArrayUtils;
-import com.android.internal.util.Preconditions;
 import com.android.server.EventLogTags;
 import com.android.server.LocalServices;
 import com.android.server.power.PowerManagerService;
@@ -49,6 +48,7 @@ import com.android.server.power.batterysaver.BatterySavingStats.DozeState;
 import com.android.server.power.batterysaver.BatterySavingStats.InteractiveState;
 
 import java.util.ArrayList;
+import java.util.Objects;
 
 /**
  * Responsible for battery saver mode transition logic.
@@ -75,11 +75,19 @@ public class BatterySaverController implements BatterySaverPolicyListener {
     @GuardedBy("mLock")
     private final ArrayList<LowPowerModeListener> mListeners = new ArrayList<>();
 
+    /**
+     * Do not access directly; always use {@link #setFullEnabledLocked}
+     * and {@link #getFullEnabledLocked}
+     */
     @GuardedBy("mLock")
-    private boolean mFullEnabled;
+    private boolean mFullEnabledRaw;
 
+    /**
+     * Do not access directly; always use {@link #setAdaptiveEnabledLocked} and
+     * {@link #getAdaptiveEnabledLocked}.
+     */
     @GuardedBy("mLock")
-    private boolean mAdaptiveEnabled;
+    private boolean mAdaptiveEnabledRaw;
 
     @GuardedBy("mLock")
     private boolean mIsPluggedIn;
@@ -207,6 +215,7 @@ public class BatterySaverController implements BatterySaverPolicyListener {
         mPlugins = new Plugin[] {
                 new BatterySaverLocationPlugin(mContext)
         };
+        PowerManager.invalidatePowerSaveModeCaches();
     }
 
     /**
@@ -237,7 +246,7 @@ public class BatterySaverController implements BatterySaverPolicyListener {
     private PowerManager getPowerManager() {
         if (mPowerManager == null) {
             mPowerManager =
-                    Preconditions.checkNotNull(mContext.getSystemService(PowerManager.class));
+                    Objects.requireNonNull(mContext.getSystemService(PowerManager.class));
         }
         return mPowerManager;
     }
@@ -293,10 +302,10 @@ public class BatterySaverController implements BatterySaverPolicyListener {
     @VisibleForTesting
     public void enableBatterySaver(boolean enable, int reason) {
         synchronized (mLock) {
-            if (mFullEnabled == enable) {
+            if (getFullEnabledLocked() == enable) {
                 return;
             }
-            mFullEnabled = enable;
+            setFullEnabledLocked(enable);
 
             if (updatePolicyLevelLocked()) {
                 mHandler.postStateChanged(/*sendBroadcast=*/ true, reason);
@@ -305,9 +314,9 @@ public class BatterySaverController implements BatterySaverPolicyListener {
     }
 
     private boolean updatePolicyLevelLocked() {
-        if (mFullEnabled) {
+        if (getFullEnabledLocked()) {
             return mBatterySaverPolicy.setPolicyLevel(BatterySaverPolicy.POLICY_LEVEL_FULL);
-        } else if (mAdaptiveEnabled) {
+        } else if (getAdaptiveEnabledLocked()) {
             return mBatterySaverPolicy.setPolicyLevel(BatterySaverPolicy.POLICY_LEVEL_ADAPTIVE);
         } else {
             return mBatterySaverPolicy.setPolicyLevel(BatterySaverPolicy.POLICY_LEVEL_OFF);
@@ -320,8 +329,8 @@ public class BatterySaverController implements BatterySaverPolicyListener {
      */
     public boolean isEnabled() {
         synchronized (mLock) {
-            return mFullEnabled
-                    || (mAdaptiveEnabled && mBatterySaverPolicy.shouldAdvertiseIsEnabled());
+            return getFullEnabledLocked() || (getAdaptiveEnabledLocked()
+                    && mBatterySaverPolicy.shouldAdvertiseIsEnabled());
         }
     }
 
@@ -331,19 +340,19 @@ public class BatterySaverController implements BatterySaverPolicyListener {
      */
     private boolean isPolicyEnabled() {
         synchronized (mLock) {
-            return mFullEnabled || mAdaptiveEnabled;
+            return getFullEnabledLocked() || getAdaptiveEnabledLocked();
         }
     }
 
     boolean isFullEnabled() {
         synchronized (mLock) {
-            return mFullEnabled;
+            return getFullEnabledLocked();
         }
     }
 
     boolean isAdaptiveEnabled() {
         synchronized (mLock) {
-            return mAdaptiveEnabled;
+            return getAdaptiveEnabledLocked();
         }
     }
 
@@ -374,10 +383,10 @@ public class BatterySaverController implements BatterySaverPolicyListener {
     }
 
     boolean setAdaptivePolicyEnabledLocked(boolean enabled, int reason) {
-        if (mAdaptiveEnabled == enabled) {
+        if (getAdaptiveEnabledLocked() == enabled) {
             return false;
         }
-        mAdaptiveEnabled = enabled;
+        setAdaptiveEnabledLocked(enabled);
         if (updatePolicyLevelLocked()) {
             mHandler.postStateChanged(/*sendBroadcast=*/ true, reason);
             return true;
@@ -426,19 +435,19 @@ public class BatterySaverController implements BatterySaverPolicyListener {
         final ArrayMap<String, String> fileValues;
 
         synchronized (mLock) {
-            enabled = mFullEnabled || mAdaptiveEnabled;
+            enabled = getFullEnabledLocked() || getAdaptiveEnabledLocked();
 
             EventLogTags.writeBatterySaverMode(
                     mFullPreviouslyEnabled ? 1 : 0, // Previously off or on.
                     mAdaptivePreviouslyEnabled ? 1 : 0, // Previously off or on.
-                    mFullEnabled ? 1 : 0, // Now off or on.
-                    mAdaptiveEnabled ? 1 : 0, // Now off or on.
+                    getFullEnabledLocked() ? 1 : 0, // Now off or on.
+                    getAdaptiveEnabledLocked() ? 1 : 0, // Now off or on.
                     isInteractive ?  1 : 0, // Device interactive state.
                     enabled ? mBatterySaverPolicy.toEventLogString() : "",
                     reason);
 
-            mFullPreviouslyEnabled = mFullEnabled;
-            mAdaptivePreviouslyEnabled = mAdaptiveEnabled;
+            mFullPreviouslyEnabled = getFullEnabledLocked();
+            mAdaptivePreviouslyEnabled = getAdaptiveEnabledLocked();
 
             listeners = mListeners.toArray(new LowPowerModeListener[0]);
 
@@ -517,10 +526,40 @@ public class BatterySaverController implements BatterySaverPolicyListener {
                 return;
             }
             mBatterySavingStats.transitionState(
-                    mFullEnabled ? BatterySaverState.ON :
-                            (mAdaptiveEnabled ? BatterySaverState.ADAPTIVE : BatterySaverState.OFF),
-                    isInteractive ? InteractiveState.INTERACTIVE : InteractiveState.NON_INTERACTIVE,
-                    dozeMode);
+                    getFullEnabledLocked() ? BatterySaverState.ON :
+                            (getAdaptiveEnabledLocked() ? BatterySaverState.ADAPTIVE :
+                            BatterySaverState.OFF),
+                            isInteractive ? InteractiveState.INTERACTIVE :
+                            InteractiveState.NON_INTERACTIVE,
+                            dozeMode);
         }
+    }
+
+    @GuardedBy("mLock")
+    private void setFullEnabledLocked(boolean value) {
+        if (mFullEnabledRaw == value) {
+            return;
+        }
+        PowerManager.invalidatePowerSaveModeCaches();
+        mFullEnabledRaw = value;
+    }
+
+    /** Non-blocking getter exists as a reminder not to directly modify the cached field */
+    private boolean getFullEnabledLocked() {
+        return mFullEnabledRaw;
+    }
+
+    @GuardedBy("mLock")
+    private void setAdaptiveEnabledLocked(boolean value) {
+        if (mAdaptiveEnabledRaw == value) {
+            return;
+        }
+        PowerManager.invalidatePowerSaveModeCaches();
+        mAdaptiveEnabledRaw = value;
+    }
+
+    /** Non-blocking getter exists as a reminder not to directly modify the cached field */
+    private boolean getAdaptiveEnabledLocked() {
+        return mAdaptiveEnabledRaw;
     }
 }

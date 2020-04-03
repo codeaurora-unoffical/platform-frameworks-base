@@ -16,10 +16,11 @@
 
 package android.app;
 
+import android.annotation.NonNull;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
@@ -157,18 +158,37 @@ public class ActivityTaskManager {
                 }
             };
 
+    /** @hide */
+    @RequiresPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS)
+    public static ITaskOrganizerController getTaskOrganizerController() {
+        return ITaskOrganizerControllerSingleton.get();
+    }
+
+    private static final Singleton<ITaskOrganizerController> ITaskOrganizerControllerSingleton =
+            new Singleton<ITaskOrganizerController>() {
+                @Override
+                protected ITaskOrganizerController create() {
+                    try {
+                        return getService().getTaskOrganizerController();
+                    } catch (RemoteException e) {
+                        return null;
+                    }
+                }
+            };
+
     /**
      * Sets the windowing mode for a specific task. Only works on tasks of type
      * {@link WindowConfiguration#ACTIVITY_TYPE_STANDARD}
      * @param taskId The id of the task to set the windowing mode for.
      * @param windowingMode The windowing mode to set for the task.
      * @param toTop If the task should be moved to the top once the windowing mode changes.
+     * @return Whether the task was successfully put into the specified windowing mode.
      */
     @RequiresPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS)
-    public void setTaskWindowingMode(int taskId, int windowingMode, boolean toTop)
+    public boolean setTaskWindowingMode(int taskId, int windowingMode, boolean toTop)
             throws SecurityException {
         try {
-            getService().setTaskWindowingMode(taskId, windowingMode, toTop);
+            return getService().setTaskWindowingMode(taskId, windowingMode, toTop);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -189,13 +209,13 @@ public class ActivityTaskManager {
      *                      docked stack. Pass {@code null} to use default bounds.
      * @param showRecents If the recents activity should be shown on the other side of the task
      *                    going into split-screen mode.
+     * @return Whether the task was successfully put into splitscreen.
      */
     @RequiresPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS)
-    public void setTaskWindowingModeSplitScreenPrimary(int taskId, int createMode, boolean toTop,
+    public boolean setTaskWindowingModeSplitScreenPrimary(int taskId, int createMode, boolean toTop,
             boolean animate, Rect initialBounds, boolean showRecents) throws SecurityException {
         try {
-            getService().setTaskWindowingModeSplitScreenPrimary(taskId, createMode, toTop, animate,
-                    initialBounds, showRecents);
+            return getService().setTaskWindowingModeSplitScreenPrimary(taskId, toTop);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -341,25 +361,6 @@ public class ActivityTaskManager {
     }
 
     /**
-     * Resize the input stack id to the given bounds with animate setting.
-     * @param stackId Id of the stack to resize.
-     * @param bounds Bounds to resize the stack to or {@code null} for fullscreen.
-     * @param animate Whether we should play an animation for resizing stack.
-     */
-    @RequiresPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS)
-    public void resizePinnedStack(int stackId, Rect bounds, boolean animate) {
-        try {
-            if (animate) {
-                getService().animateResizePinnedStack(stackId, bounds, -1 /* animationDuration */);
-            } else {
-                getService().resizePinnedStack(bounds, null /* tempPinnedTaskBounds */);
-            }
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-    }
-
-    /**
      * Resize task to given bounds.
      * @param taskId Id of task to resize.
      * @param bounds Bounds to resize task.
@@ -429,6 +430,20 @@ public class ActivityTaskManager {
     public void setDisplayToSingleTaskInstance(int displayId) {
         try {
             getService().setDisplayToSingleTaskInstance(displayId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Requests that an activity should enter picture-in-picture mode if possible.
+     * @hide
+     */
+    @TestApi
+    @RequiresPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS)
+    public void requestPictureInPictureMode(@NonNull IBinder token) {
+        try {
+            getService().requestPictureInPictureMode(token);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

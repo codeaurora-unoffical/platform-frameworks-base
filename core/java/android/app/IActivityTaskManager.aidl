@@ -29,6 +29,7 @@ import android.app.IProcessObserver;
 import android.app.IRequestFinishCallback;
 import android.app.IServiceConnection;
 import android.app.IStopUserCallback;
+import android.app.ITaskOrganizerController;
 import android.app.ITaskStackListener;
 import android.app.IUiAutomationConnection;
 import android.app.IUidObserver;
@@ -68,9 +69,9 @@ import android.os.StrictMode;
 import android.os.WorkSource;
 import android.service.voice.IVoiceInteractionSession;
 import android.view.IRecentsAnimationRunner;
+import android.view.ITaskOrganizer;
 import android.view.RemoteAnimationDefinition;
 import android.view.RemoteAnimationAdapter;
-import android.view.WindowContainerTransaction;
 import com.android.internal.app.IVoiceInteractor;
 import com.android.internal.os.IResultReceiver;
 import com.android.internal.policy.IKeyguardDismissCallback;
@@ -84,36 +85,45 @@ import java.util.List;
  * {@hide}
  */
 interface IActivityTaskManager {
-    int startActivity(in IApplicationThread caller, in String callingPackage, in Intent intent,
-            in String resolvedType, in IBinder resultTo, in String resultWho, int requestCode,
+    int startActivity(in IApplicationThread caller, in String callingPackage,
+            in String callingFeatureId, in Intent intent, in String resolvedType,
+            in IBinder resultTo, in String resultWho, int requestCode,
             int flags, in ProfilerInfo profilerInfo, in Bundle options);
     int startActivities(in IApplicationThread caller, in String callingPackage,
-            in Intent[] intents, in String[] resolvedTypes, in IBinder resultTo,
-            in Bundle options, int userId);
+            in String callingFeatureId, in Intent[] intents, in String[] resolvedTypes,
+            in IBinder resultTo, in Bundle options, int userId);
     int startActivityAsUser(in IApplicationThread caller, in String callingPackage,
-            in Intent intent, in String resolvedType, in IBinder resultTo, in String resultWho,
-            int requestCode, int flags, in ProfilerInfo profilerInfo,
-            in Bundle options, int userId);
+            in String callingFeatureId, in Intent intent, in String resolvedType,
+            in IBinder resultTo, in String resultWho, int requestCode, int flags,
+            in ProfilerInfo profilerInfo, in Bundle options, int userId);
     boolean startNextMatchingActivity(in IBinder callingActivity,
             in Intent intent, in Bundle options);
+
+    /**
+    *  The DreamActivity has to be started in a special way that does not involve the PackageParser.
+    *  The DreamActivity is a framework component inserted in the dream application process. Hence,
+    *  it is not declared in the application's manifest and cannot be parsed. startDreamActivity
+    *  creates the activity and starts it without reaching out to the PackageParser.
+    */
+    boolean startDreamActivity(in Intent intent);
     int startActivityIntentSender(in IApplicationThread caller,
             in IIntentSender target, in IBinder whitelistToken, in Intent fillInIntent,
             in String resolvedType, in IBinder resultTo, in String resultWho, int requestCode,
             int flagsMask, int flagsValues, in Bundle options);
     WaitResult startActivityAndWait(in IApplicationThread caller, in String callingPackage,
-            in Intent intent, in String resolvedType, in IBinder resultTo, in String resultWho,
-            int requestCode, int flags, in ProfilerInfo profilerInfo, in Bundle options,
-            int userId);
+            in String callingFeatureId, in Intent intent, in String resolvedType,
+            in IBinder resultTo, in String resultWho, int requestCode, int flags,
+            in ProfilerInfo profilerInfo, in Bundle options, int userId);
     int startActivityWithConfig(in IApplicationThread caller, in String callingPackage,
-            in Intent intent, in String resolvedType, in IBinder resultTo, in String resultWho,
-            int requestCode, int startFlags, in Configuration newConfig,
-            in Bundle options, int userId);
-    int startVoiceActivity(in String callingPackage, int callingPid, int callingUid,
-            in Intent intent, in String resolvedType, in IVoiceInteractionSession session,
-            in IVoiceInteractor interactor, int flags, in ProfilerInfo profilerInfo,
-            in Bundle options, int userId);
-    int startAssistantActivity(in String callingPackage, int callingPid, int callingUid,
-            in Intent intent, in String resolvedType, in Bundle options, int userId);
+            in String callingFeatureId, in Intent intent, in String resolvedType,
+            in IBinder resultTo, in String resultWho, int requestCode, int startFlags,
+            in Configuration newConfig, in Bundle options, int userId);
+    int startVoiceActivity(in String callingPackage, in String callingFeatureId, int callingPid,
+            int callingUid, in Intent intent, in String resolvedType,
+            in IVoiceInteractionSession session, in IVoiceInteractor interactor, int flags,
+            in ProfilerInfo profilerInfo, in Bundle options, int userId);
+    int startAssistantActivity(in String callingPackage, in String callingFeatureId, int callingPid,
+            int callingUid, in Intent intent, in String resolvedType, in Bundle options, int userId);
     void startRecentsActivity(in Intent intent, in IAssistDataReceiver assistDataReceiver,
             in IRecentsAnimationRunner recentsAnimationRunner);
     int startActivityFromRecents(int taskId, in Bundle options);
@@ -121,6 +131,7 @@ interface IActivityTaskManager {
             in Intent intent, in String resolvedType, in IBinder resultTo, in String resultWho,
             int requestCode, int flags, in ProfilerInfo profilerInfo, in Bundle options,
             IBinder permissionToken, boolean ignoreTargetSecurity, int userId);
+
     boolean isActivityStartAllowedOnDisplay(int displayId, in Intent intent, in String resolvedType,
             int userId);
 
@@ -137,7 +148,6 @@ interface IActivityTaskManager {
             in PersistableBundle persistentState, in CharSequence description);
     oneway void activityDestroyed(in IBinder token);
     void activityRelaunched(in IBinder token);
-    oneway void activitySlept(in IBinder token);
     int getFrontActivityScreenCompatMode();
     void setFrontActivityScreenCompatMode(int mode);
     String getCallingPackage(in IBinder token);
@@ -221,7 +231,6 @@ interface IActivityTaskManager {
     void setTaskResizeable(int taskId, int resizeableMode);
     void toggleFreeformWindowingMode(in IBinder token);
     void resizeTask(int taskId, in Rect bounds, int resizeMode);
-    void applyContainerTransaction(in WindowContainerTransaction t);
     void moveStackToDisplay(int stackId, int displayId);
     void removeStack(int stackId);
 
@@ -231,35 +240,11 @@ interface IActivityTaskManager {
      * @param taskId The id of the task to set the windowing mode for.
      * @param windowingMode The windowing mode to set for the task.
      * @param toTop If the task should be moved to the top once the windowing mode changes.
+     * @return Whether the task was successfully put into the specified windowing mode.
      */
-    void setTaskWindowingMode(int taskId, int windowingMode, boolean toTop);
+    boolean setTaskWindowingMode(int taskId, int windowingMode, boolean toTop);
     void moveTaskToStack(int taskId, int stackId, boolean toTop);
-    /**
-     * Resizes the input pinned stack to the given bounds with animation.
-     *
-     * @param stackId Id of the pinned stack to resize.
-     * @param bounds Bounds to resize the stack to or {@code null} for fullscreen.
-     * @param animationDuration The duration of the resize animation in milliseconds or -1 if the
-     *                          default animation duration should be used.
-     * @throws RemoteException
-     */
-    void animateResizePinnedStack(int stackId, in Rect bounds, int animationDuration);
-    boolean setTaskWindowingModeSplitScreenPrimary(int taskId, int createMode, boolean toTop,
-            boolean animate, in Rect initialBounds, boolean showRecents);
-    /**
-     * Use the offset to adjust the stack boundary with animation.
-     *
-     * @param stackId Id of the stack to adjust.
-     * @param compareBounds Offset is only applied if the current pinned stack bounds is equal to
-     *                      the compareBounds.
-     * @param xOffset The horizontal offset.
-     * @param yOffset The vertical offset.
-     * @param animationDuration The duration of the resize animation in milliseconds or -1 if the
-     *                          default animation duration should be used.
-     * @throws RemoteException
-     */
-    void offsetPinnedStackBounds(int stackId, in Rect compareBounds, int xOffset, int yOffset,
-            int animationDuration);
+    boolean setTaskWindowingModeSplitScreenPrimary(int taskId, boolean toTop);
     /**
      * Removes stacks in the input windowing modes from the system if they are of activity type
      * ACTIVITY_TYPE_STANDARD or ACTIVITY_TYPE_UNDEFINED
@@ -313,11 +298,6 @@ interface IActivityTaskManager {
     void positionTaskInStack(int taskId, int stackId, int position);
     void reportSizeConfigurations(in IBinder token, in int[] horizontalSizeConfiguration,
             in int[] verticalSizeConfigurations, in int[] smallestWidthConfigurations);
-    /**
-     * Dismisses split-screen multi-window mode.
-     * {@param toTop} If true the current primary split-screen stack will be placed or left on top.
-     */
-    void dismissSplitScreenMode(boolean toTop);
 
     /**
      * Dismisses PiP
@@ -333,6 +313,7 @@ interface IActivityTaskManager {
     boolean isInPictureInPictureMode(in IBinder token);
     boolean enterPictureInPictureMode(in IBinder token, in PictureInPictureParams params);
     void setPictureInPictureParams(in IBinder token, in PictureInPictureParams params);
+    void requestPictureInPictureMode(in IBinder token);
     int getMaxNumPictureInPictureActions(in IBinder token);
     IBinder getUriPermissionOwnerForActivity(in IBinder activityToken);
 
@@ -360,6 +341,11 @@ interface IActivityTaskManager {
             in Rect tempOtherTaskBounds, in Rect tempOtherTaskInsetBounds);
 
     /**
+     * Returns an interface enabling the management of task organizers.
+     */
+    ITaskOrganizerController getTaskOrganizerController();
+
+    /**
      * Sets whether we are currently in an interactive split screen resize operation where we
      * are changing the docked stack size.
      */
@@ -368,22 +354,9 @@ interface IActivityTaskManager {
     void startLocalVoiceInteraction(in IBinder token, in Bundle options);
     void stopLocalVoiceInteraction(in IBinder token);
     boolean supportsLocalVoiceInteraction();
-    void notifyPinnedStackAnimationStarted();
-    void notifyPinnedStackAnimationEnded();
 
     // Get device configuration
     ConfigurationInfo getDeviceConfigurationInfo();
-
-    /**
-     * Resizes the pinned stack.
-     *
-     * @param pinnedBounds The bounds for the pinned stack.
-     * @param tempPinnedTaskBounds The temporary bounds for the tasks in the pinned stack, which
-     *                             might be different from the stack bounds to allow more
-     *                             flexibility while resizing, or {@code null} if they should be the
-     *                             same as the stack bounds.
-     */
-    void resizePinnedStack(in Rect pinnedBounds, in Rect tempPinnedTaskBounds);
 
     void dismissKeyguard(in IBinder token, in IKeyguardDismissCallback callback,
             in CharSequence message);
@@ -393,11 +366,11 @@ interface IActivityTaskManager {
 
     /**
      * @param taskId the id of the task to retrieve the sAutoapshots for
-     * @param reducedResolution if set, if the snapshot needs to be loaded from disk, this will load
+     * @param isLowResolution if set, if the snapshot needs to be loaded from disk, this will load
      *                          a reduced resolution of it, which is much faster
      * @return a graphic buffer representing a screenshot of a task
      */
-    ActivityManager.TaskSnapshot getTaskSnapshot(int taskId, boolean reducedResolution);
+    ActivityManager.TaskSnapshot getTaskSnapshot(int taskId, boolean isLowResolution);
 
     /**
      * See {@link android.app.Activity#setDisablePreviewScreenshots}
@@ -435,6 +408,11 @@ interface IActivityTaskManager {
      * Registers remote animations for a specific activity.
      */
     void registerRemoteAnimations(in IBinder token, in RemoteAnimationDefinition definition);
+
+    /**
+     * Unregisters all remote animations for a specific activity.
+     */
+    void unregisterRemoteAnimations(in IBinder token);
 
     /**
      * Registers a remote animation to be run for all activity starts from a certain package during

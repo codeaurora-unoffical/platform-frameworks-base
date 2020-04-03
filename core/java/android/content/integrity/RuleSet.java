@@ -16,20 +16,21 @@
 
 package android.content.integrity;
 
-import static com.android.internal.util.Preconditions.checkNotNull;
-
 import android.annotation.NonNull;
 import android.annotation.SystemApi;
+import android.annotation.TestApi;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Immutable data class encapsulating all parameters of a rule set.
  *
  * @hide
  */
+@TestApi
 @SystemApi
 public class RuleSet {
     private final String mVersion;
@@ -85,7 +86,7 @@ public class RuleSet {
          */
         @NonNull
         public RuleSet build() {
-            checkNotNull(mVersion);
+            Objects.requireNonNull(mVersion);
             return new RuleSet(mVersion, mRules);
         }
     }

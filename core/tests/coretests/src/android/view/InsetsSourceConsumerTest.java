@@ -18,6 +18,8 @@ package android.view;
 
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
 
+import static android.view.WindowInsets.Type.statusBars;
+import static junit.framework.Assert.assertEquals;
 import static junit.framework.TestCase.assertFalse;
 import static junit.framework.TestCase.assertTrue;
 
@@ -75,7 +77,8 @@ public class InsetsSourceConsumerTest {
         instrumentation.runOnMainSync(() -> {
             final Context context = instrumentation.getTargetContext();
             // cannot mock ViewRootImpl since it's final.
-            final ViewRootImpl viewRootImpl = new ViewRootImpl(context, context.getDisplay());
+            final ViewRootImpl viewRootImpl = new ViewRootImpl(context,
+                    context.getDisplayNoVerify());
             try {
                 viewRootImpl.setView(new TextView(context), new LayoutParams(), null);
             } catch (BadTokenException e) {
@@ -90,30 +93,44 @@ public class InsetsSourceConsumerTest {
         });
         instrumentation.waitForIdleSync();
 
-        mConsumer.setControl(new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point()));
+        mConsumer.setControl(new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point()),
+                new int[1], new int[1]);
     }
 
     @Test
     public void testHide() {
-        mConsumer.hide();
-        assertFalse("Consumer should not be visible", mConsumer.isVisible());
-        verify(mSpyInsetsSource).setVisible(eq(false));
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            mConsumer.hide();
+            assertFalse("Consumer should not be visible", mConsumer.isRequestedVisible());
+            verify(mSpyInsetsSource).setVisible(eq(false));
+        });
+
     }
 
     @Test
     public void testShow() {
-        mConsumer.show();
-        assertTrue("Consumer should be visible", mConsumer.isVisible());
-        verify(mSpyInsetsSource).setVisible(eq(true));
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            // Insets source starts out visible
+            mConsumer.hide();
+            mConsumer.show(false /* fromIme */);
+            assertTrue("Consumer should be visible", mConsumer.isRequestedVisible());
+            verify(mSpyInsetsSource).setVisible(eq(false));
+            verify(mSpyInsetsSource).setVisible(eq(true));
+        });
+
     }
 
     @Test
     public void testRestore() {
-        mConsumer.setControl(null);
-        reset(mMockTransaction);
-        mConsumer.hide();
-        verifyZeroInteractions(mMockTransaction);
-        mConsumer.setControl(new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point()));
-        verify(mMockTransaction).hide(eq(mLeash));
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            mConsumer.setControl(null, new int[1], new int[1]);
+            reset(mMockTransaction);
+            mConsumer.hide();
+            verifyZeroInteractions(mMockTransaction);
+            int[] hideTypes = new int[1];
+            mConsumer.setControl(new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point()),
+                    new int[1], hideTypes);
+            assertEquals(statusBars(), hideTypes[0]);
+        });
     }
 }

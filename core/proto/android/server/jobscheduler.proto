@@ -32,8 +32,8 @@ import "frameworks/base/core/proto/android/server/appstatetracker.proto";
 import "frameworks/base/core/proto/android/server/job/enums.proto";
 import "frameworks/base/core/proto/android/server/statlogger.proto";
 import "frameworks/base/core/proto/android/privacy.proto";
+import "frameworks/base/core/proto/android/util/quotatracker.proto";
 
-// Next tag: 21
 message JobSchedulerServiceDumpProto {
     option (.android.msg_privacy).dest = DEST_AUTOMATIC;
 
@@ -160,37 +160,23 @@ message JobSchedulerServiceDumpProto {
     optional JobConcurrencyManagerProto concurrency_manager = 20;
 
     optional JobStorePersistStatsProto persist_stats = 21;
+
+    optional .android.util.quota.CountQuotaTrackerProto quota_tracker = 22;
+
+    // Next tag: 23
 }
 
 // A com.android.server.job.JobSchedulerService.Constants object.
-// Next tag: 29
 message ConstantsProto {
     option (.android.msg_privacy).dest = DEST_AUTOMATIC;
 
-    // Minimum # of idle jobs that must be ready in order to force the JMS to
-    // schedule things early.
-    optional int32 min_idle_count = 1;
-    // Minimum # of charging jobs that must be ready in order to force the JMS
-    // to schedule things early.
-    optional int32 min_charging_count = 2;
-    // Minimum # of "battery not low" jobs that must be ready in order to force
-    // the JMS to schedule things early.
-    optional int32 min_battery_not_low_count = 3;
-    // Minimum # of "storage not low" jobs that must be ready in order to force
-    // the JMS to schedule things early.
-    optional int32 min_storage_not_low_count = 4;
-    // Minimum # of connectivity jobs that must be ready in order to force the
-    // JMS to schedule things early. 1 == Run connectivity jobs as soon as
-    // ready.
-    optional int32 min_connectivity_count = 5;
-    // Minimum # of content trigger jobs that must be ready in order to force
-    // the JMS to schedule things early.
-    optional int32 min_content_count = 6;
-    // Minimum # of jobs (with no particular constraints) for which the JMS will
-    // be happy running some work early. This (and thus the other min counts)
-    // is now set to 1, to prevent any batching at this level. Since we now do
-    // batching through doze, that is a much better mechanism.
-    optional int32 min_ready_jobs_count = 7;
+    reserved 1; // min_idle_count
+    reserved 2; // min_charging_count
+    reserved 3; // min_battery_not_low_count
+    reserved 4; // min_storage_not_low_count
+    reserved 5; // min_connectivity_count
+    reserved 6; // min_content_count
+    reserved 7; // min_ready_jobs_count
     // Minimum # of non-ACTIVE jobs for which the JMS will be happy running some work early.
     optional int32 min_ready_non_active_jobs_count = 29;
     // Don't batch a non-ACTIVE job if it's been delayed due to force batching attempts for
@@ -216,12 +202,8 @@ message ConstantsProto {
     // The maximum number of background jobs we allow when the system is in a
     // critical memory state.
     optional int32 bg_critical_job_count = 14;
-    // The maximum number of times we allow a job to have itself rescheduled
-    // before giving up on it, for standard jobs.
-    optional int32 max_standard_reschedule_count = 15;
-    // The maximum number of times we allow a job to have itself rescheduled
-    // before giving up on it, for jobs that are executing work.
-    optional int32 max_work_reschedule_count = 16;
+    reserved 15; // max_standard_reschedule_count
+    reserved 16; // max_work_reschedule_count
     // The minimum backoff time to allow for linear backoff.
     optional int64 min_linear_backoff_time_ms = 17;
     // The minimum backoff time to allow for exponential backoff.
@@ -246,6 +228,14 @@ message ConstantsProto {
     // Whether to use heartbeats or rolling window for quota management. True
     // will use heartbeats, false will use a rolling window.
     reserved 23; // use_heartbeats
+    // Whether to enable quota limits on APIs.
+    optional bool enable_api_quotas = 31;
+    // The maximum number of schedule() calls an app can make in a set amount of time.
+    optional int32 api_quota_schedule_count = 32;
+    // The time window that {@link #API_QUOTA_SCHEDULE_COUNT} should be evaluated over.
+    optional int64 api_quota_schedule_window_ms = 33;
+    // Whether or not to throw an exception when an app hits its schedule quota limit.
+    optional bool api_quota_schedule_throw_exception = 34;
 
     message QuotaController {
         option (.android.msg_privacy).dest = DEST_AUTOMATIC;
@@ -271,6 +261,10 @@ message ConstantsProto {
         // expected to run only {@link QUOTA_CONTROLLER_ALLOWED_TIME_PER_PERIOD_MS} within the past
         // WINDOW_SIZE_MS.
         optional int64 rare_window_size_ms = 6;
+        // The quota window size of the particular standby bucket. Apps in this standby bucket are
+        // expected to run only {@link QUOTA_CONTROLLER_ALLOWED_TIME_PER_PERIOD_MS} within the past
+        // WINDOW_SIZE_MS.
+        optional int64 restricted_window_size_ms = 20;
         // The maximum amount of time an app can have its jobs running within a 24 hour window.
         optional int64 max_execution_time_ms = 7;
         // The maximum number of jobs an app can run within this particular standby bucket's
@@ -285,6 +279,9 @@ message ConstantsProto {
         // The maximum number of jobs an app can run within this particular standby bucket's
         // window size.
         optional int32 max_job_count_rare = 11;
+        // The maximum number of jobs an app can run within this particular standby bucket's
+        // window size.
+        optional int32 max_job_count_restricted = 21;
         // The period of time used to rate limit recently run jobs.
         optional int32 rate_limiting_window_ms = 19;
         // The maximum number of jobs that should be allowed to run in the past
@@ -302,12 +299,17 @@ message ConstantsProto {
         // The maximum number of timing sessions an app can run within this particular standby
         // bucket's window size.
         optional int32 max_session_count_rare = 16;
+        // The maximum number of timing sessions an app can run within this particular standby
+        // bucket's window size.
+        optional int32 max_session_count_restricted = 22;
         // The maximum number of timing sessions that should be allowed to run in the past
         // rate_limiting_window_ms.
         optional int32 max_session_count_per_rate_limiting_window = 17;
         // Treat two distinct {@link TimingSession}s as the same if they start and end within this
         // amount of time of each other.
         optional int64 timing_session_coalescing_duration_ms = 18;
+
+        // Next tag: 23
     }
     optional QuotaController quota_controller = 24;
 
@@ -331,7 +333,7 @@ message ConstantsProto {
     // In this time after screen turns on, we increase job concurrency.
     optional int32 screen_off_job_concurrency_increase_delay_ms = 28;
 
-    // Next tag: 31
+    // Next tag: 35
 }
 
 // Next tag: 4
@@ -651,8 +653,7 @@ message StateControllerProto {
             optional bool is_active = 2;
             // The time this timer last became active. Only valid if is_active is true.
             optional int64 start_time_elapsed = 3;
-            // How many background jobs are currently running. Valid only if the device is_active
-            // is true.
+            // How many background jobs are currently running. Valid only if is_active is true.
             optional int32 bg_job_count = 4;
             // All of the jobs that the Timer is currently tracking.
             repeated JobStatusShortInfoProto running_jobs = 5;
@@ -669,7 +670,7 @@ message StateControllerProto {
 
             repeated ExecutionStats execution_stats = 4;
 
-            optional AlarmListener in_quota_alarm_listener = 5;
+            reserved 5; // in_quota_alarm_listener
         }
         repeated PackageStats package_stats = 5;
 
@@ -682,7 +683,25 @@ message StateControllerProto {
         }
         repeated UidPackageMapping uid_to_package_cache = 7;
 
-        // Next tag: 8
+        message InQuotaAlarmListener {
+            option (.android.msg_privacy).dest = DEST_AUTOMATIC;
+
+            // The time at which the alarm is set to go off, in the elapsed realtime timebase.
+            optional int64 trigger_time_elapsed = 1;
+
+            message Alarm {
+                option (.android.msg_privacy).dest = DEST_AUTOMATIC;
+
+                optional Package pkg = 1;
+
+                // The time at which the package will be in quota, in the elapsed realtime timebase.
+                optional int64 in_quota_time_elapsed = 2;
+            }
+            repeated Alarm alarms = 2;
+        }
+        optional InQuotaAlarmListener in_quota_alarm_listener = 8;
+
+        // Next tag: 9
     }
     message StorageController {
         option (.android.msg_privacy).dest = DEST_AUTOMATIC;
@@ -933,6 +952,9 @@ message JobStatusDumpProto {
     optional JobInfo job_info = 6;
 
     repeated ConstraintEnum required_constraints = 7;
+    // Dynamic constraints are additional constraints imposed by the system that MUST be met before
+    // the app can run if the app does not have quota.
+    repeated ConstraintEnum dynamic_constraints = 31;
     repeated ConstraintEnum satisfied_constraints = 8;
     repeated ConstraintEnum unsatisfied_constraints = 9;
     optional bool is_doze_whitelisted = 10;
@@ -946,6 +968,8 @@ message JobStatusDumpProto {
         // Battery Saver). This implicit constraint must be satisfied for the
         // job to run.
         optional bool is_not_restricted_in_bg = 2;
+        // True if dynamic constraints have been satisfied.
+        optional bool is_dynamic_satisfied = 3;
     }
     optional ImplicitConstraints implicit_constraints = 25;
 
@@ -988,6 +1012,7 @@ message JobStatusDumpProto {
         FREQUENT = 2;
         RARE = 3;
         NEVER = 4;
+        RESTRICTED = 5;
     }
     optional Bucket standby_bucket = 17;
     optional bool is_exempted_from_app_standby = 27;
@@ -1018,7 +1043,7 @@ message JobStatusDumpProto {
     // was no attempt.
     optional int64 time_since_first_force_batch_attempt_ms = 29;
 
-    // Next tag: 31
+    // Next tag: 32
 }
 
 // Dump from com.android.server.job.JobConcurrencyManager.

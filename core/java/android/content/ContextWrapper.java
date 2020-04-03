@@ -21,9 +21,9 @@ import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.IApplicationThread;
 import android.app.IServiceConnection;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
@@ -250,6 +250,16 @@ public class ContextWrapper extends Context {
     @Override
     public File getFilesDir() {
         return mBase.getFilesDir();
+    }
+
+    /**
+     * {@inheritDoc Context#getCrateDir()}
+     * @hide
+     */
+    @NonNull
+    @Override
+    public File getCrateDir(@NonNull String cratedId) {
+        return mBase.getCrateDir(cratedId);
     }
 
     @Override
@@ -590,13 +600,13 @@ public class ContextWrapper extends Context {
     }
 
     @Override
-    public void sendOrderedBroadcast(@RequiresPermission @NonNull Intent intent,
+    public void sendOrderedBroadcast(@RequiresPermission @NonNull Intent intent, int initialCode,
             @Nullable String receiverPermission, @Nullable String receiverAppOp,
-            @Nullable Bundle options, @Nullable BroadcastReceiver resultReceiver,
-            @Nullable Handler scheduler, int initialCode, @Nullable String initialData,
-            @Nullable Bundle initialExtras) {
-        mBase.sendOrderedBroadcast(intent, receiverPermission, receiverAppOp, options,
-                resultReceiver, scheduler, initialCode, initialData, initialExtras);
+            @Nullable BroadcastReceiver resultReceiver, @Nullable Handler scheduler,
+            @Nullable String initialData, @Nullable Bundle initialExtras,
+            @Nullable Bundle options) {
+        mBase.sendOrderedBroadcast(intent, initialCode, receiverPermission, receiverAppOp,
+                resultReceiver, scheduler, initialData, initialExtras, options);
     }
 
     @Override
@@ -967,6 +977,12 @@ public class ContextWrapper extends Context {
     }
 
     @Override
+    @NonNull
+    public Context createWindowContext(int type, @Nullable Bundle options) {
+        return mBase.createWindowContext(type, options);
+    }
+
+    @Override
     public @NonNull Context createFeatureContext(@Nullable String featureId) {
         return mBase.createFeatureContext(featureId);
     }
@@ -982,12 +998,15 @@ public class ContextWrapper extends Context {
         return mBase.getDisplayAdjustments(displayId);
     }
 
-    /** @hide */
-    @UnsupportedAppUsage
-    @TestApi
     @Override
-    public Display getDisplay() {
+    public @Nullable Display getDisplay() {
         return mBase.getDisplay();
+    }
+
+    /** @hide */
+    @Override
+    public @Nullable Display getDisplayNoVerify() {
+        return mBase.getDisplayNoVerify();
     }
 
     /**

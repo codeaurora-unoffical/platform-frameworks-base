@@ -17,13 +17,14 @@
 package com.android.systemui.statusbar.notification.collection.listbuilder;
 
 import com.android.systemui.statusbar.notification.collection.ListEntry;
+import com.android.systemui.statusbar.notification.collection.NotifPipeline;
 import com.android.systemui.statusbar.notification.collection.listbuilder.pluggable.NotifPromoter;
 
 import java.util.List;
 
 /**
  * See
- * {@link NotifListBuilder#addOnBeforeTransformGroupsListener(OnBeforeTransformGroupsListener)}
+ * {@link NotifPipeline#addOnBeforeTransformGroupsListener(OnBeforeTransformGroupsListener)}
  */
 public interface OnBeforeTransformGroupsListener {
     /**
@@ -33,8 +34,6 @@ public interface OnBeforeTransformGroupsListener {
      * @param list The current filtered and grouped list of (top-level) entries. Note that this is
      *             a live view into the current notif list and will change as the list moves through
      *             the pipeline.
-     * @param newlyVisibleEntries The list of all entries (both top-level and children) who have
-     *                            been added to the list for the first time.
      */
-    void onBeforeTransformGroups(List<ListEntry> list, List<ListEntry> newlyVisibleEntries);
+    void onBeforeTransformGroups(List<ListEntry> list);
 }

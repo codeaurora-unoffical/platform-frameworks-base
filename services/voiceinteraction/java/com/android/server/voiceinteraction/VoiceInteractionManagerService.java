@@ -41,7 +41,11 @@ import android.content.pm.UserInfo;
 import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.hardware.soundtrigger.IRecognitionStatusCallback;
+import android.hardware.soundtrigger.KeyphraseMetadata;
+import android.hardware.soundtrigger.ModelParams;
+import android.hardware.soundtrigger.SoundTrigger;
 import android.hardware.soundtrigger.SoundTrigger.KeyphraseSoundModel;
+import android.hardware.soundtrigger.SoundTrigger.ModelParamRange;
 import android.hardware.soundtrigger.SoundTrigger.ModuleProperties;
 import android.hardware.soundtrigger.SoundTrigger.RecognitionConfig;
 import android.os.Binder;
@@ -56,7 +60,6 @@ import android.os.Trace;
 import android.os.UserHandle;
 import android.os.UserManagerInternal;
 import android.provider.Settings;
-import android.service.voice.IVoiceInteractionService;
 import android.service.voice.IVoiceInteractionSession;
 import android.service.voice.VoiceInteractionManagerInternal;
 import android.service.voice.VoiceInteractionService;
@@ -76,7 +79,6 @@ import com.android.internal.app.IVoiceInteractor;
 import com.android.internal.content.PackageMonitor;
 import com.android.internal.os.BackgroundThread;
 import com.android.internal.util.DumpUtils;
-import com.android.internal.util.Preconditions;
 import com.android.server.FgThread;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
@@ -89,6 +91,8 @@ import com.android.server.wm.ActivityTaskManagerInternal;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 
 /**
@@ -117,11 +121,11 @@ public class VoiceInteractionManagerService extends SystemService {
         mResolver = context.getContentResolver();
         mDbHelper = new DatabaseHelper(context);
         mServiceStub = new VoiceInteractionManagerServiceStub();
-        mAmInternal = Preconditions.checkNotNull(
+        mAmInternal = Objects.requireNonNull(
                 LocalServices.getService(ActivityManagerInternal.class));
-        mAtmInternal = Preconditions.checkNotNull(
+        mAtmInternal = Objects.requireNonNull(
                 LocalServices.getService(ActivityTaskManagerInternal.class));
-        mUserManagerInternal = Preconditions.checkNotNull(
+        mUserManagerInternal = Objects.requireNonNull(
                 LocalServices.getService(UserManagerInternal.class));
 
         PermissionManagerServiceInternal permissionManagerInternal = LocalServices.getService(
@@ -149,7 +153,7 @@ public class VoiceInteractionManagerService extends SystemService {
     @Override
     public void onBootPhase(int phase) {
         if (PHASE_SYSTEM_SERVICES_READY == phase) {
-            mShortcutServiceInternal = Preconditions.checkNotNull(
+            mShortcutServiceInternal = Objects.requireNonNull(
                     LocalServices.getService(ShortcutServiceInternal.class));
             mSoundTriggerInternal = LocalServices.getService(SoundTriggerInternal.class);
         } else if (phase == PHASE_THIRD_PARTY_APPS_CAN_START) {
@@ -157,9 +161,13 @@ public class VoiceInteractionManagerService extends SystemService {
         }
     }
 
+    private boolean isSupported(UserInfo user) {
+        return user.isFull();
+    }
+
     @Override
-    public boolean isSupported(UserInfo userInfo) {
-        return userInfo.isFull();
+    public boolean isUserSupported(TargetUser user) {
+        return isSupported(user.getUserInfo());
     }
 
     @Override
@@ -675,9 +683,9 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         @Override
-        public void showSession(IVoiceInteractionService service, Bundle args, int flags) {
+        public void showSession(Bundle args, int flags) {
             synchronized (this) {
-                enforceIsCurrentVoiceInteractionService(service);
+                enforceIsCurrentVoiceInteractionService();
 
                 final long caller = Binder.clearCallingIdentity();
                 try {
@@ -738,7 +746,8 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         @Override
-        public int startVoiceActivity(IBinder token, Intent intent, String resolvedType) {
+        public int startVoiceActivity(IBinder token, Intent intent, String resolvedType,
+                String callingFeatureId) {
             synchronized (this) {
                 if (mImpl == null) {
                     Slog.w(TAG, "startVoiceActivity without running voice interaction service");
@@ -748,8 +757,8 @@ public class VoiceInteractionManagerService extends SystemService {
                 final int callingUid = Binder.getCallingUid();
                 final long caller = Binder.clearCallingIdentity();
                 try {
-                    return mImpl.startVoiceActivityLocked(callingPid, callingUid, token,
-                            intent, resolvedType);
+                    return mImpl.startVoiceActivityLocked(callingFeatureId, callingPid, callingUid,
+                            token, intent, resolvedType);
                 } finally {
                     Binder.restoreCallingIdentity(caller);
                 }
@@ -757,7 +766,8 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         @Override
-        public int startAssistantActivity(IBinder token, Intent intent, String resolvedType) {
+        public int startAssistantActivity(IBinder token, Intent intent, String resolvedType,
+                String callingFeatureId) {
             synchronized (this) {
                 if (mImpl == null) {
                     Slog.w(TAG, "startAssistantActivity without running voice interaction service");
@@ -767,8 +777,8 @@ public class VoiceInteractionManagerService extends SystemService {
                 final int callingUid = Binder.getCallingUid();
                 final long caller = Binder.clearCallingIdentity();
                 try {
-                    return mImpl.startAssistantActivityLocked(callingPid, callingUid, token,
-                            intent, resolvedType);
+                    return mImpl.startAssistantActivityLocked(callingFeatureId, callingPid,
+                            callingUid, token, intent, resolvedType);
                 } finally {
                     Binder.restoreCallingIdentity(caller);
                 }
@@ -920,7 +930,7 @@ public class VoiceInteractionManagerService extends SystemService {
 
         @Override
         public KeyphraseSoundModel getKeyphraseSoundModel(int keyphraseId, String bcp47Locale) {
-            enforceCallingPermission(Manifest.permission.MANAGE_VOICE_KEYPHRASES);
+            enforceCallerAllowedToEnrollVoiceModel();
 
             if (bcp47Locale == null) {
                 throw new IllegalArgumentException("Illegal argument(s) in getKeyphraseSoundModel");
@@ -937,7 +947,7 @@ public class VoiceInteractionManagerService extends SystemService {
 
         @Override
         public int updateKeyphraseSoundModel(KeyphraseSoundModel model) {
-            enforceCallingPermission(Manifest.permission.MANAGE_VOICE_KEYPHRASES);
+            enforceCallerAllowedToEnrollVoiceModel();
             if (model == null) {
                 throw new IllegalArgumentException("Model must not be null");
             }
@@ -962,7 +972,7 @@ public class VoiceInteractionManagerService extends SystemService {
 
         @Override
         public int deleteKeyphraseSoundModel(int keyphraseId, String bcp47Locale) {
-            enforceCallingPermission(Manifest.permission.MANAGE_VOICE_KEYPHRASES);
+            enforceCallerAllowedToEnrollVoiceModel();
 
             if (bcp47Locale == null) {
                 throw new IllegalArgumentException(
@@ -995,10 +1005,9 @@ public class VoiceInteractionManagerService extends SystemService {
 
         //----------------- SoundTrigger APIs --------------------------------//
         @Override
-        public boolean isEnrolledForKeyphrase(IVoiceInteractionService service, int keyphraseId,
-                String bcp47Locale) {
+        public boolean isEnrolledForKeyphrase(int keyphraseId, String bcp47Locale) {
             synchronized (this) {
-                enforceIsCurrentVoiceInteractionService(service);
+                enforceIsCurrentVoiceInteractionService();
             }
 
             if (bcp47Locale == null) {
@@ -1016,11 +1025,46 @@ public class VoiceInteractionManagerService extends SystemService {
             }
         }
 
+        @Nullable
+        public KeyphraseMetadata getEnrolledKeyphraseMetadata(String keyphrase,
+                String bcp47Locale) {
+            synchronized (this) {
+                enforceIsCurrentVoiceInteractionService();
+            }
+
+            if (bcp47Locale == null) {
+                throw new IllegalArgumentException("Illegal argument(s) in isEnrolledForKeyphrase");
+            }
+
+            final int callingUid = UserHandle.getCallingUserId();
+            final long caller = Binder.clearCallingIdentity();
+            try {
+                KeyphraseSoundModel model =
+                        mDbHelper.getKeyphraseSoundModel(keyphrase, callingUid, bcp47Locale);
+                if (model == null) {
+                    return null;
+                }
+
+                for (SoundTrigger.Keyphrase phrase : model.keyphrases) {
+                    if (keyphrase.equals(phrase.text)) {
+                        ArraySet<Locale> locales = new ArraySet<>();
+                        locales.add(phrase.locale);
+                        return new KeyphraseMetadata(phrase.id, phrase.text, locales,
+                                phrase.recognitionModes);
+                    }
+                }
+            } finally {
+                Binder.restoreCallingIdentity(caller);
+            }
+
+            return null;
+        }
+
         @Override
-        public ModuleProperties getDspModuleProperties(IVoiceInteractionService service) {
+        public ModuleProperties getDspModuleProperties() {
             // Allow the call if this is the current voice interaction service.
             synchronized (this) {
-                enforceIsCurrentVoiceInteractionService(service);
+                enforceIsCurrentVoiceInteractionService();
 
                 final long caller = Binder.clearCallingIdentity();
                 try {
@@ -1032,12 +1076,11 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         @Override
-        public int startRecognition(IVoiceInteractionService service, int keyphraseId,
-                String bcp47Locale, IRecognitionStatusCallback callback,
-                RecognitionConfig recognitionConfig) {
+        public int startRecognition(int keyphraseId, String bcp47Locale,
+                IRecognitionStatusCallback callback, RecognitionConfig recognitionConfig) {
             // Allow the call if this is the current voice interaction service.
             synchronized (this) {
-                enforceIsCurrentVoiceInteractionService(service);
+                enforceIsCurrentVoiceInteractionService();
 
                 if (callback == null || recognitionConfig == null || bcp47Locale == null) {
                     throw new IllegalArgumentException("Illegal argument(s) in startRecognition");
@@ -1069,16 +1112,61 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         @Override
-        public int stopRecognition(IVoiceInteractionService service, int keyphraseId,
-                IRecognitionStatusCallback callback) {
+        public int stopRecognition(int keyphraseId, IRecognitionStatusCallback callback) {
             // Allow the call if this is the current voice interaction service.
             synchronized (this) {
-                enforceIsCurrentVoiceInteractionService(service);
+                enforceIsCurrentVoiceInteractionService();
             }
 
             final long caller = Binder.clearCallingIdentity();
             try {
                 return mSoundTriggerInternal.stopRecognition(keyphraseId, callback);
+            } finally {
+                Binder.restoreCallingIdentity(caller);
+            }
+        }
+
+        @Override
+        public int setParameter(int keyphraseId, @ModelParams int modelParam, int value) {
+            // Allow the call if this is the current voice interaction service.
+            synchronized (this) {
+                enforceIsCurrentVoiceInteractionService();
+            }
+
+            final long caller = Binder.clearCallingIdentity();
+            try {
+                return mSoundTriggerInternal.setParameter(keyphraseId, modelParam, value);
+            } finally {
+                Binder.restoreCallingIdentity(caller);
+            }
+        }
+
+        @Override
+        public int getParameter(int keyphraseId, @ModelParams int modelParam) {
+            // Allow the call if this is the current voice interaction service.
+            synchronized (this) {
+                enforceIsCurrentVoiceInteractionService();
+            }
+
+            final long caller = Binder.clearCallingIdentity();
+            try {
+                return mSoundTriggerInternal.getParameter(keyphraseId, modelParam);
+            } finally {
+                Binder.restoreCallingIdentity(caller);
+            }
+        }
+
+        @Override
+        @Nullable
+        public ModelParamRange queryParameter(int keyphraseId, @ModelParams int modelParam) {
+            // Allow the call if this is the current voice interaction service.
+            synchronized (this) {
+                enforceIsCurrentVoiceInteractionService();
+            }
+
+            final long caller = Binder.clearCallingIdentity();
+            try {
+                return mSoundTriggerInternal.queryParameter(keyphraseId, modelParam);
             } finally {
                 Binder.restoreCallingIdentity(caller);
             }
@@ -1291,6 +1379,8 @@ public class VoiceInteractionManagerService extends SystemService {
                 pw.println("  mCurUser: " + mCurUser);
                 pw.println("  mCurUserUnlocked: " + mCurUserUnlocked);
                 pw.println("  mCurUserSupported: " + mCurUserSupported);
+                dumpSupportedUsers(pw, "  ");
+                mDbHelper.dump(pw);
                 if (mImpl == null) {
                     pw.println("  (No active implementation)");
                     return;
@@ -1301,9 +1391,9 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         @Override
-        public void setUiHints(IVoiceInteractionService service, Bundle hints) {
+        public void setUiHints(Bundle hints) {
             synchronized (this) {
-                enforceIsCurrentVoiceInteractionService(service);
+                enforceIsCurrentVoiceInteractionService();
 
                 final int size = mVoiceInteractionSessionListeners.beginBroadcast();
                 for (int i = 0; i < size; ++i) {
@@ -1326,12 +1416,30 @@ public class VoiceInteractionManagerService extends SystemService {
             }
         }
 
-        private void enforceIsCurrentVoiceInteractionService(IVoiceInteractionService service) {
-            if (mImpl == null || mImpl.mService == null
-                    || service.asBinder() != mImpl.mService.asBinder()) {
+        private void enforceIsCurrentVoiceInteractionService() {
+            if (!isCallerCurrentVoiceInteractionService()) {
                 throw new
                     SecurityException("Caller is not the current voice interaction service");
             }
+        }
+
+        private void enforceCallerAllowedToEnrollVoiceModel() {
+            enforceCallingPermission(Manifest.permission.MANAGE_VOICE_KEYPHRASES);
+            if (!isCallerCurrentVoiceInteractionService()
+                    && !isCallerTrustedEnrollmentApplication()) {
+                throw new SecurityException("Caller is required to be the current voice interaction"
+                        + " service or a system enrollment application to enroll voice models");
+            }
+        }
+
+        private boolean isCallerCurrentVoiceInteractionService() {
+            return mImpl != null
+                    && mImpl.mInfo.getServiceInfo().applicationInfo.uid == Binder.getCallingUid();
+        }
+
+        private boolean isCallerTrustedEnrollmentApplication() {
+            return mImpl.mEnrollmentApplicationInfo.isUidSupportedEnrollmentApplication(
+                    Binder.getCallingUid());
         }
 
         private void setImplLocked(VoiceInteractionManagerServiceImpl impl) {

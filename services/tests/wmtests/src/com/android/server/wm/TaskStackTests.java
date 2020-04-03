@@ -16,9 +16,11 @@
 
 package com.android.server.wm;
 
+import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECONDARY;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
 
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.doNothing;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.times;
@@ -31,7 +33,9 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 
+import android.app.WindowConfiguration;
 import android.graphics.Rect;
 import android.platform.test.annotations.Presubmit;
 
@@ -109,12 +113,12 @@ public class TaskStackTests extends WindowTestsBase {
     public void testStackRemoveImmediately() {
         final ActivityStack stack = createTaskStackOnDisplay(mDisplayContent);
         final Task task = createTaskInStack(stack, 0 /* userId */);
-        assertEquals(stack, task.getTaskStack());
+        assertEquals(stack, task.getStack());
 
         // Remove stack and check if its child is also removed.
         stack.removeImmediately();
         assertNull(stack.getDisplayContent());
-        assertNull(task.getTaskStack());
+        assertNull(task.getParent());
     }
 
     @Test
@@ -130,7 +134,7 @@ public class TaskStackTests extends WindowTestsBase {
         assertEquals(0, stack.getChildCount());
         assertNull(stack.getDisplayContent());
         assertNull(task.getDisplayContent());
-        assertNull(task.getTaskStack());
+        assertNull(task.getParent());
     }
 
     @Test
@@ -139,6 +143,7 @@ public class TaskStackTests extends WindowTestsBase {
         final Task task = createTaskInStack(stack, 0 /* userId */);
 
         // Stack removal is deferred if one of its child is animating.
+        doReturn(true).when(stack).hasWindowsAlive();
         doReturn(true).when(task).isAnimating(TRANSITION | CHILDREN);
 
         stack.removeIfPossible();
@@ -165,6 +170,7 @@ public class TaskStackTests extends WindowTestsBase {
         final ActivityStack stack2 = createTaskStackOnDisplay(dc);
 
         // Reparent
+        clearInvocations(task1); // reset the number of onDisplayChanged for task.
         stack1.reparent(dc, true /* onTop */);
         assertEquals(dc, stack1.getDisplayContent());
         final int stack1PositionInParent = stack1.getParent().mChildren.indexOf(stack1);
@@ -180,6 +186,16 @@ public class TaskStackTests extends WindowTestsBase {
         spyOn(stack);
         doReturn(stackOutset).when(stack).getStackOutset();
         doReturn(true).when(stack).inMultiWindowMode();
+
+        // Mock the resolved override windowing mode to non-fullscreen
+        final WindowConfiguration windowConfiguration =
+                stack.getResolvedOverrideConfiguration().windowConfiguration;
+        spyOn(windowConfiguration);
+        doReturn(WINDOWING_MODE_SPLIT_SCREEN_SECONDARY)
+                .when(windowConfiguration).getWindowingMode();
+
+        // Prevent adjust task dimensions
+        doNothing().when(stack).adjustForMinimalTaskDimensions(any(), any());
 
         final Rect stackBounds = new Rect(200, 200, 800, 1000);
         // Update surface position and size by the given bounds.

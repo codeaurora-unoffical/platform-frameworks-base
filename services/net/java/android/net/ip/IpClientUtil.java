@@ -119,6 +119,7 @@ public class IpClientUtil {
         @Override
         public void onNewDhcpResults(DhcpResultsParcelable dhcpResults) {
             mCb.onNewDhcpResults(fromStableParcelable(dhcpResults));
+            mCb.onNewDhcpResults(dhcpResults);
         }
 
         @Override
@@ -187,6 +188,11 @@ public class IpClientUtil {
         @Override
         public int getInterfaceVersion() {
             return this.VERSION;
+        }
+
+        @Override
+        public String getInterfaceHash() {
+            return this.HASH;
         }
     }
 

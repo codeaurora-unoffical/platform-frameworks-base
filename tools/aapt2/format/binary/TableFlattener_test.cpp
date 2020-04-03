@@ -32,6 +32,8 @@ using ::testing::Gt;
 using ::testing::IsNull;
 using ::testing::NotNull;
 
+using PolicyFlags = android::ResTable_overlayable_policy_header::PolicyFlags;
+
 namespace aapt {
 
 class TableFlattenerTest : public ::testing::Test {
@@ -431,6 +433,47 @@ TEST_F(TableFlattenerTest, FlattenSharedLibrary) {
   EXPECT_EQ("lib", iter->second);
 }
 
+TEST_F(TableFlattenerTest, FlattenSharedLibraryWithStyle) {
+  std::unique_ptr<IAaptContext> context =
+      test::ContextBuilder().SetCompilationPackage("lib").SetPackageId(0x00).Build();
+  std::unique_ptr<ResourceTable> table =
+      test::ResourceTableBuilder()
+          .SetPackageId("lib", 0x00)
+          .AddValue("lib:style/Theme",
+                    ResourceId(0x00030001),
+                    test::StyleBuilder()
+                    .AddItem("lib:attr/bar", ResourceId(0x00010002),
+                             ResourceUtils::TryParseInt("2"))
+                    .AddItem("lib:attr/foo", ResourceId(0x00010001),
+                             ResourceUtils::TryParseInt("1"))
+                    .AddItem("android:attr/bar", ResourceId(0x01010002),
+                             ResourceUtils::TryParseInt("4"))
+                    .AddItem("android:attr/foo", ResourceId(0x01010001),
+                             ResourceUtils::TryParseInt("3"))
+                    .Build())
+          .Build();
+  ResourceTable result;
+  ASSERT_TRUE(Flatten(context.get(), {}, table.get(), &result));
+
+  Maybe<ResourceTable::SearchResult> search_result =
+      result.FindResource(test::ParseNameOrDie("lib:style/Theme"));
+  ASSERT_TRUE(search_result);
+  EXPECT_EQ(0x00u, search_result.value().package->id.value());
+  EXPECT_EQ(0x03u, search_result.value().type->id.value());
+  EXPECT_EQ(0x01u, search_result.value().entry->id.value());
+  ASSERT_EQ(1u, search_result.value().entry->values.size());
+  Value* value = search_result.value().entry->values[0]->value.get();
+  Style* style = ValueCast<Style>(value);
+  ASSERT_TRUE(style);
+  ASSERT_EQ(4u, style->entries.size());
+  // Ensure the attributes from the shared library come after the items from
+  // android.
+  EXPECT_EQ(0x01010001, style->entries[0].key.id.value());
+  EXPECT_EQ(0x01010002, style->entries[1].key.id.value());
+  EXPECT_EQ(0x00010001, style->entries[2].key.id.value());
+  EXPECT_EQ(0x00010002, style->entries[3].key.id.value());
+}
+
 TEST_F(TableFlattenerTest, FlattenTableReferencingSharedLibraries) {
   std::unique_ptr<IAaptContext> context =
       test::ContextBuilder().SetCompilationPackage("app").SetPackageId(0x7f).Build();
@@ -630,9 +673,9 @@ TEST_F(TableFlattenerTest, ObfuscatingResourceNamesWithNameCollapseExemptionsSuc
 
 TEST_F(TableFlattenerTest, FlattenOverlayable) {
   OverlayableItem overlayable_item(std::make_shared<Overlayable>("TestName", "overlay://theme"));
-  overlayable_item.policies |= OverlayableItem::Policy::kProduct;
-  overlayable_item.policies |= OverlayableItem::Policy::kSystem;
-  overlayable_item.policies |= OverlayableItem::Policy::kVendor;
+  overlayable_item.policies |= PolicyFlags::PRODUCT_PARTITION;
+  overlayable_item.policies |= PolicyFlags::SYSTEM_PARTITION;
+  overlayable_item.policies |= PolicyFlags::VENDOR_PARTITION;
 
   std::string name = "com.app.test:integer/overlayable";
   std::unique_ptr<ResourceTable> table =
@@ -650,27 +693,27 @@ TEST_F(TableFlattenerTest, FlattenOverlayable) {
   ASSERT_THAT(search_result.value().entry, NotNull());
   ASSERT_TRUE(search_result.value().entry->overlayable_item);
   OverlayableItem& result_overlayable_item = search_result.value().entry->overlayable_item.value();
-  EXPECT_EQ(result_overlayable_item.policies, OverlayableItem::Policy::kSystem
-                                         | OverlayableItem::Policy::kVendor
-                                         | OverlayableItem::Policy::kProduct);
+  EXPECT_EQ(result_overlayable_item.policies, PolicyFlags::SYSTEM_PARTITION
+                                         | PolicyFlags::VENDOR_PARTITION
+                                         | PolicyFlags::PRODUCT_PARTITION);
 }
 
 TEST_F(TableFlattenerTest, FlattenMultipleOverlayablePolicies) {
   auto overlayable = std::make_shared<Overlayable>("TestName", "overlay://theme");
   std::string name_zero = "com.app.test:integer/overlayable_zero_item";
   OverlayableItem overlayable_item_zero(overlayable);
-  overlayable_item_zero.policies |= OverlayableItem::Policy::kProduct;
-  overlayable_item_zero.policies |= OverlayableItem::Policy::kSystem;
+  overlayable_item_zero.policies |= PolicyFlags::PRODUCT_PARTITION;
+  overlayable_item_zero.policies |= PolicyFlags::SYSTEM_PARTITION;
 
   std::string name_one = "com.app.test:integer/overlayable_one_item";
   OverlayableItem overlayable_item_one(overlayable);
-  overlayable_item_one.policies |= OverlayableItem::Policy::kPublic;
+  overlayable_item_one.policies |= PolicyFlags::PUBLIC;
 
   std::string name_two = "com.app.test:integer/overlayable_two_item";
   OverlayableItem overlayable_item_two(overlayable);
-  overlayable_item_two.policies |= OverlayableItem::Policy::kProduct;
-  overlayable_item_two.policies |= OverlayableItem::Policy::kSystem;
-  overlayable_item_two.policies |= OverlayableItem::Policy::kVendor;
+  overlayable_item_two.policies |= PolicyFlags::PRODUCT_PARTITION;
+  overlayable_item_two.policies |= PolicyFlags::SYSTEM_PARTITION;
+  overlayable_item_two.policies |= PolicyFlags::VENDOR_PARTITION;
 
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
@@ -691,47 +734,48 @@ TEST_F(TableFlattenerTest, FlattenMultipleOverlayablePolicies) {
   ASSERT_THAT(search_result.value().entry, NotNull());
   ASSERT_TRUE(search_result.value().entry->overlayable_item);
   OverlayableItem& overlayable_item = search_result.value().entry->overlayable_item.value();
-  EXPECT_EQ(overlayable_item.policies, OverlayableItem::Policy::kSystem
-                                       | OverlayableItem::Policy::kProduct);
+  EXPECT_EQ(overlayable_item.policies, PolicyFlags::SYSTEM_PARTITION
+                                       | PolicyFlags::PRODUCT_PARTITION);
 
   search_result = output_table.FindResource(test::ParseNameOrDie(name_one));
   ASSERT_TRUE(search_result);
   ASSERT_THAT(search_result.value().entry, NotNull());
   ASSERT_TRUE(search_result.value().entry->overlayable_item);
   overlayable_item = search_result.value().entry->overlayable_item.value();
-  EXPECT_EQ(overlayable_item.policies, OverlayableItem::Policy::kPublic);
+  EXPECT_EQ(overlayable_item.policies, PolicyFlags::PUBLIC);
 
   search_result = output_table.FindResource(test::ParseNameOrDie(name_two));
   ASSERT_TRUE(search_result);
   ASSERT_THAT(search_result.value().entry, NotNull());
   ASSERT_TRUE(search_result.value().entry->overlayable_item);
   overlayable_item = search_result.value().entry->overlayable_item.value();
-  EXPECT_EQ(overlayable_item.policies, OverlayableItem::Policy::kSystem
-                                       | OverlayableItem::Policy::kProduct
-                                       | OverlayableItem::Policy::kVendor);
+  EXPECT_EQ(overlayable_item.policies, PolicyFlags::SYSTEM_PARTITION
+                                       | PolicyFlags::PRODUCT_PARTITION
+                                       | PolicyFlags::VENDOR_PARTITION);
 }
 
 TEST_F(TableFlattenerTest, FlattenMultipleOverlayable) {
   auto group = std::make_shared<Overlayable>("TestName", "overlay://theme");
   std::string name_zero = "com.app.test:integer/overlayable_zero";
   OverlayableItem overlayable_item_zero(group);
-  overlayable_item_zero.policies |= OverlayableItem::Policy::kProduct;
-  overlayable_item_zero.policies |= OverlayableItem::Policy::kSystem;
+  overlayable_item_zero.policies |= PolicyFlags::PRODUCT_PARTITION;
+  overlayable_item_zero.policies |= PolicyFlags::SYSTEM_PARTITION;
 
   auto group_one = std::make_shared<Overlayable>("OtherName", "overlay://customization");
   std::string name_one = "com.app.test:integer/overlayable_one";
   OverlayableItem overlayable_item_one(group_one);
-  overlayable_item_one.policies |= OverlayableItem::Policy::kPublic;
+  overlayable_item_one.policies |= PolicyFlags::PUBLIC;
 
   std::string name_two = "com.app.test:integer/overlayable_two";
   OverlayableItem overlayable_item_two(group);
-  overlayable_item_two.policies |= OverlayableItem::Policy::kOdm;
-  overlayable_item_two.policies |= OverlayableItem::Policy::kOem;
-  overlayable_item_two.policies |= OverlayableItem::Policy::kVendor;
+  overlayable_item_two.policies |= PolicyFlags::ODM_PARTITION;
+  overlayable_item_two.policies |= PolicyFlags::OEM_PARTITION;
+  overlayable_item_two.policies |= PolicyFlags::VENDOR_PARTITION;
 
   std::string name_three = "com.app.test:integer/overlayable_three";
   OverlayableItem overlayable_item_three(group_one);
-  overlayable_item_three.policies |= OverlayableItem::Policy::kSignature;
+  overlayable_item_three.policies |= PolicyFlags::SIGNATURE;
+  overlayable_item_three.policies |= PolicyFlags::ACTOR_SIGNATURE;
 
   std::unique_ptr<ResourceTable> table =
       test::ResourceTableBuilder()
@@ -755,8 +799,8 @@ TEST_F(TableFlattenerTest, FlattenMultipleOverlayable) {
   OverlayableItem& result_overlayable = search_result.value().entry->overlayable_item.value();
   EXPECT_EQ(result_overlayable.overlayable->name, "TestName");
   EXPECT_EQ(result_overlayable.overlayable->actor, "overlay://theme");
-  EXPECT_EQ(result_overlayable.policies, OverlayableItem::Policy::kSystem
-                                         | OverlayableItem::Policy::kProduct);
+  EXPECT_EQ(result_overlayable.policies, PolicyFlags::SYSTEM_PARTITION
+                                         | PolicyFlags::PRODUCT_PARTITION);
 
   search_result = output_table.FindResource(test::ParseNameOrDie(name_one));
   ASSERT_TRUE(search_result);
@@ -765,7 +809,7 @@ TEST_F(TableFlattenerTest, FlattenMultipleOverlayable) {
   result_overlayable = search_result.value().entry->overlayable_item.value();
   EXPECT_EQ(result_overlayable.overlayable->name, "OtherName");
   EXPECT_EQ(result_overlayable.overlayable->actor, "overlay://customization");
-  EXPECT_EQ(result_overlayable.policies, OverlayableItem::Policy::kPublic);
+  EXPECT_EQ(result_overlayable.policies, PolicyFlags::PUBLIC);
 
   search_result = output_table.FindResource(test::ParseNameOrDie(name_two));
   ASSERT_TRUE(search_result);
@@ -774,9 +818,9 @@ TEST_F(TableFlattenerTest, FlattenMultipleOverlayable) {
   result_overlayable = search_result.value().entry->overlayable_item.value();
   EXPECT_EQ(result_overlayable.overlayable->name, "TestName");
   EXPECT_EQ(result_overlayable.overlayable->actor, "overlay://theme");
-  EXPECT_EQ(result_overlayable.policies, OverlayableItem::Policy::kOdm
-                                         | OverlayableItem::Policy::kOem
-                                         | OverlayableItem::Policy::kVendor);
+  EXPECT_EQ(result_overlayable.policies, PolicyFlags::ODM_PARTITION
+                                         | PolicyFlags::OEM_PARTITION
+                                         | PolicyFlags::VENDOR_PARTITION);
 
   search_result = output_table.FindResource(test::ParseNameOrDie(name_three));
   ASSERT_TRUE(search_result);
@@ -785,7 +829,8 @@ TEST_F(TableFlattenerTest, FlattenMultipleOverlayable) {
   result_overlayable = search_result.value().entry->overlayable_item.value();
   EXPECT_EQ(result_overlayable.overlayable->name, "OtherName");
   EXPECT_EQ(result_overlayable.overlayable->actor, "overlay://customization");
-  EXPECT_EQ(result_overlayable.policies, OverlayableItem::Policy::kSignature);
+  EXPECT_EQ(result_overlayable.policies, PolicyFlags::SIGNATURE
+                                           | PolicyFlags::ACTOR_SIGNATURE);
 }
 
 TEST_F(TableFlattenerTest, FlattenOverlayableNoPolicyFails) {

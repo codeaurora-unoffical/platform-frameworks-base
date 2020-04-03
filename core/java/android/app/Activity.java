@@ -33,10 +33,10 @@ import android.annotation.RequiresPermission;
 import android.annotation.StyleRes;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
 import android.app.VoiceInteractor.Request;
 import android.app.admin.DevicePolicyManager;
 import android.app.assist.AssistContent;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentCallbacks2;
 import android.content.ComponentName;
 import android.content.ContentResolver;
@@ -45,6 +45,7 @@ import android.content.CursorLoader;
 import android.content.IIntentSender;
 import android.content.Intent;
 import android.content.IntentSender;
+import android.content.LocusId;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
@@ -59,6 +60,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.Icon;
 import android.media.AudioManager;
 import android.media.session.MediaController;
 import android.net.Uri;
@@ -125,6 +127,7 @@ import android.view.autofill.AutofillManager;
 import android.view.autofill.AutofillManager.AutofillClient;
 import android.view.autofill.AutofillPopupWindow;
 import android.view.autofill.IAutofillWindowPresenter;
+import android.view.contentcapture.ContentCaptureContext;
 import android.view.contentcapture.ContentCaptureManager;
 import android.view.contentcapture.ContentCaptureManager.ContentCaptureClient;
 import android.widget.AdapterView;
@@ -766,8 +769,18 @@ public class Activity extends ContextThemeWrapper
 
     private static final String REQUEST_PERMISSIONS_WHO_PREFIX = "@android:requestPermissions:";
     private static final String AUTO_FILL_AUTH_WHO_PREFIX = "@android:autoFillAuth:";
-
     private static final String KEYBOARD_SHORTCUTS_RECEIVER_PKG_NAME = "com.android.systemui";
+
+    private static final int LOG_AM_ON_CREATE_CALLED = 30057;
+    private static final int LOG_AM_ON_START_CALLED = 30059;
+    private static final int LOG_AM_ON_RESUME_CALLED = 30022;
+    private static final int LOG_AM_ON_PAUSE_CALLED = 30021;
+    private static final int LOG_AM_ON_STOP_CALLED = 30049;
+    private static final int LOG_AM_ON_RESTART_CALLED = 30058;
+    private static final int LOG_AM_ON_DESTROY_CALLED = 30060;
+    private static final int LOG_AM_ON_ACTIVITY_RESULT_CALLED = 30062;
+    private static final int LOG_AM_ON_TOP_RESUMED_GAINED_CALLED = 30064;
+    private static final int LOG_AM_ON_TOP_RESUMED_LOST_CALLED = 30065;
 
     private static class ManagedDialog {
         Dialog mDialog;
@@ -1015,6 +1028,42 @@ public class Activity extends ContextThemeWrapper
         mIntent = newIntent;
     }
 
+    /**
+     * Sets the {@link android.content.LocusId} for this activity. The locus id
+     * helps identify different instances of the same {@code Activity} class.
+     * <p> For example, a locus id based on a specific conversation could be set on a
+     * conversation app's chat {@code Activity}. The system can then use this locus id
+     * along with app's contents to provide ranking signals in various UI surfaces
+     * including sharing, notifications, shortcuts and so on.
+     * <p> It is recommended to set the same locus id in the shortcut's locus id using
+     * {@link android.content.pm.ShortcutInfo.Builder#setLocusId(android.content.LocusId)
+     *      setLocusId}
+     * so that the system can learn appropriate ranking signals linking the activity's
+     * locus id with the matching shortcut.
+     *
+     * @param locusId  a unique, stable id that identifies this {@code Activity} instance from
+     *      others. This can be linked to a shortcut using
+     *      {@link android.content.pm.ShortcutInfo.Builder#setLocusId(android.content.LocusId)
+     *      setLocusId} with the same locus id string.
+     * @param bundle extras set or updated as part of this locus context. This may help provide
+     *      additional metadata such as URLs, conversation participants specific to this
+     *      {@code Activity}'s context.
+     *
+     * @see android.view.contentcapture.ContentCaptureManager
+     * @see android.view.contentcapture.ContentCaptureContext
+     */
+    public void setLocusContext(@Nullable LocusId locusId, @Nullable Bundle bundle) {
+        try {
+            ActivityManager.getService().setActivityLocusContext(mComponent, locusId, mToken);
+        } catch (RemoteException re) {
+            re.rethrowFromSystemServer();
+        }
+        // If locusId is not null pass it to the Content Capture.
+        if (locusId != null) {
+            setLocusContextToContentCapture(locusId, bundle);
+        }
+    }
+
     /** Return the application that owns this activity. */
     public final Application getApplication() {
         return mApplication;
@@ -1163,6 +1212,19 @@ public class Activity extends ContextThemeWrapper
         } finally {
             Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
         }
+    }
+
+    private void setLocusContextToContentCapture(LocusId locusId, @Nullable Bundle bundle) {
+        final ContentCaptureManager cm = getContentCaptureManager();
+        if (cm == null) return;
+
+        ContentCaptureContext.Builder contentCaptureContextBuilder =
+                new ContentCaptureContext.Builder(locusId);
+        if (bundle != null) {
+            contentCaptureContextBuilder.setExtras(bundle);
+        }
+        cm.getMainContentCaptureSession().setContentCaptureContext(
+                contentCaptureContextBuilder.build());
     }
 
     @Override
@@ -1846,6 +1908,7 @@ public class Activity extends ContextThemeWrapper
             if (!mAutoFillIgnoreFirstResumePause) {
                 View focus = getCurrentFocus();
                 if (focus != null && focus.canNotifyAutofillEnterExitEvent()) {
+                    // TODO(b/148815880): Bring up keyboard if resumed from inline authentication.
                     // TODO: in Activity killed/recreated case, i.e. SessionLifecycleTest#
                     // testDatasetVisibleWhileAutofilledAppIsLifecycled: the View's initial
                     // window visibility after recreation is INVISIBLE in onResume() and next frame
@@ -2439,8 +2502,11 @@ public class Activity extends ContextThemeWrapper
      * {@link #onProvideKeyboardShortcuts} to retrieve the shortcuts for the foreground activity.
      */
     public final void requestShowKeyboardShortcuts() {
+        final ComponentName sysuiComponent = ComponentName.unflattenFromString(
+                getResources().getString(
+                        com.android.internal.R.string.config_systemUIServiceComponent));
         Intent intent = new Intent(Intent.ACTION_SHOW_KEYBOARD_SHORTCUTS);
-        intent.setPackage(KEYBOARD_SHORTCUTS_RECEIVER_PKG_NAME);
+        intent.setPackage(sysuiComponent.getPackageName());
         sendBroadcastAsUser(intent, Process.myUserHandle());
     }
 
@@ -2448,8 +2514,11 @@ public class Activity extends ContextThemeWrapper
      * Dismiss the Keyboard Shortcuts screen.
      */
     public final void dismissKeyboardShortcutsHelper() {
+        final ComponentName sysuiComponent = ComponentName.unflattenFromString(
+                getResources().getString(
+                        com.android.internal.R.string.config_systemUIServiceComponent));
         Intent intent = new Intent(Intent.ACTION_DISMISS_KEYBOARD_SHORTCUTS);
-        intent.setPackage(KEYBOARD_SHORTCUTS_RECEIVER_PKG_NAME);
+        intent.setPackage(sysuiComponent.getPackageName());
         sendBroadcastAsUser(intent, Process.myUserHandle());
     }
 
@@ -2523,7 +2592,8 @@ public class Activity extends ContextThemeWrapper
         mCalled = true;
 
         if (mAutoFillResetNeeded) {
-            getAutofillManager().onInvisibleForAutofill();
+            // If stopped without changing the configurations, the response should expire.
+            getAutofillManager().onInvisibleForAutofill(!mChangingConfigurations);
         } else if (mIntent != null
                 && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_SESSION_TOKEN)
                 && mIntent.hasExtra(AutofillManager.EXTRA_RESTORE_CROSS_ACTIVITY)) {
@@ -2819,6 +2889,24 @@ public class Activity extends ContextThemeWrapper
      */
     private boolean deviceSupportsPictureInPictureMode() {
         return getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+
+    /**
+     * This method is called by the system in various cases where picture in picture mode should be
+     * entered if supported.
+     *
+     * <p>It is up to the app developer to choose whether to call
+     * {@link #enterPictureInPictureMode(PictureInPictureParams)} at this time. For example, the
+     * system will call this method when the activity is being put into the background, so the app
+     * developer might want to switch an activity into PIP mode instead.</p>
+     *
+     * @return {@code true} if the activity received this callback regardless of if it acts on it
+     * or not. If {@code false}, the framework will assume the app hasn't been updated to leverage
+     * this callback and will in turn send a legacy callback of {@link #onUserLeaveHint()} for the
+     * app to enter picture-in-picture mode.
+     */
+    public boolean onPictureInPictureRequested() {
+        return false;
     }
 
     void dispatchMovedToDisplay(int displayId, Configuration config) {
@@ -5741,9 +5829,9 @@ public class Activity extends ContextThemeWrapper
                 intent.prepareToLeaveProcess(this);
                 result = ActivityTaskManager.getService()
                     .startActivity(mMainThread.getApplicationThread(), getBasePackageName(),
-                            intent, intent.resolveTypeIfNeeded(getContentResolver()), mToken,
-                            mEmbeddedID, requestCode, ActivityManager.START_FLAG_ONLY_IF_NEEDED,
-                            null, options);
+                            getFeatureId(), intent,
+                            intent.resolveTypeIfNeeded(getContentResolver()), mToken, mEmbeddedID,
+                            requestCode, ActivityManager.START_FLAG_ONLY_IF_NEEDED, null, options);
             } catch (RemoteException e) {
                 // Empty
             }
@@ -6537,8 +6625,8 @@ public class Activity extends ContextThemeWrapper
         try {
             data.prepareToLeaveProcess(this);
             IIntentSender target =
-                ActivityManager.getService().getIntentSender(
-                        ActivityManager.INTENT_SENDER_ACTIVITY_RESULT, packageName,
+                ActivityManager.getService().getIntentSenderWithFeature(
+                        ActivityManager.INTENT_SENDER_ACTIVITY_RESULT, packageName, getFeatureId(),
                         mParent == null ? mToken : mParent.mToken,
                         mEmbeddedID, requestCode, new Intent[] { data }, null, flags, null,
                         getUserId());
@@ -6810,7 +6898,7 @@ public class Activity extends ContextThemeWrapper
                 final int size = ActivityManager.getLauncherLargeIconSizeInner(this);
                 final Bitmap icon = Bitmap.createScaledBitmap(taskDescription.getIcon(), size, size,
                         true);
-                mTaskDescription.setIcon(icon);
+                mTaskDescription.setIcon(Icon.createWithBitmap(icon));
             }
         }
         try {
@@ -7855,6 +7943,8 @@ public class Activity extends ContextThemeWrapper
         mCurrentConfig = config;
 
         mWindow.setColorMode(info.colorMode);
+        mWindow.setPreferMinimalPostProcessing(
+                (info.flags & ActivityInfo.FLAG_PREFER_MINIMAL_POST_PROCESSING) != 0);
 
         setAutofillOptions(application.getAutofillOptions());
         setContentCaptureOptions(application.getContentCaptureOptions());
@@ -8380,7 +8470,7 @@ public class Activity extends ContextThemeWrapper
     /** @hide */
     @Override
     public final void autofillClientAuthenticate(int authenticationId, IntentSender intent,
-            Intent fillInIntent) {
+            Intent fillInIntent, boolean authenticateInline) {
         try {
             startIntentSenderForResultInner(intent, AUTO_FILL_AUTH_WHO_PREFIX,
                     authenticationId, fillInIntent, 0, 0, null);
@@ -8658,10 +8748,23 @@ public class Activity extends ContextThemeWrapper
      * @hide
      */
     @RequiresPermission(CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS)
-    @UnsupportedAppUsage
     public void registerRemoteAnimations(RemoteAnimationDefinition definition) {
         try {
             ActivityTaskManager.getService().registerRemoteAnimations(mToken, definition);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Unregisters all remote animations for this activity.
+     *
+     * @hide
+     */
+    @RequiresPermission(CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS)
+    public void unregisterRemoteAnimations() {
+        try {
+            ActivityTaskManager.getService().unregisterRemoteAnimations(mToken);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

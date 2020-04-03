@@ -20,7 +20,7 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.PackageManager;
 import android.net.IpConfiguration;
 import android.net.IpConfiguration.ProxySettings;
@@ -29,6 +29,7 @@ import android.net.NetworkSpecifier;
 import android.net.ProxyInfo;
 import android.net.StaticIpConfiguration;
 import android.net.Uri;
+import android.net.util.MacAddressUtils;
 import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -36,14 +37,11 @@ import android.os.SystemClock;
 import android.os.UserHandle;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
-import android.util.BackupUtils;
 import android.util.Log;
 import android.util.SparseArray;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import com.android.internal.annotations.VisibleForTesting;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.Arrays;
@@ -123,7 +121,11 @@ public class WifiConfiguration implements Parcelable {
                 OWE,
                 SUITE_B_192,
                 WPA_PSK_SHA256,
-                WPA_EAP_SHA256})
+                WPA_EAP_SHA256,
+                WAPI_PSK,
+                WAPI_CERT,
+                FILS_SHA256,
+                FILS_SHA384})
         public @interface KeyMgmtScheme {}
 
         /** WPA is not used; plaintext or static WEP could be used. */
@@ -190,11 +192,37 @@ public class WifiConfiguration implements Parcelable {
          */
         public static final int WPA_EAP_SHA256 = 12;
 
+        /**
+         * WAPI pre-shared key (requires {@code preSharedKey} to be specified).
+         * @hide
+         */
+        @SystemApi
+        public static final int WAPI_PSK = 13;
+
+        /**
+         * WAPI certificate to be specified.
+         * @hide
+         */
+        @SystemApi
+        public static final int WAPI_CERT = 14;
+
+        /**
+        * IEEE 802.11ai FILS SK with SHA256
+         * @hide
+        */
+        public static final int FILS_SHA256 = 15;
+        /**
+         * IEEE 802.11ai FILS SK with SHA384:
+         * @hide
+         */
+        public static final int FILS_SHA384 = 16;
+
         public static final String varName = "key_mgmt";
 
         public static final String[] strings = { "NONE", "WPA_PSK", "WPA_EAP",
                 "IEEE8021X", "WPA2_PSK", "OSEN", "FT_PSK", "FT_EAP",
-                "SAE", "OWE", "SUITE_B_192", "WPA_PSK_SHA256", "WPA_EAP_SHA256" };
+                "SAE", "OWE", "SUITE_B_192", "WPA_PSK_SHA256", "WPA_EAP_SHA256",
+                "WAPI_PSK", "WAPI_CERT", "FILS_SHA256", "FILS_SHA384" };
     }
 
     /**
@@ -215,9 +243,14 @@ public class WifiConfiguration implements Parcelable {
          */
         public static final int OSEN = 2;
 
+        /**
+         * WAPI Protocol
+         */
+        public static final int WAPI = 3;
+
         public static final String varName = "proto";
 
-        public static final String[] strings = { "WPA", "RSN", "OSEN" };
+        public static final String[] strings = { "WPA", "RSN", "OSEN", "WAPI" };
     }
 
     /**
@@ -236,9 +269,12 @@ public class WifiConfiguration implements Parcelable {
         /** LEAP/Network EAP (only used with LEAP) */
         public static final int LEAP = 2;
 
+        /** SAE (Used only for WPA3-Personal) */
+        public static final int SAE = 3;
+
         public static final String varName = "auth_alg";
 
-        public static final String[] strings = { "OPEN", "SHARED", "LEAP" };
+        public static final String[] strings = { "OPEN", "SHARED", "LEAP", "SAE" };
     }
 
     /**
@@ -260,10 +296,14 @@ public class WifiConfiguration implements Parcelable {
          * AES in Galois/Counter Mode
          */
         public static final int GCMP_256 = 3;
+        /**
+         * SMS4 cipher for WAPI
+         */
+        public static final int SMS4 = 4;
 
         public static final String varName = "pairwise";
 
-        public static final String[] strings = { "NONE", "TKIP", "CCMP", "GCMP_256" };
+        public static final String[] strings = { "NONE", "TKIP", "CCMP", "GCMP_256", "SMS4" };
     }
 
     /**
@@ -301,12 +341,17 @@ public class WifiConfiguration implements Parcelable {
          * AES in Galois/Counter Mode
          */
         public static final int GCMP_256 = 5;
+        /**
+         * SMS4 cipher for WAPI
+         */
+        public static final int SMS4 = 6;
 
         public static final String varName = "group";
 
         public static final String[] strings =
                 { /* deprecated */ "WEP40", /* deprecated */ "WEP104",
-                        "TKIP", "CCMP", "GTK_NOT_USED", "GCMP_256" };
+                        "TKIP", "CCMP", "GTK_NOT_USED", "GCMP_256",
+                        "SMS4" };
     }
 
     /**
@@ -371,25 +416,29 @@ public class WifiConfiguration implements Parcelable {
         public static final String[] strings = { "current", "disabled", "enabled" };
     }
 
+    /** Security type for an open network. */
+    public static final int SECURITY_TYPE_OPEN = 0;
+    /** Security type for a WEP network. */
+    public static final int SECURITY_TYPE_WEP = 1;
+    /** Security type for a PSK network. */
+    public static final int SECURITY_TYPE_PSK = 2;
+    /** Security type for an EAP network. */
+    public static final int SECURITY_TYPE_EAP = 3;
+    /** Security type for an SAE network. */
+    public static final int SECURITY_TYPE_SAE = 4;
+    /** Security type for an EAP Suite B network. */
+    public static final int SECURITY_TYPE_EAP_SUITE_B = 5;
+    /** Security type for an OWE network. */
+    public static final int SECURITY_TYPE_OWE = 6;
+    /** Security type for a WAPI PSK network. */
+    public static final int SECURITY_TYPE_WAPI_PSK = 7;
+    /** Security type for a WAPI Certificate network. */
+    public static final int SECURITY_TYPE_WAPI_CERT = 8;
+
     /**
      * Security types we support.
+     * @hide
      */
-    /** @hide */
-    public static final int SECURITY_TYPE_OPEN = 0;
-    /** @hide */
-    public static final int SECURITY_TYPE_WEP = 1;
-    /** @hide */
-    public static final int SECURITY_TYPE_PSK = 2;
-    /** @hide */
-    public static final int SECURITY_TYPE_EAP = 3;
-    /** @hide */
-    public static final int SECURITY_TYPE_SAE = 4;
-    /** @hide */
-    public static final int SECURITY_TYPE_EAP_SUITE_B = 5;
-    /** @hide */
-    public static final int SECURITY_TYPE_OWE = 6;
-
-    /** @hide */
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(prefix = { "SECURITY_TYPE_" }, value = {
             SECURITY_TYPE_OPEN,
@@ -398,15 +447,26 @@ public class WifiConfiguration implements Parcelable {
             SECURITY_TYPE_EAP,
             SECURITY_TYPE_SAE,
             SECURITY_TYPE_EAP_SUITE_B,
-            SECURITY_TYPE_OWE
+            SECURITY_TYPE_OWE,
+            SECURITY_TYPE_WAPI_PSK,
+            SECURITY_TYPE_WAPI_CERT
     })
     public @interface SecurityType {}
 
     /**
-     * @hide
-     * Set security params (sets the various bitsets exposed in WifiConfiguration).
+     * Set the various security params to correspond to the provided security type.
+     * This is accomplished by setting the various BitSets exposed in WifiConfiguration.
      *
-     * @param securityType One of the security types from {@link SecurityType}.
+     * @param securityType One of the following security types:
+     * {@link #SECURITY_TYPE_OPEN},
+     * {@link #SECURITY_TYPE_WEP},
+     * {@link #SECURITY_TYPE_PSK},
+     * {@link #SECURITY_TYPE_EAP},
+     * {@link #SECURITY_TYPE_SAE},
+     * {@link #SECURITY_TYPE_EAP_SUITE_B},
+     * {@link #SECURITY_TYPE_OWE},
+     * {@link #SECURITY_TYPE_WAPI_PSK}, or
+     * {@link #SECURITY_TYPE_WAPI_CERT}
      */
     public void setSecurityParams(@SecurityType int securityType) {
         // Clear all the bitsets.
@@ -435,20 +495,40 @@ public class WifiConfiguration implements Parcelable {
                 allowedKeyManagement.set(WifiConfiguration.KeyMgmt.IEEE8021X);
                 break;
             case SECURITY_TYPE_SAE:
+                allowedProtocols.set(WifiConfiguration.Protocol.RSN);
                 allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SAE);
-                requirePMF = true;
+                allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.CCMP);
+                allowedGroupCiphers.set(WifiConfiguration.GroupCipher.CCMP);
+                requirePmf = true;
                 break;
             case SECURITY_TYPE_EAP_SUITE_B:
+                allowedProtocols.set(WifiConfiguration.Protocol.RSN);
                 allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SUITE_B_192);
+                allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.GCMP_256);
                 allowedGroupCiphers.set(WifiConfiguration.GroupCipher.GCMP_256);
                 allowedGroupManagementCiphers.set(WifiConfiguration.GroupMgmtCipher.BIP_GMAC_256);
                 // Note: allowedSuiteBCiphers bitset will be set by the service once the
                 // certificates are attached to this profile
-                requirePMF = true;
+                requirePmf = true;
                 break;
             case SECURITY_TYPE_OWE:
+                allowedProtocols.set(WifiConfiguration.Protocol.RSN);
                 allowedKeyManagement.set(WifiConfiguration.KeyMgmt.OWE);
-                requirePMF = true;
+                allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.CCMP);
+                allowedGroupCiphers.set(WifiConfiguration.GroupCipher.CCMP);
+                requirePmf = true;
+                break;
+            case SECURITY_TYPE_WAPI_PSK:
+                allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WAPI_PSK);
+                allowedProtocols.set(WifiConfiguration.Protocol.WAPI);
+                allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.SMS4);
+                allowedGroupCiphers.set(WifiConfiguration.GroupCipher.SMS4);
+                break;
+            case SECURITY_TYPE_WAPI_CERT:
+                allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WAPI_CERT);
+                allowedProtocols.set(WifiConfiguration.Protocol.WAPI);
+                allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.SMS4);
+                allowedGroupCiphers.set(WifiConfiguration.GroupCipher.SMS4);
                 break;
             default:
                 throw new IllegalArgumentException("unknown security type " + securityType);
@@ -501,14 +581,12 @@ public class WifiConfiguration implements Parcelable {
      * 2GHz band.
      * @hide
      */
-    @SystemApi
     public static final int AP_BAND_2GHZ = 0;
 
     /**
      * 5GHz band.
      * @hide
      */
-    @SystemApi
     public static final int AP_BAND_5GHZ = 1;
 
     /**
@@ -516,7 +594,6 @@ public class WifiConfiguration implements Parcelable {
      * operating country code and current radio conditions.
      * @hide
      */
-    @SystemApi
     public static final int AP_BAND_ANY = -1;
 
     /**
@@ -526,7 +603,7 @@ public class WifiConfiguration implements Parcelable {
      *
      * @hide
      */
-    @SystemApi
+    @UnsupportedAppUsage
     @ApBand
     public int apBand = AP_BAND_2GHZ;
 
@@ -598,7 +675,7 @@ public class WifiConfiguration implements Parcelable {
      * @hide
      */
     @SystemApi
-    public boolean requirePMF;
+    public boolean requirePmf;
 
     /**
      * Update identifier, for Passpoint network.
@@ -649,8 +726,8 @@ public class WifiConfiguration implements Parcelable {
     public BitSet allowedGroupManagementCiphers;
     /**
      * The set of SuiteB ciphers supported by this configuration.
-     * To be used for WPA3-Enterprise mode.
-     * See {@link SuiteBCipher} for descriptions of the values.
+     * To be used for WPA3-Enterprise mode. Set automatically by the framework based on the
+     * certificate type that is used in this configuration.
      */
     @NonNull
     public BitSet allowedSuiteBCiphers;
@@ -802,18 +879,6 @@ public class WifiConfiguration implements Parcelable {
 
     /**
      * @hide
-     * For debug: date at which the config was last updated
-     */
-    public String updateTime;
-
-    /**
-     * @hide
-     * For debug: date at which the config was last updated
-     */
-    public String creationTime;
-
-    /**
-     * @hide
      * The WiFi configuration is considered to have no internet access for purpose of autojoining
      * if there has been a report of it having no internet access, and, it never have had
      * internet access in the past.
@@ -896,8 +961,10 @@ public class WifiConfiguration implements Parcelable {
     }
 
     /**
-     * Indicate whther the network is trusted or not. Networks are considered trusted
+     * Indicate whether the network is trusted or not. Networks are considered trusted
      * if the user explicitly allowed this network connection.
+     * This bit can be used by suggestion network, see
+     * {@link WifiNetworkSuggestion.Builder#setUntrusted(boolean)}
      * @hide
      */
     public boolean trusted;
@@ -1112,7 +1179,7 @@ public class WifiConfiguration implements Parcelable {
      * @return true if mac is good to use
      */
     public static boolean isValidMacAddressForRandomization(MacAddress mac) {
-        return mac != null && !mac.isMulticastAddress() && mac.isLocallyAssigned()
+        return mac != null && !MacAddressUtils.isMulticastAddress(mac) && mac.isLocallyAssigned()
                 && !MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS).equals(mac);
     }
 
@@ -1156,22 +1223,27 @@ public class WifiConfiguration implements Parcelable {
      */
     @SystemApi
     public static class NetworkSelectionStatus {
-        // Quality Network Selection Status enable, temporary disabled, permanently disabled
+        /** @hide */
+        @Retention(RetentionPolicy.SOURCE)
+        @IntDef(prefix = "NETWORK_SELECTION_",
+                value = {
+                NETWORK_SELECTION_ENABLED,
+                NETWORK_SELECTION_TEMPORARY_DISABLED,
+                NETWORK_SELECTION_PERMANENTLY_DISABLED})
+        public @interface NetworkEnabledStatus {}
         /**
-         * This network is allowed to join Quality Network Selection
-         * @hide
+         * This network will be considered as a potential candidate to connect to during network
+         * selection.
          */
         public static final int NETWORK_SELECTION_ENABLED = 0;
         /**
-         * network was temporary disabled. Can be re-enabled after a time period expire
-         * @hide
+         * This network was temporary disabled. May be re-enabled after a time out.
          */
-        public static final int NETWORK_SELECTION_TEMPORARY_DISABLED  = 1;
+        public static final int NETWORK_SELECTION_TEMPORARY_DISABLED = 1;
         /**
-         * network was permanently disabled.
-         * @hide
+         * This network was permanently disabled.
          */
-        public static final int NETWORK_SELECTION_PERMANENTLY_DISABLED  = 2;
+        public static final int NETWORK_SELECTION_PERMANENTLY_DISABLED = 2;
         /**
          * Maximum Network selection status
          * @hide
@@ -1190,8 +1262,8 @@ public class WifiConfiguration implements Parcelable {
 
         /** @hide */
         @Retention(RetentionPolicy.SOURCE)
-        @IntDef(value = {
-                NETWORK_SELECTION_ENABLE,
+        @IntDef(prefix = "DISABLED_", value = {
+                DISABLED_NONE,
                 DISABLED_ASSOCIATION_REJECTION,
                 DISABLED_AUTHENTICATION_FAILURE,
                 DISABLED_DHCP_FAILURE,
@@ -1205,7 +1277,7 @@ public class WifiConfiguration implements Parcelable {
 
         // Quality Network disabled reasons
         /** Default value. Means not disabled. */
-        public static final int NETWORK_SELECTION_ENABLE = 0;
+        public static final int DISABLED_NONE = 0;
         /**
          * The starting index for network selection disabled reasons.
          * @hide
@@ -1242,8 +1314,32 @@ public class WifiConfiguration implements Parcelable {
         public static final int DISABLED_BY_WRONG_PASSWORD = 8;
         /** This network is disabled because service is not subscribed. */
         public static final int DISABLED_AUTHENTICATION_NO_SUBSCRIPTION = 9;
-        /** All other disable reasons should be strictly less than this value. */
+        /**
+         * All other disable reasons should be strictly less than this value.
+         * @hide
+         */
         public static final int NETWORK_SELECTION_DISABLED_MAX = 10;
+
+        /**
+         * Get an integer that is equal to the maximum integer value of all the
+         * DISABLED_* reasons
+         * e.g. {@link #DISABLED_NONE}, {@link #DISABLED_ASSOCIATION_REJECTION}, etc.
+         *
+         * All DISABLED_* constants will be contiguous in the range
+         * 0, 1, 2, 3, ..., getMaxNetworkSelectionDisableReasons()
+         *
+         * <br />
+         * For example, this can be used to iterate through all the network selection
+         * disable reasons like so:
+         * <pre>{@code
+         * for (int reason = 0; reason <= getMaxNetworkSelectionDisableReasons(); reason++) {
+         *     ...
+         * }
+         * }</pre>
+         */
+        public static int getMaxNetworkSelectionDisableReason() {
+            return NETWORK_SELECTION_DISABLED_MAX - 1;
+        }
 
         /**
          * Contains info about disable reasons.
@@ -1294,7 +1390,7 @@ public class WifiConfiguration implements Parcelable {
         private static SparseArray<DisableReasonInfo> buildDisableReasonInfos() {
             SparseArray<DisableReasonInfo> reasons = new SparseArray<>();
 
-            reasons.append(NETWORK_SELECTION_ENABLE,
+            reasons.append(DISABLED_NONE,
                     new DisableReasonInfo(
                             // Note that these strings are persisted in
                             // XmlUtil.NetworkSelectionStatusXmlUtil#writeToXml,
@@ -1403,6 +1499,7 @@ public class WifiConfiguration implements Parcelable {
          * Network selection status, should be in one of three status: enable, temporaily disabled
          * or permanently disabled
          */
+        @NetworkEnabledStatus
         private int mStatus;
 
         /**
@@ -1431,12 +1528,6 @@ public class WifiConfiguration implements Parcelable {
          * configKey is : "SSID"-WEP-WPA_PSK-WPA_EAP
          */
         private String mConnectChoice;
-
-        /**
-         * The system timestamp when we records the connectChoice. This value is obtained from
-         * System.currentTimeMillis
-         */
-        private long mConnectChoiceTimestamp = INVALID_NETWORK_SELECTION_DISABLE_TIMESTAMP;
 
         /**
          * Used to cache the temporary candidate during the network selection procedure. It will be
@@ -1541,25 +1632,6 @@ public class WifiConfiguration implements Parcelable {
             mConnectChoice = newConnectChoice;
         }
 
-        /**
-         * get the timeStamp when user select a choice over this configuration
-         * @return returns when current connectChoice is set (time from System.currentTimeMillis)
-         * @hide
-         */
-        public long getConnectChoiceTimestamp() {
-            return mConnectChoiceTimestamp;
-        }
-
-        /**
-         * set the timeStamp when user select a choice over this configuration
-         * @param timeStamp, the timestamp set to connectChoiceTimestamp, expected timestamp should
-         *        be obtained from System.currentTimeMillis
-         * @hide
-         */
-        public void setConnectChoiceTimestamp(long timeStamp) {
-            mConnectChoiceTimestamp = timeStamp;
-        }
-
         /** Get the current Quality network selection status as a String (for debugging). */
         @NonNull
         public String getNetworkStatusString() {
@@ -1572,7 +1644,7 @@ public class WifiConfiguration implements Parcelable {
         }
 
         /** True if the device has ever connected to this network, false otherwise. */
-        public boolean getHasEverConnected() {
+        public boolean hasEverConnected() {
             return mHasEverConnected;
         }
 
@@ -1583,13 +1655,65 @@ public class WifiConfiguration implements Parcelable {
         }
 
         /**
+         * NetworkSelectionStatus exports an immutable public API.
+         * However, test code has a need to construct a NetworkSelectionStatus in a specific state.
+         * (Note that mocking using Mockito does not work if the object needs to be parceled and
+         * unparceled.)
+         * Export a @SystemApi Builder to allow tests to construct a NetworkSelectionStatus object
+         * in the desired state, without sacrificing NetworkSelectionStatus's immutability.
+         */
+        @VisibleForTesting
+        public static final class Builder {
+            private final NetworkSelectionStatus mNetworkSelectionStatus =
+                    new NetworkSelectionStatus();
+
+            /**
+             * Set the current network selection status.
+             * One of:
+             * {@link #NETWORK_SELECTION_ENABLED},
+             * {@link #NETWORK_SELECTION_TEMPORARY_DISABLED},
+             * {@link #NETWORK_SELECTION_PERMANENTLY_DISABLED}
+             * @see NetworkSelectionStatus#getNetworkSelectionStatus()
+             */
+            @NonNull
+            public Builder setNetworkSelectionStatus(@NetworkEnabledStatus int status) {
+                mNetworkSelectionStatus.setNetworkSelectionStatus(status);
+                return this;
+            }
+
+            /**
+             *
+             * Set the current network's disable reason.
+             * One of the {@link #DISABLED_NONE} or DISABLED_* constants.
+             * e.g. {@link #DISABLED_ASSOCIATION_REJECTION}.
+             * @see NetworkSelectionStatus#getNetworkSelectionDisableReason()
+             */
+            @NonNull
+            public Builder setNetworkSelectionDisableReason(
+                    @NetworkSelectionDisableReason int reason) {
+                mNetworkSelectionStatus.setNetworkSelectionDisableReason(reason);
+                return this;
+            }
+
+            /**
+             * Build a NetworkSelectionStatus object.
+             */
+            @NonNull
+            public NetworkSelectionStatus build() {
+                NetworkSelectionStatus status = new NetworkSelectionStatus();
+                status.copy(mNetworkSelectionStatus);
+                return status;
+            }
+        }
+
+        /**
          * Get the network disable reason string for a reason code (for debugging).
-         * @param reason specific error reason. One of the {@link #NETWORK_SELECTION_ENABLE} or
+         * @param reason specific error reason. One of the {@link #DISABLED_NONE} or
          *               DISABLED_* constants e.g. {@link #DISABLED_ASSOCIATION_REJECTION}.
          * @return network disable reason string, or null if the reason is invalid.
          */
         @Nullable
-        public static String getNetworkDisableReasonString(
+        public static String getNetworkSelectionDisableReasonString(
                 @NetworkSelectionDisableReason int reason) {
             DisableReasonInfo info = DISABLE_REASON_INFOS.get(reason);
             if (info == null) {
@@ -1603,20 +1727,26 @@ public class WifiConfiguration implements Parcelable {
          * @return current network disable reason in String (for debug purpose)
          * @hide
          */
-        public String getNetworkDisableReasonString() {
-            return getNetworkDisableReasonString(mNetworkSelectionDisableReason);
+        public String getNetworkSelectionDisableReasonString() {
+            return getNetworkSelectionDisableReasonString(mNetworkSelectionDisableReason);
         }
 
         /**
-         * get current network network selection status
-         * @return return current network network selection status
-         * @hide
+         * Get the current network network selection status.
+         * One of:
+         * {@link #NETWORK_SELECTION_ENABLED},
+         * {@link #NETWORK_SELECTION_TEMPORARY_DISABLED},
+         * {@link #NETWORK_SELECTION_PERMANENTLY_DISABLED}
          */
+        @NetworkEnabledStatus
         public int getNetworkSelectionStatus() {
             return mStatus;
         }
 
-        /** True if the current network is enabled to join network selection, false otherwise. */
+        /**
+         * True if the current network is enabled to join network selection, false otherwise.
+         * @hide
+         */
         public boolean isNetworkEnabled() {
             return mStatus == NETWORK_SELECTION_ENABLED;
         }
@@ -1629,7 +1759,10 @@ public class WifiConfiguration implements Parcelable {
             return mStatus == NETWORK_SELECTION_TEMPORARY_DISABLED;
         }
 
-        /** True if the current network is permanently disabled, false otherwise. */
+        /**
+         * True if the current network is permanently disabled, false otherwise.
+         * @hide
+         */
         public boolean isNetworkPermanentlyDisabled() {
             return mStatus == NETWORK_SELECTION_PERMANENTLY_DISABLED;
         }
@@ -1647,7 +1780,7 @@ public class WifiConfiguration implements Parcelable {
 
         /**
          * Returns the current network's disable reason.
-         * One of the {@link #NETWORK_SELECTION_ENABLE} or DISABLED_* constants
+         * One of the {@link #DISABLED_NONE} or DISABLED_* constants
          * e.g. {@link #DISABLED_ASSOCIATION_REJECTION}.
          */
         @NetworkSelectionDisableReason
@@ -1687,13 +1820,13 @@ public class WifiConfiguration implements Parcelable {
 
         /**
          * Get the disable counter of a specific reason.
-         * @param reason specific failure reason. One of the {@link #NETWORK_SELECTION_ENABLE} or
+         * @param reason specific failure reason. One of the {@link #DISABLED_NONE} or
          *              DISABLED_* constants e.g. {@link #DISABLED_ASSOCIATION_REJECTION}.
          * @exception IllegalArgumentException for invalid reason
          * @return counter number for specific error reason.
          */
         public int getDisableReasonCounter(@NetworkSelectionDisableReason int reason) {
-            if (reason >= NETWORK_SELECTION_ENABLE && reason < NETWORK_SELECTION_DISABLED_MAX) {
+            if (reason >= DISABLED_NONE && reason < NETWORK_SELECTION_DISABLED_MAX) {
                 return mNetworkSeclectionDisableCounter[reason];
             } else {
                 throw new IllegalArgumentException("Illegal reason value: " + reason);
@@ -1708,7 +1841,7 @@ public class WifiConfiguration implements Parcelable {
          * @hide
          */
         public void setDisableReasonCounter(int reason, int value) {
-            if (reason >= NETWORK_SELECTION_ENABLE && reason < NETWORK_SELECTION_DISABLED_MAX) {
+            if (reason >= DISABLED_NONE && reason < NETWORK_SELECTION_DISABLED_MAX) {
                 mNetworkSeclectionDisableCounter[reason] = value;
             } else {
                 throw new IllegalArgumentException("Illegal reason value: " + reason);
@@ -1722,7 +1855,7 @@ public class WifiConfiguration implements Parcelable {
          * @hide
          */
         public void incrementDisableReasonCounter(int reason) {
-            if (reason >= NETWORK_SELECTION_ENABLE  && reason < NETWORK_SELECTION_DISABLED_MAX) {
+            if (reason >= DISABLED_NONE && reason < NETWORK_SELECTION_DISABLED_MAX) {
                 mNetworkSeclectionDisableCounter[reason]++;
             } else {
                 throw new IllegalArgumentException("Illegal reason value: " + reason);
@@ -1736,8 +1869,8 @@ public class WifiConfiguration implements Parcelable {
          * @hide
          */
         public void clearDisableReasonCounter(int reason) {
-            if (reason >= NETWORK_SELECTION_ENABLE && reason < NETWORK_SELECTION_DISABLED_MAX) {
-                mNetworkSeclectionDisableCounter[reason] = NETWORK_SELECTION_ENABLE;
+            if (reason >= DISABLED_NONE && reason < NETWORK_SELECTION_DISABLED_MAX) {
+                mNetworkSeclectionDisableCounter[reason] = DISABLED_NONE;
             } else {
                 throw new IllegalArgumentException("Illegal reason value: " + reason);
             }
@@ -1748,7 +1881,7 @@ public class WifiConfiguration implements Parcelable {
          * @hide
          */
         public void clearDisableReasonCounter() {
-            Arrays.fill(mNetworkSeclectionDisableCounter, NETWORK_SELECTION_ENABLE);
+            Arrays.fill(mNetworkSeclectionDisableCounter, DISABLED_NONE);
         }
 
         /**
@@ -1778,7 +1911,7 @@ public class WifiConfiguration implements Parcelable {
         public void copy(NetworkSelectionStatus source) {
             mStatus = source.mStatus;
             mNetworkSelectionDisableReason = source.mNetworkSelectionDisableReason;
-            for (int index = NETWORK_SELECTION_ENABLE; index < NETWORK_SELECTION_DISABLED_MAX;
+            for (int index = DISABLED_NONE; index < NETWORK_SELECTION_DISABLED_MAX;
                     index++) {
                 mNetworkSeclectionDisableCounter[index] =
                         source.mNetworkSeclectionDisableCounter[index];
@@ -1789,15 +1922,14 @@ public class WifiConfiguration implements Parcelable {
             setCandidate(source.getCandidate());
             setCandidateScore(source.getCandidateScore());
             setConnectChoice(source.getConnectChoice());
-            setConnectChoiceTimestamp(source.getConnectChoiceTimestamp());
-            setHasEverConnected(source.getHasEverConnected());
+            setHasEverConnected(source.hasEverConnected());
         }
 
         /** @hide */
         public void writeToParcel(Parcel dest) {
             dest.writeInt(getNetworkSelectionStatus());
             dest.writeInt(getNetworkSelectionDisableReason());
-            for (int index = NETWORK_SELECTION_ENABLE; index < NETWORK_SELECTION_DISABLED_MAX;
+            for (int index = DISABLED_NONE; index < NETWORK_SELECTION_DISABLED_MAX;
                     index++) {
                 dest.writeInt(getDisableReasonCounter(index));
             }
@@ -1806,18 +1938,17 @@ public class WifiConfiguration implements Parcelable {
             if (getConnectChoice() != null) {
                 dest.writeInt(CONNECT_CHOICE_EXISTS);
                 dest.writeString(getConnectChoice());
-                dest.writeLong(getConnectChoiceTimestamp());
             } else {
                 dest.writeInt(CONNECT_CHOICE_NOT_EXISTS);
             }
-            dest.writeInt(getHasEverConnected() ? 1 : 0);
+            dest.writeInt(hasEverConnected() ? 1 : 0);
         }
 
         /** @hide */
         public void readFromParcel(Parcel in) {
             setNetworkSelectionStatus(in.readInt());
             setNetworkSelectionDisableReason(in.readInt());
-            for (int index = NETWORK_SELECTION_ENABLE; index < NETWORK_SELECTION_DISABLED_MAX;
+            for (int index = DISABLED_NONE; index < NETWORK_SELECTION_DISABLED_MAX;
                     index++) {
                 setDisableReasonCounter(index, in.readInt());
             }
@@ -1825,10 +1956,8 @@ public class WifiConfiguration implements Parcelable {
             setNetworkSelectionBSSID(in.readString());
             if (in.readInt() == CONNECT_CHOICE_EXISTS) {
                 setConnectChoice(in.readString());
-                setConnectChoiceTimestamp(in.readLong());
             } else {
                 setConnectChoice(null);
-                setConnectChoiceTimestamp(INVALID_NETWORK_SELECTION_DISABLE_TIMESTAMP);
             }
             setHasEverConnected(in.readInt() != 0);
         }
@@ -1841,54 +1970,38 @@ public class WifiConfiguration implements Parcelable {
     private NetworkSelectionStatus mNetworkSelectionStatus = new NetworkSelectionStatus();
 
     /**
-     * @hide
      * This class is intended to store extra failure reason information for the most recent
      * connection attempt, so that it may be surfaced to the settings UI
+     * @hide
      */
-    @SystemApi
+    // TODO(b/148626966): called by SUW via reflection, remove once SUW is updated
     public static class RecentFailure {
 
         private RecentFailure() {}
 
-        /** @hide */
-        @Retention(RetentionPolicy.SOURCE)
-        @IntDef(value = {NONE, STATUS_AP_UNABLE_TO_HANDLE_NEW_STA})
-        public @interface AssociationStatus {}
-
-        /**
-         * No recent failure, or no specific reason given for the recent connection failure
-         */
-        public static final int NONE = 0;
-        /**
-         * Connection to this network recently failed due to Association Rejection Status 17
-         * (AP is full)
-         */
-        public static final int STATUS_AP_UNABLE_TO_HANDLE_NEW_STA = 17;
         /**
          * Association Rejection Status code (NONE for success/non-association-rejection-fail)
          */
-        @AssociationStatus
-        private int mAssociationStatus = NONE;
+        @RecentFailureReason
+        private int mAssociationStatus = RECENT_FAILURE_NONE;
 
         /**
          * @param status the association status code for the recent failure
-         * @hide
          */
-        public void setAssociationStatus(@AssociationStatus int status) {
+        public void setAssociationStatus(@RecentFailureReason int status) {
             mAssociationStatus = status;
         }
         /**
          * Sets the RecentFailure to NONE
-         * @hide
          */
         public void clear() {
-            mAssociationStatus = NONE;
+            mAssociationStatus = RECENT_FAILURE_NONE;
         }
         /**
-         * Get the recent failure code. One of {@link #NONE} or
-         * {@link #STATUS_AP_UNABLE_TO_HANDLE_NEW_STA}.
+         * Get the recent failure code. One of {@link #RECENT_FAILURE_NONE} or
+         * {@link #RECENT_FAILURE_AP_UNABLE_TO_HANDLE_NEW_STA}.
          */
-        @AssociationStatus
+        @RecentFailureReason
         public int getAssociationStatus() {
             return mAssociationStatus;
         }
@@ -1898,9 +2011,46 @@ public class WifiConfiguration implements Parcelable {
      * RecentFailure member
      * @hide
      */
+    // TODO(b/148626966): called by SUW via reflection, once SUW is updated, make private and
+    //  rename to mRecentFailure
     @NonNull
-    @SystemApi
     public final RecentFailure recentFailure = new RecentFailure();
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = "RECENT_FAILURE_", value = {
+            RECENT_FAILURE_NONE,
+            RECENT_FAILURE_AP_UNABLE_TO_HANDLE_NEW_STA})
+    public @interface RecentFailureReason {}
+
+    /**
+     * No recent failure, or no specific reason given for the recent connection failure
+     * @hide
+     */
+    @SystemApi
+    public static final int RECENT_FAILURE_NONE = 0;
+    /**
+     * Connection to this network recently failed due to Association Rejection Status 17
+     * (AP is full)
+     * @hide
+     */
+    @SystemApi
+    public static final int RECENT_FAILURE_AP_UNABLE_TO_HANDLE_NEW_STA = 17;
+
+    /**
+     * Get the failure reason for the most recent connection attempt, or
+     * {@link #RECENT_FAILURE_NONE} if there was no failure.
+     *
+     * Failure reasons include:
+     * {@link #RECENT_FAILURE_AP_UNABLE_TO_HANDLE_NEW_STA}
+     *
+     * @hide
+     */
+    @RecentFailureReason
+    @SystemApi
+    public int getRecentFailureReason() {
+        return recentFailure.getAssociationStatus();
+    }
 
     /**
      * Get the network selection status.
@@ -1913,10 +2063,11 @@ public class WifiConfiguration implements Parcelable {
     }
 
     /**
-     * Set the network selection status
+     * Set the network selection status.
      * @hide
      */
-    public void setNetworkSelectionStatus(NetworkSelectionStatus status) {
+    @SystemApi
+    public void setNetworkSelectionStatus(@NonNull NetworkSelectionStatus status) {
         mNetworkSelectionStatus = status;
     }
 
@@ -1974,7 +2125,8 @@ public class WifiConfiguration implements Parcelable {
         return !TextUtils.isEmpty(FQDN)
                 && !TextUtils.isEmpty(providerFriendlyName)
                 && enterpriseConfig != null
-                && enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE;
+                && enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE
+                && !TextUtils.isEmpty(mPasspointUniqueId);
     }
 
     /**
@@ -2001,7 +2153,8 @@ public class WifiConfiguration implements Parcelable {
     public boolean isEnterprise() {
         return (allowedKeyManagement.get(KeyMgmt.WPA_EAP)
                 || allowedKeyManagement.get(KeyMgmt.IEEE8021X)
-                || allowedKeyManagement.get(KeyMgmt.SUITE_B_192))
+                || allowedKeyManagement.get(KeyMgmt.SUITE_B_192)
+                || allowedKeyManagement.get(KeyMgmt.WAPI_CERT))
                 && enterpriseConfig != null
                 && enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE;
     }
@@ -2027,36 +2180,38 @@ public class WifiConfiguration implements Parcelable {
         sbuf.append("ID: ").append(this.networkId).append(" SSID: ").append(this.SSID).
                 append(" PROVIDER-NAME: ").append(this.providerFriendlyName).
                 append(" BSSID: ").append(this.BSSID).append(" FQDN: ").append(this.FQDN)
+                .append(" HOME-PROVIDER-NETWORK: ").append(this.isHomeProviderNetwork)
                 .append(" PRIO: ").append(this.priority)
                 .append(" HIDDEN: ").append(this.hiddenSSID)
-                .append(" PMF: ").append(this.requirePMF)
+                .append(" PMF: ").append(this.requirePmf)
                 .append("CarrierId: ").append(this.carrierId)
                 .append('\n');
 
 
         sbuf.append(" NetworkSelectionStatus ")
-                .append(mNetworkSelectionStatus.getNetworkStatusString() + "\n");
+                .append(mNetworkSelectionStatus.getNetworkStatusString())
+                .append("\n");
         if (mNetworkSelectionStatus.getNetworkSelectionDisableReason() > 0) {
             sbuf.append(" mNetworkSelectionDisableReason ")
-                    .append(mNetworkSelectionStatus.getNetworkDisableReasonString() + "\n");
+                    .append(mNetworkSelectionStatus.getNetworkSelectionDisableReasonString())
+                    .append("\n");
 
-            for (int index = mNetworkSelectionStatus.NETWORK_SELECTION_ENABLE;
-                    index < mNetworkSelectionStatus.NETWORK_SELECTION_DISABLED_MAX; index++) {
+            for (int index = NetworkSelectionStatus.DISABLED_NONE;
+                    index < NetworkSelectionStatus.NETWORK_SELECTION_DISABLED_MAX; index++) {
                 if (mNetworkSelectionStatus.getDisableReasonCounter(index) != 0) {
-                    sbuf.append(NetworkSelectionStatus.getNetworkDisableReasonString(index)
-                            + " counter:" + mNetworkSelectionStatus.getDisableReasonCounter(index)
-                            + "\n");
+                    sbuf.append(
+                            NetworkSelectionStatus.getNetworkSelectionDisableReasonString(index))
+                            .append(" counter:")
+                            .append(mNetworkSelectionStatus.getDisableReasonCounter(index))
+                            .append("\n");
                 }
             }
         }
         if (mNetworkSelectionStatus.getConnectChoice() != null) {
             sbuf.append(" connect choice: ").append(mNetworkSelectionStatus.getConnectChoice());
-            sbuf.append(" connect choice set time: ")
-                    .append(logTimeOfDay(
-                            mNetworkSelectionStatus.getConnectChoiceTimestamp()));
         }
         sbuf.append(" hasEverConnected: ")
-                .append(mNetworkSelectionStatus.getHasEverConnected()).append("\n");
+                .append(mNetworkSelectionStatus.hasEverConnected()).append("\n");
 
         if (this.numAssociation > 0) {
             sbuf.append(" numAssociation ").append(this.numAssociation).append("\n");
@@ -2064,12 +2219,6 @@ public class WifiConfiguration implements Parcelable {
         if (this.numNoInternetAccessReports > 0) {
             sbuf.append(" numNoInternetAccessReports ");
             sbuf.append(this.numNoInternetAccessReports).append("\n");
-        }
-        if (this.updateTime != null) {
-            sbuf.append(" update ").append(this.updateTime).append("\n");
-        }
-        if (this.creationTime != null) {
-            sbuf.append(" creation ").append(this.creationTime).append("\n");
         }
         if (this.validatedInternetAccess) sbuf.append(" validatedInternetAccess");
         if (this.ephemeral) sbuf.append(" ephemeral");
@@ -2286,20 +2435,30 @@ public class WifiConfiguration implements Parcelable {
             if (allowedKeyManagement.get(KeyMgmt.SUITE_B_192)) {
                 keyMgmt += KeyMgmt.strings[KeyMgmt.SUITE_B_192];
             }
+            if (allowedKeyManagement.get(KeyMgmt.WAPI_CERT)) {
+                keyMgmt += KeyMgmt.strings[KeyMgmt.WAPI_CERT];
+            }
 
             if (TextUtils.isEmpty(keyMgmt)) {
                 throw new IllegalStateException("Not an EAP network");
             }
+            String keyId = trimStringForKeyId(SSID) + "_" + keyMgmt + "_"
+                    + trimStringForKeyId(enterpriseConfig.getKeyId(current != null
+                    ? current.enterpriseConfig : null));
 
-            return trimStringForKeyId(SSID) + "_" + keyMgmt + "_" +
-                    trimStringForKeyId(enterpriseConfig.getKeyId(current != null ?
-                            current.enterpriseConfig : null));
+            if (!fromWifiNetworkSuggestion) {
+                return keyId;
+            }
+            return keyId + "_" + trimStringForKeyId(BSSID) + "_" + trimStringForKeyId(creatorName);
         } catch (NullPointerException e) {
             throw new IllegalStateException("Invalid config details");
         }
     }
 
     private String trimStringForKeyId(String string) {
+        if (string == null) {
+            return "";
+        }
         // Remove quotes and spaces
         return string.replace("\"", "").replace(" ", "");
     }
@@ -2350,6 +2509,10 @@ public class WifiConfiguration implements Parcelable {
             return KeyMgmt.OWE;
         } else if (allowedKeyManagement.get(KeyMgmt.SUITE_B_192)) {
             return KeyMgmt.SUITE_B_192;
+        } else if (allowedKeyManagement.get(KeyMgmt.WAPI_PSK)) {
+            return KeyMgmt.WAPI_PSK;
+        } else if (allowedKeyManagement.get(KeyMgmt.WAPI_CERT)) {
+            return KeyMgmt.WAPI_CERT;
         }
         return KeyMgmt.NONE;
     }
@@ -2361,12 +2524,17 @@ public class WifiConfiguration implements Parcelable {
      */
     @NonNull
     public String getKey() {
-        String key = providerFriendlyName == null
-                ? getSsidAndSecurityTypeString()
-                : FQDN + KeyMgmt.strings[KeyMgmt.WPA_EAP];
+        // Passpoint ephemeral networks have their unique identifier set. Return it as is to be
+        // able to match internally.
+        if (mPasspointUniqueId != null) {
+            return mPasspointUniqueId;
+        }
+
+        String key = getSsidAndSecurityTypeString();
         if (!shared) {
             key += "-" + UserHandle.getUserHandleForUid(creatorUid).getIdentifier();
         }
+
         return key;
     }
 
@@ -2380,7 +2548,8 @@ public class WifiConfiguration implements Parcelable {
         } else if (allowedKeyManagement.get(KeyMgmt.WPA_EAP)
                 || allowedKeyManagement.get(KeyMgmt.IEEE8021X)) {
             key = SSID + KeyMgmt.strings[KeyMgmt.WPA_EAP];
-        } else if (wepKeys[0] != null) {
+        } else if (wepTxKeyIndex >= 0 && wepTxKeyIndex < wepKeys.length
+                && wepKeys[wepTxKeyIndex] != null) {
             key = SSID + "WEP";
         } else if (allowedKeyManagement.get(KeyMgmt.OWE)) {
             key = SSID + KeyMgmt.strings[KeyMgmt.OWE];
@@ -2388,16 +2557,26 @@ public class WifiConfiguration implements Parcelable {
             key = SSID + KeyMgmt.strings[KeyMgmt.SAE];
         } else if (allowedKeyManagement.get(KeyMgmt.SUITE_B_192)) {
             key = SSID + KeyMgmt.strings[KeyMgmt.SUITE_B_192];
+        } else if (allowedKeyManagement.get(KeyMgmt.WAPI_PSK)) {
+            key = SSID + KeyMgmt.strings[KeyMgmt.WAPI_PSK];
+        } else if (allowedKeyManagement.get(KeyMgmt.WAPI_CERT)) {
+            key = SSID + KeyMgmt.strings[KeyMgmt.WAPI_CERT];
+        } else if (allowedKeyManagement.get(KeyMgmt.OSEN)) {
+            key = SSID + KeyMgmt.strings[KeyMgmt.OSEN];
         } else {
             key = SSID + KeyMgmt.strings[KeyMgmt.NONE];
         }
         return key;
     }
 
-    /** @hide */
-    @UnsupportedAppUsage
+    /**
+     * Get the IpConfiguration object associated with this WifiConfiguration.
+     * @hide
+     */
+    @NonNull
+    @SystemApi
     public IpConfiguration getIpConfiguration() {
-        return mIpConfiguration;
+        return new IpConfiguration(mIpConfiguration);
     }
 
     /**
@@ -2418,7 +2597,7 @@ public class WifiConfiguration implements Parcelable {
      * @hide
      */
     @Nullable
-    @SystemApi
+    @UnsupportedAppUsage
     public StaticIpConfiguration getStaticIpConfiguration() {
         return mIpConfiguration.getStaticIpConfiguration();
     }
@@ -2434,7 +2613,7 @@ public class WifiConfiguration implements Parcelable {
      * @hide
      */
     @NonNull
-    @SystemApi
+    @UnsupportedAppUsage
     public IpConfiguration.IpAssignment getIpAssignment() {
         return mIpConfiguration.getIpAssignment();
     }
@@ -2450,7 +2629,7 @@ public class WifiConfiguration implements Parcelable {
      * @hide
      */
     @NonNull
-    @SystemApi
+    @UnsupportedAppUsage
     public IpConfiguration.ProxySettings getProxySettings() {
         return mIpConfiguration.getProxySettings();
     }
@@ -2513,7 +2692,7 @@ public class WifiConfiguration implements Parcelable {
      * Set the {@link ProxySettings} and {@link ProxyInfo} for this network.
      * @hide
      */
-    @SystemApi
+    @UnsupportedAppUsage
     public void setProxy(@NonNull ProxySettings settings, @NonNull ProxyInfo proxy) {
         mIpConfiguration.setProxySettings(settings);
         mIpConfiguration.setHttpProxy(proxy);
@@ -2534,9 +2713,8 @@ public class WifiConfiguration implements Parcelable {
         return mPasspointManagementObjectTree;
     }
 
-    /** copy constructor {@hide} */
-    @UnsupportedAppUsage
-    public WifiConfiguration(WifiConfiguration source) {
+    /** Copy constructor */
+    public WifiConfiguration(@NonNull WifiConfiguration source) {
         if (source != null) {
             networkId = source.networkId;
             status = source.status;
@@ -2605,16 +2783,15 @@ public class WifiConfiguration implements Parcelable {
             allowAutojoin = source.allowAutojoin;
             numNoInternetAccessReports = source.numNoInternetAccessReports;
             noInternetAccessExpected = source.noInternetAccessExpected;
-            creationTime = source.creationTime;
-            updateTime = source.updateTime;
             shared = source.shared;
             recentFailure.setAssociationStatus(source.recentFailure.getAssociationStatus());
             mRandomizedMacAddress = source.mRandomizedMacAddress;
             macRandomizationSetting = source.macRandomizationSetting;
             randomizedMacExpirationTimeMs = source.randomizedMacExpirationTimeMs;
-            requirePMF = source.requirePMF;
+            requirePmf = source.requirePmf;
             updateIdentifier = source.updateIdentifier;
             carrierId = source.carrierId;
+            mPasspointUniqueId = source.mPasspointUniqueId;
         }
     }
 
@@ -2643,7 +2820,7 @@ public class WifiConfiguration implements Parcelable {
         dest.writeInt(wepTxKeyIndex);
         dest.writeInt(priority);
         dest.writeInt(hiddenSSID ? 1 : 0);
-        dest.writeInt(requirePMF ? 1 : 0);
+        dest.writeInt(requirePmf ? 1 : 0);
         dest.writeString(updateIdentifier);
 
         writeBitSet(dest, allowedKeyManagement);
@@ -2687,6 +2864,7 @@ public class WifiConfiguration implements Parcelable {
         dest.writeInt(osu ? 1 : 0);
         dest.writeLong(randomizedMacExpirationTimeMs);
         dest.writeInt(carrierId);
+        dest.writeString(mPasspointUniqueId);
     }
 
     /** Implement the Parcelable interface {@hide} */
@@ -2718,7 +2896,7 @@ public class WifiConfiguration implements Parcelable {
                 config.wepTxKeyIndex = in.readInt();
                 config.priority = in.readInt();
                 config.hiddenSSID = in.readInt() != 0;
-                config.requirePMF = in.readInt() != 0;
+                config.requirePmf = in.readInt() != 0;
                 config.updateIdentifier = in.readString();
 
                 config.allowedKeyManagement   = readBitSet(in);
@@ -2761,6 +2939,7 @@ public class WifiConfiguration implements Parcelable {
                 config.osu = in.readInt() != 0;
                 config.randomizedMacExpirationTimeMs = in.readLong();
                 config.carrierId = in.readInt();
+                config.mPasspointUniqueId = in.readString();
                 return config;
             }
 
@@ -2770,52 +2949,26 @@ public class WifiConfiguration implements Parcelable {
         };
 
     /**
-     * Serialize the Soft AP configuration contained in this object for backup.
+     * Passpoint Unique identifier
      * @hide
      */
-    @NonNull
-    // TODO(b/144368124): this method should be removed once we migrate to SoftApConfiguration
-    public byte[] getBytesForBackup() throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DataOutputStream out = new DataOutputStream(baos);
+    private String mPasspointUniqueId = null;
 
-        out.writeInt(BACKUP_VERSION);
-        BackupUtils.writeString(out, SSID);
-        out.writeInt(apBand);
-        out.writeInt(apChannel);
-        BackupUtils.writeString(out, preSharedKey);
-        out.writeInt(getAuthType());
-        out.writeBoolean(hiddenSSID);
-        return baos.toByteArray();
+    /**
+     * Set the Passpoint unique identifier
+     * @param uniqueId Passpoint unique identifier to be set
+     * @hide
+     */
+    public void setPasspointUniqueId(String uniqueId) {
+        mPasspointUniqueId = uniqueId;
     }
 
     /**
-     * Deserialize a byte array containing Soft AP configuration into a WifiConfiguration object.
-     * @return The deserialized WifiConfiguration containing Soft AP configuration, or null if
-     * the version contains a bad dataset e.g. Version 1
-     * @throws BackupUtils.BadVersionException if the version is unrecognized
+     * Set the Passpoint unique identifier
      * @hide
      */
-    @Nullable
-    // TODO(b/144368124): this method should be removed once we migrate to SoftApConfiguration
-    public static WifiConfiguration getWifiConfigFromBackup(@NonNull DataInputStream in)
-            throws IOException, BackupUtils.BadVersionException {
-        WifiConfiguration config = new WifiConfiguration();
-        int version = in.readInt();
-        if (version < 1 || version > BACKUP_VERSION) {
-            throw new BackupUtils.BadVersionException("Unknown Backup Serialization Version");
-        }
-
-        if (version == 1) return null; // Version 1 is a bad dataset.
-
-        config.SSID = BackupUtils.readString(in);
-        config.apBand = in.readInt();
-        config.apChannel = in.readInt();
-        config.preSharedKey = BackupUtils.readString(in);
-        config.allowedKeyManagement.set(in.readInt());
-        if (version >= 3) {
-            config.hiddenSSID = in.readBoolean();
-        }
-        return config;
+    public String getPasspointUniqueId() {
+        return mPasspointUniqueId;
     }
+
 }

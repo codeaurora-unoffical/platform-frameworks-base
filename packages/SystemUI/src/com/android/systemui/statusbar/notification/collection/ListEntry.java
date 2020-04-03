@@ -18,7 +18,7 @@ package com.android.systemui.statusbar.notification.collection;
 
 import android.annotation.Nullable;
 
-import com.android.internal.annotations.VisibleForTesting;
+import com.android.systemui.statusbar.notification.collection.listbuilder.pluggable.NotifSection;
 
 /**
  * Abstract superclass for top-level entries, i.e. things that can appear in the final notification
@@ -29,7 +29,9 @@ public abstract class ListEntry {
 
     @Nullable private GroupEntry mParent;
     @Nullable private GroupEntry mPreviousParent;
-    private int mSection;
+    @Nullable NotifSection mNotifSection;
+
+    private int mSection = -1;
     int mFirstAddedIteration = -1;
 
     ListEntry(String key) {
@@ -42,17 +44,17 @@ public abstract class ListEntry {
 
     /**
      * Should return the "representative entry" for this ListEntry. For NotificationEntries, its
-     * the entry itself. For groups, it should be the summary. This method exists to interface with
+     * the entry itself. For groups, it should be the summary (but if a summary doesn't exist,
+     * this can return null). This method exists to interface with
      * legacy code that expects groups to also be NotificationEntries.
      */
-    public abstract NotificationEntry getRepresentativeEntry();
+    public abstract @Nullable NotificationEntry getRepresentativeEntry();
 
     @Nullable public GroupEntry getParent() {
         return mParent;
     }
 
-    @VisibleForTesting
-    public void setParent(@Nullable GroupEntry parent) {
+    void setParent(@Nullable GroupEntry parent) {
         mParent = parent;
     }
 

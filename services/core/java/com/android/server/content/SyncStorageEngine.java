@@ -137,7 +137,7 @@ public class SyncStorageEngine {
     /**
      * String names for the sync source types.
      *
-     * KEEP THIS AND {@link SyncStatusInfo#SOURCE_COUNT} IN SYNC.
+     * KEEP THIS AND {@link SyncStatusInfo}.SOURCE_COUNT IN SYNC.
      */
     public static final String[] SOURCES = {
             "OTHER",
@@ -472,8 +472,7 @@ public class SyncStorageEngine {
 
     private int mSyncRandomOffset;
 
-    // STOPSHIP: b/143656271 this should be true on launch
-    private static final boolean DELETE_LEGACY_PARCEL_FILES = false;
+    private static final boolean DELETE_LEGACY_PARCEL_FILES = true;
     private static final String LEGACY_STATUS_FILE_NAME = "status.bin";
     private static final String LEGACY_STATISTICS_FILE_NAME = "stats.bin";
 
@@ -1117,7 +1116,7 @@ public class SyncStorageEngine {
                 Slog.v(TAG, "setActiveSync: account="
                         + " auth=" + activeSyncContext.mSyncOperation.target
                         + " src=" + activeSyncContext.mSyncOperation.syncSource
-                        + " extras=" + activeSyncContext.mSyncOperation.extras);
+                        + " extras=" + activeSyncContext.mSyncOperation.getExtrasAsString());
             }
             final EndPoint info = activeSyncContext.mSyncOperation.target;
             AuthorityInfo authorityInfo = getOrCreateAuthorityLocked(
@@ -1179,7 +1178,7 @@ public class SyncStorageEngine {
             item.eventTime = now;
             item.source = op.syncSource;
             item.reason = op.reason;
-            item.extras = op.extras;
+            item.extras = op.getClonedExtras();
             item.event = EVENT_START;
             item.syncExemptionFlag = op.syncExemptionFlag;
             mSyncHistory.add(0, item);
@@ -1738,7 +1737,7 @@ public class SyncStorageEngine {
 
     /**
      * Ensure the old pending.bin is deleted, as it has been changed to pending.xml.
-     * pending.xml was used starting in KLP.
+     * pending.xml was used starting in KitKat.
      * @param syncDir directory where the sync files are located.
      */
     private void maybeDeleteLegacyPendingInfoLocked(File syncDir) {
@@ -2076,7 +2075,7 @@ public class SyncStorageEngine {
         }
 
         // if upgrade to proto was successful, delete parcel file
-        if (DELETE_LEGACY_PARCEL_FILES && mStatusFile.exists()) {
+        if (DELETE_LEGACY_PARCEL_FILES && parcelStatus.exists() && mStatusFile.exists()) {
             parcelStatus.delete();
         }
     }
@@ -2475,7 +2474,7 @@ public class SyncStorageEngine {
         }
 
         // if upgrade to proto was successful, delete parcel file
-        if (DELETE_LEGACY_PARCEL_FILES && mStatisticsFile.exists()) {
+        if (DELETE_LEGACY_PARCEL_FILES && parcelStats.exists() && mStatisticsFile.exists()) {
             parcelStats.delete();
         }
     }

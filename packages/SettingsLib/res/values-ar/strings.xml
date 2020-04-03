@@ -42,7 +42,7 @@
     <string name="connected_via_app" msgid="3532267661404276584">"تم الاتصال عبر <xliff:g id="NAME">%1$s</xliff:g>."</string>
     <string name="available_via_passpoint" msgid="1716000261192603682">"‏متوفرة عبر %1$s"</string>
     <string name="tap_to_sign_up" msgid="5356397741063740395">"انقر للاشتراك."</string>
-    <string name="wifi_connected_no_internet" msgid="2381729074310543563">"متصلة ولكن بلا إنترنت"</string>
+    <string name="wifi_connected_no_internet" msgid="5087420713443350646">"لا يتوفر اتصال إنترنت."</string>
     <string name="private_dns_broken" msgid="1984159464346556931">"لا يمكن الوصول إلى خادم أسماء نظام نطاقات خاص"</string>
     <string name="wifi_limited_connection" msgid="1184778285475204682">"اتصال محدود"</string>
     <string name="wifi_status_no_internet" msgid="3799933875988829048">"لا يتوفر اتصال إنترنت."</string>
@@ -57,7 +57,7 @@
     <string name="osu_sign_up_complete" msgid="7640183358878916847">"اكتمل الاشتراك. جارٍ الاتصال…"</string>
     <string name="speed_label_very_slow" msgid="8526005255731597666">"بطيئة جدًا"</string>
     <string name="speed_label_slow" msgid="6069917670665664161">"بطيئة"</string>
-    <string name="speed_label_okay" msgid="1253594383880810424">"موافق"</string>
+    <string name="speed_label_okay" msgid="1253594383880810424">"حسنًا"</string>
     <string name="speed_label_medium" msgid="9078405312828606976">"متوسطة"</string>
     <string name="speed_label_fast" msgid="2677719134596044051">"سريعة"</string>
     <string name="speed_label_very_fast" msgid="8215718029533182439">"سريعة جدًا"</string>
@@ -68,14 +68,14 @@
     <string name="bluetooth_connecting" msgid="5871702668260192755">"جارٍ الاتصال…"</string>
     <string name="bluetooth_connected" msgid="8065345572198502293">"الجهاز متصل<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
     <string name="bluetooth_pairing" msgid="4269046942588193600">"جارٍ الاقتران..."</string>
-    <string name="bluetooth_connected_no_headset" msgid="2224101138659967604">"الجهاز متصل (من دون هاتف)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
-    <string name="bluetooth_connected_no_a2dp" msgid="8566874395813947092">"الجهاز متصل (من دون وسائط)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
-    <string name="bluetooth_connected_no_map" msgid="3381860077002724689">"الجهاز متصل (من دون وصول إلى الرسائل)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
-    <string name="bluetooth_connected_no_headset_no_a2dp" msgid="2893204819854215433">"الجهاز متصل (من دون هاتف أو وسائط)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_headset" msgid="2224101138659967604">"الجهاز متصل (بدون هاتف)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_a2dp" msgid="8566874395813947092">"الجهاز متصل (بدون وسائط)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_map" msgid="3381860077002724689">"الجهاز متصل (بدون وصول إلى الرسائل)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_headset_no_a2dp" msgid="2893204819854215433">"الجهاز متصل (بدون هاتف أو وسائط)<xliff:g id="ACTIVE_DEVICE">%1$s</xliff:g>"</string>
     <string name="bluetooth_connected_battery_level" msgid="5410325759372259950">"الجهاز متصل، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
-    <string name="bluetooth_connected_no_headset_battery_level" msgid="2661863370509206428">"الجهاز متصل (من دون هاتف)، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
-    <string name="bluetooth_connected_no_a2dp_battery_level" msgid="6499078454894324287">"الجهاز متصل (من دون وسائط)، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
-    <string name="bluetooth_connected_no_headset_no_a2dp_battery_level" msgid="8477440576953067242">"الجهاز متّصل (من دون هاتف أو وسائط)، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_headset_battery_level" msgid="2661863370509206428">"الجهاز متصل (بدون هاتف)، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_a2dp_battery_level" msgid="6499078454894324287">"الجهاز متصل (بدون وسائط)، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
+    <string name="bluetooth_connected_no_headset_no_a2dp_battery_level" msgid="8477440576953067242">"الجهاز متّصل (بدون هاتف أو وسائط)، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g><xliff:g id="ACTIVE_DEVICE">%2$s</xliff:g>"</string>
     <string name="bluetooth_active_battery_level" msgid="3450745316700494425">"نشط، ومستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g>"</string>
     <string name="bluetooth_active_battery_level_untethered" msgid="2706188607604205362">"مفعّلة، مستوى البطارية: <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE_0">%1$s</xliff:g>، المعدّل: <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE_1">%2$s</xliff:g>"</string>
     <string name="bluetooth_battery_level" msgid="2893696778200201555">"مستوى طاقة البطارية <xliff:g id="BATTERY_LEVEL_AS_PERCENTAGE">%1$s</xliff:g>"</string>
@@ -124,7 +124,7 @@
     <string name="bluetooth_talkback_headset" msgid="3406852564400882682">"سماعة رأس"</string>
     <string name="bluetooth_talkback_phone" msgid="868393783858123880">"هاتف"</string>
     <string name="bluetooth_talkback_imaging" msgid="8781682986822514331">"تصوير"</string>
-    <string name="bluetooth_talkback_headphone" msgid="8613073829180337091">"سماعة أذن"</string>
+    <string name="bluetooth_talkback_headphone" msgid="8613073829180337091">"السمّاعة"</string>
     <string name="bluetooth_talkback_input_peripheral" msgid="5133944817800149942">"جهاز إدخال طرفي"</string>
     <string name="bluetooth_talkback_bluetooth" msgid="1143241359781999989">"بلوتوث"</string>
     <string name="bluetooth_hearingaid_left_pairing_message" msgid="8561855779703533591">"جارٍ إقران سماعة الأذن الطبية اليسرى…"</string>
@@ -157,7 +157,7 @@
     <string name="tts_settings" msgid="8130616705989351312">"إعدادات تحويل النص إلى كلام"</string>
     <string name="tts_settings_title" msgid="7602210956640483039">"تحويل النص إلى كلام"</string>
     <string name="tts_default_rate_title" msgid="3964187817364304022">"معدل سرعة الكلام"</string>
-    <string name="tts_default_rate_summary" msgid="3781937042151716987">"سرعة نطق الكلام"</string>
+    <string name="tts_default_rate_summary" msgid="3781937042151716987">"سرعة قول الكلام"</string>
     <string name="tts_default_pitch_title" msgid="6988592215554485479">"درجة الصوت"</string>
     <string name="tts_default_pitch_summary" msgid="9132719475281551884">"للتأثير في نبرة الكلام المُرَكَّب"</string>
     <string name="tts_default_lang_title" msgid="4698933575028098940">"اللغة"</string>
@@ -181,7 +181,7 @@
     <string name="tts_engine_preference_section_title" msgid="3861562305498624904">"المحرّك المفضّل"</string>
     <string name="tts_general_section_title" msgid="8919671529502364567">"عامة"</string>
     <string name="tts_reset_speech_pitch_title" msgid="7149398585468413246">"إعادة ضبط طبقة صوت الكلام"</string>
-    <string name="tts_reset_speech_pitch_summary" msgid="6822904157021406449">"إعادة ضبط طبقة الصوت التي يتم نطق النص بها على الإعداد التلقائي."</string>
+    <string name="tts_reset_speech_pitch_summary" msgid="6822904157021406449">"إعادة ضبط طبقة الصوت التي يتم قول النص بها على الإعداد التلقائي."</string>
   <string-array name="tts_rate_entries">
     <item msgid="9004239613505400644">"بطيء جدًا"</item>
     <item msgid="1815382991399815061">"بطيء"</item>
@@ -206,6 +206,33 @@
     <string name="enable_adb" msgid="8072776357237289039">"‏تصحيح أخطاء USB"</string>
     <string name="enable_adb_summary" msgid="3711526030096574316">"‏وضع تصحيح الأخطاء عند توصيل USB"</string>
     <string name="clear_adb_keys" msgid="3010148733140369917">"‏إلغاء عمليات تفويض تصحيح أخطاء USB"</string>
+    <string name="enable_adb_wireless" msgid="6973226350963971018">"‏تصحيح الأخطاء عبر شبكة Wi-Fi"</string>
+    <string name="enable_adb_wireless_summary" msgid="7344391423657093011">"‏وضع تصحيح الأخطاء عندما يتم الاتصال بشبكة Wi‑Fi"</string>
+    <string name="adb_wireless_error" msgid="721958772149779856">"خطأ"</string>
+    <string name="adb_wireless_settings" msgid="2295017847215680229">"‏تصحيح الأخطاء عبر شبكة Wi-Fi"</string>
+    <string name="adb_wireless_list_empty_off" msgid="1713707973837255490">"لعرض الأجهزة المتاحة واستخدامها، فعِّل ميزة تصحيح الأخطاء لاسلكيًا."</string>
+    <string name="adb_pair_method_qrcode_title" msgid="6982904096137468634">"إقران الجهاز باستخدام رمز الاستجابة السريعة"</string>
+    <string name="adb_pair_method_qrcode_summary" msgid="3729901496856458634">"إقران الأجهزة الجديدة باستخدام الماسح الضوئي لرموز الاستجابة السريعة"</string>
+    <string name="adb_pair_method_code_title" msgid="1122590300445142904">"إقران الجهاز باستخدام رمز الإقران"</string>
+    <string name="adb_pair_method_code_summary" msgid="6370414511333685185">"إقران الأجهزة الجديدة باستخدام رمز مكوّن من 6 أعداد"</string>
+    <string name="adb_paired_devices_title" msgid="5268997341526217362">"الأجهزة المقترنة"</string>
+    <string name="adb_wireless_device_connected_summary" msgid="3039660790249148713">"الأجهزة المتصلة حاليًا"</string>
+    <string name="adb_wireless_device_details_title" msgid="7129369670526565786">"تفاصيل الجهاز"</string>
+    <string name="adb_device_forget" msgid="193072400783068417">"حذف"</string>
+    <string name="adb_device_fingerprint_title_format" msgid="291504822917843701">"بصمة الإصبع للجهاز: <xliff:g id="FINGERPRINT_PARAM">%1$s</xliff:g>"</string>
+    <string name="adb_wireless_connection_failed_title" msgid="664211177427438438">"تعذّر الاتصال بالشبكة"</string>
+    <string name="adb_wireless_connection_failed_message" msgid="9213896700171602073">"تأكّدْ من اتصال <xliff:g id="DEVICE_NAME">%1$s</xliff:g> بالشبكة الصحيحة."</string>
+    <string name="adb_pairing_device_dialog_title" msgid="7141739231018530210">"الإقران مع الجهاز"</string>
+    <string name="adb_pairing_device_dialog_pairing_code_label" msgid="3639239786669722731">"‏رمز إقران Wi‑Fi"</string>
+    <string name="adb_pairing_device_dialog_failed_title" msgid="3426758947882091735">"تعذّر الإقران"</string>
+    <string name="adb_pairing_device_dialog_failed_msg" msgid="6611097519661997148">"تأكّد من توصيل الجهاز بالشبكة نفسها."</string>
+    <string name="adb_wireless_qrcode_summary" msgid="8051414549011801917">"‏إقران الجهاز من خلال شبكة Wi‑Fi عن طريق المسح الضوئي لرمز استجابة سريعة"</string>
+    <string name="adb_wireless_verifying_qrcode_text" msgid="6123192424916029207">"جارٍ إقران الجهاز…"</string>
+    <string name="adb_qrcode_pairing_device_failed_msg" msgid="6936292092592914132">"تعذّر إقران الجهاز. إما أن رمز الاستجابة السريعة غير صحيح أو أن الجهاز غير متصل بالشبكة نفسها."</string>
+    <string name="adb_wireless_ip_addr_preference_title" msgid="8335132107715311730">"‏عنوان IP والمنفذ"</string>
+    <string name="adb_wireless_qrcode_pairing_title" msgid="1906409667944674707">"المسح الضوئي لرمز الاستجابة السريعة"</string>
+    <string name="adb_wireless_qrcode_pairing_description" msgid="8578868049289910131">"‏إقران الجهاز من خلال شبكة Wi‑Fi عن طريق المسح الضوئي لرمز استجابة سريعة"</string>
+    <string name="keywords_adb_wireless" msgid="6507505581882171240">"‏adb، تصحيح الأخطاء، مطور برامج"</string>
     <string name="bugreport_in_power" msgid="8664089072534638709">"اختصار تقرير الأخطاء"</string>
     <string name="bugreport_in_power_summary" msgid="1885529649381831775">"عرض زر في قائمة خيارات التشغيل لإعداد تقرير بالأخطاء"</string>
     <string name="keep_screen_on" msgid="1187161672348797558">"البقاء في الوضع النشط"</string>
@@ -215,7 +242,7 @@
     <string name="oem_unlock_enable" msgid="5334869171871566731">"فتح قفل المصنّع الأصلي للجهاز"</string>
     <string name="oem_unlock_enable_summary" msgid="5857388174390953829">"‏السماح بإلغاء قفل برنامج bootloader"</string>
     <string name="confirm_enable_oem_unlock_title" msgid="8249318129774367535">"هل تريد السماح بإلغاء قفل المصنّع الأصلي للجهاز؟"</string>
-    <string name="confirm_enable_oem_unlock_text" msgid="854131050791011970">"تحذير: لن تعمل ميزات الحماية على هذا الجهاز أثناء تشغيل هذا الإعداد."</string>
+    <string name="confirm_enable_oem_unlock_text" msgid="854131050791011970">"تحذير: لن تعمل ميزات الحماية على هذا الجهاز أثناء تفعيل هذا الإعداد."</string>
     <string name="mock_location_app" msgid="6269380172542248304">"اختيار تطبيق الموقع الزائف"</string>
     <string name="mock_location_app_not_set" msgid="6972032787262831155">"لم يتم تعيين تطبيق موقع زائف"</string>
     <string name="mock_location_app_set" msgid="4706722469342913843">"تطبيق الموقع الزائف: <xliff:g id="APP_NAME">%1$s</xliff:g>"</string>
@@ -227,8 +254,12 @@
     <string name="tethering_hardware_offload" msgid="4116053719006939161">"تسريع الأجهزة للتوصيل"</string>
     <string name="bluetooth_show_devices_without_names" msgid="923584526471885819">"عرض أجهزة البلوتوث بدون أسماء"</string>
     <string name="bluetooth_disable_absolute_volume" msgid="1452342324349203434">"إيقاف مستوى الصوت المطلق"</string>
+    <string name="bluetooth_enable_gabeldorsche" msgid="9131730396242883416">"‏تفعيل Gabeldorsche"</string>
+    <string name="enhanced_connectivity" msgid="7201127377781666804">"إمكانية اتصال محسّن"</string>
     <string name="bluetooth_select_avrcp_version_string" msgid="1710571610177659127">"‏إصدار Bluetooth AVRCP"</string>
     <string name="bluetooth_select_avrcp_version_dialog_title" msgid="7846922290083709633">"‏اختيار إصدار Bluetooth AVRCP"</string>
+    <string name="bluetooth_select_map_version_string" msgid="526308145174175327">"‏إصدار Bluetooth MAP"</string>
+    <string name="bluetooth_select_map_version_dialog_title" msgid="7085934373987428460">"‏اختيار إصدار Bluetooth MAP"</string>
     <string name="bluetooth_select_a2dp_codec_type" msgid="952001408455456494">"برنامج ترميز صوت بلوتوث"</string>
     <string name="bluetooth_select_a2dp_codec_type_dialog_title" msgid="7510542404227225545">"اختيار برنامج ترميز الصوت لمشغّل\nالبلوتوث"</string>
     <string name="bluetooth_select_a2dp_codec_sample_rate" msgid="1638623076480928191">"معدّل عيّنة صوت بلوتوث"</string>
@@ -268,6 +299,8 @@
     <string name="tethering_hardware_offload_summary" msgid="7801345335142803029">"استخدام إعداد تسريع الأجهزة للتوصيل إن كان متاحًا"</string>
     <string name="adb_warning_title" msgid="7708653449506485728">"‏هل تريد السماح بتصحيح أخطاء USB؟"</string>
     <string name="adb_warning_message" msgid="8145270656419669221">"‏تم تصميم تصحيح أخطاء USB لأغراض التطوير فقط. يمكن استخدامه لنسخ البيانات بين الكمبيوتر والجهاز، وتثبيت التطبيقات على جهازك بدون تنبيه، وقراءة بيانات السجل."</string>
+    <string name="adbwifi_warning_title" msgid="727104571653031865">"‏هل تريد السماح بتصحيح الأخطاء عبر شبكة Wi-Fi؟"</string>
+    <string name="adbwifi_warning_message" msgid="8005936574322702388">"‏تم تصميم ميزة \"تصحيح الأخطاء عبر شبكة Wi-Fi\" لأغراض التطوير فقط. يمكن استخدامها لنسخ البيانات بين الكمبيوتر والجهاز وتثبيت التطبيقات على جهازك بدون إرسال إشعار وقراءة بيانات السجلّ."</string>
     <string name="adb_keys_warning_message" msgid="2968555274488101220">"‏هل تريد إلغاء إمكانية الدخول إلى تصحيح أخطاء USB من جميع أجهزة الكمبيوتر التي تم التصريح لها سابقًا؟"</string>
     <string name="dev_settings_warning_title" msgid="8251234890169074553">"هل تريد السماح لإعدادات التطوير؟"</string>
     <string name="dev_settings_warning_message" msgid="37741686486073668">"هذه الإعدادات مخصصة لاستخدام التطوير فقط. قد يتسبب هذا في حدوث أعطال أو خلل في أداء الجهاز والتطبيقات المثبتة عليه."</string>
@@ -275,6 +308,8 @@
     <string name="verify_apps_over_usb_summary" msgid="1317933737581167839">"‏التحقق من التطبيقات المثبتة عبر ADB/ADT لكشف السلوك الضار"</string>
     <string name="bluetooth_show_devices_without_names_summary" msgid="780964354377854507">"‏سيتم عرض أجهزة البلوتوث بدون أسماء (عناوين MAC فقط)"</string>
     <string name="bluetooth_disable_absolute_volume_summary" msgid="2006309932135547681">"لإيقاف ميزة مستوى الصوت المطلق للبلوتوث في حال حدوث مشاكل متعلقة بمستوى الصوت في الأجهزة البعيدة، مثل مستوى صوت عالٍ بشكل غير مقبول أو عدم إمكانية التحكّم في الصوت"</string>
+    <string name="bluetooth_enable_gabeldorsche_summary" msgid="2054730331770712629">"‏تفعيل حِزم ميزة Bluetooth Gabeldorsche"</string>
+    <string name="enhanced_connectivity_summary" msgid="1576414159820676330">"لتفعيل الميزة \"إمكانية اتصال محسّن\""</string>
     <string name="enable_terminal_title" msgid="3834790541986303654">"تطبيق طرفي محلي"</string>
     <string name="enable_terminal_summary" msgid="2481074834856064500">"تفعيل تطبيق طرفي يوفر إمكانية الدخول إلى واجهة النظام المحلية"</string>
     <string name="hdcp_checking_title" msgid="3155692785074095986">"‏التحقق من HDCP"</string>
@@ -321,6 +356,8 @@
     <string name="track_frame_time" msgid="522674651937771106">"‏عرض ملف التعريف HWUI"</string>
     <string name="enable_gpu_debug_layers" msgid="4986675516188740397">"‏تفعيل طبقات تصحيح أخطاء GPU"</string>
     <string name="enable_gpu_debug_layers_summary" msgid="4921521407377170481">"‏السماح بتحميل طبقات تصحيح أخطاء GPU لتطبيقات تصحيح الأخطاء"</string>
+    <string name="enable_verbose_vendor_logging" msgid="1196698788267682072">"تفعيل التسجيل المطوَّل للمورّد"</string>
+    <string name="enable_verbose_vendor_logging_summary" msgid="5426292185780393708">"يمكنك تضمين سجلات المورّدين الإضافية الخاصة بالجهاز في تقارير الخطأ، وقد تحتوي على معلومات شخصية و/أو تستهلك المزيد من شحن البطارية و/أو تستهلك المزيد من مساحة التخزين."</string>
     <string name="window_animation_scale_title" msgid="5236381298376812508">"حجم الرسوم المتحركة للنافذة"</string>
     <string name="transition_animation_scale_title" msgid="1278477690695439337">"حجم الرسوم المتحركة للنقل"</string>
     <string name="animator_duration_scale_title" msgid="7082913931326085176">"طول مدة الرسوم المتحركة"</string>
@@ -349,7 +386,7 @@
   <string-array name="color_mode_names">
     <item msgid="3836559907767149216">"نابض بالحياة (تلقائي)"</item>
     <item msgid="9112200311983078311">"طبيعي"</item>
-    <item msgid="6564241960833766170">"قياسي"</item>
+    <item msgid="6564241960833766170">"عادي"</item>
   </string-array>
   <string-array name="color_mode_descriptions">
     <item msgid="6828141153199944847">"ألوان محسَّنة"</item>
@@ -365,11 +402,11 @@
     <string name="select_webview_provider_title" msgid="3917815648099445503">"‏تطبيق WebView"</string>
     <string name="select_webview_provider_dialog_title" msgid="2444261109877277714">"‏تعيين تطبيق WebView"</string>
     <string name="select_webview_provider_toast_text" msgid="8512254949169359848">"لم يعد هذا الاختيار صالحًا. أعد المحاولة."</string>
-    <string name="convert_to_file_encryption" msgid="2828976934129751818">"التحويل إلى تشفير ملفات"</string>
+    <string name="convert_to_file_encryption" msgid="2828976934129751818">"التحويل إلى ترميز ملفات"</string>
     <string name="convert_to_file_encryption_enabled" msgid="840757431284311754">"تحويل…"</string>
-    <string name="convert_to_file_encryption_done" msgid="8965831011811180627">"تم استخدام تشفير ملفات من قبل"</string>
-    <string name="title_convert_fbe" msgid="5780013350366495149">"التحويل إلى تشفير على الملف"</string>
-    <string name="convert_to_fbe_warning" msgid="34294381569282109">"تحويل قسم البيانات إلى تشفير على الملف.\n !!تحذير!! سيؤدي هذا إلى محو جميع بياناتك.\n لا تزال هذه الميزة في مرحلة ألفا، وقد لا تعمل على نحو سليم.\n للمتابعة، اضغط على \"مسح وتحويل…\"."</string>
+    <string name="convert_to_file_encryption_done" msgid="8965831011811180627">"تم استخدام ترميز ملفات من قبل"</string>
+    <string name="title_convert_fbe" msgid="5780013350366495149">"التحويل إلى ترميز على الملف"</string>
+    <string name="convert_to_fbe_warning" msgid="34294381569282109">"تحويل قسم البيانات إلى ترميز على الملف.\n !!تحذير!! سيؤدي هذا إلى محو جميع بياناتك.\n لا تزال هذه الميزة في مرحلة ألفا، وقد لا تعمل على نحو سليم.\n للمتابعة، اضغط على \"مسح وتحويل…\"."</string>
     <string name="button_convert_fbe" msgid="1159861795137727671">"مسح وتحويل…"</string>
     <string name="picture_color_mode" msgid="1013807330552931903">"نمط لون الصورة"</string>
     <string name="picture_color_mode_desc" msgid="151780973768136200">"‏استخدام sRGB"</string>
@@ -379,7 +416,7 @@
     <string name="daltonizer_mode_protanomaly" msgid="7805583306666608440">"غطش الأحمر (الأحمر والأخضر)"</string>
     <string name="daltonizer_mode_tritanomaly" msgid="7135266249220732267">"غمش الأزرق (الأزرق والأصفر)"</string>
     <string name="accessibility_display_daltonizer_preference_title" msgid="1810693571332381974">"تصحيح الألوان"</string>
-    <string name="accessibility_display_daltonizer_preference_subtitle" msgid="5190814747212060815">"هذه الميزة تجريبية وقد تؤثر في الأداء."</string>
+    <string name="accessibility_display_daltonizer_preference_subtitle" msgid="6178138727195403796">"تساعد ميزة تصحيح الألوان المصابين بعمى الألوان على رؤية الألوان بدقة أكبر"</string>
     <string name="daltonizer_type_overridden" msgid="4509604753672535721">"تم الاستبدال بـ <xliff:g id="TITLE">%1$s</xliff:g>"</string>
     <string name="power_remaining_settings_home_page" msgid="4885165789445462557">"<xliff:g id="PERCENTAGE">%1$s</xliff:g> - <xliff:g id="TIME_STRING">%2$s</xliff:g>"</string>
     <string name="power_remaining_duration_only" msgid="8264199158671531431">"يتبقى <xliff:g id="TIME_REMAINING">%1$s</xliff:g> تقريبًا"</string>
@@ -398,18 +435,19 @@
     <string name="power_remaining_less_than_duration" msgid="1812668275239801236">"يتبقى أقل من <xliff:g id="THRESHOLD">%1$s</xliff:g> (<xliff:g id="LEVEL">%2$s</xliff:g>)."</string>
     <string name="power_remaining_more_than_subtext" msgid="7919119719242734848">"يتبقى أكثر من <xliff:g id="TIME_REMAINING">%1$s</xliff:g> (<xliff:g id="LEVEL">%2$s</xliff:g>)."</string>
     <string name="power_remaining_only_more_than_subtext" msgid="3274496164769110480">"يتبقى أكثر من <xliff:g id="TIME_REMAINING">%1$s</xliff:g>."</string>
-    <string name="power_remaining_duration_only_shutdown_imminent" product="default" msgid="6583866940347159957">"قد يتم إغلاق الهاتف بعد قليل."</string>
-    <string name="power_remaining_duration_only_shutdown_imminent" product="tablet" msgid="8009177999719462724">"قد يتم إغلاق الجهاز اللوحي بعد قليل."</string>
-    <string name="power_remaining_duration_only_shutdown_imminent" product="device" msgid="8320892540455268018">"قد يتم إغلاق الجهاز بعد قليل."</string>
-    <string name="power_remaining_duration_shutdown_imminent" product="default" msgid="6186572170809116621">"قد يتم إغلاق الهاتف بعد قليل (<xliff:g id="LEVEL">%1$s</xliff:g>)."</string>
-    <string name="power_remaining_duration_shutdown_imminent" product="tablet" msgid="1338758278145563121">"قد يتم إغلاق الجهاز اللوحي بعد قليل (<xliff:g id="LEVEL">%1$s</xliff:g>)."</string>
-    <string name="power_remaining_duration_shutdown_imminent" product="device" msgid="3699579688084774362">"قد يتم إغلاق الجهاز بعد قليل (<xliff:g id="LEVEL">%1$s</xliff:g>)."</string>
+    <string name="power_remaining_duration_only_shutdown_imminent" product="default" msgid="137330009791560774">"قد يتم إغلاق الهاتف قريبًا"</string>
+    <string name="power_remaining_duration_only_shutdown_imminent" product="tablet" msgid="145489081521468132">"قد يتم إغلاق الجهاز اللوحي قريبًا"</string>
+    <string name="power_remaining_duration_only_shutdown_imminent" product="device" msgid="1070562682853942350">"قد يتم إغلاق الجهاز قريبًا"</string>
+    <string name="power_remaining_duration_shutdown_imminent" product="default" msgid="4429259621177089719">"قد يتم إغلاق الهاتف قريبًا (<xliff:g id="LEVEL">%1$s</xliff:g>)"</string>
+    <string name="power_remaining_duration_shutdown_imminent" product="tablet" msgid="7703677921000858479">"قد يتم إغلاق الجهاز اللوحي قريبًا (<xliff:g id="LEVEL">%1$s</xliff:g>)"</string>
+    <string name="power_remaining_duration_shutdown_imminent" product="device" msgid="4374784375644214578">"قد يتم إغلاق الجهاز قريبًا (<xliff:g id="LEVEL">%1$s</xliff:g>)"</string>
     <string name="power_charging" msgid="6727132649743436802">"<xliff:g id="LEVEL">%1$s</xliff:g> - <xliff:g id="STATE">%2$s</xliff:g>"</string>
     <string name="power_remaining_charging_duration_only" msgid="7415639699283965818">"<xliff:g id="TIME">%1$s</xliff:g> إلى أن يتم شحن الجهاز بالكامل"</string>
     <string name="power_charging_duration" msgid="5005740040558984057">"<xliff:g id="LEVEL">%1$s</xliff:g> - <xliff:g id="TIME">%2$s</xliff:g> إلى أن يتم شحن الجهاز بالكامل"</string>
     <string name="battery_info_status_unknown" msgid="268625384868401114">"غير معروف"</string>
     <string name="battery_info_status_charging" msgid="4279958015430387405">"جارٍ الشحن"</string>
-    <string name="battery_info_status_charging_lower" msgid="8696042568167401574">"جارٍ الشحن"</string>
+    <string name="battery_info_status_charging_fast" msgid="8027559755902954885">"جارٍ الشحن سريعًا"</string>
+    <string name="battery_info_status_charging_slow" msgid="3190803837168962319">"جارٍ الشحن ببطء"</string>
     <string name="battery_info_status_discharging" msgid="6962689305413556485">"لا يتم الشحن"</string>
     <string name="battery_info_status_not_charging" msgid="8330015078868707899">"تم التوصيل، ولكن يتعذّر الشحن الآن"</string>
     <string name="battery_info_status_full" msgid="4443168946046847468">"ممتلئة"</string>
@@ -433,7 +471,7 @@
     <string name="screen_zoom_summary_extremely_large" msgid="1438045624562358554">"أكبر مستوى"</string>
     <string name="screen_zoom_summary_custom" msgid="3468154096832912210">"مخصص (<xliff:g id="DENSITYDPI">%d</xliff:g>)"</string>
     <string name="content_description_menu_button" msgid="6254844309171779931">"القائمة"</string>
-    <string name="retail_demo_reset_message" msgid="5392824901108195463">"إدخال كلمة المرور لإعادة الضبط بحسب بيانات المصنع في الوضع التجريبي"</string>
+    <string name="retail_demo_reset_message" msgid="5392824901108195463">"إدخال كلمة المرور لإعادة الضبط على الإعدادات الأصلية في الوضع التجريبي"</string>
     <string name="retail_demo_reset_next" msgid="3688129033843885362">"التالي"</string>
     <string name="retail_demo_reset_title" msgid="1866911701095959800">"يلزم توفر كلمة مرور"</string>
     <string name="active_input_method_subtypes" msgid="4232680535471633046">"طرق الإدخال النشطة"</string>
@@ -457,9 +495,9 @@
     <string name="accessibility_manual_zen_more_time" msgid="5141801092071134235">"وقت أكثر."</string>
     <string name="accessibility_manual_zen_less_time" msgid="6828877595848229965">"وقت أقل."</string>
     <string name="cancel" msgid="5665114069455378395">"إلغاء"</string>
-    <string name="okay" msgid="949938843324579502">"موافق"</string>
-    <string name="zen_mode_enable_dialog_turn_on" msgid="6418297231575050426">"تشغيل"</string>
-    <string name="zen_mode_settings_turn_on_dialog_title" msgid="2760567063190790696">"تشغيل وضع \"الرجاء عدم الإزعاج\""</string>
+    <string name="okay" msgid="949938843324579502">"حسنًا"</string>
+    <string name="zen_mode_enable_dialog_turn_on" msgid="6418297231575050426">"تفعيل"</string>
+    <string name="zen_mode_settings_turn_on_dialog_title" msgid="2760567063190790696">"تفعيل وضع \"الرجاء عدم الإزعاج\""</string>
     <string name="zen_mode_settings_summary_off" msgid="3832876036123504076">"مطلقًا"</string>
     <string name="zen_interruption_level_priority" msgid="5392140786447823299">"الأولوية فقط"</string>
     <string name="zen_mode_and_condition" msgid="8877086090066332516">"<xliff:g id="ZEN_MODE">%1$s</xliff:g>. <xliff:g id="EXIT_CONDITION">%2$s</xliff:g>"</string>
@@ -471,6 +509,7 @@
     <string name="zen_mode_duration_always_prompt_title" msgid="3212996860498119555">"الطلب في كل مرة"</string>
     <string name="zen_mode_forever" msgid="3339224497605461291">"إلى أن توقف الوضع يدويًا"</string>
     <string name="time_unit_just_now" msgid="3006134267292728099">"للتو"</string>
-    <string name="media_transfer_this_device_name" msgid="2858384945459339073">"هذا الجهاز"</string>
+    <string name="media_transfer_this_device_name" msgid="2716555073132169240">"مكبر صوت الهاتف"</string>
     <string name="profile_connect_timeout_subtext" msgid="4043408193005851761">"حدثت مشكلة أثناء الاتصال. يُرجى إيقاف الجهاز ثم إعادة تشغيله."</string>
+    <string name="media_transfer_wired_device_name" msgid="4447880899964056007">"جهاز سماعي سلكي"</string>
 </resources>

@@ -16,6 +16,8 @@
 
 package com.android.server;
 
+import static android.telephony.SubscriptionManager.INVALID_SIM_SLOT_INDEX;
+
 import android.Manifest;
 import android.app.AppOpsManager;
 import android.app.PendingIntent;
@@ -37,6 +39,7 @@ import android.os.SystemClock;
 import android.os.UserHandle;
 import android.service.carrier.CarrierMessagingService;
 import android.telephony.SmsManager;
+import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Slog;
@@ -125,20 +128,17 @@ public class MmsServiceBroker extends SystemService {
 
         @Override
         public void sendMessage(int subId, String callingPkg, Uri contentUri, String locationUrl,
-                Bundle configOverrides, PendingIntent sentIntent) throws RemoteException {
+                Bundle configOverrides, PendingIntent sentIntent, long messageId)
+                throws RemoteException {
             returnPendingIntentWithError(sentIntent);
         }
 
         @Override
         public void downloadMessage(int subId, String callingPkg, String locationUrl,
-                Uri contentUri, Bundle configOverrides, PendingIntent downloadedIntent)
+                Uri contentUri, Bundle configOverrides, PendingIntent downloadedIntent,
+                long messageId)
                 throws RemoteException {
             returnPendingIntentWithError(downloadedIntent);
-        }
-
-        @Override
-        public Bundle getCarrierConfigValues(int subId) throws RemoteException {
-            return null;
         }
 
         @Override
@@ -331,7 +331,8 @@ public class MmsServiceBroker extends SystemService {
 
         @Override
         public void sendMessage(int subId, String callingPkg, Uri contentUri,
-                String locationUrl, Bundle configOverrides, PendingIntent sentIntent)
+                String locationUrl, Bundle configOverrides, PendingIntent sentIntent,
+                long messageId)
                 throws RemoteException {
             Slog.d(TAG, "sendMessage() by " + callingPkg);
             mContext.enforceCallingPermission(Manifest.permission.SEND_SMS, "Send MMS message");
@@ -345,13 +346,13 @@ public class MmsServiceBroker extends SystemService {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                     subId);
             getServiceGuarded().sendMessage(subId, callingPkg, contentUri, locationUrl,
-                    configOverrides, sentIntent);
+                    configOverrides, sentIntent, messageId);
         }
 
         @Override
         public void downloadMessage(int subId, String callingPkg, String locationUrl,
                 Uri contentUri, Bundle configOverrides,
-                PendingIntent downloadedIntent) throws RemoteException {
+                PendingIntent downloadedIntent, long messageId) throws RemoteException {
             Slog.d(TAG, "downloadMessage() by " + callingPkg);
             mContext.enforceCallingPermission(Manifest.permission.RECEIVE_MMS,
                     "Download MMS message");
@@ -366,13 +367,7 @@ public class MmsServiceBroker extends SystemService {
                     subId);
 
             getServiceGuarded().downloadMessage(subId, callingPkg, locationUrl, contentUri,
-                    configOverrides, downloadedIntent);
-        }
-
-        @Override
-        public Bundle getCarrierConfigValues(int subId) throws RemoteException {
-            Slog.d(TAG, "getCarrierConfigValues() by " + getCallingPackageName());
-            return getServiceGuarded().getCarrierConfigValues(subId);
+                    configOverrides, downloadedIntent, messageId);
         }
 
         @Override
@@ -523,11 +518,11 @@ public class MmsServiceBroker extends SystemService {
 
                 // Grant permission for the carrier app.
                 Intent intent = new Intent(action);
-                TelephonyManager telephonyManager =
-                        (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
-                List<String> carrierPackages =
-                        telephonyManager.getCarrierPackageNamesForIntentAndPhone(
-                                intent, SubscriptionManager.getPhoneId(subId));
+                TelephonyManager telephonyManager = (TelephonyManager)
+                        mContext.getSystemService(Context.TELEPHONY_SERVICE);
+                List<String> carrierPackages = telephonyManager
+                        .getCarrierPackageNamesForIntentAndPhone(
+                                intent, getPhoneIdFromSubId(subId));
                 if (carrierPackages != null && carrierPackages.size() == 1) {
                     LocalServices.getService(UriGrantsManagerInternal.class)
                             .grantUriPermissionFromIntent(callingUid, carrierPackages.get(0),
@@ -538,5 +533,14 @@ public class MmsServiceBroker extends SystemService {
             }
             return contentUri;
         }
+    }
+
+    private int getPhoneIdFromSubId(int subId) {
+        SubscriptionManager subManager = (SubscriptionManager)
+                mContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+        if (subManager == null) return INVALID_SIM_SLOT_INDEX;
+        SubscriptionInfo info = subManager.getActiveSubscriptionInfo(subId);
+        if (info == null) return INVALID_SIM_SLOT_INDEX;
+        return info.getSimSlotIndex();
     }
 }

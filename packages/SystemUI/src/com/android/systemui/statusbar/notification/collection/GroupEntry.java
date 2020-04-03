@@ -77,4 +77,5 @@ public class GroupEntry extends ListEntry {
     }
 
     public static final GroupEntry ROOT_ENTRY = new GroupEntry("<root>");
+
 }

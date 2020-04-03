@@ -41,14 +41,13 @@ public:
 
     bool setOutColorType(SkColorType outColorType);
 
-    bool setOutAlphaType(SkAlphaType outAlphaType);
+    bool setUnpremultipliedRequired(bool unpremultipliedRequired);
 
+    sk_sp<SkColorSpace> getDefaultColorSpace() const;
     void setOutColorSpace(sk_sp<SkColorSpace> cs);
 
     // The size is the final size after scaling and cropping.
     SkImageInfo getOutputInfo() const;
-    SkColorType getOutColorType() const { return mOutColorType; }
-    SkAlphaType getOutAlphaType() const { return mOutAlphaType; }
 
     bool opaque() const;
     bool gray() const;
@@ -59,13 +58,16 @@ private:
     SkISize mTargetSize;
     SkISize mDecodeSize;
     SkColorType mOutColorType;
-    SkAlphaType mOutAlphaType;
+    bool mUnpremultipliedRequired;
     sk_sp<SkColorSpace> mOutColorSpace;
     int mSampleSize;
     std::optional<SkIRect> mCropRect;
 
     ImageDecoder(const ImageDecoder&) = delete;
     ImageDecoder& operator=(const ImageDecoder&) = delete;
+
+    SkAlphaType getOutAlphaType() const;
+    sk_sp<SkColorSpace> getOutputColorSpace() const;
 };
 
 } // namespace android

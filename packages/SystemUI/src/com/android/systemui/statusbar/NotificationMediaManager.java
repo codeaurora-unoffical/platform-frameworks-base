@@ -15,7 +15,6 @@
  */
 package com.android.systemui.statusbar;
 
-import static com.android.systemui.Dependency.MAIN_HANDLER;
 import static com.android.systemui.statusbar.StatusBarState.KEYGUARD;
 import static com.android.systemui.statusbar.phone.StatusBar.DEBUG_MEDIA_FAKE_ARTWORK;
 import static com.android.systemui.statusbar.phone.StatusBar.ENABLE_LOCKSCREEN_WALLPAPER;
@@ -36,7 +35,6 @@ import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.AsyncTask;
-import android.os.Handler;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.provider.DeviceConfig;
@@ -52,18 +50,21 @@ import com.android.systemui.Dependency;
 import com.android.systemui.Dumpable;
 import com.android.systemui.Interpolators;
 import com.android.systemui.colorextraction.SysuiColorExtractor;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.statusbar.dagger.StatusBarModule;
 import com.android.systemui.statusbar.notification.NotificationEntryListener;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.phone.BiometricUnlockController;
 import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.LockscreenWallpaper;
+import com.android.systemui.statusbar.phone.NotificationShadeWindowController;
 import com.android.systemui.statusbar.phone.ScrimController;
 import com.android.systemui.statusbar.phone.ScrimState;
 import com.android.systemui.statusbar.phone.StatusBar;
-import com.android.systemui.statusbar.phone.StatusBarWindowController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.util.DeviceConfigProxy;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -72,9 +73,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-
-import javax.inject.Inject;
-import javax.inject.Singleton;
+import java.util.concurrent.Executor;
 
 import dagger.Lazy;
 
@@ -82,7 +81,6 @@ import dagger.Lazy;
  * Handles tasks and state related to media notifications. For example, there is a 'current' media
  * notification, which this class keeps track of.
  */
-@Singleton
 public class NotificationMediaManager implements Dumpable {
     private static final String TAG = "NotificationMediaManager";
     public static final boolean DEBUG_MEDIA = false;
@@ -101,11 +99,10 @@ public class NotificationMediaManager implements Dumpable {
         PAUSED_MEDIA_STATES.add(PlaybackState.STATE_ERROR);
     }
 
-
     private final NotificationEntryManager mEntryManager;
 
     @Nullable
-    private Lazy<StatusBarWindowController> mStatusBarWindowController;
+    private Lazy<NotificationShadeWindowController> mNotificationShadeWindowController;
 
     @Nullable
     private BiometricUnlockController mBiometricUnlockController;
@@ -114,7 +111,7 @@ public class NotificationMediaManager implements Dumpable {
     @Nullable
     private LockscreenWallpaper mLockscreenWallpaper;
 
-    private final Handler mHandler = Dependency.get(MAIN_HANDLER);
+    private final Executor mMainExecutor;
 
     private final Context mContext;
     private final MediaSessionManager mMediaSessionManager;
@@ -176,14 +173,18 @@ public class NotificationMediaManager implements Dumpable {
         }
     };
 
-    @Inject
+    /**
+     * Injected constructor. See {@link StatusBarModule}.
+     */
     public NotificationMediaManager(
             Context context,
             Lazy<StatusBar> statusBarLazy,
-            Lazy<StatusBarWindowController> statusBarWindowController,
+            Lazy<NotificationShadeWindowController> notificationShadeWindowController,
             NotificationEntryManager notificationEntryManager,
             MediaArtworkProcessor mediaArtworkProcessor,
-            KeyguardBypassController keyguardBypassController) {
+            KeyguardBypassController keyguardBypassController,
+            @Main Executor mainExecutor,
+            DeviceConfigProxy deviceConfig) {
         mContext = context;
         mMediaArtworkProcessor = mediaArtworkProcessor;
         mKeyguardBypassController = keyguardBypassController;
@@ -194,8 +195,9 @@ public class NotificationMediaManager implements Dumpable {
                 Context.MEDIA_SESSION_SERVICE);
         // TODO: use KeyguardStateController#isOccluded to remove this dependency
         mStatusBarLazy = statusBarLazy;
-        mStatusBarWindowController = statusBarWindowController;
+        mNotificationShadeWindowController = notificationShadeWindowController;
         mEntryManager = notificationEntryManager;
+        mMainExecutor = mainExecutor;
         notificationEntryManager.addNotificationEntryListener(new NotificationEntryListener() {
             @Override
             public void onPendingEntryAdded(NotificationEntry entry) {
@@ -211,7 +213,8 @@ public class NotificationMediaManager implements Dumpable {
             public void onEntryRemoved(
                     NotificationEntry entry,
                     NotificationVisibility visibility,
-                    boolean removedByUser) {
+                    boolean removedByUser,
+                    int reason) {
                 onNotificationRemoved(entry.getKey());
             }
         });
@@ -220,7 +223,7 @@ public class NotificationMediaManager implements Dumpable {
                 DeviceConfig.getProperty(DeviceConfig.NAMESPACE_SYSTEMUI,
                     SystemUiDeviceConfigFlags.COMPACT_MEDIA_SEEKBAR_ENABLED));
 
-        DeviceConfig.addOnPropertiesChangedListener(DeviceConfig.NAMESPACE_SYSTEMUI,
+        deviceConfig.addOnPropertiesChangedListener(DeviceConfig.NAMESPACE_SYSTEMUI,
                 mContext.getMainExecutor(),
                 mPropertiesChangedListener);
     }
@@ -525,7 +528,8 @@ public class NotificationMediaManager implements Dumpable {
             }
         }
 
-        StatusBarWindowController windowController = mStatusBarWindowController.get();
+        NotificationShadeWindowController windowController =
+                mNotificationShadeWindowController.get();
         boolean hideBecauseOccluded = mStatusBarLazy.get().isOccluded();
 
         final boolean hasArtwork = artworkDrawable != null;
@@ -624,7 +628,7 @@ public class NotificationMediaManager implements Dumpable {
                                 mBackdrop.setVisibility(View.GONE);
                                 mBackdropFront.animate().cancel();
                                 mBackdropBack.setImageDrawable(null);
-                                mHandler.post(mHideBackdropFront);
+                                mMainExecutor.execute(mHideBackdropFront);
                             });
                     if (mKeyguardStateController.isKeyguardFadingAway()) {
                         mBackdrop.animate()

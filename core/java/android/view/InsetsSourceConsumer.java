@@ -16,10 +16,14 @@
 
 package android.view;
 
+import static android.view.InsetsController.AnimationType;
+import static android.view.InsetsState.toPublicType;
+
 import android.annotation.IntDef;
 import android.annotation.Nullable;
 import android.view.InsetsState.InternalInsetsType;
 import android.view.SurfaceControl.Transaction;
+import android.view.WindowInsets.Type.InsetsType;
 
 import com.android.internal.annotations.VisibleForTesting;
 
@@ -34,7 +38,7 @@ import java.util.function.Supplier;
 public class InsetsSourceConsumer {
 
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef(value = {ShowResult.SHOW_IMMEDIATELY, ShowResult.SHOW_DELAYED, ShowResult.SHOW_FAILED})
+    @IntDef(value = {ShowResult.SHOW_IMMEDIATELY, ShowResult.IME_SHOW_DELAYED, ShowResult.IME_SHOW_FAILED})
     @interface ShowResult {
         /**
          * Window type is ready to be shown, will be shown immidiately.
@@ -44,19 +48,20 @@ public class InsetsSourceConsumer {
          * Result will be delayed. Window needs to be prepared or request is not from controller.
          * Request will be delegated to controller and may or may not be shown.
          */
-        int SHOW_DELAYED = 1;
+        int IME_SHOW_DELAYED = 1;
         /**
          * Window will not be shown because one of the conditions couldn't be met.
          * (e.g. in IME's case, when no editor is focused.)
          */
-        int SHOW_FAILED = 2;
+        int IME_SHOW_FAILED = 2;
     }
 
     protected final InsetsController mController;
-    protected boolean mVisible;
+    protected boolean mRequestedVisible;
+    protected final InsetsState mState;
+    protected final @InternalInsetsType int mType;
+
     private final Supplier<Transaction> mTransactionSupplier;
-    private final @InternalInsetsType int mType;
-    private final InsetsState mState;
     private @Nullable InsetsSourceControl mSourceControl;
     private boolean mHasWindowFocus;
 
@@ -66,20 +71,53 @@ public class InsetsSourceConsumer {
         mState = state;
         mTransactionSupplier = transactionSupplier;
         mController = controller;
-        mVisible = InsetsState.getDefaultVisibility(type);
+        mRequestedVisible = InsetsState.getDefaultVisibility(type);
     }
 
-    public void setControl(@Nullable InsetsSourceControl control) {
+    /**
+     * Updates the control delivered from the server.
+
+     * @param showTypes An integer array with a single entry that determines which types a show
+     *                  animation should be run after setting the control.
+     * @param hideTypes An integer array with a single entry that determines which types a hide
+     *                  animation should be run after setting the control.
+     */
+    public void setControl(@Nullable InsetsSourceControl control,
+            @InsetsType int[] showTypes, @InsetsType int[] hideTypes) {
         if (mSourceControl == control) {
             return;
         }
+        final InsetsSourceControl lastControl = mSourceControl;
         mSourceControl = control;
-        applyHiddenToControl();
-        if (applyLocalVisibilityOverride()) {
-            mController.notifyVisibilityChanged();
-        }
+
+        // We are loosing control
         if (mSourceControl == null) {
             mController.notifyControlRevoked(this);
+
+            // Restore server visibility.
+            mState.getSource(getType()).setVisible(
+                    mController.getLastDispatchedState().getSource(getType()).isVisible());
+            applyLocalVisibilityOverride();
+        } else {
+            // We are gaining control, and need to run an animation since previous state
+            // didn't match
+            if (mRequestedVisible != mState.getSource(mType).isVisible()) {
+                if (mRequestedVisible) {
+                    showTypes[0] |= toPublicType(getType());
+                } else {
+                    hideTypes[0] |= toPublicType(getType());
+                }
+            } else {
+              // We are gaining control, but don't need to run an animation.
+              // However make sure that the leash visibility is still up to date.
+              if (applyLocalVisibilityOverride()) {
+                  mController.notifyVisibilityChanged();
+              }
+              applyHiddenToControl();
+            }
+        }
+        if (lastControl != null) {
+            lastControl.release();
         }
     }
 
@@ -93,13 +131,17 @@ public class InsetsSourceConsumer {
     }
 
     @VisibleForTesting
-    public void show() {
-        setVisible(true);
+    public void show(boolean fromIme) {
+        setRequestedVisible(true);
     }
 
     @VisibleForTesting
     public void hide() {
-        setVisible(false);
+        setRequestedVisible(false);
+    }
+
+    void hide(boolean animationFinished, @AnimationType int animationType) {
+        hide();
     }
 
     /**
@@ -121,21 +163,29 @@ public class InsetsSourceConsumer {
     }
 
     boolean applyLocalVisibilityOverride() {
+        InsetsSource source = mState.peekSource(mType);
+        final boolean isVisible = source != null && source.isVisible();
+        final boolean hasControl = mSourceControl != null;
+
+        // We still need to let the legacy app know the visibility change even if we don't have the
+        // control.
+        mController.updateCompatSysUiVisibility(
+                mType, hasControl ? mRequestedVisible : isVisible, hasControl);
 
         // If we don't have control, we are not able to change the visibility.
-        if (mSourceControl == null) {
+        if (!hasControl) {
             return false;
         }
-        if (mState.getSource(mType).isVisible() == mVisible) {
+        if (isVisible == mRequestedVisible) {
             return false;
         }
-        mState.getSource(mType).setVisible(mVisible);
+        mState.getSource(mType).setVisible(mRequestedVisible);
         return true;
     }
 
     @VisibleForTesting
-    public boolean isVisible() {
-        return mVisible;
+    public boolean isRequestedVisible() {
+        return mRequestedVisible;
     }
 
     /**
@@ -146,7 +196,8 @@ public class InsetsSourceConsumer {
      *                       {@link android.inputmethodservice.InputMethodService}).
      * @return @see {@link ShowResult}.
      */
-    @ShowResult int requestShow(boolean fromController) {
+    @VisibleForTesting
+    public @ShowResult int requestShow(boolean fromController) {
         return ShowResult.SHOW_IMMEDIATELY;
     }
 
@@ -157,23 +208,31 @@ public class InsetsSourceConsumer {
         // no-op for types that always return ShowResult#SHOW_IMMEDIATELY.
     }
 
-    private void setVisible(boolean visible) {
-        if (mVisible == visible) {
-            return;
+    /**
+     * Remove surface on which this consumer type is drawn.
+     */
+    public void removeSurface() {
+        // no-op for types that always return ShowResult#SHOW_IMMEDIATELY.
+    }
+
+    /**
+     * Sets requested visibility from the client, regardless of whether we are able to control it at
+     * the moment.
+     */
+    private void setRequestedVisible(boolean requestedVisible) {
+        mRequestedVisible = requestedVisible;
+        if (applyLocalVisibilityOverride()) {
+            mController.notifyVisibilityChanged();
         }
-        mVisible = visible;
-        applyLocalVisibilityOverride();
-        mController.notifyVisibilityChanged();
     }
 
     private void applyHiddenToControl() {
-        if (mSourceControl == null || mSourceControl.getLeash() == null
-                || mController.isAnimating()) {
+        if (mSourceControl == null || mSourceControl.getLeash() == null) {
             return;
         }
 
         final Transaction t = mTransactionSupplier.get();
-        if (mVisible) {
+        if (mRequestedVisible) {
             t.show(mSourceControl.getLeash());
         } else {
             t.hide(mSourceControl.getLeash());

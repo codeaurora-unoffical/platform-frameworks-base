@@ -16,6 +16,8 @@
 
 package com.android.server.content;
 
+import static android.content.PermissionChecker.PERMISSION_GRANTED;
+
 import android.Manifest;
 import android.accounts.Account;
 import android.annotation.Nullable;
@@ -81,6 +83,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * {@hide}
@@ -397,15 +400,22 @@ public final class ContentService extends IContentService.Stub {
     public void notifyChange(Uri[] uris, IContentObserver observer,
             boolean observerWantsSelfNotifications, int flags, int userHandle,
             int targetSdkVersion, String callingPackage) {
+        final ObserverCollector collector = new ObserverCollector();
         for (Uri uri : uris) {
             notifyChange(uri, observer, observerWantsSelfNotifications, flags, userHandle,
-                    targetSdkVersion, callingPackage);
+                    targetSdkVersion, callingPackage, collector);
+        }
+        final long token = clearCallingIdentity();
+        try {
+            collector.dispatch();
+        } finally {
+            Binder.restoreCallingIdentity(token);
         }
     }
 
     public void notifyChange(Uri uri, IContentObserver observer,
             boolean observerWantsSelfNotifications, int flags, int userHandle,
-            int targetSdkVersion, String callingPackage) {
+            int targetSdkVersion, String callingPackage, ObserverCollector collector) {
         if (DEBUG) Slog.d(TAG, "Notifying update of " + uri + " for user " + userHandle
                 + " from observer " + observer + ", flags " + Integer.toHexString(flags));
 
@@ -440,22 +450,9 @@ public final class ContentService extends IContentService.Stub {
         // process rather than the caller's process. We will restore this before returning.
         long identityToken = clearCallingIdentity();
         try {
-            ArrayList<ObserverCall> calls = new ArrayList<ObserverCall>();
             synchronized (mRootNode) {
                 mRootNode.collectObserversLocked(uri, 0, observer, observerWantsSelfNotifications,
-                        flags, userHandle, calls);
-            }
-            final int numCalls = calls.size();
-            for (int i = 0; i < numCalls; i++) {
-                // Immediately dispatch notifications to foreground apps that
-                // are important to the user; all other background observers are
-                // delayed to avoid stampeding
-                final ObserverCall oc = calls.get(i);
-                if (oc.mProcState <= ActivityManager.PROCESS_STATE_IMPORTANT_FOREGROUND) {
-                    oc.run();
-                } else {
-                    BackgroundThread.getHandler().postDelayed(oc, BACKGROUND_OBSERVER_DELAY);
-                }
+                        flags, userHandle, collector);
             }
             if ((flags&ContentResolver.NOTIFY_SYNC_TO_NETWORK) != 0) {
                 SyncManager syncManager = getSyncManager();
@@ -485,40 +482,84 @@ public final class ContentService extends IContentService.Stub {
         }
     }
 
-    public void notifyChange(Uri uri, IContentObserver observer,
-            boolean observerWantsSelfNotifications, boolean syncToNetwork,
-            String callingPackage) {
-        notifyChange(uri, observer, observerWantsSelfNotifications,
-                syncToNetwork ? ContentResolver.NOTIFY_SYNC_TO_NETWORK : 0,
-                UserHandle.getCallingUserId(), Build.VERSION_CODES.CUR_DEVELOPMENT, callingPackage);
-    }
-
-    /** {@hide} */
+    /**
+     * Collection of detected change notifications that should be delivered.
+     * <p>
+     * To help reduce Binder transaction overhead, this class clusters together
+     * multiple {@link Uri} where all other arguments are identical.
+     */
     @VisibleForTesting
-    public static final class ObserverCall implements Runnable {
-        final IContentObserver mObserver;
-        final boolean mSelfChange;
-        final Uri mUri;
-        final int mUserId;
-        final int mProcState;
+    public static class ObserverCollector {
+        private final ArrayMap<Key, List<Uri>> collected = new ArrayMap<>();
 
-        ObserverCall(IContentObserver observer, boolean selfChange, Uri uri, int userId,
-                int procState) {
-            mObserver = observer;
-            mSelfChange = selfChange;
-            mUri = uri;
-            mUserId = userId;
-            mProcState = procState;
+        private static class Key {
+            final IContentObserver observer;
+            final int uid;
+            final boolean selfChange;
+            final int flags;
+            final int userId;
+
+            Key(IContentObserver observer, int uid, boolean selfChange, int flags, int userId) {
+                this.observer = observer;
+                this.uid = uid;
+                this.selfChange = selfChange;
+                this.flags = flags;
+                this.userId = userId;
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (!(o instanceof Key)) {
+                    return false;
+                }
+                final Key other = (Key) o;
+                return Objects.equals(observer, other.observer)
+                        && (uid == other.uid)
+                        && (selfChange == other.selfChange)
+                        && (flags == other.flags)
+                        && (userId == other.userId);
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(observer, uid, selfChange, flags, userId);
+            }
         }
 
-        @Override
-        public void run() {
-            try {
-                mObserver.onChange(mSelfChange, mUri, mUserId);
-                if (DEBUG) Slog.d(TAG, "Notified " + mObserver + " of update at " + mUri);
-            } catch (RemoteException ignored) {
-                // We already have a death observer that will clean up if the
-                // remote process dies
+        public void collect(IContentObserver observer, int uid, boolean selfChange, Uri uri,
+                int flags, int userId) {
+            final Key key = new Key(observer, uid, selfChange, flags, userId);
+            List<Uri> value = collected.get(key);
+            if (value == null) {
+                value = new ArrayList<>();
+                collected.put(key, value);
+            }
+            value.add(uri);
+        }
+
+        public void dispatch() {
+            for (int i = 0; i < collected.size(); i++) {
+                final Key key = collected.keyAt(i);
+                final List<Uri> value = collected.valueAt(i);
+
+                final Runnable task = () -> {
+                    try {
+                        key.observer.onChangeEtc(key.selfChange,
+                                value.toArray(new Uri[value.size()]), key.flags, key.userId);
+                    } catch (RemoteException ignored) {
+                    }
+                };
+
+                // Immediately dispatch notifications to foreground apps that
+                // are important to the user; all other background observers are
+                // delayed to avoid stampeding
+                final int procState = LocalServices.getService(ActivityManagerInternal.class)
+                        .getUidProcessState(key.uid);
+                if (procState <= ActivityManager.PROCESS_STATE_IMPORTANT_FOREGROUND) {
+                    task.run();
+                } else {
+                    BackgroundThread.getHandler().postDelayed(task, BACKGROUND_OBSERVER_DELAY);
+                }
             }
         }
     }
@@ -1212,7 +1253,7 @@ public final class ContentService extends IContentService.Stub {
     @RequiresPermission(android.Manifest.permission.CACHE_CONTENT)
     public void putCache(String packageName, Uri key, Bundle value, int userId) {
         Bundle.setDefusable(value, true);
-        enforceCrossUserPermission(userId, TAG);
+        enforceNonFullCrossUserPermission(userId, TAG);
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.CACHE_CONTENT, TAG);
         mContext.getSystemService(AppOpsManager.class).checkPackage(Binder.getCallingUid(),
                 packageName);
@@ -1234,7 +1275,7 @@ public final class ContentService extends IContentService.Stub {
     @Override
     @RequiresPermission(android.Manifest.permission.CACHE_CONTENT)
     public Bundle getCache(String packageName, Uri key, int userId) {
-        enforceCrossUserPermission(userId, TAG);
+        enforceNonFullCrossUserPermission(userId, TAG);
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.CACHE_CONTENT, TAG);
         mContext.getSystemService(AppOpsManager.class).checkPackage(Binder.getCallingUid(),
                 packageName);
@@ -1300,6 +1341,30 @@ public final class ContentService extends IContentService.Stub {
             mContext.enforceCallingOrSelfPermission(
                     Manifest.permission.INTERACT_ACROSS_USERS_FULL, message);
         }
+    }
+
+    /**
+     * Checks if the request is from the system or an app that has {@code INTERACT_ACROSS_USERS} or
+     * {@code INTERACT_ACROSS_USERS_FULL} permission, if the {@code userHandle} is not for the
+     * caller.
+     *
+     * @param userHandle the user handle of the user we want to act on behalf of.
+     * @param message the message to log on security exception.
+     */
+    private void enforceNonFullCrossUserPermission(int userHandle, String message) {
+        final int callingUser = UserHandle.getCallingUserId();
+        if (callingUser == userHandle) {
+            return;
+        }
+
+        int interactAcrossUsersState = mContext.checkCallingOrSelfPermission(
+                Manifest.permission.INTERACT_ACROSS_USERS);
+        if (interactAcrossUsersState == PERMISSION_GRANTED) {
+            return;
+        }
+
+        mContext.enforceCallingOrSelfPermission(
+                Manifest.permission.INTERACT_ACROSS_USERS_FULL, message);
     }
 
     private static int normalizeSyncable(int syncable) {
@@ -1428,10 +1493,6 @@ public final class ContentService extends IContentService.Stub {
                         observer != null ? observer.asBinder() : null)));
             }
         }
-
-        public static final int INSERT_TYPE = 0;
-        public static final int UPDATE_TYPE = 1;
-        public static final int DELETE_TYPE = 2;
 
         private String mName;
         private ArrayList<ObserverNode> mChildren = new ArrayList<ObserverNode>();
@@ -1562,7 +1623,7 @@ public final class ContentService extends IContentService.Stub {
 
         private void collectMyObserversLocked(Uri uri, boolean leaf, IContentObserver observer,
                                               boolean observerWantsSelfNotifications, int flags,
-                                              int targetUserHandle, ArrayList<ObserverCall> calls) {
+                                              int targetUserHandle, ObserverCollector collector) {
             int N = mObservers.size();
             IBinder observerBinder = observer == null ? null : observer.asBinder();
             for (int i = 0; i < N; i++) {
@@ -1602,10 +1663,8 @@ public final class ContentService extends IContentService.Stub {
                     if (DEBUG) Slog.d(TAG, "Reporting to " + entry.observer + ": leaf=" + leaf
                             + " flags=" + Integer.toHexString(flags)
                             + " desc=" + entry.notifyForDescendants);
-                    final int procState = LocalServices.getService(ActivityManagerInternal.class)
-                            .getUidProcessState(entry.uid);
-                    calls.add(new ObserverCall(entry.observer, selfChange, uri,
-                            targetUserHandle, procState));
+                    collector.collect(entry.observer, entry.uid, selfChange, uri, flags,
+                            targetUserHandle);
                 }
             }
         }
@@ -1615,21 +1674,21 @@ public final class ContentService extends IContentService.Stub {
          */
         public void collectObserversLocked(Uri uri, int index, IContentObserver observer,
                                            boolean observerWantsSelfNotifications, int flags,
-                                           int targetUserHandle, ArrayList<ObserverCall> calls) {
+                                           int targetUserHandle, ObserverCollector collector) {
             String segment = null;
             int segmentCount = countUriSegments(uri);
             if (index >= segmentCount) {
                 // This is the leaf node, notify all observers
                 if (DEBUG) Slog.d(TAG, "Collecting leaf observers @ #" + index + ", node " + mName);
                 collectMyObserversLocked(uri, true, observer, observerWantsSelfNotifications,
-                        flags, targetUserHandle, calls);
+                        flags, targetUserHandle, collector);
             } else if (index < segmentCount){
                 segment = getUriSegment(uri, index);
                 if (DEBUG) Slog.d(TAG, "Collecting non-leaf observers @ #" + index + " / "
                         + segment);
                 // Notify any observers at this level who are interested in descendants
                 collectMyObserversLocked(uri, false, observer, observerWantsSelfNotifications,
-                        flags, targetUserHandle, calls);
+                        flags, targetUserHandle, collector);
             }
 
             int N = mChildren.size();
@@ -1638,7 +1697,7 @@ public final class ContentService extends IContentService.Stub {
                 if (segment == null || node.mName.equals(segment)) {
                     // We found the child,
                     node.collectObserversLocked(uri, index + 1, observer,
-                            observerWantsSelfNotifications, flags, targetUserHandle, calls);
+                            observerWantsSelfNotifications, flags, targetUserHandle, collector);
                     if (segment != null) {
                         break;
                     }

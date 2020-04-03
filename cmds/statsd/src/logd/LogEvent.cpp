@@ -20,7 +20,8 @@
 #include "stats_log_util.h"
 #include "statslog.h"
 
-#include <binder/IPCThreadState.h>
+#include <android/binder_ibinder.h>
+#include <android-base/stringprintf.h>
 #include <private/android_filesystem_config.h>
 
 namespace android {
@@ -31,108 +32,52 @@ namespace statsd {
 const int FIELD_ID_EXPERIMENT_ID = 1;
 
 using namespace android::util;
+using android::base::StringPrintf;
 using android::util::ProtoOutputStream;
 using std::string;
 using std::vector;
 
-// Msg is expected to begin at the start of the serialized atom -- it should not
-// include the android_log_header_t or the StatsEventTag.
-LogEvent::LogEvent(uint8_t* msg, uint32_t len, uint32_t uid)
-    : mBuf(msg),
-      mRemainingLen(len),
-      mLogdTimestampNs(time(nullptr)),
-      mLogUid(uid)
-{
-#ifdef NEW_ENCODING_SCHEME
-    initNew();
-# else
-    mContext = create_android_log_parser((char*)msg, len);
-    init(mContext);
-    if (mContext) android_log_destroy(&mContext); // set mContext to NULL
-#endif
-}
+// stats_event.h socket types. Keep in sync.
+/* ERRORS */
+#define ERROR_NO_TIMESTAMP 0x1
+#define ERROR_NO_ATOM_ID 0x2
+#define ERROR_OVERFLOW 0x4
+#define ERROR_ATTRIBUTION_CHAIN_TOO_LONG 0x8
+#define ERROR_TOO_MANY_KEY_VALUE_PAIRS 0x10
+#define ERROR_ANNOTATION_DOES_NOT_FOLLOW_FIELD 0x20
+#define ERROR_INVALID_ANNOTATION_ID 0x40
+#define ERROR_ANNOTATION_ID_TOO_LARGE 0x80
+#define ERROR_TOO_MANY_ANNOTATIONS 0x100
+#define ERROR_TOO_MANY_FIELDS 0x200
+#define ERROR_INVALID_VALUE_TYPE 0x400
+#define ERROR_STRING_NOT_NULL_TERMINATED 0x800
 
-LogEvent::LogEvent(uint8_t* msg, uint32_t len, uint32_t uid, bool useNewSchema)
-    : mBuf(msg), mRemainingLen(len), mLogdTimestampNs(time(nullptr)), mLogUid(uid) {
-    if (useNewSchema) {
-        initNew();
-    } else {
-        mContext = create_android_log_parser((char*)msg, len);
-        init(mContext);
-        if (mContext) android_log_destroy(&mContext);  // set mContext to NULL
-    }
-}
+/* TYPE IDS */
+#define INT32_TYPE 0x00
+#define INT64_TYPE 0x01
+#define STRING_TYPE 0x02
+#define LIST_TYPE 0x03
+#define FLOAT_TYPE 0x04
+#define BOOL_TYPE 0x05
+#define BYTE_ARRAY_TYPE 0x06
+#define OBJECT_TYPE 0x07
+#define KEY_VALUE_PAIRS_TYPE 0x08
+#define ATTRIBUTION_CHAIN_TYPE 0x09
+#define ERROR_TYPE 0x0F
 
 LogEvent::LogEvent(const LogEvent& event) {
     mTagId = event.mTagId;
     mLogUid = event.mLogUid;
+    mLogPid = event.mLogPid;
     mElapsedTimestampNs = event.mElapsedTimestampNs;
     mLogdTimestampNs = event.mLogdTimestampNs;
     mValues = event.mValues;
 }
 
-LogEvent::LogEvent(const StatsLogEventWrapper& statsLogEventWrapper, int workChainIndex) {
-    mTagId = statsLogEventWrapper.getTagId();
-    mLogdTimestampNs = statsLogEventWrapper.getWallClockTimeNs();
-    mElapsedTimestampNs = statsLogEventWrapper.getElapsedRealTimeNs();
-    mLogUid = 0;
-    int workChainPosOffset = 0;
-    if (workChainIndex != -1) {
-        const WorkChain& wc = statsLogEventWrapper.getWorkChains()[workChainIndex];
-        // chains are at field 1, level 2
-        int depth = 2;
-        for (int i = 0; i < (int)wc.uids.size(); i++) {
-            int pos[] = {1, i + 1, 1};
-            mValues.push_back(FieldValue(Field(mTagId, pos, depth), Value(wc.uids[i])));
-            pos[2]++;
-            mValues.push_back(FieldValue(Field(mTagId, pos, depth), Value(wc.tags[i])));
-            mValues.back().mField.decorateLastPos(2);
-        }
-        mValues.back().mField.decorateLastPos(1);
-        workChainPosOffset = 1;
-    }
-    for (int i = 0; i < (int)statsLogEventWrapper.getElements().size(); i++) {
-        Field field(statsLogEventWrapper.getTagId(), getSimpleField(i + 1 + workChainPosOffset));
-        switch (statsLogEventWrapper.getElements()[i].type) {
-            case android::os::StatsLogValue::STATS_LOG_VALUE_TYPE::INT:
-                mValues.push_back(
-                        FieldValue(field, Value(statsLogEventWrapper.getElements()[i].int_value)));
-                break;
-            case android::os::StatsLogValue::STATS_LOG_VALUE_TYPE::LONG:
-                mValues.push_back(
-                        FieldValue(field, Value(statsLogEventWrapper.getElements()[i].long_value)));
-                break;
-            case android::os::StatsLogValue::STATS_LOG_VALUE_TYPE::FLOAT:
-                mValues.push_back(FieldValue(
-                        field, Value(statsLogEventWrapper.getElements()[i].float_value)));
-                break;
-            case android::os::StatsLogValue::STATS_LOG_VALUE_TYPE::DOUBLE:
-                mValues.push_back(FieldValue(
-                        field, Value(statsLogEventWrapper.getElements()[i].double_value)));
-                break;
-            case android::os::StatsLogValue::STATS_LOG_VALUE_TYPE::STRING:
-                mValues.push_back(
-                        FieldValue(field, Value(statsLogEventWrapper.getElements()[i].str_value)));
-                break;
-            case android::os::StatsLogValue::STATS_LOG_VALUE_TYPE::STORAGE:
-                mValues.push_back(FieldValue(
-                        field, Value(statsLogEventWrapper.getElements()[i].storage_value)));
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-void LogEvent::createLogEvents(const StatsLogEventWrapper& statsLogEventWrapper,
-                               std::vector<std::shared_ptr<LogEvent>>& logEvents) {
-    if (statsLogEventWrapper.getWorkChains().size() == 0) {
-        logEvents.push_back(std::make_shared<LogEvent>(statsLogEventWrapper, -1));
-    } else {
-        for (size_t i = 0; i < statsLogEventWrapper.getWorkChains().size(); i++) {
-            logEvents.push_back(std::make_shared<LogEvent>(statsLogEventWrapper, i));
-        }
-    }
+LogEvent::LogEvent(int32_t uid, int32_t pid)
+    : mLogdTimestampNs(time(nullptr)),
+      mLogUid(uid),
+      mLogPid(pid) {
 }
 
 LogEvent::LogEvent(int32_t tagId, int64_t wallClockTimestampNs, int64_t elapsedTimestampNs) {
@@ -209,7 +154,8 @@ LogEvent::LogEvent(const string& trainName, int64_t trainVersionCode, bool requi
     mLogdTimestampNs = getWallClockNs();
     mElapsedTimestampNs = getElapsedRealtimeNs();
     mTagId = android::util::BINARY_PUSH_STATE_CHANGED;
-    mLogUid = android::IPCThreadState::self()->getCallingUid();
+    mLogUid = AIBinder_getCallingUid();
+    mLogPid = AIBinder_getCallingPid();
 
     mValues.push_back(FieldValue(Field(mTagId, getSimpleField(1)), Value(trainName)));
     mValues.push_back(FieldValue(Field(mTagId, getSimpleField(2)), Value(trainVersionCode)));
@@ -220,37 +166,6 @@ LogEvent::LogEvent(const string& trainName, int64_t trainVersionCode, bool requi
     mValues.push_back(FieldValue(Field(mTagId, getSimpleField(6)), Value(state)));
     mValues.push_back(FieldValue(Field(mTagId, getSimpleField(7)), Value(experimentIds)));
     mValues.push_back(FieldValue(Field(mTagId, getSimpleField(8)), Value(userId)));
-}
-
-LogEvent::LogEvent(int64_t wallClockTimestampNs, int64_t elapsedTimestampNs,
-                   const VendorAtom& vendorAtom) {
-    mLogdTimestampNs = wallClockTimestampNs;
-    mElapsedTimestampNs = elapsedTimestampNs;
-    mTagId = vendorAtom.atomId;
-    mLogUid = AID_STATSD;
-
-    mValues.push_back(
-            FieldValue(Field(mTagId, getSimpleField(1)), Value(vendorAtom.reverseDomainName)));
-    for (int i = 0; i < (int)vendorAtom.values.size(); i++) {
-        switch (vendorAtom.values[i].getDiscriminator()) {
-            case VendorAtom::Value::hidl_discriminator::intValue:
-                mValues.push_back(FieldValue(Field(mTagId, getSimpleField(i + 2)),
-                                             Value(vendorAtom.values[i].intValue())));
-                break;
-            case VendorAtom::Value::hidl_discriminator::longValue:
-                mValues.push_back(FieldValue(Field(mTagId, getSimpleField(i + 2)),
-                                             Value(vendorAtom.values[i].longValue())));
-                break;
-            case VendorAtom::Value::hidl_discriminator::floatValue:
-                mValues.push_back(FieldValue(Field(mTagId, getSimpleField(i + 2)),
-                                             Value(vendorAtom.values[i].floatValue())));
-                break;
-            case VendorAtom::Value::hidl_discriminator::stringValue:
-                mValues.push_back(FieldValue(Field(mTagId, getSimpleField(i + 2)),
-                                             Value(vendorAtom.values[i].stringValue())));
-                break;
-        }
-    }
 }
 
 LogEvent::LogEvent(int64_t wallClockTimestampNs, int64_t elapsedTimestampNs,
@@ -268,9 +183,6 @@ LogEvent::LogEvent(int64_t wallClockTimestampNs, int64_t elapsedTimestampNs,
     mValues.push_back(FieldValue(Field(mTagId, getSimpleField(4)), Value(trainInfo.status)));
 }
 
-LogEvent::LogEvent(int32_t tagId, int64_t timestampNs) : LogEvent(tagId, timestampNs, timestampNs) {
-}
-
 LogEvent::LogEvent(int32_t tagId, int64_t timestampNs, int32_t uid) {
     mLogdTimestampNs = timestampNs;
     mTagId = tagId;
@@ -279,22 +191,6 @@ LogEvent::LogEvent(int32_t tagId, int64_t timestampNs, int32_t uid) {
     if (mContext) {
         android_log_write_int64(mContext, timestampNs);
         android_log_write_int32(mContext, tagId);
-    }
-}
-
-void LogEvent::init() {
-    if (mContext) {
-        const char* buffer;
-        size_t len = android_log_write_list_buffer(mContext, &buffer);
-        // turns to reader mode
-        android_log_context contextForRead = create_android_log_parser(buffer, len);
-        if (contextForRead) {
-            init(contextForRead);
-            // destroy the context to save memory.
-            // android_log_destroy will set mContext to NULL
-            android_log_destroy(&contextForRead);
-        }
-        android_log_destroy(&mContext);
     }
 }
 
@@ -349,9 +245,9 @@ bool LogEvent::write(float value) {
 }
 
 bool LogEvent::writeBytes(const string& value) {
-    if (mContext) {
+    /* if (mContext) {
         return android_log_write_char_array(mContext, value.c_str(), value.length()) >= 0;
-    }
+    }*/
     return false;
 }
 
@@ -562,7 +458,10 @@ void LogEvent::parseAttributionChain(int32_t* pos, int32_t depth, bool* last) {
 
 // This parsing logic is tied to the encoding scheme used in StatsEvent.java and
 // stats_event.c
-void LogEvent::initNew() {
+bool LogEvent::parseBuffer(uint8_t* buf, size_t len) {
+    mBuf = buf;
+    mRemainingLen = (uint32_t)len;
+
     int32_t pos[] = {1, 1, 1};
     bool last[] = {false, false, false};
 
@@ -624,6 +523,7 @@ void LogEvent::initNew() {
 
     if (mRemainingLen != 0) mValid = false;
     mBuf = nullptr;
+    return mValid;
 }
 
 uint8_t LogEvent::getTypeId(uint8_t typeInfo) {
@@ -632,132 +532,6 @@ uint8_t LogEvent::getTypeId(uint8_t typeInfo) {
 
 uint8_t LogEvent::getNumAnnotations(uint8_t typeInfo) {
     return (typeInfo >> 4) & 0x0F;
-}
-
-/**
- * The elements of each log event are stored as a vector of android_log_list_elements.
- * The goal is to do as little preprocessing as possible, because we read a tiny fraction
- * of the elements that are written to the log.
- *
- * The idea here is to read through the log items once, we get as much information we need for
- * matching as possible. Because this log will be matched against lots of matchers.
- */
-void LogEvent::init(android_log_context context) {
-    android_log_list_element elem;
-    int i = 0;
-    int depth = -1;
-    int pos[] = {1, 1, 1};
-    bool isKeyValuePairAtom = false;
-    do {
-        elem = android_log_read_next(context);
-        switch ((int)elem.type) {
-            case EVENT_TYPE_INT:
-                // elem at [0] is EVENT_TYPE_LIST, [1] is the timestamp, [2] is tag id.
-                if (i == 2) {
-                    mTagId = elem.data.int32;
-                    isKeyValuePairAtom = (mTagId == android::util::KEY_VALUE_PAIRS_ATOM);
-                } else {
-                    if (depth < 0 || depth > 2) {
-                        return;
-                    }
-
-                    mValues.push_back(
-                            FieldValue(Field(mTagId, pos, depth), Value((int32_t)elem.data.int32)));
-
-                    pos[depth]++;
-                }
-                break;
-            case EVENT_TYPE_FLOAT: {
-                if (depth < 0 || depth > 2) {
-                    ALOGE("Depth > 2. Not supported!");
-                    return;
-                }
-
-                // Handles the oneof field in KeyValuePair atom.
-                if (isKeyValuePairAtom && depth == 2) {
-                    pos[depth] = 5;
-                }
-
-                mValues.push_back(FieldValue(Field(mTagId, pos, depth), Value(elem.data.float32)));
-
-                pos[depth]++;
-
-            } break;
-            case EVENT_TYPE_STRING: {
-                if (depth < 0 || depth > 2) {
-                    ALOGE("Depth > 2. Not supported!");
-                    return;
-                }
-
-                // Handles the oneof field in KeyValuePair atom.
-                if (isKeyValuePairAtom && depth == 2) {
-                    pos[depth] = 4;
-                }
-                mValues.push_back(FieldValue(Field(mTagId, pos, depth),
-                                             Value(string(elem.data.string, elem.len))));
-
-                pos[depth]++;
-
-            } break;
-            case EVENT_TYPE_LONG: {
-                if (i == 1) {
-                    mElapsedTimestampNs = elem.data.int64;
-                } else {
-                    if (depth < 0 || depth > 2) {
-                        ALOGE("Depth > 2. Not supported!");
-                        return;
-                    }
-                    // Handles the oneof field in KeyValuePair atom.
-                    if (isKeyValuePairAtom && depth == 2) {
-                        pos[depth] = 3;
-                    }
-                    mValues.push_back(
-                            FieldValue(Field(mTagId, pos, depth), Value((int64_t)elem.data.int64)));
-
-                    pos[depth]++;
-                }
-            } break;
-            case EVENT_TYPE_LIST:
-                depth++;
-                if (depth > 2) {
-                    ALOGE("Depth > 2. Not supported!");
-                    return;
-                }
-                pos[depth] = 1;
-
-                break;
-            case EVENT_TYPE_LIST_STOP: {
-                int prevDepth = depth;
-                depth--;
-                if (depth >= 0 && depth < 2) {
-                    // Now go back to decorate the previous items that are last at prevDepth.
-                    // So that we can later easily match them with Position=Last matchers.
-                    pos[prevDepth]--;
-                    int path = getEncodedField(pos, prevDepth, false);
-                    for (auto it = mValues.rbegin(); it != mValues.rend(); ++it) {
-                        if (it->mField.getDepth() >= prevDepth &&
-                            it->mField.getPath(prevDepth) == path) {
-                            it->mField.decorateLastPos(prevDepth);
-                        } else {
-                            // Safe to break, because the items are in DFS order.
-                            break;
-                        }
-                    }
-                    pos[depth]++;
-                }
-                break;
-            }
-            case EVENT_TYPE_UNKNOWN:
-                break;
-            default:
-                break;
-        }
-        i++;
-    } while ((elem.type != EVENT_TYPE_UNKNOWN) && !elem.complete);
-    if (isKeyValuePairAtom && mValues.size() > 0) {
-        mValues[0] = FieldValue(Field(android::util::KEY_VALUE_PAIRS_ATOM, getSimpleField(1)),
-                                Value((int32_t)mLogUid));
-    }
 }
 
 int64_t LogEvent::GetLong(size_t key, status_t* err) const {
@@ -863,6 +637,26 @@ float LogEvent::GetFloat(size_t key, status_t* err) const {
 
     *err = BAD_INDEX;
     return 0.0;
+}
+
+std::vector<uint8_t> LogEvent::GetStorage(size_t key, status_t* err) const {
+    int field = getSimpleField(key);
+    for (const auto& value : mValues) {
+      if (value.mField.getField() == field) {
+        if (value.mValue.getType() == STORAGE) {
+          return value.mValue.storage_value;
+        } else {
+          *err = BAD_TYPE;
+          return vector<uint8_t>();
+        }
+      }
+      if ((size_t)value.mField.getPosAtDepth(0) > key) {
+        break;
+      }
+    }
+
+    *err = BAD_INDEX;
+    return vector<uint8_t>();
 }
 
 string LogEvent::ToString() const {

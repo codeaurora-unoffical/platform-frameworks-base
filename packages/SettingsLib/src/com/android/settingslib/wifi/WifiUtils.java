@@ -16,9 +16,13 @@
 
 package com.android.settingslib.wifi;
 
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.getMaxNetworkSelectionDisableReason;
+
 import android.content.Context;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
 import android.os.SystemClock;
 
@@ -41,7 +45,9 @@ public class WifiUtils {
             summary.append(" f=" + Integer.toString(info.getFrequency()));
         }
         summary.append(" " + getVisibilityStatus(accessPoint));
-        if (config != null && !config.getNetworkSelectionStatus().isNetworkEnabled()) {
+        if (config != null
+                && (config.getNetworkSelectionStatus().getNetworkSelectionStatus()
+                        != NETWORK_SELECTION_ENABLED)) {
             summary.append(" (" + config.getNetworkSelectionStatus().getNetworkStatusString());
             if (config.getNetworkSelectionStatus().getDisableTime() > 0) {
                 long now = System.currentTimeMillis();
@@ -58,15 +64,14 @@ public class WifiUtils {
         }
 
         if (config != null) {
-            WifiConfiguration.NetworkSelectionStatus networkStatus =
-                    config.getNetworkSelectionStatus();
-            for (int index = WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE;
-                    index < WifiConfiguration.NetworkSelectionStatus
-                            .NETWORK_SELECTION_DISABLED_MAX; index++) {
-                if (networkStatus.getDisableReasonCounter(index) != 0) {
-                    summary.append(" " + WifiConfiguration.NetworkSelectionStatus
-                            .getNetworkDisableReasonString(index) + "="
-                            + networkStatus.getDisableReasonCounter(index));
+            NetworkSelectionStatus networkStatus = config.getNetworkSelectionStatus();
+            for (int reason = 0; reason <= getMaxNetworkSelectionDisableReason(); reason++) {
+                if (networkStatus.getDisableReasonCounter(reason) != 0) {
+                    summary.append(" ")
+                            .append(NetworkSelectionStatus
+                                    .getNetworkSelectionDisableReasonString(reason))
+                            .append("=")
+                            .append(networkStatus.getDisableReasonCounter(reason));
                 }
             }
         }
@@ -102,10 +107,10 @@ public class WifiUtils {
             if (accessPoint.getSpeed() != AccessPoint.Speed.NONE) {
                 visibility.append(" speed=").append(accessPoint.getSpeedLabel());
             }
-            visibility.append(String.format(" tx=%.1f,", info.getTxSuccessRate()));
-            visibility.append(String.format("%.1f,", info.getTxRetriesRate()));
-            visibility.append(String.format("%.1f ", info.getTxBadRate()));
-            visibility.append(String.format("rx=%.1f", info.getRxSuccessRate()));
+            visibility.append(String.format(" tx=%.1f,", info.getSuccessfulTxPacketsPerSecond()));
+            visibility.append(String.format("%.1f,", info.getRetriedTxPacketsPerSecond()));
+            visibility.append(String.format("%.1f ", info.getLostTxPacketsPerSecond()));
+            visibility.append(String.format("rx=%.1f", info.getSuccessfulRxPacketsPerSecond()));
         }
 
         int maxRssi5 = INVALID_RSSI;

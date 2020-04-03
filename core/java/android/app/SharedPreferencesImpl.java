@@ -17,10 +17,10 @@
 package android.app;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.compat.Compatibility;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.EnabledAfter;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.FileUtils;
@@ -66,8 +66,9 @@ final class SharedPreferencesImpl implements SharedPreferences {
 
     /**
      * There will now be a callback to {@link
-     * OnSharedPreferenceChangeListener#onSharedPreferenceChanged(SharedPreferences, String)} with
-     * a {@code null} key on {@link Editor#clear()}.
+     * android.content.SharedPreferences.OnSharedPreferenceChangeListener#onSharedPreferenceChanged
+     * OnSharedPreferenceChangeListener.onSharedPreferenceChanged} with a {@code null} key on
+     * {@link android.content.SharedPreferences.Editor#clear Editor.clear}.
      */
     @ChangeId
     @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)

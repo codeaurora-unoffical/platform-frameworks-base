@@ -17,6 +17,7 @@
 package android.hardware.soundtrigger;
 
 import android.Manifest;
+import android.annotation.IntDef;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -24,10 +25,10 @@ import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
-import android.service.voice.AlwaysOnHotwordDetector;
 import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.util.Slog;
 import android.util.Xml;
 
@@ -35,12 +36,15 @@ import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Enrollment information about the different available keyphrases.
@@ -66,9 +70,10 @@ public class KeyphraseEnrollmentInfo {
             "com.android.intent.action.MANAGE_VOICE_KEYPHRASES";
     /**
      * Intent extra: The intent extra for the specific manage action that needs to be performed.
-     * Possible values are {@link AlwaysOnHotwordDetector#MANAGE_ACTION_ENROLL},
-     * {@link AlwaysOnHotwordDetector#MANAGE_ACTION_RE_ENROLL}
-     * or {@link AlwaysOnHotwordDetector#MANAGE_ACTION_UN_ENROLL}.
+     *
+     * @see #MANAGE_ACTION_ENROLL
+     * @see #MANAGE_ACTION_RE_ENROLL
+     * @see #MANAGE_ACTION_UN_ENROLL
      */
     public static final String EXTRA_VOICE_KEYPHRASE_ACTION =
             "com.android.intent.extra.VOICE_KEYPHRASE_ACTION";
@@ -86,9 +91,39 @@ public class KeyphraseEnrollmentInfo {
             "com.android.intent.extra.VOICE_KEYPHRASE_LOCALE";
 
     /**
+     * Keyphrase management actions used with the {@link #EXTRA_VOICE_KEYPHRASE_ACTION} intent extra
+     * @hide
+     */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(prefix = { "MANAGE_ACTION_" }, value = {
+            MANAGE_ACTION_ENROLL,
+            MANAGE_ACTION_RE_ENROLL,
+            MANAGE_ACTION_UN_ENROLL
+    })
+    public @interface ManageActions {}
+
+    /**
+     * Indicates desired action to enroll keyphrase model
+     */
+    public static final int MANAGE_ACTION_ENROLL = 0;
+    /**
+     * Indicates desired action to re-enroll keyphrase model
+     */
+    public static final int MANAGE_ACTION_RE_ENROLL = 1;
+    /**
+     * Indicates desired action to un-enroll keyphrase model
+     */
+    public static final int MANAGE_ACTION_UN_ENROLL = 2;
+
+    /**
      * List of available keyphrases.
      */
-    final private KeyphraseMetadata[] mKeyphrases;
+    private final KeyphraseMetadata[] mKeyphrases;
+
+    /**
+     * Set of UIDs associated with the detected enrollment applications.
+     */
+    private final Set<Integer> mEnrollmentApplicationUids;
 
     /**
      * Map between KeyphraseMetadata and the package name of the enrollment app that provides it.
@@ -108,11 +143,13 @@ public class KeyphraseEnrollmentInfo {
             mParseError = "No enrollment applications found";
             mKeyphrasePackageMap = Collections.<KeyphraseMetadata, String>emptyMap();
             mKeyphrases = null;
+            mEnrollmentApplicationUids = Collections.emptySet();
             return;
         }
 
         List<String> parseErrors = new LinkedList<String>();
         mKeyphrasePackageMap = new HashMap<KeyphraseMetadata, String>();
+        mEnrollmentApplicationUids = new ArraySet<>();
         for (ResolveInfo ri : ris) {
             try {
                 ApplicationInfo ai = pm.getApplicationInfo(
@@ -134,6 +171,7 @@ public class KeyphraseEnrollmentInfo {
                         getKeyphraseMetadataFromApplicationInfo(pm, ai, parseErrors);
                 if (metadata != null) {
                     mKeyphrasePackageMap.put(metadata, ai.packageName);
+                    mEnrollmentApplicationUids.add(ai.uid);
                 }
             } catch (PackageManager.NameNotFoundException e) {
                 String error = "error parsing voice enrollment meta-data for "
@@ -294,15 +332,13 @@ public class KeyphraseEnrollmentInfo {
      * for the locale.
      *
      * @param action The enrollment related action that this intent is supposed to perform.
-     *        This can be one of {@link AlwaysOnHotwordDetector#MANAGE_ACTION_ENROLL},
-     *        {@link AlwaysOnHotwordDetector#MANAGE_ACTION_RE_ENROLL}
-     *        or {@link AlwaysOnHotwordDetector#MANAGE_ACTION_UN_ENROLL}
      * @param keyphrase The keyphrase that the user needs to be enrolled to.
      * @param locale The locale for which the enrollment needs to be performed.
      * @return An {@link Intent} to manage the keyphrase. This can be null if managing the
      *         given keyphrase/locale combination isn't possible.
      */
-    public Intent getManageKeyphraseIntent(int action, String keyphrase, Locale locale) {
+    public Intent getManageKeyphraseIntent(@ManageActions int action, String keyphrase,
+            Locale locale) {
         if (mKeyphrasePackageMap == null || mKeyphrasePackageMap.isEmpty()) {
             Slog.w(TAG, "No enrollment application exists");
             return null;
@@ -346,9 +382,22 @@ public class KeyphraseEnrollmentInfo {
         return null;
     }
 
+    /**
+     * Tests if the input UID matches a supported enrollment application.
+     *
+     * @param uid UID of the caller to test against.
+     * @return Returns true if input uid matches the uid of a supported enrollment application.
+     *         False if not.
+     */
+    public boolean isUidSupportedEnrollmentApplication(int uid) {
+        Log.d(TAG, "isUidSupportedEnrollmentApplication: " + toString());
+        return mEnrollmentApplicationUids.contains(uid);
+    }
+
     @Override
     public String toString() {
-        return "KeyphraseEnrollmentInfo [Keyphrases=" + mKeyphrasePackageMap.toString()
+        return "KeyphraseEnrollmentInfo [KeyphrasePackageMap=" + mKeyphrasePackageMap.toString()
+                + ", enrollmentApplicationUids=" + mEnrollmentApplicationUids.toString()
                 + ", ParseError=" + mParseError + "]";
     }
 }

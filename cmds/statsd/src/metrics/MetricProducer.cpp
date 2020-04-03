@@ -19,6 +19,7 @@
 
 #include "MetricProducer.h"
 
+#include "../guardrail/StatsdStats.h"
 #include "state/StateTracker.h"
 
 using android::util::FIELD_COUNT_REPEATED;
@@ -32,7 +33,6 @@ namespace android {
 namespace os {
 namespace statsd {
 
-using std::map;
 
 // for ActiveMetric
 const int FIELD_ID_ACTIVE_METRIC_ID = 1;
@@ -132,8 +132,8 @@ void MetricProducer::onMatchedLogEventLocked(const size_t matcherIndex, const Lo
     HashableDimensionKey dimensionInWhat;
     filterValues(mDimensionsInWhat, event.getValues(), &dimensionInWhat);
     MetricDimensionKey metricKey(dimensionInWhat, stateValuesKey);
-    onMatchedLogEventInternalLocked(
-            matcherIndex, metricKey, conditionKey, condition, event);
+    onMatchedLogEventInternalLocked(matcherIndex, metricKey, conditionKey, condition, event,
+                                    statePrimaryKeys);
 }
 
 bool MetricProducer::evaluateActiveStateLocked(int64_t elapsedTimestampNs) {
@@ -268,6 +268,7 @@ void MetricProducer::getMappedStateValue(const int32_t atomId, const HashableDim
                                          FieldValue* value) {
     if (!StateManager::getInstance().getStateValue(atomId, queryKey, value)) {
         value->mValue = Value(StateTracker::kStateUnknown);
+        value->mField.setTag(atomId);
         ALOGW("StateTracker not found for state atom %d", atomId);
         return;
     }
@@ -287,6 +288,17 @@ void MetricProducer::getMappedStateValue(const int32_t atomId, const HashableDim
         // set mValue to group_id
         value->mValue.setLong(valueIt->second);
     }
+}
+
+DropEvent MetricProducer::buildDropEvent(const int64_t dropTimeNs, const BucketDropReason reason) {
+    DropEvent event;
+    event.reason = reason;
+    event.dropTimeNs = dropTimeNs;
+    return event;
+}
+
+bool MetricProducer::maxDropEventsReached() {
+    return mCurrentSkippedBucket.dropEvents.size() >= StatsdStats::kMaxLoggedBucketDropEvents;
 }
 
 }  // namespace statsd

@@ -82,6 +82,7 @@ import android.content.pm.LauncherApps.PinItemRequest;
 import android.content.pm.LauncherApps.ShortcutQuery;
 import android.content.pm.PackageInfo;
 import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.CompressFormat;
 import android.graphics.BitmapFactory;
@@ -376,6 +377,113 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         runWithCaller(CALLING_PACKAGE_2, USER_10, () -> {
             assertTrue(mManager.addDynamicShortcuts(list(makeShortcut("s1"))));
         });
+    }
+
+    public void testPushDynamicShortcut() {
+
+        setCaller(CALLING_PACKAGE_1, USER_0);
+
+        final ShortcutInfo s1 = makeShortcut("s1");
+        final ShortcutInfo s2 = makeShortcut("s2");
+        final ShortcutInfo s3 = makeShortcut("s3");
+        final ShortcutInfo s4 = makeShortcut("s4");
+
+        final ShortcutInfo s10 = makeShortcut("s10");
+        final ShortcutInfo s11 = makeShortcut("s11");
+        final ShortcutInfo s12 = makeShortcut("s12");
+        final ShortcutInfo s13 = makeShortcut("s13");
+        final ShortcutInfo s14 = makeShortcut("s14");
+
+        // Test push as first shortcut
+        mManager.pushDynamicShortcut(s1);
+        assertShortcutIds(assertAllNotKeyFieldsOnly(mManager.getDynamicShortcuts()), "s1");
+        assertEquals(0, getCallerShortcut("s1").getRank());
+
+        // Test push when other shortcuts exist
+        assertTrue(mManager.setDynamicShortcuts(list(s1, s2)));
+        assertShortcutIds(assertAllNotKeyFieldsOnly(mManager.getDynamicShortcuts()), "s1", "s2");
+        mManager.pushDynamicShortcut(s3);
+        assertShortcutIds(assertAllNotKeyFieldsOnly(mManager.getDynamicShortcuts()),
+                "s1", "s2", "s3");
+        assertEquals(0, getCallerShortcut("s3").getRank());
+        assertEquals(1, getCallerShortcut("s1").getRank());
+        assertEquals(2, getCallerShortcut("s2").getRank());
+
+        mInjectedCurrentTimeMillis += INTERVAL; // reset
+
+        // Push with set rank
+        s4.setRank(2);
+        mManager.pushDynamicShortcut(s4);
+        assertEquals(2, getCallerShortcut("s4").getRank());
+        assertEquals(3, getCallerShortcut("s2").getRank());
+
+        // Push existing shortcut with set rank
+        final ShortcutInfo s4_2 = makeShortcut("s4");
+        s4_2.setRank(4);
+        mManager.pushDynamicShortcut(s4_2);
+        assertEquals(2, getCallerShortcut("s2").getRank());
+        assertEquals(3, getCallerShortcut("s4").getRank());
+
+        mInjectedCurrentTimeMillis += INTERVAL; // reset
+
+        // Test push as last
+        assertTrue(mManager.addDynamicShortcuts(makeShortcuts("s5", "s6", "s7", "s8", "s9")));
+        mManager.pushDynamicShortcut(s10);
+        assertShortcutIds(assertAllNotKeyFieldsOnly(mManager.getDynamicShortcuts()),
+                "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10");
+        assertEquals(0, getCallerShortcut("s10").getRank());
+        assertEquals(1, getCallerShortcut("s5").getRank());
+        assertEquals(6, getCallerShortcut("s3").getRank());
+        assertEquals(7, getCallerShortcut("s1").getRank());
+        assertEquals(8, getCallerShortcut("s2").getRank());
+        assertEquals(9, getCallerShortcut("s4").getRank());
+
+        // Push when max has already reached
+        mManager.pushDynamicShortcut(s11);
+        assertShortcutIds(assertAllNotKeyFieldsOnly(mManager.getDynamicShortcuts()),
+                "s1", "s2", "s3", "s5", "s6", "s7", "s8", "s9", "s10", "s11");
+        assertEquals(0, getCallerShortcut("s11").getRank());
+        assertEquals(1, getCallerShortcut("s10").getRank());
+        assertEquals(9, getCallerShortcut("s2").getRank());
+
+        mInjectedCurrentTimeMillis += INTERVAL; // reset
+
+        // Push with different activity
+        s12.setActivity(makeComponent(ShortcutActivity2.class));
+        mManager.pushDynamicShortcut(s12);
+        assertEquals(makeComponent(ShortcutActivity2.class),
+                getCallerShortcut("s12").getActivity());
+        assertEquals(0, getCallerShortcut("s12").getRank());
+
+        // Push to update shortcut with different activity
+        final ShortcutInfo s1_2 = makeShortcut("s1");
+        s1_2.setActivity(makeComponent(ShortcutActivity2.class));
+        s1_2.setRank(1);
+        mManager.pushDynamicShortcut(s1_2);
+        assertEquals(0, getCallerShortcut("s12").getRank());
+        assertEquals(1, getCallerShortcut("s1").getRank());
+        assertEquals(0, getCallerShortcut("s11").getRank());
+        assertEquals(1, getCallerShortcut("s10").getRank());
+        assertEquals(7, getCallerShortcut("s3").getRank());
+        assertEquals(8, getCallerShortcut("s2").getRank());
+
+        mInjectedCurrentTimeMillis += INTERVAL; // reset
+
+        // Test push when dropped shortcut is cached
+        s13.setLongLived();
+        s13.setRank(100);
+        mManager.pushDynamicShortcut(s13);
+        assertEquals(9, getCallerShortcut("s13").getRank());
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.cacheShortcuts(CALLING_PACKAGE_1, list("s13"), HANDLE_USER_0);
+        });
+
+        mManager.pushDynamicShortcut(s14);
+        assertShortcutIds(assertAllNotKeyFieldsOnly(mManager.getDynamicShortcuts()),
+                "s1", "s2", "s3", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12", "s14");
+        // Verify s13 stayed as cached
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s13");
     }
 
     public void testUnlimitedCalls() {
@@ -1227,6 +1335,158 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         });
     }
 
+    public void testShortcutManagerGetShortcuts_shortcutTypes() {
+
+        // Create 3 manifest and 3 dynamic shortcuts
+        addManifestShortcutResource(
+                new ComponentName(CALLING_PACKAGE_1, ShortcutActivity.class.getName()),
+                R.xml.shortcut_3);
+        updatePackageVersion(CALLING_PACKAGE_1, 1);
+        mService.mPackageMonitor.onReceive(getTestContext(),
+                genPackageAddIntent(CALLING_PACKAGE_1, USER_0));
+
+        runWithCaller(CALLING_PACKAGE_1, USER_0, () -> {
+            assertTrue(mManager.setDynamicShortcuts(list(
+                    makeLongLivedShortcut("s1"), makeLongLivedShortcut("s2"), makeShortcut("s3"))));
+        });
+
+        // Pin 2 and 3
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.pinShortcuts(CALLING_PACKAGE_1, list("ms2", "ms3", "s2", "s3"),
+                    HANDLE_USER_0);
+        });
+
+        // Cache 1 and 2
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.cacheShortcuts(CALLING_PACKAGE_1, list("s1", "s2"),
+                    HANDLE_USER_0);
+        });
+
+        setCaller(CALLING_PACKAGE_1);
+
+        // Get manifest shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_MANIFEST),
+                "ms1", "ms2", "ms3");
+
+        // Get dynamic shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_DYNAMIC),
+                "s1", "s2", "s3");
+
+        // Get pinned shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_PINNED),
+                "ms2", "ms3", "s2", "s3");
+
+        // Get cached shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s1", "s2");
+
+        // Get manifest and dynamic shortcuts
+        assertShortcutIds(mManager.getShortcuts(
+                ShortcutManager.FLAG_MATCH_MANIFEST | ShortcutManager.FLAG_MATCH_DYNAMIC),
+                "ms1", "ms2", "ms3", "s1", "s2", "s3");
+
+        // Get manifest and pinned shortcuts
+        assertShortcutIds(mManager.getShortcuts(
+                ShortcutManager.FLAG_MATCH_MANIFEST | ShortcutManager.FLAG_MATCH_PINNED),
+                "ms1", "ms2", "ms3", "s2", "s3");
+
+        // Get manifest and cached shortcuts
+        assertShortcutIds(mManager.getShortcuts(
+                ShortcutManager.FLAG_MATCH_MANIFEST | ShortcutManager.FLAG_MATCH_CACHED),
+                "ms1", "ms2", "ms3", "s1", "s2");
+
+        // Get dynamic and pinned shortcuts
+        assertShortcutIds(mManager.getShortcuts(
+                ShortcutManager.FLAG_MATCH_DYNAMIC | ShortcutManager.FLAG_MATCH_PINNED),
+                "ms2", "ms3", "s1", "s2", "s3");
+
+        // Get dynamic and cached shortcuts
+        assertShortcutIds(mManager.getShortcuts(
+                ShortcutManager.FLAG_MATCH_DYNAMIC | ShortcutManager.FLAG_MATCH_CACHED),
+                "s1", "s2", "s3");
+
+        // Get pinned and cached shortcuts
+        assertShortcutIds(mManager.getShortcuts(
+                ShortcutManager.FLAG_MATCH_PINNED | ShortcutManager.FLAG_MATCH_CACHED),
+                "ms2", "ms3", "s1", "s2", "s3");
+
+        // Remove a dynamic cached shortcut
+        mManager.removeDynamicShortcuts(list("s1"));
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_DYNAMIC), "s2", "s3");
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED), "s1", "s2");
+
+        // Remove a dynamic cached and pinned shortcut
+        mManager.removeDynamicShortcuts(list("s2"));
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_DYNAMIC), "s3");
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_PINNED),
+                "ms2", "ms3", "s2", "s3");
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED), "s1", "s2");
+    }
+
+    public void testCachedShortcuts() {
+        runWithCaller(CALLING_PACKAGE_1, USER_0, () -> {
+            assertTrue(mManager.setDynamicShortcuts(list(makeShortcut("s1"),
+                    makeLongLivedShortcut("s2"), makeLongLivedShortcut("s3"),
+                    makeLongLivedShortcut("s4"))));
+        });
+
+        // Pin s2
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.pinShortcuts(CALLING_PACKAGE_1, list("s2"),
+                    HANDLE_USER_0);
+        });
+
+        // Cache some, but non long lived shortcuts will be ignored.
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.cacheShortcuts(CALLING_PACKAGE_1, list("s1", "s2", "s4"),
+                    HANDLE_USER_0);
+        });
+
+        setCaller(CALLING_PACKAGE_1);
+
+        // Get dynamic shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_DYNAMIC),
+                "s1", "s2", "s3", "s4");
+        // Get pinned shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_PINNED),
+                "s2");
+        // Get cached shortcuts
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s2", "s4");
+
+        // Remove a dynamic cached shortcut
+        mManager.removeDynamicShortcuts(list("s4"));
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_DYNAMIC),
+                "s1", "s2", "s3");
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s2", "s4");
+
+        // uncache a non-dynamic shortcut. Should be removed.
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.uncacheShortcuts(CALLING_PACKAGE_1, list("s4"),
+                    HANDLE_USER_0);
+        });
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s2");
+
+        // Cache another shortcut
+        runWithCaller(LAUNCHER_1, USER_0, () -> {
+            mLauncherApps.cacheShortcuts(CALLING_PACKAGE_1, list("s3"),
+                    HANDLE_USER_0);
+        });
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s2", "s3");
+
+        // Remove a dynamic cached pinned long lived shortcut
+        mManager.removeLongLivedShortcuts(list("s2"));
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_DYNAMIC),
+                "s1", "s3");
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_CACHED),
+                "s3");
+        assertShortcutIds(mManager.getShortcuts(ShortcutManager.FLAG_MATCH_PINNED),
+                "s2");
+    }
+
     // === Test for launcher side APIs ===
 
     public void testGetShortcuts() {
@@ -1234,8 +1494,8 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         // Set up shortcuts.
 
         setCaller(CALLING_PACKAGE_1);
-        final ShortcutInfo s1_1 = makeShortcut("s1");
-        final ShortcutInfo s1_2 = makeShortcut("s2");
+        final ShortcutInfo s1_1 = makeLongLivedShortcut("s1");
+        final ShortcutInfo s1_2 = makeShortcutWithLocusId("s2", makeLocusId("l1"));
 
         assertTrue(mManager.setDynamicShortcuts(list(s1_1, s1_2)));
 
@@ -1257,7 +1517,9 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         getCallerShortcut("s4").setTimestamp(500);
 
         setCaller(CALLING_PACKAGE_3);
-        final ShortcutInfo s3_2 = makeShortcut("s3");
+        final ShortcutInfo s3_2 = makeShortcutWithLocusId("s3", makeLocusId("l2"));
+        s3_2.setLongLived();
+
         assertTrue(mManager.setDynamicShortcuts(list(s3_2)));
 
         getCallerShortcut("s3").setTimestamp(START_TIME + 5000);
@@ -1309,7 +1571,7 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         // With ID.
         assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
                 assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
-                        /* time =*/ 1000, CALLING_PACKAGE_2, list("s3"),
+                        /* time =*/ 1000, CALLING_PACKAGE_2, list("s3"), /* locusIds =*/ null,
                         /* activity =*/ null,
                         ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
                         getCallingUser())),
@@ -1317,20 +1579,51 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
                 assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
                         /* time =*/ 1000, CALLING_PACKAGE_2, list("s3", "s2", "ss"),
-                        /* activity =*/ null,
+                        /* locusIds =*/ null, /* activity =*/ null,
                         ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
                         getCallingUser())),
                 "s2", "s3"))));
         assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
                 assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
                         /* time =*/ 1000, CALLING_PACKAGE_2, list("s3x", "s2x"),
-                        /* activity =*/ null,
+                        /* locusIds =*/ null, /* activity =*/ null,
                         ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
                         getCallingUser()))
                 /* empty */))));
         assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
                 assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
-                        /* time =*/ 1000, CALLING_PACKAGE_2, list(),
+                        /* time =*/ 1000, CALLING_PACKAGE_2, list(), /* locusIds =*/ null,
+                        /* activity =*/ null,
+                        ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
+                        getCallingUser()))
+                /* empty */))));
+
+        // With locus ID.
+        assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
+                assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 1000, CALLING_PACKAGE_3, /* shortcutIds =*/ null,
+                        list(makeLocusId("l2")), /* activity =*/ null,
+                        ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
+                        getCallingUser())),
+                "s3"))));
+        assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
+                assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 1000, CALLING_PACKAGE_1, /* shortcutIds =*/ null,
+                        list(makeLocusId("l1"), makeLocusId("l2"), makeLocusId("l3")),
+                        /* activity =*/ null,
+                        ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
+                        getCallingUser())),
+                "s2"))));
+        assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
+                assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 1000, CALLING_PACKAGE_1, /* shortcutIds =*/ null,
+                        list(makeLocusId("lx1"), makeLocusId("lx2")), /* activity =*/ null,
+                        ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
+                        getCallingUser()))
+                /* empty */))));
+        assertAllDynamic(assertAllNotHaveTitle(assertAllNotHaveIntents(assertShortcutIds(
+                assertAllKeyFieldsOnly(mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 1000, CALLING_PACKAGE_3, /* shortcutIds =*/ null, list(),
                         /* activity =*/ null,
                         ShortcutQuery.FLAG_GET_DYNAMIC | ShortcutQuery.FLAG_GET_KEY_FIELDS_ONLY),
                         getCallingUser()))
@@ -1361,11 +1654,53 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
         assertExpectException(
                 IllegalArgumentException.class, "package name must also be set", () -> {
                     mLauncherApps.getShortcuts(buildQuery(
-                    /* time =*/ 0, /* package= */ null, list("id"),
+                    /* time =*/ 0, /* package= */ null, list("id"), /* locusIds =*/ null,
                     /* activity =*/ null, /* flags */ 0), getCallingUser());
                 });
 
         // TODO More tests: pinned but dynamic.
+
+        setCaller(LAUNCHER_1);
+
+        // Cache some shortcuts. Only long lived shortcuts can get cached.
+        mLauncherApps.cacheShortcuts(CALLING_PACKAGE_1, list("s1"), getCallingUser());
+        mLauncherApps.cacheShortcuts(CALLING_PACKAGE_3, list("s3"), getCallingUser());
+
+        // Cached ones only
+        assertShortcutIds(assertAllNotKeyFieldsOnly(
+                mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 0, CALLING_PACKAGE_3,
+                        /* activity =*/ null,
+                        ShortcutQuery.FLAG_MATCH_CACHED),
+                        getCallingUser())),
+                "s3");
+
+        // All packages.
+        assertShortcutIds(assertAllNotKeyFieldsOnly(
+                mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 0, /* package= */ null,
+                        /* activity =*/ null,
+                        ShortcutQuery.FLAG_MATCH_CACHED),
+                        getCallingUser())),
+                "s1", "s3");
+
+        assertExpectException(
+                IllegalArgumentException.class, "package name must also be set", () -> {
+                    mLauncherApps.getShortcuts(buildQuery(
+                            /* time =*/ 0, /* package= */ null, list("id"), /* locusIds= */ null,
+                            /* activity =*/ null, /* flags */ 0), getCallingUser());
+                });
+
+        // Change Launcher. Cached shortcuts are the same for all launchers.
+        setCaller(LAUNCHER_2);
+        // All packages.
+        assertShortcutIds(assertAllNotKeyFieldsOnly(
+                mLauncherApps.getShortcuts(buildQuery(
+                        /* time =*/ 0, /* package= */ null,
+                        /* activity =*/ null,
+                        ShortcutQuery.FLAG_MATCH_CACHED),
+                        getCallingUser())),
+                "s1", "s3");
     }
 
     public void testGetShortcuts_shortcutKinds() throws Exception {
@@ -2916,7 +3251,7 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
             // Not launchable.
             doReturn(ActivityManager.START_CLASS_NOT_FOUND)
                     .when(mMockActivityTaskManagerInternal).startActivitiesAsPackage(
-                    anyStringOrNull(), anyInt(),
+                    anyStringOrNull(), anyStringOrNull(), anyInt(),
                     anyOrNull(Intent[].class), anyOrNull(Bundle.class));
             assertStartShortcutThrowsException(CALLING_PACKAGE_1, "s1", USER_0,
                     ActivityNotFoundException.class);
@@ -2925,7 +3260,7 @@ public class ShortcutManagerTest1 extends BaseShortcutManagerTest {
             doReturn(ActivityManager.START_CLASS_NOT_FOUND)
                     .when(mMockActivityTaskManagerInternal)
                     .startActivitiesAsPackage(
-                            anyStringOrNull(), anyInt(),
+                            anyStringOrNull(), anyStringOrNull(), anyInt(),
                             anyOrNull(Intent[].class), anyOrNull(Bundle.class));
             assertStartShortcutThrowsException(CALLING_PACKAGE_1, "s1", USER_0,
                     ActivityNotFoundException.class);

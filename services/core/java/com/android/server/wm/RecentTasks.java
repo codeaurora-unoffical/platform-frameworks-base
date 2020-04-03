@@ -32,7 +32,6 @@ import static android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
 import static android.os.Process.SYSTEM_UID;
-import static android.view.Display.DEFAULT_DISPLAY;
 
 import static com.android.server.wm.ActivityStackSupervisor.REMOVE_FROM_RECENTS;
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.DEBUG_RECENTS;
@@ -43,6 +42,7 @@ import static com.android.server.wm.ActivityTaskManagerDebugConfig.POSTFIX_TASKS
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_ATM;
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_WITH_CLASS_NAME;
 
+import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
 import android.app.AppGlobals;
@@ -56,7 +56,6 @@ import android.content.pm.ParceledListSlice;
 import android.content.pm.UserInfo;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
-import android.os.Bundle;
 import android.os.Environment;
 import android.os.IBinder;
 import android.os.RemoteException;
@@ -156,6 +155,7 @@ class RecentTasks {
      */
     private int mRecentsUid = -1;
     private ComponentName mRecentsComponent = null;
+    private @Nullable String mFeatureId;
 
     /**
      * Mapping of user id -> whether recent tasks have been loaded for that user.
@@ -173,6 +173,9 @@ class RecentTasks {
     // List of all active recent tasks
     private final ArrayList<Task> mTasks = new ArrayList<>();
     private final ArrayList<Callbacks> mCallbacks = new ArrayList<>();
+
+    /** The non-empty tasks that are removed from recent tasks (see {@link #removeForAddTask}). */
+    private final ArrayList<Task> mHiddenTasks = new ArrayList<>();
 
     // These values are generally loaded from resources, but can be set dynamically in the tests
     private boolean mHasVisibleRecentTasks;
@@ -207,7 +210,7 @@ class RecentTasks {
             mService.mH.post(PooledLambda.obtainRunnable((nonArg) -> {
                 synchronized (mService.mGlobalLock) {
                     // Unfreeze the task list once we touch down in a task
-                    final RootActivityContainer rac = mService.mRootActivityContainer;
+                    final RootWindowContainer rac = mService.mRootWindowContainer;
                     final DisplayContent dc = rac.getDisplayContent(displayId).mDisplayContent;
                     if (dc.pointWithinAppWindow(x, y)) {
                         final ActivityStack stack = mService.getTopDisplayFocusedStack();
@@ -413,6 +416,13 @@ class RecentTasks {
      */
     ComponentName getRecentsComponent() {
         return mRecentsComponent;
+    }
+
+    /**
+     * @return the featureId for the recents component.
+     */
+    @Nullable String getRecentsComponentFeatureId() {
+        return mFeatureId;
     }
 
     /**
@@ -863,16 +873,16 @@ class RecentTasks {
      * @return the list of recent tasks for presentation.
      */
     ParceledListSlice<ActivityManager.RecentTaskInfo> getRecentTasks(int maxNum, int flags,
-            boolean getTasksAllowed, boolean getDetailedTasks, int userId, int callingUid) {
+            boolean getTasksAllowed, int userId, int callingUid) {
         return new ParceledListSlice<>(getRecentTasksImpl(maxNum, flags, getTasksAllowed,
-                getDetailedTasks, userId, callingUid));
+                userId, callingUid));
     }
 
     /**
      * @return the list of recent tasks for presentation.
      */
     private ArrayList<ActivityManager.RecentTaskInfo> getRecentTasksImpl(int maxNum, int flags,
-            boolean getTasksAllowed, boolean getDetailedTasks, int userId, int callingUid) {
+            boolean getTasksAllowed, int userId, int callingUid) {
         final boolean withExcluded = (flags & RECENT_WITH_EXCLUDED) != 0;
 
         if (!isUserRunning(userId, FLAG_AND_UNLOCKED)) {
@@ -950,12 +960,7 @@ class RecentTasks {
                 continue;
             }
 
-            final ActivityManager.RecentTaskInfo rti = createRecentTaskInfo(task);
-            if (!getDetailedTasks) {
-                rti.baseIntent.replaceExtras((Bundle) null);
-            }
-
-            res.add(rti);
+            res.add(createRecentTaskInfo(task));
         }
         return res;
     }
@@ -1024,6 +1029,12 @@ class RecentTasks {
      */
     void add(Task task) {
         if (DEBUG_RECENTS_TRIM_TASKS) Slog.d(TAG, "add: task=" + task);
+
+        // Clean up the hidden tasks when going to home because the user may not be unable to return
+        // to the task from recents.
+        if (!mHiddenTasks.isEmpty() && task.isActivityTypeHome()) {
+            removeUnreachableHiddenTasks(task.getWindowingMode());
+        }
 
         final boolean isAffiliated = task.mAffiliatedTaskId != task.mTaskId
                 || task.mNextAffiliateTaskId != INVALID_TASK_ID
@@ -1382,13 +1393,35 @@ class RecentTasks {
 
         // Ignore tasks from different displays
         // TODO (b/115289124): No Recents on non-default displays.
-        if (stack.mDisplayId != DEFAULT_DISPLAY) {
+        if (!stack.isOnHomeDisplay()) {
             return false;
         }
 
         // Trim tasks that are in stacks that are behind the home stack
         final DisplayContent display = stack.getDisplay();
-        return display.getIndexOf(stack) < display.getIndexOf(display.getHomeStack());
+        return display.getIndexOf(stack) < display.getIndexOf(display.getRootHomeTask());
+    }
+
+    /** Remove the tasks that user may not be able to return. */
+    private void removeUnreachableHiddenTasks(int windowingMode) {
+        for (int i = mHiddenTasks.size() - 1; i >= 0; i--) {
+            final Task hiddenTask = mHiddenTasks.get(i);
+            if (!hiddenTask.hasChild()) {
+                // The task was removed by other path.
+                mHiddenTasks.remove(i);
+                continue;
+            }
+            if (hiddenTask.getWindowingMode() != windowingMode
+                    || hiddenTask.getTopVisibleActivity() != null) {
+                // The task may be reachable from the back stack of other windowing mode or it is
+                // currently in use. Keep the task in the hidden list to avoid losing track, e.g.
+                // after dismissing primary split screen.
+                continue;
+            }
+            mHiddenTasks.remove(i);
+            mSupervisor.removeTask(hiddenTask, false /* killProcess */,
+                    !REMOVE_FROM_RECENTS, "remove-hidden-task");
+        }
     }
 
     /**
@@ -1407,6 +1440,14 @@ class RecentTasks {
         // callbacks here.
         final Task removedTask = mTasks.remove(removeIndex);
         if (removedTask != task) {
+            // The added task is in recents so it is not hidden.
+            mHiddenTasks.remove(task);
+            if (removedTask.hasChild()) {
+                // A non-empty task is replaced by a new task. Because the removed task is no longer
+                // managed by the recent tasks list, add it to the hidden list to prevent the task
+                // from becoming dangling.
+                mHiddenTasks.add(removedTask);
+            }
             notifyTaskRemoved(removedTask, false /* wasTrimmed */, false /* killProcess */);
             if (DEBUG_RECENTS_TRIM_TASKS) Slog.d(TAG, "Trimming task=" + removedTask
                     + " for addition of task=" + task);
@@ -1663,6 +1704,9 @@ class RecentTasks {
         pw.println("mFreezeTaskListReordering=" + mFreezeTaskListReordering);
         pw.println("mFreezeTaskListReorderingPendingTimeout="
                 + mService.mH.hasCallbacks(mResetFreezeTaskListOnTimeoutRunnable));
+        if (!mHiddenTasks.isEmpty()) {
+            pw.println("mHiddenTasks=" + mHiddenTasks);
+        }
         if (mTasks.isEmpty()) {
             return;
         }
@@ -1695,8 +1739,7 @@ class RecentTasks {
             // Reset the header flag for the next block
             printedHeader = false;
             ArrayList<ActivityManager.RecentTaskInfo> tasks = getRecentTasksImpl(Integer.MAX_VALUE,
-                    0, true /* getTasksAllowed */, false /* getDetailedTasks */,
-                    mService.getCurrentUserId(), SYSTEM_UID);
+                    0, true /* getTasksAllowed */, mService.getCurrentUserId(), SYSTEM_UID);
             for (int i = 0; i < tasks.size(); i++) {
                 final ActivityManager.RecentTaskInfo taskInfo = tasks.get(i);
                 if (!printedHeader) {

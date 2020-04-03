@@ -26,13 +26,15 @@ import android.annotation.Nullable;
 import android.annotation.RequiresFeature;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemService;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.hardware.biometrics.BiometricAuthenticator;
 import android.hardware.biometrics.BiometricFingerprintConstants;
+import android.hardware.biometrics.BiometricNativeHandleUtils;
 import android.hardware.biometrics.BiometricPrompt;
+import android.hardware.biometrics.IBiometricNativeHandle;
 import android.hardware.biometrics.IBiometricServiceLockoutResetCallback;
 import android.os.Binder;
 import android.os.CancellationSignal;
@@ -41,9 +43,11 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.IRemoteCallback;
 import android.os.Looper;
+import android.os.NativeHandle;
 import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.security.identity.IdentityCredential;
 import android.util.Slog;
 
 import java.security.Signature;
@@ -125,6 +129,10 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
             super(mac);
         }
 
+        public CryptoObject(@NonNull IdentityCredential credential) {
+            super(credential);
+        }
+
         /**
          * Get {@link Signature} object.
          * @return {@link Signature} object or null if this doesn't contain one.
@@ -148,6 +156,14 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
         public Mac getMac() {
             return super.getMac();
         }
+
+        /**
+         * Get {@link IdentityCredential} object.
+         * @return {@link IdentityCredential} object or null if this doesn't contain one.
+         */
+        public @Nullable IdentityCredential getIdentityCredential() {
+            return super.getIdentityCredential();
+        }
     }
 
     /**
@@ -160,6 +176,7 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
         private Fingerprint mFingerprint;
         private CryptoObject mCryptoObject;
         private int mUserId;
+        private boolean mIsStrongBiometric;
 
         /**
          * Authentication result
@@ -168,10 +185,12 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
          * @param fingerprint the recognized fingerprint data, if allowed.
          * @hide
          */
-        public AuthenticationResult(CryptoObject crypto, Fingerprint fingerprint, int userId) {
+        public AuthenticationResult(CryptoObject crypto, Fingerprint fingerprint, int userId,
+                boolean isStrongBiometric) {
             mCryptoObject = crypto;
             mFingerprint = fingerprint;
             mUserId = userId;
+            mIsStrongBiometric = isStrongBiometric;
         }
 
         /**
@@ -195,6 +214,15 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
          * @hide
          */
         public int getUserId() { return mUserId; }
+
+        /**
+         * Check whether the strength of the fingerprint modality associated with this operation is
+         * strong (i.e. not weak or convenience).
+         * @hide
+         */
+        public boolean isStrongBiometric() {
+            return mIsStrongBiometric;
+        }
     };
 
     /**
@@ -390,15 +418,33 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
     }
 
     /**
-     * Per-user version, see {@link FingerprintManager#authenticate(CryptoObject,
-     * CancellationSignal, int, AuthenticationCallback, Handler)}. This version does not
-     * display the BiometricPrompt.
-     * @param userId the user ID that the fingerprint hardware will authenticate for.
+     * Defaults to {@link FingerprintManager#authenticate(CryptoObject, CancellationSignal, int,
+     * AuthenticationCallback, Handler, int, NativeHandle)} with {@code windowId} set to null.
+     *
+     * @see FingerprintManager#authenticate(CryptoObject, CancellationSignal, int,
+     * AuthenticationCallback, Handler, int, NativeHandle)
+     *
      * @hide
      */
     @RequiresPermission(anyOf = {USE_BIOMETRIC, USE_FINGERPRINT})
     public void authenticate(@Nullable CryptoObject crypto, @Nullable CancellationSignal cancel,
             int flags, @NonNull AuthenticationCallback callback, Handler handler, int userId) {
+        authenticate(crypto, cancel, flags, callback, handler, userId, null /* windowId */);
+    }
+
+    /**
+     * Per-user version, see {@link FingerprintManager#authenticate(CryptoObject,
+     * CancellationSignal, int, AuthenticationCallback, Handler)}. This version does not
+     * display the BiometricPrompt.
+     * @param userId the user ID that the fingerprint hardware will authenticate for.
+     * @param windowId for optical fingerprint sensors that require active illumination by the OLED
+     *        display. Should be null for devices that don't require illumination.
+     * @hide
+     */
+    @RequiresPermission(anyOf = {USE_BIOMETRIC, USE_FINGERPRINT})
+    public void authenticate(@Nullable CryptoObject crypto, @Nullable CancellationSignal cancel,
+            int flags, @NonNull AuthenticationCallback callback, Handler handler, int userId,
+            @Nullable NativeHandle windowId) {
         if (callback == null) {
             throw new IllegalArgumentException("Must supply an authentication callback");
         }
@@ -412,23 +458,41 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
             }
         }
 
-        if (mService != null) try {
-            useHandler(handler);
-            mAuthenticationCallback = callback;
-            mCryptoObject = crypto;
-            long sessionId = crypto != null ? crypto.getOpId() : 0;
-            mService.authenticate(mToken, sessionId, userId, mServiceReceiver, flags,
-                    mContext.getOpPackageName());
-        } catch (RemoteException e) {
-            Slog.w(TAG, "Remote exception while authenticating: ", e);
-            if (callback != null) {
+        if (mService != null) {
+            IBiometricNativeHandle handle = BiometricNativeHandleUtils.dup(windowId);
+            try {
+                useHandler(handler);
+                mAuthenticationCallback = callback;
+                mCryptoObject = crypto;
+                long sessionId = crypto != null ? crypto.getOpId() : 0;
+                mService.authenticate(mToken, sessionId, userId, mServiceReceiver, flags,
+                        mContext.getOpPackageName(), handle);
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Remote exception while authenticating: ", e);
                 // Though this may not be a hardware issue, it will cause apps to give up or try
                 // again later.
                 callback.onAuthenticationError(FINGERPRINT_ERROR_HW_UNAVAILABLE,
                         getErrorString(mContext, FINGERPRINT_ERROR_HW_UNAVAILABLE,
-                            0 /* vendorCode */));
+                                0 /* vendorCode */));
+            } finally {
+                BiometricNativeHandleUtils.close(handle);
             }
         }
+    }
+
+    /**
+     * Defaults to {@link FingerprintManager#enroll(byte[], CancellationSignal, int, int,
+     * EnrollmentCallback, NativeHandle)} with {@code windowId} set to null.
+     *
+     * @see FingerprintManager#enroll(byte[], CancellationSignal, int, int, EnrollmentCallback,
+     * NativeHandle)
+     *
+     * @hide
+     */
+    @RequiresPermission(MANAGE_FINGERPRINT)
+    public void enroll(byte [] token, CancellationSignal cancel, int flags,
+            int userId, EnrollmentCallback callback) {
+        enroll(token, cancel, flags, userId, callback, null /* windowId */);
     }
 
     /**
@@ -449,7 +513,7 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
      */
     @RequiresPermission(MANAGE_FINGERPRINT)
     public void enroll(byte [] token, CancellationSignal cancel, int flags,
-            int userId, EnrollmentCallback callback) {
+            int userId, EnrollmentCallback callback, @Nullable NativeHandle windowId) {
         if (userId == UserHandle.USER_CURRENT) {
             userId = getCurrentUserId();
         }
@@ -466,18 +530,21 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
             }
         }
 
-        if (mService != null) try {
-            mEnrollmentCallback = callback;
-            mService.enroll(mToken, token, userId, mServiceReceiver, flags,
-                    mContext.getOpPackageName());
-        } catch (RemoteException e) {
-            Slog.w(TAG, "Remote exception in enroll: ", e);
-            if (callback != null) {
+        if (mService != null) {
+            IBiometricNativeHandle handle = BiometricNativeHandleUtils.dup(windowId);
+            try {
+                mEnrollmentCallback = callback;
+                mService.enroll(mToken, token, userId, mServiceReceiver, flags,
+                        mContext.getOpPackageName(), handle);
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Remote exception in enroll: ", e);
                 // Though this may not be a hardware issue, it will cause apps to give up or try
                 // again later.
                 callback.onEnrollmentError(FINGERPRINT_ERROR_HW_UNAVAILABLE,
                         getErrorString(mContext, FINGERPRINT_ERROR_HW_UNAVAILABLE,
-                            0 /* vendorCode */));
+                                0 /* vendorCode */));
+            } finally {
+                BiometricNativeHandleUtils.close(handle);
             }
         }
     }
@@ -702,26 +769,6 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
     }
 
     /**
-     * Retrieves the authenticator token for binding keys to the lifecycle
-     * of the calling user's fingerprints. Used only by internal clients.
-     *
-     * @hide
-     */
-    @UnsupportedAppUsage
-    public long getAuthenticatorId() {
-        if (mService != null) {
-            try {
-                return mService.getAuthenticatorId(mContext.getOpPackageName());
-            } catch (RemoteException e) {
-                throw e.rethrowFromSystemServer();
-            }
-        } else {
-            Slog.w(TAG, "getAuthenticatorId(): Service not connected!");
-        }
-        return 0;
-    }
-
-    /**
      * @hide
      */
     public void addLockoutResetCallback(final LockoutResetCallback callback) {
@@ -778,7 +825,8 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
                             msg.arg2 /* vendorCode */);
                     break;
                 case MSG_AUTHENTICATION_SUCCEEDED:
-                    sendAuthenticatedSucceeded((Fingerprint) msg.obj, msg.arg1 /* userId */);
+                    sendAuthenticatedSucceeded((Fingerprint) msg.obj, msg.arg1 /* userId */,
+                            msg.arg2 == 1 /* isStrongBiometric */);
                     break;
                 case MSG_AUTHENTICATION_FAILED:
                     sendAuthenticatedFailed();
@@ -835,10 +883,10 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
         }
     }
 
-    private void sendAuthenticatedSucceeded(Fingerprint fp, int userId) {
+    private void sendAuthenticatedSucceeded(Fingerprint fp, int userId, boolean isStrongBiometric) {
         if (mAuthenticationCallback != null) {
             final AuthenticationResult result =
-                    new AuthenticationResult(mCryptoObject, fp, userId);
+                    new AuthenticationResult(mCryptoObject, fp, userId, isStrongBiometric);
             mAuthenticationCallback.onAuthenticationSucceeded(result);
         }
     }
@@ -863,7 +911,9 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
         if (mEnrollmentCallback != null) {
             mEnrollmentCallback.onEnrollmentHelp(clientInfo, msg);
         } else if (mAuthenticationCallback != null) {
-            mAuthenticationCallback.onAuthenticationHelp(clientInfo, msg);
+            if (acquireInfo != BiometricFingerprintConstants.FINGERPRINT_ACQUIRED_START) {
+                mAuthenticationCallback.onAuthenticationHelp(clientInfo, msg);
+            }
         }
     }
 
@@ -954,6 +1004,9 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
             case FINGERPRINT_ERROR_HW_NOT_PRESENT:
                 return context.getString(
                         com.android.internal.R.string.fingerprint_error_hw_not_present);
+            case BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED:
+                return context.getString(
+                        com.android.internal.R.string.fingerprint_error_security_update_required);
             case FINGERPRINT_ERROR_VENDOR: {
                     String[] msgArray = context.getResources().getStringArray(
                             com.android.internal.R.array.fingerprint_error_vendor);
@@ -995,6 +1048,9 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
                         return msgArray[vendorCode];
                     }
                 }
+                break;
+            case FINGERPRINT_ACQUIRED_START:
+                return null;
         }
         Slog.w(TAG, "Invalid acquired message: " + acquireInfo + ", " + vendorCode);
         return null;
@@ -1015,8 +1071,10 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
         }
 
         @Override // binder call
-        public void onAuthenticationSucceeded(long deviceId, Fingerprint fp, int userId) {
-            mHandler.obtainMessage(MSG_AUTHENTICATION_SUCCEEDED, userId, 0, fp).sendToTarget();
+        public void onAuthenticationSucceeded(long deviceId, Fingerprint fp, int userId,
+                boolean isStrongBiometric) {
+            mHandler.obtainMessage(MSG_AUTHENTICATION_SUCCEEDED, userId, isStrongBiometric ? 1 : 0,
+                    fp).sendToTarget();
         }
 
         @Override // binder call

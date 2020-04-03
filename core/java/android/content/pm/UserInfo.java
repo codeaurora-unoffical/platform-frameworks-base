@@ -18,8 +18,8 @@ package android.content.pm;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
 import android.annotation.UserIdInt;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.UserHandle;
@@ -360,6 +360,10 @@ public class UserInfo implements Parcelable {
     public boolean supportsSwitchTo() {
         if (isEphemeral() && !isEnabled()) {
             // Don't support switching to an ephemeral user with removal in progress.
+            return false;
+        }
+        if (preCreated) {
+            // Don't support switching to pre-created users until they become "real" users.
             return false;
         }
         return !isProfile();

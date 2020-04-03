@@ -21,6 +21,7 @@ import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verifyZeroInteractions;
+import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_APP_TRANSITION;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
 
 import static org.junit.Assert.assertFalse;
@@ -28,11 +29,11 @@ import static org.junit.Assert.assertTrue;
 
 import android.platform.test.annotations.Presubmit;
 
-import androidx.test.filters.FlakyTest;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -40,10 +41,11 @@ import org.mockito.MockitoAnnotations;
  * Tests for the {@link ActivityStack} class.
  *
  * Build/Install/Run:
- *  atest FrameworksServicesTests:AnimatingActivityRegistryTest
+ *  atest WmTests:AnimatingActivityRegistryTest
  */
 @SmallTest
 @Presubmit
+@RunWith(WindowTestRunner.class)
 public class AnimatingActivityRegistryTest extends WindowTestsBase {
 
     @Mock
@@ -68,8 +70,10 @@ public class AnimatingActivityRegistryTest extends WindowTestsBase {
         final AnimatingActivityRegistry registry =
                 activity1.getStack().getAnimatingActivityRegistry();
 
-        activity1.startAnimation(activity1.getPendingTransaction(), mAdapter, false /* hidden */);
-        activity2.startAnimation(activity1.getPendingTransaction(), mAdapter, false /* hidden */);
+        activity1.startAnimation(activity1.getPendingTransaction(), mAdapter, false /* hidden */,
+                ANIMATION_TYPE_APP_TRANSITION);
+        activity2.startAnimation(activity1.getPendingTransaction(), mAdapter, false /* hidden */,
+                ANIMATION_TYPE_APP_TRANSITION);
         assertTrue(activity1.isAnimating(TRANSITION));
         assertTrue(activity2.isAnimating(TRANSITION));
 
@@ -82,7 +86,6 @@ public class AnimatingActivityRegistryTest extends WindowTestsBase {
     }
 
     @Test
-    @FlakyTest(bugId = 131005232)
     public void testContainerRemoved() {
         final ActivityRecord window1 = createActivityRecord(mDisplayContent,
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD);
@@ -91,8 +94,10 @@ public class AnimatingActivityRegistryTest extends WindowTestsBase {
         final AnimatingActivityRegistry registry =
                 window1.getStack().getAnimatingActivityRegistry();
 
-        window1.startAnimation(window1.getPendingTransaction(), mAdapter, false /* hidden */);
-        window2.startAnimation(window1.getPendingTransaction(), mAdapter, false /* hidden */);
+        window1.startAnimation(window1.getPendingTransaction(), mAdapter, false /* hidden */,
+                ANIMATION_TYPE_APP_TRANSITION);
+        window2.startAnimation(window1.getPendingTransaction(), mAdapter, false /* hidden */,
+                ANIMATION_TYPE_APP_TRANSITION);
         assertTrue(window1.isAnimating(TRANSITION));
         assertTrue(window2.isAnimating(TRANSITION));
 

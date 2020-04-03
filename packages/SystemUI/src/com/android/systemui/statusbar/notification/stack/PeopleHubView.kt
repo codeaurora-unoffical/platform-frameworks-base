@@ -16,94 +16,86 @@
 
 package com.android.systemui.statusbar.notification.stack
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
 import android.content.Context
 import android.util.AttributeSet
-import android.util.FloatProperty
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
 import com.android.systemui.R
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin
 import com.android.systemui.statusbar.notification.people.DataListener
 import com.android.systemui.statusbar.notification.people.PersonViewModel
-import com.android.systemui.statusbar.notification.row.ActivatableNotificationView
-
-private val TRANSLATE_CONTENT = object : FloatProperty<PeopleHubView>("translate") {
-    override fun setValue(view: PeopleHubView, value: Float) {
-        view.translation = value
-    }
-
-    override fun get(view: PeopleHubView) = view.translation
-}
+import com.android.systemui.statusbar.notification.row.StackScrollerDecorView
 
 class PeopleHubView(context: Context, attrs: AttributeSet) :
-        ActivatableNotificationView(context, attrs), SwipeableView {
+        StackScrollerDecorView(context, attrs), SwipeableView {
 
     private lateinit var contents: ViewGroup
-    private lateinit var personControllers: List<PersonDataListenerImpl>
-    private var translateAnim: ObjectAnimator? = null
 
-    val personViewAdapters: Sequence<DataListener<PersonViewModel?>>
-        get() = personControllers.asSequence()
+    lateinit var personViewAdapters: Sequence<DataListener<PersonViewModel?>>
+        private set
 
     override fun onFinishInflate() {
-        super.onFinishInflate()
         contents = requireViewById(R.id.people_list)
-        personControllers = (0 until contents.childCount)
-                .asSequence()
+        personViewAdapters = (0 until contents.childCount)
+                .asSequence() // so we can map
                 .mapNotNull { idx ->
-                    (contents.getChildAt(idx) as? LinearLayout)?.let(::PersonDataListenerImpl)
+                    // get all our people slots
+                    (contents.getChildAt(idx) as? ImageView)?.let(::PersonDataListenerImpl)
                 }
-                .toList()
+                .toList() // cache it
+                .asSequence() // but don't reveal it's a list
+        super.onFinishInflate()
+        setVisible(true /* nowVisible */, false /* animate */)
     }
 
-    override fun getContentView(): View = contents
+    override fun findContentView(): View = contents
+    override fun findSecondaryView(): View? = null
 
     override fun hasFinishedInitialization(): Boolean = true
 
     override fun createMenu(): NotificationMenuRowPlugin? = null
 
-    override fun getTranslateViewAnimator(
-        leftTarget: Float,
-        listener: ValueAnimator.AnimatorUpdateListener?
-    ): Animator =
-            ObjectAnimator
-                    .ofFloat(this, TRANSLATE_CONTENT, leftTarget)
-                    .apply {
-                        listener?.let { addUpdateListener(listener) }
-                        addListener(object : AnimatorListenerAdapter() {
-                            override fun onAnimationEnd(anim: Animator) {
-                                translateAnim = null
-                            }
-                        })
-                    }
-                    .also {
-                        translateAnim?.cancel()
-                        translateAnim = it
-                    }
-
     override fun resetTranslation() {
-        translateAnim?.cancel()
         translationX = 0f
     }
 
-    private inner class PersonDataListenerImpl(val viewGroup: ViewGroup) :
+    override fun setTranslation(translation: Float) {
+        if (canSwipe) {
+            super.setTranslation(translation)
+        }
+    }
+
+    var canSwipe: Boolean = true
+        set(value) {
+            if (field != value) {
+                if (field) {
+                    resetTranslation()
+                }
+                field = value
+            }
+        }
+
+    override fun needsClippingToShelf(): Boolean {
+        return true
+    }
+
+    override fun applyContentTransformation(contentAlpha: Float, translationY: Float) {
+        super.applyContentTransformation(contentAlpha, translationY)
+        for (i in 0 until contents.childCount) {
+            val view = contents.getChildAt(i)
+            view.alpha = contentAlpha
+            view.translationY = translationY
+        }
+    }
+
+    private inner class PersonDataListenerImpl(val avatarView: ImageView) :
             DataListener<PersonViewModel?> {
 
-        val nameView = viewGroup.requireViewById<TextView>(R.id.person_name)
-        val avatarView = viewGroup.requireViewById<ImageView>(R.id.person_icon)
-
         override fun onDataChanged(data: PersonViewModel?) {
-            viewGroup.visibility = data?.let { View.VISIBLE } ?: View.INVISIBLE
-            nameView.text = data?.name
+            avatarView.visibility = data?.let { View.VISIBLE } ?: View.GONE
             avatarView.setImageDrawable(data?.icon)
-            viewGroup.setOnClickListener { data?.onClick?.invoke() }
+            avatarView.setOnClickListener { data?.onClick?.invoke() }
         }
     }
 }

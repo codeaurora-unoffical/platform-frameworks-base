@@ -70,6 +70,7 @@ import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.stackdivider.Divider;
 import com.android.systemui.statusbar.CommandQueue;
+import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.policy.AccessibilityManagerWrapper;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 
@@ -190,7 +191,7 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
         mFragments.dispatchResume();
         processAllMessages();
 
-        verify(mBroadcastDispatcher).registerReceiver(
+        verify(mBroadcastDispatcher).registerReceiverWithHandler(
                 any(BroadcastReceiver.class),
                 any(IntentFilter.class),
                 any(Handler.class),
@@ -255,6 +256,7 @@ public class NavigationBarFragmentTest extends SysuiBaseFragmentTest {
                 Optional.of(mRecents),
                 () -> mock(StatusBar.class),
                 mock(ShadeController.class),
+                mock(NotificationRemoteInputManager.class),
                 mHandler);
     }
 

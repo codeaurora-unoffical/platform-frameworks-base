@@ -18,7 +18,10 @@ package com.android.keyguard;
 
 import android.app.ActivityManager;
 import android.app.IActivityManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.Resources;
 import android.graphics.Color;
 import android.os.Handler;
@@ -40,6 +43,8 @@ import androidx.core.graphics.ColorUtils;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
+import com.android.systemui.shared.system.SurfaceViewRequestReceiver;
+import com.android.systemui.shared.system.UniversalSmartspaceUtils;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 
 import java.io.FileDescriptor;
@@ -119,6 +124,21 @@ public class KeyguardStatusView extends GridLayout implements
         @Override
         public void onLogoutEnabledChanged() {
             updateLogoutView();
+        }
+    };
+
+    private final BroadcastReceiver mUniversalSmartspaceBroadcastReceiver =
+            new BroadcastReceiver() {
+        private final SurfaceViewRequestReceiver mReceiver = new SurfaceViewRequestReceiver();
+
+        @Override
+        public void onReceive(Context context, Intent i) {
+            // TODO(b/148159743): Restrict to Pixel Launcher.
+            if (UniversalSmartspaceUtils.ACTION_REQUEST_SMARTSPACE_VIEW.equals(i.getAction())) {
+                mReceiver.onReceive(context,
+                        i.getBundleExtra(UniversalSmartspaceUtils.INTENT_BUNDLE_KEY),
+                        inflate(mContext, R.layout.keyguard_status_area, null));
+            }
         }
     };
 
@@ -316,6 +336,8 @@ public class KeyguardStatusView extends GridLayout implements
         super.onAttachedToWindow();
         Dependency.get(KeyguardUpdateMonitor.class).registerCallback(mInfoCallback);
         Dependency.get(ConfigurationController.class).addCallback(this);
+        getContext().registerReceiver(mUniversalSmartspaceBroadcastReceiver,
+                new IntentFilter(UniversalSmartspaceUtils.ACTION_REQUEST_SMARTSPACE_VIEW));
     }
 
     @Override
@@ -323,6 +345,7 @@ public class KeyguardStatusView extends GridLayout implements
         super.onDetachedFromWindow();
         Dependency.get(KeyguardUpdateMonitor.class).removeCallback(mInfoCallback);
         Dependency.get(ConfigurationController.class).removeCallback(this);
+        getContext().unregisterReceiver(mUniversalSmartspaceBroadcastReceiver);
     }
 
     @Override

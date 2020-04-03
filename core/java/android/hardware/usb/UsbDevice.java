@@ -18,13 +18,15 @@ package android.hardware.usb;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityThread;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.RemoteException;
 
 import com.android.internal.util.Preconditions;
+
+import java.util.Objects;
 
 /**
  * This class represents a USB device attached to the android device with the android device
@@ -81,7 +83,7 @@ public class UsbDevice implements Parcelable {
             @NonNull IUsbSerialReader serialNumberReader,
             boolean hasAudioPlayback, boolean hasAudioCapture, boolean hasMidi,
             boolean hasVideoPlayback, boolean hasVideoCapture) {
-        mName = Preconditions.checkNotNull(name);
+        mName = Objects.requireNonNull(name);
         mVendorId = vendorId;
         mProductId = productId;
         mClass = Class;
@@ -91,7 +93,7 @@ public class UsbDevice implements Parcelable {
         mProductName = productName;
         mVersion = Preconditions.checkStringNotEmpty(version);
         mConfigurations = Preconditions.checkArrayElementsNotNull(configurations, "configurations");
-        mSerialNumberReader = Preconditions.checkNotNull(serialNumberReader);
+        mSerialNumberReader = Objects.requireNonNull(serialNumberReader);
         mHasAudioPlayback = hasAudioPlayback;
         mHasAudioCapture = hasAudioCapture;
         mHasMidi = hasMidi;
@@ -441,7 +443,7 @@ public class UsbDevice implements Parcelable {
                 @Nullable String serialNumber,
                 boolean hasAudioPlayback, boolean hasAudioCapture, boolean hasMidi,
                 boolean hasVideoPlayback, boolean hasVideoCapture) {
-            mName = Preconditions.checkNotNull(name);
+            mName = Objects.requireNonNull(name);
             mVendorId = vendorId;
             mProductId = productId;
             mClass = Class;

@@ -64,7 +64,6 @@ import android.provider.Settings;
 import android.provider.Settings.SettingNotFoundException;
 import android.text.TextUtils;
 import android.util.Log;
-import android.util.Pair;
 import android.util.Slog;
 import android.util.SparseArray;
 import android.view.Display;
@@ -80,15 +79,16 @@ import android.view.InputWindowHandle;
 import android.view.KeyEvent;
 import android.view.PointerIcon;
 import android.view.Surface;
+import android.view.VerifiedInputEvent;
 import android.view.ViewConfiguration;
 import android.widget.Toast;
 
 import com.android.internal.R;
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.messages.nano.SystemMessageProto.SystemMessage;
 import com.android.internal.notification.SystemNotificationChannels;
 import com.android.internal.os.SomeArgs;
 import com.android.internal.util.DumpUtils;
-import com.android.internal.util.Preconditions;
 import com.android.internal.util.XmlUtils;
 import com.android.server.DisplayThread;
 import com.android.server.LocalServices;
@@ -113,8 +113,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
-
 /*
  * Wraps the C++ InputManager and provides its callbacks.
  */
@@ -184,6 +184,13 @@ public class InputManagerService extends IInputManager.Stub
     IInputFilter mInputFilter; // guarded by mInputFilterLock
     InputFilterHost mInputFilterHost; // guarded by mInputFilterLock
 
+    // The associations of input devices to displays by port. Maps from input device port (String)
+    // to display id (int). Currently only accessed by InputReader.
+    private final Map<String, Integer> mStaticAssociations;
+    private final Object mAssociationsLock = new Object();
+    @GuardedBy("mAssociationLock")
+    private final Map<String, Integer> mRuntimeAssociations = new HashMap<String, Integer>();
+
     private static native long nativeInit(InputManagerService service,
             Context context, MessageQueue messageQueue);
     private static native void nativeStart(long ptr);
@@ -208,6 +215,7 @@ public class InputManagerService extends IInputManager.Stub
     private static native int nativeInjectInputEvent(long ptr, InputEvent event,
             int injectorPid, int injectorUid, int syncMode, int timeoutMillis,
             int policyFlags);
+    private static native VerifiedInputEvent nativeVerifyInputEvent(long ptr, InputEvent event);
     private static native void nativeToggleCapsLock(long ptr, int deviceId);
     private static native void nativeSetInputWindows(long ptr, InputWindowHandle[] windowHandles,
             int displayId);
@@ -217,7 +225,7 @@ public class InputManagerService extends IInputManager.Stub
             int displayId, InputApplicationHandle application);
     private static native void nativeSetFocusedDisplay(long ptr, int displayId);
     private static native boolean nativeTransferTouchFocus(long ptr,
-            InputChannel fromChannel, InputChannel toChannel);
+            IBinder fromChannelToken, IBinder toChannelToken);
     private static native void nativeSetPointerSpeed(long ptr, int speed);
     private static native void nativeSetShowTouches(long ptr, boolean enabled);
     private static native void nativeSetInteractive(long ptr, boolean interactive);
@@ -237,6 +245,7 @@ public class InputManagerService extends IInputManager.Stub
     private static native void nativeSetCustomPointerIcon(long ptr, PointerIcon icon);
     private static native void nativeSetPointerCapture(long ptr, boolean detached);
     private static native boolean nativeCanDispatchToDisplay(long ptr, int deviceId, int displayId);
+    private static native void nativeNotifyPortAssociationsChanged(long ptr);
 
     // Input event injection constants defined in InputDispatcher.h.
     private static final int INPUT_EVENT_INJECTION_SUCCEEDED = 0;
@@ -314,6 +323,7 @@ public class InputManagerService extends IInputManager.Stub
         this.mContext = context;
         this.mHandler = new InputManagerHandler(DisplayThread.get().getLooper());
 
+        mStaticAssociations = loadStaticInputPortAssociations();
         mUseDevInputEventForAudioJack =
                 context.getResources().getBoolean(R.bool.config_useDevInputEventForAudioJack);
         Slog.i(TAG, "Initializing input manager, mUseDevInputEventForAudioJack="
@@ -662,6 +672,11 @@ public class InputManagerService extends IInputManager.Stub
                 Slog.w(TAG, "Input event injection from pid " + pid + " failed.");
                 return false;
         }
+    }
+
+    @Override // Binder call
+    public VerifiedInputEvent verifyInputEvent(InputEvent event) {
+        return nativeVerifyInputEvent(mPtr, event);
     }
 
     /**
@@ -1546,14 +1561,29 @@ public class InputManagerService extends IInputManager.Stub
      * @return True if the transfer was successful.  False if the window with the
      * specified channel did not actually have touch focus at the time of the request.
      */
-    public boolean transferTouchFocus(InputChannel fromChannel, InputChannel toChannel) {
-        if (fromChannel == null) {
-            throw new IllegalArgumentException("fromChannel must not be null.");
-        }
-        if (toChannel == null) {
-            throw new IllegalArgumentException("toChannel must not be null.");
-        }
-        return nativeTransferTouchFocus(mPtr, fromChannel, toChannel);
+    public boolean transferTouchFocus(@NonNull InputChannel fromChannel,
+            @NonNull InputChannel toChannel) {
+        return nativeTransferTouchFocus(mPtr, fromChannel.getToken(), toChannel.getToken());
+    }
+
+    /**
+     * Atomically transfers touch focus from one window to another as identified by
+     * their input channels.  It is possible for multiple windows to have
+     * touch focus if they support split touch dispatch
+     * {@link android.view.WindowManager.LayoutParams#FLAG_SPLIT_TOUCH} but this
+     * method only transfers touch focus of the specified window without affecting
+     * other windows that may also have touch focus at the same time.
+     * @param fromChannelToken The channel token of a window that currently has touch focus.
+     * @param toChannelToken The channel token of the window that should receive touch focus in
+     * place of the first.
+     * @return True if the transfer was successful.  False if the window with the
+     * specified channel did not actually have touch focus at the time of the request.
+     */
+    public boolean transferTouchFocus(@NonNull IBinder fromChannelToken,
+            @NonNull IBinder toChannelToken) {
+        Objects.nonNull(fromChannelToken);
+        Objects.nonNull(toChannelToken);
+        return nativeTransferTouchFocus(mPtr, fromChannelToken, toChannelToken);
     }
 
     @Override // Binder call
@@ -1715,8 +1745,51 @@ public class InputManagerService extends IInputManager.Stub
     // Binder call
     @Override
     public void setCustomPointerIcon(PointerIcon icon) {
-        Preconditions.checkNotNull(icon);
+        Objects.requireNonNull(icon);
         nativeSetCustomPointerIcon(mPtr, icon);
+    }
+
+    /**
+     * Add a runtime association between the input port and the display port. This overrides any
+     * static associations.
+     * @param inputPort The port of the input device.
+     * @param displayPort The physical port of the associated display.
+     */
+    @Override // Binder call
+    public void addPortAssociation(@NonNull String inputPort, int displayPort) {
+        if (!checkCallingPermission(
+                android.Manifest.permission.ASSOCIATE_INPUT_DEVICE_TO_DISPLAY_BY_PORT,
+                "addPortAssociation()")) {
+            throw new SecurityException(
+                    "Requires ASSOCIATE_INPUT_DEVICE_TO_DISPLAY_BY_PORT permission");
+        }
+
+        Objects.requireNonNull(inputPort);
+        synchronized (mAssociationsLock) {
+            mRuntimeAssociations.put(inputPort, displayPort);
+        }
+        nativeNotifyPortAssociationsChanged(mPtr);
+    }
+
+    /**
+     * Remove the runtime association between the input port and the display port. Any existing
+     * static association for the cleared input port will be restored.
+     * @param inputPort The port of the input device to be cleared.
+     */
+    @Override // Binder call
+    public void removePortAssociation(@NonNull String inputPort) {
+        if (!checkCallingPermission(
+                android.Manifest.permission.ASSOCIATE_INPUT_DEVICE_TO_DISPLAY_BY_PORT,
+                "clearPortAssociations()")) {
+            throw new SecurityException(
+                    "Requires ASSOCIATE_INPUT_DEVICE_TO_DISPLAY_BY_PORT permission");
+        }
+
+        Objects.requireNonNull(inputPort);
+        synchronized (mAssociationsLock) {
+            mRuntimeAssociations.remove(inputPort);
+        }
+        nativeNotifyPortAssociationsChanged(mPtr);
     }
 
     @Override
@@ -1727,6 +1800,27 @@ public class InputManagerService extends IInputManager.Stub
         String dumpStr = nativeDump(mPtr);
         if (dumpStr != null) {
             pw.println(dumpStr);
+            dumpAssociations(pw);
+        }
+    }
+
+    private void dumpAssociations(PrintWriter pw) {
+        if (!mStaticAssociations.isEmpty()) {
+            pw.println("Static Associations:");
+            mStaticAssociations.forEach((k, v) -> {
+                pw.print("  port: " + k);
+                pw.println("  display: " + v);
+            });
+        }
+
+        synchronized (mAssociationsLock) {
+            if (!mRuntimeAssociations.isEmpty()) {
+                pw.println("Runtime Associations:");
+                mRuntimeAssociations.forEach((k, v) -> {
+                    pw.print("  port: " + k);
+                    pw.println("  display: " + v);
+                });
+            }
         }
     }
 
@@ -1751,6 +1845,7 @@ public class InputManagerService extends IInputManager.Stub
     @Override
     public void monitor() {
         synchronized (mInputFilterLock) { }
+        synchronized (mAssociationsLock) { /* Test if blocked by associations lock. */}
         nativeMonitor(mPtr);
     }
 
@@ -1910,15 +2005,16 @@ public class InputManagerService extends IInputManager.Stub
     }
 
     /**
-     * Flatten a list of pairs into a list, with value positioned directly next to the key
+     * Flatten a map into a string list, with value positioned directly next to the
+     * key.
      * @return Flattened list
      */
-    private static <T> List<T> flatten(@NonNull List<Pair<T, T>> pairs) {
-        List<T> list = new ArrayList<>(pairs.size() * 2);
-        for (Pair<T, T> pair : pairs) {
-            list.add(pair.first);
-            list.add(pair.second);
-        }
+    private static List<String> flatten(@NonNull Map<String, Integer> map) {
+        final List<String> list = new ArrayList<>(map.size() * 2);
+        map.forEach((k, v)-> {
+            list.add(k);
+            list.add(v.toString());
+        });
         return list;
     }
 
@@ -1926,23 +2022,33 @@ public class InputManagerService extends IInputManager.Stub
      * Ports are highly platform-specific, so only allow these to be specified in the vendor
      * directory.
      */
-    // Native callback
-    private static String[] getInputPortAssociations() {
-        File baseDir = Environment.getVendorDirectory();
-        File confFile = new File(baseDir, PORT_ASSOCIATIONS_PATH);
+    private static Map<String, Integer> loadStaticInputPortAssociations() {
+        final File baseDir = Environment.getVendorDirectory();
+        final File confFile = new File(baseDir, PORT_ASSOCIATIONS_PATH);
 
         try {
-            InputStream stream = new FileInputStream(confFile);
-            List<Pair<String, String>> associations =
-                    ConfigurationProcessor.processInputPortAssociations(stream);
-            List<String> associationList = flatten(associations);
-            return associationList.toArray(new String[0]);
+            final InputStream stream = new FileInputStream(confFile);
+            return ConfigurationProcessor.processInputPortAssociations(stream);
         } catch (FileNotFoundException e) {
             // Most of the time, file will not exist, which is expected.
         } catch (Exception e) {
             Slog.e(TAG, "Could not parse '" + confFile.getAbsolutePath() + "'", e);
         }
-        return new String[0];
+
+        return new HashMap<>();
+    }
+
+    // Native callback
+    private String[] getInputPortAssociations() {
+        final Map<String, Integer> associations = new HashMap<>(mStaticAssociations);
+
+        // merge the runtime associations.
+        synchronized (mAssociationsLock) {
+            associations.putAll(mRuntimeAssociations);
+        }
+
+        final List<String> associationList = flatten(associations);
+        return associationList.toArray(new String[0]);
     }
 
     /**

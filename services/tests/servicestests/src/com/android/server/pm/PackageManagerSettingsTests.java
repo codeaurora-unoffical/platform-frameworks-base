@@ -20,6 +20,8 @@ import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
 import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
 import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
 import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
+import static android.content.pm.SuspendDialogInfo.BUTTON_ACTION_MORE_DETAILS;
+import static android.content.pm.SuspendDialogInfo.BUTTON_ACTION_UNSUSPEND;
 import static android.content.res.Resources.ID_NULL;
 
 import static org.hamcrest.CoreMatchers.is;
@@ -217,6 +219,7 @@ public class PackageManagerSettingsTests {
         assertThat(params.dialogInfo.getTitleResId(), is(ID_NULL));
         assertThat(params.dialogInfo.getIconResId(), is(TEST_RESOURCE_ID));
         assertThat(params.dialogInfo.getNeutralButtonTextResId(), is(ID_NULL));
+        assertThat(params.dialogInfo.getNeutralButtonAction(), is(BUTTON_ACTION_MORE_DETAILS));
         assertThat(params.dialogInfo.getDialogMessageResId(), is(ID_NULL));
     }
 
@@ -243,12 +246,14 @@ public class PackageManagerSettingsTests {
                 .setTitle(0x11220002)
                 .setMessage("1st message")
                 .setNeutralButtonText(0x11220003)
+                .setNeutralButtonAction(BUTTON_ACTION_MORE_DETAILS)
                 .build();
         final SuspendDialogInfo dialogInfo2 = new SuspendDialogInfo.Builder()
                 .setIcon(0x22220001)
                 .setTitle(0x22220002)
                 .setMessage("2nd message")
                 .setNeutralButtonText(0x22220003)
+                .setNeutralButtonAction(BUTTON_ACTION_UNSUSPEND)
                 .build();
 
         ps1.addOrUpdateSuspension("suspendingPackage1", dialogInfo1, appExtras1, launcherExtras1,
@@ -426,7 +431,8 @@ public class PackageManagerSettingsTests {
                 ApplicationInfo.PRIVATE_FLAG_PRIVILEGED|ApplicationInfo.PRIVATE_FLAG_HIDDEN,
                 0,
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         final PackageSetting testPkgSetting01 = new PackageSetting(origPkgSetting01);
         verifySettingCopy(origPkgSetting01, testPkgSetting01);
     }
@@ -447,7 +453,8 @@ public class PackageManagerSettingsTests {
                 ApplicationInfo.PRIVATE_FLAG_PRIVILEGED|ApplicationInfo.PRIVATE_FLAG_HIDDEN,
                 0,
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         final PackageSetting testPkgSetting01 = new PackageSetting(
                 PACKAGE_NAME /*pkgName*/,
                 REAL_PACKAGE_NAME /*realPkgName*/,
@@ -462,7 +469,8 @@ public class PackageManagerSettingsTests {
                 0 /*pkgPrivateFlags*/,
                 0,
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         testPkgSetting01.copyFrom(origPkgSetting01);
         verifySettingCopy(origPkgSetting01, testPkgSetting01);
     }
@@ -489,7 +497,8 @@ public class PackageManagerSettingsTests {
                 0 /*pkgPrivateFlags*/,
                 UserManagerService.getInstance(),
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         assertThat(testPkgSetting01.primaryCpuAbiString, is("arm64-v8a"));
         assertThat(testPkgSetting01.secondaryCpuAbiString, is("armeabi"));
         assertThat(testPkgSetting01.pkgFlags, is(0));
@@ -522,7 +531,8 @@ public class PackageManagerSettingsTests {
                 ApplicationInfo.PRIVATE_FLAG_PRIVILEGED /*pkgPrivateFlags*/,
                 UserManagerService.getInstance(),
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         assertThat(testPkgSetting01.primaryCpuAbiString, is("arm64-v8a"));
         assertThat(testPkgSetting01.secondaryCpuAbiString, is("armeabi"));
         assertThat(testPkgSetting01.pkgFlags, is(ApplicationInfo.FLAG_SYSTEM));
@@ -561,7 +571,8 @@ public class PackageManagerSettingsTests {
                     0 /*pkgPrivateFlags*/,
                     UserManagerService.getInstance(),
                     null /*usesStaticLibraries*/,
-                    null /*usesStaticLibrariesVersions*/);
+                    null /*usesStaticLibrariesVersions*/,
+                    null /*mimeGroups*/);
             fail("Expected a PackageManagerException");
         } catch (PackageManagerException expected) {
         }
@@ -593,7 +604,8 @@ public class PackageManagerSettingsTests {
                 false /*virtualPreload*/,
                 UserManagerService.getInstance(),
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         assertThat(testPkgSetting01.codePath, is(UPDATED_CODE_PATH));
         assertThat(testPkgSetting01.name, is(PACKAGE_NAME));
         assertThat(testPkgSetting01.pkgFlags, is(ApplicationInfo.FLAG_SYSTEM));
@@ -632,7 +644,8 @@ public class PackageManagerSettingsTests {
                 false /*virtualPreload*/,
                 UserManagerService.getInstance(),
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         assertThat(testPkgSetting01.appId, is(0));
         assertThat(testPkgSetting01.codePath, is(INITIAL_CODE_PATH));
         assertThat(testPkgSetting01.name, is(PACKAGE_NAME));
@@ -677,7 +690,8 @@ public class PackageManagerSettingsTests {
                 false /*virtualPreload*/,
                 UserManagerService.getInstance(),
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         assertThat(testPkgSetting01.appId, is(10064));
         assertThat(testPkgSetting01.codePath, is(INITIAL_CODE_PATH));
         assertThat(testPkgSetting01.name, is(PACKAGE_NAME));
@@ -719,7 +733,8 @@ public class PackageManagerSettingsTests {
                 false /*virtualPreload*/,
                 UserManagerService.getInstance(),
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
         assertThat(testPkgSetting01.appId, is(10064));
         assertThat(testPkgSetting01.codePath, is(UPDATED_CODE_PATH));
         assertThat(testPkgSetting01.name, is(PACKAGE_NAME));
@@ -790,6 +805,8 @@ public class PackageManagerSettingsTests {
                 testPkgSetting.legacyNativeLibraryPathString);
         assertThat(origPkgSetting.legacyNativeLibraryPathString,
                 is(testPkgSetting.legacyNativeLibraryPathString));
+        assertNotSame(origPkgSetting.mimeGroups, testPkgSetting.mimeGroups);
+        assertThat(origPkgSetting.mimeGroups, is(testPkgSetting.mimeGroups));
         assertNotSame(origPkgSetting.mPermissionsState, testPkgSetting.mPermissionsState);
         assertThat(origPkgSetting.mPermissionsState, is(testPkgSetting.mPermissionsState));
         assertThat(origPkgSetting.name, is(testPkgSetting.name));
@@ -849,7 +866,8 @@ public class PackageManagerSettingsTests {
                 0 /*privateFlags*/,
                 sharedUserId,
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
     }
 
     private PackageSetting createPackageSetting(String packageName) {
@@ -867,7 +885,8 @@ public class PackageManagerSettingsTests {
                 0 /*privateFlags*/,
                 0,
                 null /*usesStaticLibraries*/,
-                null /*usesStaticLibrariesVersions*/);
+                null /*usesStaticLibrariesVersions*/,
+                null /*mimeGroups*/);
     }
 
     private @NonNull List<UserInfo> createFakeUsers() {

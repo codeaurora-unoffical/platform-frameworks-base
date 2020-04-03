@@ -28,11 +28,9 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.Process;
 import android.os.UserHandle;
-import android.telephony.Rlog;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
-import android.util.StatsLog;
 
 import com.android.internal.annotations.VisibleForTesting;
 
@@ -344,7 +342,7 @@ public final class TelephonyPermissions {
             DevicePolicyManager devicePolicyManager =
                     (DevicePolicyManager) context.getSystemService(
                             Context.DEVICE_POLICY_SERVICE);
-            if (devicePolicyManager != null && devicePolicyManager.checkDeviceIdentifierAccess(
+            if (devicePolicyManager != null && devicePolicyManager.hasDeviceIdentifierAccess(
                     callingPackage, pid, uid)) {
                 return true;
             }
@@ -365,16 +363,10 @@ public final class TelephonyPermissions {
      */
     private static boolean reportAccessDeniedToReadIdentifiers(Context context, int subId, int pid,
             int uid, String callingPackage, String message) {
-        boolean isPreinstalled = false;
         ApplicationInfo callingPackageInfo = null;
         try {
             callingPackageInfo = context.getPackageManager().getApplicationInfoAsUser(
                     callingPackage, 0, UserHandle.getUserHandleForUid(uid));
-            if (callingPackageInfo != null) {
-                if (callingPackageInfo.isSystemApp()) {
-                    isPreinstalled = true;
-                }
-            }
         } catch (PackageManager.NameNotFoundException e) {
             // If the application info for the calling package could not be found then assume the
             // calling app is a non-preinstalled app to detect any issues with the check
@@ -394,11 +386,10 @@ public final class TelephonyPermissions {
                 invokedMethods = sReportedDeviceIDPackages.get(callingPackage);
             }
             invokedMethods.add(message);
-            StatsLog.write(StatsLog.DEVICE_IDENTIFIER_ACCESS_DENIED, callingPackage, message,
-                    isPreinstalled, false);
+            TelephonyCommonStatsLog.write(TelephonyCommonStatsLog.DEVICE_IDENTIFIER_ACCESS_DENIED,
+                    callingPackage, message, /* isPreinstalled= */ false, false);
         }
-        Log.w(LOG_TAG, "reportAccessDeniedToReadIdentifiers:" + callingPackage + ":" + message
-                + ":isPreinstalled=" + isPreinstalled);
+        Log.w(LOG_TAG, "reportAccessDeniedToReadIdentifiers:" + callingPackage + ":" + message);
         // if the target SDK is pre-Q then check if the calling package would have previously
         // had access to device identifiers.
         if (callingPackageInfo != null && (
@@ -521,7 +512,7 @@ public final class TelephonyPermissions {
             return;
         }
 
-        if (DBG) Rlog.d(LOG_TAG, "No modify permission, check carrier privilege next.");
+        if (DBG) Log.d(LOG_TAG, "No modify permission, check carrier privilege next.");
         enforceCallingOrSelfCarrierPrivilege(context, subId, message);
     }
 
@@ -539,7 +530,7 @@ public final class TelephonyPermissions {
         }
 
         if (DBG) {
-            Rlog.d(LOG_TAG, "No READ_PHONE_STATE permission, check carrier privilege next.");
+            Log.d(LOG_TAG, "No READ_PHONE_STATE permission, check carrier privilege next.");
         }
 
         enforceCallingOrSelfCarrierPrivilege(context, subId, message);
@@ -559,8 +550,35 @@ public final class TelephonyPermissions {
         }
 
         if (DBG) {
-            Rlog.d(LOG_TAG, "No READ_PRIVILEDED_PHONE_STATE permission, "
+            Log.d(LOG_TAG, "No READ_PRIVILEGED_PHONE_STATE permission, "
                     + "check carrier privilege next.");
+        }
+
+        enforceCallingOrSelfCarrierPrivilege(context, subId, message);
+    }
+
+    /**
+     * Ensure the caller (or self, if not processing an IPC) has
+     * {@link android.Manifest.permission#READ_PRIVILEGED_PHONE_STATE} or
+     * {@link android.Manifest.permission#READ_PRECISE_PHONE_STATE} or carrier privileges.
+     *
+     * @throws SecurityException if the caller does not have the required permission/privileges
+     */
+    public static void enforeceCallingOrSelfReadPrecisePhoneStatePermissionOrCarrierPrivilege(
+            Context context, int subId, String message) {
+        if (context.checkCallingOrSelfPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+                == PERMISSION_GRANTED) {
+            return;
+        }
+
+        if (context.checkCallingOrSelfPermission(Manifest.permission.READ_PRECISE_PHONE_STATE)
+                == PERMISSION_GRANTED) {
+            return;
+        }
+
+        if (DBG) {
+            Log.d(LOG_TAG, "No READ_PRIVILEGED_PHONE_STATE nor READ_PRECISE_PHONE_STATE permission"
+                    + ", check carrier privilege next.");
         }
 
         enforceCallingOrSelfCarrierPrivilege(context, subId, message);
@@ -584,7 +602,7 @@ public final class TelephonyPermissions {
             Context context, int subId, int uid, String message) {
         if (getCarrierPrivilegeStatus(context, subId, uid)
                 != TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS) {
-            if (DBG) Rlog.e(LOG_TAG, "No Carrier Privilege.");
+            if (DBG) Log.e(LOG_TAG, "No Carrier Privilege.");
             throw new SecurityException(message);
         }
     }
@@ -593,7 +611,7 @@ public final class TelephonyPermissions {
     private static boolean checkCarrierPrivilegeForAnySubId(Context context, int uid) {
         SubscriptionManager sm = (SubscriptionManager) context.getSystemService(
                 Context.TELEPHONY_SUBSCRIPTION_SERVICE);
-        int[] activeSubIds = sm.getActiveSubscriptionIdList(/* visibleOnly */ false);
+        int[] activeSubIds = sm.getActiveAndHiddenSubscriptionIdList();
         for (int activeSubId : activeSubIds) {
             if (getCarrierPrivilegeStatus(context, activeSubId, uid)
                     == TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS) {

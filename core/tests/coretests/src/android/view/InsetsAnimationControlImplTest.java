@@ -11,22 +11,23 @@
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
- * limitations under the License
+ * limitations under the License.
  */
 
 package android.view;
 
+import static android.view.InsetsController.LAYOUT_INSETS_DURING_ANIMATION_SHOWN;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_FULL;
-import static android.view.WindowInsets.Type.navigationBars;
 import static android.view.WindowInsets.Type.systemBars;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +40,7 @@ import android.platform.test.annotations.Presubmit;
 import android.util.SparseArray;
 import android.view.SurfaceControl.Transaction;
 import android.view.SyncRtSurfaceTransactionApplier.SurfaceParams;
+import android.view.animation.LinearInterpolator;
 import android.view.test.InsetsModeSession;
 
 import androidx.test.runner.AndroidJUnit4;
@@ -78,7 +80,6 @@ public class InsetsAnimationControlImplTest {
     @Mock Transaction mMockTransaction;
     @Mock InsetsController mMockController;
     @Mock WindowInsetsAnimationControlListener mMockListener;
-    @Mock SyncRtSurfaceTransactionApplier mMockTransactionApplier;
 
     @BeforeClass
     public static void setupOnce() {
@@ -93,6 +94,8 @@ public class InsetsAnimationControlImplTest {
     @Before
     public void setup() {
         MockitoAnnotations.initMocks(this);
+        doNothing().when(mMockController).updateCompatSysUiVisibility(
+                anyInt(), anyBoolean(), anyBoolean());
         mTopLeash = new SurfaceControl.Builder(mSession)
                 .setName("testSurface")
                 .build();
@@ -105,20 +108,22 @@ public class InsetsAnimationControlImplTest {
         InsetsSourceConsumer topConsumer = new InsetsSourceConsumer(ITYPE_STATUS_BAR, mInsetsState,
                 () -> mMockTransaction, mMockController);
         topConsumer.setControl(
-                new InsetsSourceControl(ITYPE_STATUS_BAR, mTopLeash, new Point(0, 0)));
+                new InsetsSourceControl(ITYPE_STATUS_BAR, mTopLeash, new Point(0, 0)),
+                new int[1], new int[1]);
 
         InsetsSourceConsumer navConsumer = new InsetsSourceConsumer(ITYPE_NAVIGATION_BAR,
                 mInsetsState, () -> mMockTransaction, mMockController);
-        navConsumer.hide();
         navConsumer.setControl(new InsetsSourceControl(ITYPE_NAVIGATION_BAR, mNavLeash,
-                new Point(400, 0)));
+                new Point(400, 0)), new int[1], new int[1]);
+        navConsumer.hide();
 
-        SparseArray<InsetsSourceConsumer> consumers = new SparseArray<>();
-        consumers.put(ITYPE_STATUS_BAR, topConsumer);
-        consumers.put(ITYPE_NAVIGATION_BAR, navConsumer);
-        mController = new InsetsAnimationControlImpl(consumers,
+        SparseArray<InsetsSourceControl> controls = new SparseArray<>();
+        controls.put(ITYPE_STATUS_BAR, topConsumer.getControl());
+        controls.put(ITYPE_NAVIGATION_BAR, navConsumer.getControl());
+        mController = new InsetsAnimationControlImpl(controls,
                 new Rect(0, 0, 500, 500), mInsetsState, mMockListener, systemBars(),
-                () -> mMockTransactionApplier, mMockController);
+                mMockController, 10 /* durationMs */, new LinearInterpolator(),
+                false /* fade */, LAYOUT_INSETS_DURING_ANIMATION_SHOWN, 0 /* animationType */);
     }
 
     @Test
@@ -131,12 +136,14 @@ public class InsetsAnimationControlImplTest {
 
     @Test
     public void testChangeInsets() {
-        mController.changeInsets(Insets.of(0, 30, 40, 0));
+        mController.setInsetsAndAlpha(Insets.of(0, 30, 40, 0), 1f /* alpha */,
+                0f /* fraction */);
         mController.applyChangeInsets(new InsetsState());
         assertEquals(Insets.of(0, 30, 40, 0), mController.getCurrentInsets());
+        assertEquals(1f, mController.getCurrentAlpha(), 1f - mController.getCurrentAlpha());
 
         ArgumentCaptor<SurfaceParams> captor = ArgumentCaptor.forClass(SurfaceParams.class);
-        verify(mMockTransactionApplier).scheduleApply(captor.capture());
+        verify(mMockController).applySurfaceParams(captor.capture());
         List<SurfaceParams> params = captor.getAllValues();
         assertEquals(2, params.size());
         SurfaceParams first = params.get(0);
@@ -148,26 +155,41 @@ public class InsetsAnimationControlImplTest {
     }
 
     @Test
+    public void testChangeAlphaNoInsets() {
+        Insets initialInsets = mController.getCurrentInsets();
+        mController.setInsetsAndAlpha(null, 0.5f, 0f /* fraction*/);
+        mController.applyChangeInsets(new InsetsState());
+        assertEquals(0.5f, mController.getCurrentAlpha(), 0.5f - mController.getCurrentAlpha());
+        assertEquals(initialInsets, mController.getCurrentInsets());
+    }
+
+    @Test
+    public void testChangeInsetsAndAlpha() {
+        mController.setInsetsAndAlpha(Insets.of(0, 30, 40, 0), 0.5f, 1f);
+        mController.applyChangeInsets(new InsetsState());
+        assertEquals(0.5f, mController.getCurrentAlpha(), 0.5f - mController.getCurrentAlpha());
+        assertEquals(Insets.of(0, 30, 40, 0), mController.getCurrentInsets());
+    }
+
+    @Test
     public void testFinishing() {
         when(mMockController.getState()).thenReturn(mInsetsState);
-        mController.finish(navigationBars());
+        mController.finish(true /* shown */);
         mController.applyChangeInsets(mInsetsState);
-        assertFalse(mInsetsState.getSource(ITYPE_STATUS_BAR).isVisible());
-        assertTrue(mInsetsState.getSource(ITYPE_NAVIGATION_BAR).isVisible());
-        assertEquals(Insets.of(0, 0, 100, 0), mController.getCurrentInsets());
-        verify(mMockController).notifyFinished(eq(mController), eq(navigationBars()));
+        assertEquals(Insets.of(0, 100, 100, 0), mController.getCurrentInsets());
+        verify(mMockController).notifyFinished(eq(mController), eq(true /* shown */));
     }
 
     @Test
     public void testCancelled() {
         mController.onCancelled();
         try {
-            mController.changeInsets(Insets.NONE);
+            mController.setInsetsAndAlpha(Insets.NONE, 1f /*alpha */, 0f /* fraction */);
             fail("Expected exception to be thrown");
         } catch (IllegalStateException ignored) {
         }
         verify(mMockListener).onCancelled();
-        mController.finish(navigationBars());
+        mController.finish(true /* shown */);
     }
 
     private void assertPosition(Matrix m, Rect original, Rect transformed) {

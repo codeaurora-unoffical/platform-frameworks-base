@@ -17,6 +17,7 @@
 package com.android.server.accessibility;
 
 import android.content.Context;
+import android.graphics.Region;
 import android.os.PowerManager;
 import android.util.Slog;
 import android.util.SparseArray;
@@ -31,6 +32,7 @@ import android.view.accessibility.AccessibilityEvent;
 
 import com.android.server.LocalServices;
 import com.android.server.accessibility.gestures.TouchExplorer;
+import com.android.server.accessibility.magnification.MagnificationGestureHandler;
 import com.android.server.policy.WindowManagerPolicy;
 
 import java.util.ArrayList;
@@ -98,9 +100,28 @@ class AccessibilityInputFilter extends InputFilter implements EventStreamTransfo
      */
     static final int FLAG_FEATURE_TRIGGERED_SCREEN_MAGNIFIER = 0x00000040;
 
-    static final int FEATURES_AFFECTING_MOTION_EVENTS = FLAG_FEATURE_INJECT_MOTION_EVENTS
-            | FLAG_FEATURE_AUTOCLICK | FLAG_FEATURE_TOUCH_EXPLORATION
-            | FLAG_FEATURE_SCREEN_MAGNIFIER | FLAG_FEATURE_TRIGGERED_SCREEN_MAGNIFIER;
+    /**
+     * Flag for dispatching double tap and double tap and hold to the service.
+     *
+     * @see #setUserAndEnabledFeatures(int, int)
+     */
+    static final int FLAG_SERVICE_HANDLES_DOUBLE_TAP = 0x00000080;
+
+/**
+     * Flag for enabling multi-finger gestures.
+     *
+     * @see #setUserAndEnabledFeatures(int, int)
+     */
+    static final int FLAG_REQUEST_MULTI_FINGER_GESTURES = 0x00000100;
+
+    static final int FEATURES_AFFECTING_MOTION_EVENTS =
+            FLAG_FEATURE_INJECT_MOTION_EVENTS
+                    | FLAG_FEATURE_AUTOCLICK
+                    | FLAG_FEATURE_TOUCH_EXPLORATION
+                    | FLAG_FEATURE_SCREEN_MAGNIFIER
+                    | FLAG_FEATURE_TRIGGERED_SCREEN_MAGNIFIER
+                    | FLAG_SERVICE_HANDLES_DOUBLE_TAP
+                    | FLAG_REQUEST_MULTI_FINGER_GESTURES;
 
     private final Context mContext;
 
@@ -390,6 +411,12 @@ class AccessibilityInputFilter extends InputFilter implements EventStreamTransfo
 
             if ((mEnabledFeatures & FLAG_FEATURE_TOUCH_EXPLORATION) != 0) {
                 TouchExplorer explorer = new TouchExplorer(displayContext, mAms);
+                if ((mEnabledFeatures & FLAG_SERVICE_HANDLES_DOUBLE_TAP) != 0) {
+                    explorer.setServiceHandlesDoubleTap(true);
+                }
+                if ((mEnabledFeatures & FLAG_REQUEST_MULTI_FINGER_GESTURES) != 0) {
+                    explorer.setMultiFingerGesturesEnabled(true);
+                }
                 addFirstEventHandler(displayId, explorer);
                 mTouchExplorer.put(displayId, explorer);
             }
@@ -402,7 +429,7 @@ class AccessibilityInputFilter extends InputFilter implements EventStreamTransfo
                 final boolean triggerable = (mEnabledFeatures
                         & FLAG_FEATURE_TRIGGERED_SCREEN_MAGNIFIER) != 0;
                 MagnificationGestureHandler magnificationGestureHandler =
-                        new MagnificationGestureHandler(displayContext,
+                        new FullScreenMagnificationGestureHandler(displayContext,
                                 mAms.getMagnificationController(),
                                 detectControlGestures, triggerable, displayId);
                 addFirstEventHandler(displayId, magnificationGestureHandler);
@@ -698,6 +725,18 @@ class AccessibilityInputFilter extends InputFilter implements EventStreamTransfo
             boolean shouldProcess = event.getAction() == KeyEvent.ACTION_DOWN;
             mEventSequenceStartedMap.put(deviceId, shouldProcess);
             return shouldProcess;
+        }
+    }
+
+    public void setGestureDetectionPassthroughRegion(int displayId, Region region) {
+        if (region != null && mTouchExplorer.contains(displayId)) {
+            mTouchExplorer.get(displayId).setGestureDetectionPassthroughRegion(region);
+        }
+    }
+
+    public void setTouchExplorationPassthroughRegion(int displayId, Region region) {
+        if (region != null && mTouchExplorer.contains(displayId)) {
+            mTouchExplorer.get(displayId).setTouchExplorationPassthroughRegion(region);
         }
     }
 }

@@ -47,6 +47,7 @@ import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -73,10 +74,11 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.IPowerManager;
+import android.os.IThermalService;
 import android.os.PowerManager;
 import android.os.Process;
+import android.os.RemoteCallback;
 import android.os.RemoteException;
-import android.testing.DexmakerShareClassLoaderRule;
 import android.view.Display;
 import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -85,10 +87,10 @@ import android.view.accessibility.IAccessibilityInteractionConnection;
 import android.view.accessibility.IAccessibilityInteractionConnectionCallback;
 
 import com.android.server.accessibility.AccessibilityWindowManager.RemoteAccessibilityConnection;
+import com.android.server.accessibility.test.MessageCapturingHandler;
 import com.android.server.wm.WindowManagerInternal;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -144,12 +146,9 @@ public class AbstractAccessibilityServiceConnectionTest {
     private ArrayList<Integer> mDisplayList = new ArrayList<>(Arrays.asList(
             Display.DEFAULT_DISPLAY, SECONDARY_DISPLAY_ID));
 
-    // To mock package-private class.
-    @Rule public final DexmakerShareClassLoaderRule mDexmakerShareClassLoaderRule =
-            new DexmakerShareClassLoaderRule();
-
     @Mock private Context mMockContext;
     @Mock private IPowerManager mMockIPowerManager;
+    @Mock private IThermalService mMockIThermalService;
     @Mock private PackageManager mMockPackageManager;
     @Spy  private AccessibilityServiceInfo mSpyServiceInfo = new AccessibilityServiceInfo();
     @Mock private AccessibilitySecurityPolicy mMockSecurityPolicy;
@@ -177,7 +176,7 @@ public class AbstractAccessibilityServiceConnectionTest {
                 .thenReturn(mMockMagnificationController);
 
         PowerManager powerManager =
-                new PowerManager(mMockContext, mMockIPowerManager, mHandler);
+                new PowerManager(mMockContext, mMockIPowerManager, mMockIThermalService, mHandler);
         when(mMockContext.getSystemService(Context.POWER_SERVICE)).thenReturn(powerManager);
         when(mMockContext.getPackageManager()).thenReturn(mMockPackageManager);
         when(mMockPackageManager.hasSystemFeature(FEATURE_FINGERPRINT)).thenReturn(true);
@@ -493,6 +492,13 @@ public class AbstractAccessibilityServiceConnectionTest {
     }
 
     @Test
+    public void getSystemActions() {
+        List<AccessibilityNodeInfo.AccessibilityAction> actions =
+                mServiceConnection.getSystemActions();
+        verify(mMockSystemActionPerformer).getSystemActions();
+    }
+
+    @Test
     public void isFingerprintGestureDetectionAvailable_hasFingerPrintSupport_returnTrue() {
         when(mMockFingerprintGestureDispatcher.isFingerprintGestureDetectionAvailable())
                 .thenReturn(true);
@@ -692,6 +698,24 @@ public class AbstractAccessibilityServiceConnectionTest {
         assertThat(result, is(false));
     }
 
+    @Test
+    public void takeScreenshot_returnNull() {
+        // no checkAccessibilityAccess, should return null.
+        when(mMockSecurityPolicy.canTakeScreenshotLocked(mServiceConnection)).thenReturn(true);
+        when(mMockSecurityPolicy.checkAccessibilityAccess(mServiceConnection)).thenReturn(false);
+        mServiceConnection.takeScreenshot(Display.DEFAULT_DISPLAY, new RemoteCallback((result) -> {
+            assertNull(result);
+        }));
+    }
+
+    @Test (expected = SecurityException.class)
+    public void takeScreenshot_throwSecurityException() {
+        // no canTakeScreenshot, should throw security exception.
+        when(mMockSecurityPolicy.canTakeScreenshotLocked(mServiceConnection)).thenReturn(false);
+        mServiceConnection.takeScreenshot(Display.DEFAULT_DISPLAY, new RemoteCallback((result) -> {
+        }));
+    }
+
     private void updateServiceInfo(AccessibilityServiceInfo serviceInfo, int eventType,
             int feedbackType, int flags, String[] packageNames, int notificationTimeout) {
         serviceInfo.eventTypes = eventType;
@@ -800,6 +824,11 @@ public class AbstractAccessibilityServiceConnectionTest {
         @Override
         public int getSoftKeyboardShowMode() throws RemoteException {
             return 0;
+        }
+
+        @Override
+        public boolean switchToInputMethod(String imeId) {
+            return false;
         }
 
         @Override

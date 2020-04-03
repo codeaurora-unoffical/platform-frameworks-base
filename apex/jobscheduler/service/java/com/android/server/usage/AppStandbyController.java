@@ -17,11 +17,13 @@
 package com.android.server.usage;
 
 import static android.app.usage.UsageStatsManager.REASON_MAIN_DEFAULT;
-import static android.app.usage.UsageStatsManager.REASON_MAIN_FORCED;
+import static android.app.usage.UsageStatsManager.REASON_MAIN_FORCED_BY_SYSTEM;
+import static android.app.usage.UsageStatsManager.REASON_MAIN_FORCED_BY_USER;
 import static android.app.usage.UsageStatsManager.REASON_MAIN_MASK;
 import static android.app.usage.UsageStatsManager.REASON_MAIN_PREDICTED;
 import static android.app.usage.UsageStatsManager.REASON_MAIN_TIMEOUT;
 import static android.app.usage.UsageStatsManager.REASON_MAIN_USAGE;
+import static android.app.usage.UsageStatsManager.REASON_SUB_MASK;
 import static android.app.usage.UsageStatsManager.REASON_SUB_PREDICTED_RESTORED;
 import static android.app.usage.UsageStatsManager.REASON_SUB_USAGE_ACTIVE_TIMEOUT;
 import static android.app.usage.UsageStatsManager.REASON_SUB_USAGE_EXEMPTED_SYNC_SCHEDULED_DOZE;
@@ -43,10 +45,13 @@ import static android.app.usage.UsageStatsManager.STANDBY_BUCKET_EXEMPTED;
 import static android.app.usage.UsageStatsManager.STANDBY_BUCKET_FREQUENT;
 import static android.app.usage.UsageStatsManager.STANDBY_BUCKET_NEVER;
 import static android.app.usage.UsageStatsManager.STANDBY_BUCKET_RARE;
+import static android.app.usage.UsageStatsManager.STANDBY_BUCKET_RESTRICTED;
 import static android.app.usage.UsageStatsManager.STANDBY_BUCKET_WORKING_SET;
 
+import static com.android.server.SystemService.PHASE_BOOT_COMPLETED;
 import static com.android.server.SystemService.PHASE_SYSTEM_SERVICES_READY;
 
+import android.annotation.NonNull;
 import android.annotation.UserIdInt;
 import android.app.ActivityManager;
 import android.app.AppGlobals;
@@ -60,6 +65,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.CrossProfileAppsInternal;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
@@ -67,16 +73,16 @@ import android.content.pm.ParceledListSlice;
 import android.database.ContentObserver;
 import android.hardware.display.DisplayManager;
 import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkRequest;
 import android.net.NetworkScoreManager;
+import android.os.BatteryManager;
 import android.os.BatteryStats;
+import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
-import android.os.IDeviceIdleController;
 import android.os.Looper;
 import android.os.Message;
 import android.os.PowerManager;
+import android.os.PowerWhitelistManager;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
@@ -91,7 +97,9 @@ import android.util.SparseArray;
 import android.util.SparseIntArray;
 import android.util.TimeUtils;
 import android.view.Display;
+import android.widget.Toast;
 
+import com.android.internal.R;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
@@ -101,7 +109,6 @@ import com.android.internal.util.ConcurrentUtils;
 import com.android.internal.util.IndentingPrintWriter;
 import com.android.server.LocalServices;
 import com.android.server.usage.AppIdleHistory.AppUsageHistory;
-import com.android.server.usage.AppStandbyInternal.AppIdleStateChangeListener;
 
 import java.io.File;
 import java.io.PrintWriter;
@@ -109,6 +116,7 @@ import java.time.Duration;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -122,6 +130,7 @@ import java.util.concurrent.CountDownLatch;
 public class AppStandbyController implements AppStandbyInternal {
 
     private static final String TAG = "AppStandbyController";
+    // Do not submit with true.
     static final boolean DEBUG = false;
 
     static final boolean COMPRESS_TIME = false;
@@ -129,25 +138,59 @@ public class AppStandbyController implements AppStandbyInternal {
     private static final long ONE_HOUR = ONE_MINUTE * 60;
     private static final long ONE_DAY = ONE_HOUR * 24;
 
-    static final long[] SCREEN_TIME_THRESHOLDS = {
+    /**
+     * The minimum amount of time the screen must have been on before an app can time out from its
+     * current bucket to the next bucket.
+     */
+    private static final long[] SCREEN_TIME_THRESHOLDS = {
             0,
             0,
-            COMPRESS_TIME ? 120 * 1000 : 1 * ONE_HOUR,
-            COMPRESS_TIME ? 240 * 1000 : 2 * ONE_HOUR
+            COMPRESS_TIME ? 2 * ONE_MINUTE : 1 * ONE_HOUR,
+            COMPRESS_TIME ? 4 * ONE_MINUTE : 2 * ONE_HOUR,
+            COMPRESS_TIME ? 8 * ONE_MINUTE : 6 * ONE_HOUR
     };
 
-    static final long[] ELAPSED_TIME_THRESHOLDS = {
+    /** The minimum allowed values for each index in {@link #SCREEN_TIME_THRESHOLDS}. */
+    private static final long[] MINIMUM_SCREEN_TIME_THRESHOLDS = COMPRESS_TIME
+            ? new long[SCREEN_TIME_THRESHOLDS.length]
+            : new long[]{
+                    0,
+                    0,
+                    0,
+                    30 * ONE_MINUTE,
+                    ONE_HOUR
+            };
+
+    /**
+     * The minimum amount of elapsed time that must have passed before an app can time out from its
+     * current bucket to the next bucket.
+     */
+    private static final long[] ELAPSED_TIME_THRESHOLDS = {
             0,
             COMPRESS_TIME ?  1 * ONE_MINUTE : 12 * ONE_HOUR,
             COMPRESS_TIME ?  4 * ONE_MINUTE : 24 * ONE_HOUR,
-            COMPRESS_TIME ? 16 * ONE_MINUTE : 48 * ONE_HOUR
+            COMPRESS_TIME ? 16 * ONE_MINUTE : 48 * ONE_HOUR,
+            // TODO(149050681): increase timeout to 30+ days
+            COMPRESS_TIME ? 32 * ONE_MINUTE : 4 * ONE_DAY
     };
 
-    static final int[] THRESHOLD_BUCKETS = {
+    /** The minimum allowed values for each index in {@link #ELAPSED_TIME_THRESHOLDS}. */
+    private static final long[] MINIMUM_ELAPSED_TIME_THRESHOLDS = COMPRESS_TIME
+            ? new long[ELAPSED_TIME_THRESHOLDS.length]
+            : new long[]{
+                    0,
+                    ONE_HOUR,
+                    ONE_HOUR,
+                    2 * ONE_HOUR,
+                    4 * ONE_DAY
+            };
+
+    private static final int[] THRESHOLD_BUCKETS = {
             STANDBY_BUCKET_ACTIVE,
             STANDBY_BUCKET_WORKING_SET,
             STANDBY_BUCKET_FREQUENT,
-            STANDBY_BUCKET_RARE
+            STANDBY_BUCKET_RARE,
+            STANDBY_BUCKET_RESTRICTED
     };
 
     /** Default expiration time for bucket prediction. After this, use thresholds to downgrade. */
@@ -197,7 +240,15 @@ public class AppStandbyController implements AppStandbyInternal {
     static final int MSG_REPORT_EXEMPTED_SYNC_START = 13;
 
     long mCheckIdleIntervalMillis;
+    /**
+     * The minimum amount of time the screen must have been on before an app can time out from its
+     * current bucket to the next bucket.
+     */
     long[] mAppStandbyScreenThresholds = SCREEN_TIME_THRESHOLDS;
+    /**
+     * The minimum amount of elapsed time that must have passed before an app can time out from its
+     * current bucket to the next bucket.
+     */
     long[] mAppStandbyElapsedThresholds = ELAPSED_TIME_THRESHOLDS;
     /** Minimum time a strong usage event should keep the bucket elevated. */
     long mStrongUsageTimeoutMillis;
@@ -234,8 +285,15 @@ public class AppStandbyController implements AppStandbyInternal {
      * start is the first usage of the app
      */
     long mInitialForegroundServiceStartTimeoutMillis;
+    /**
+     * User usage that would elevate an app's standby bucket will also elevate the standby bucket of
+     * cross profile connected apps. Explicit standby bucket setting via
+     * {@link #setAppStandbyBucket(String, int, int, int, int)} will not be propagated.
+     */
+    boolean mLinkCrossProfileApps;
 
     private volatile boolean mAppIdleEnabled;
+    private boolean mIsCharging;
     private boolean mSystemServicesReady = false;
     // There was a system update, defaults need to be initialized after services are ready
     private boolean mPendingInitializeDefaults;
@@ -311,6 +369,11 @@ public class AppStandbyController implements AppStandbyInternal {
         mHandler = new AppStandbyHandler(mInjector.getLooper());
         mPackageManager = mContext.getPackageManager();
 
+        DeviceStateReceiver deviceStateReceiver = new DeviceStateReceiver();
+        IntentFilter deviceStates = new IntentFilter(BatteryManager.ACTION_CHARGING);
+        deviceStates.addAction(BatteryManager.ACTION_DISCHARGING);
+        mContext.registerReceiver(deviceStateReceiver, deviceStates);
+
         synchronized (mAppIdleLock) {
             mAppIdleHistory = new AppIdleHistory(mInjector.getDataSystemDirectory(),
                     mInjector.elapsedRealtime());
@@ -368,6 +431,8 @@ public class AppStandbyController implements AppStandbyInternal {
             if (mPendingOneTimeCheckIdleStates) {
                 postOneTimeCheckIdleStates();
             }
+        } else if (phase == PHASE_BOOT_COMPLETED) {
+            setChargingState(mInjector.isCharging());
         }
     }
 
@@ -388,13 +453,12 @@ public class AppStandbyController implements AppStandbyInternal {
                     continue;
                 }
                 if (!packageName.equals(providerPkgName)) {
+                    final List<UserHandle> linkedProfiles = getCrossProfileTargets(packageName,
+                            userId);
                     synchronized (mAppIdleLock) {
-                        AppUsageHistory appUsage = mAppIdleHistory.reportUsage(packageName, userId,
+                        reportNoninteractiveUsageCrossUserLocked(packageName, userId,
                                 STANDBY_BUCKET_ACTIVE, REASON_SUB_USAGE_SYNC_ADAPTER,
-                                0,
-                                elapsedRealtime + mSyncAdapterTimeoutMillis);
-                        maybeInformListeners(packageName, userId, elapsedRealtime,
-                                appUsage.currentBucket, appUsage.bucketingReason, false);
+                                elapsedRealtime, mSyncAdapterTimeoutMillis, linkedProfiles);
                     }
                 }
             } catch (PackageManager.NameNotFoundException e) {
@@ -423,14 +487,10 @@ public class AppStandbyController implements AppStandbyInternal {
         }
 
         final long elapsedRealtime = mInjector.elapsedRealtime();
-
+        final List<UserHandle> linkedProfiles = getCrossProfileTargets(packageName, userId);
         synchronized (mAppIdleLock) {
-            AppUsageHistory appUsage = mAppIdleHistory.reportUsage(packageName, userId,
-                    bucketToPromote, usageReason,
-                    0,
-                    elapsedRealtime + durationMillis);
-            maybeInformListeners(packageName, userId, elapsedRealtime,
-                    appUsage.currentBucket, appUsage.bucketingReason, false);
+            reportNoninteractiveUsageCrossUserLocked(packageName, userId, bucketToPromote,
+                    usageReason, elapsedRealtime, durationMillis, linkedProfiles);
         }
     }
 
@@ -442,13 +502,11 @@ public class AppStandbyController implements AppStandbyInternal {
             final int currentBucket =
                     mAppIdleHistory.getAppStandbyBucket(packageName, userId, elapsedRealtime);
             if (currentBucket == STANDBY_BUCKET_NEVER) {
+                final List<UserHandle> linkedProfiles = getCrossProfileTargets(packageName, userId);
                 // Bring the app out of the never bucket
-                AppUsageHistory appUsage = mAppIdleHistory.reportUsage(packageName, userId,
+                reportNoninteractiveUsageCrossUserLocked(packageName, userId,
                         STANDBY_BUCKET_WORKING_SET, REASON_SUB_USAGE_UNEXEMPTED_SYNC_SCHEDULED,
-                        0,
-                        elapsedRealtime + mUnexemptedSyncScheduledTimeoutMillis);
-                maybeInformListeners(packageName, userId, elapsedRealtime,
-                        appUsage.currentBucket, appUsage.bucketingReason, false);
+                        elapsedRealtime, mUnexemptedSyncScheduledTimeoutMillis, linkedProfiles);
             }
         }
     }
@@ -457,14 +515,57 @@ public class AppStandbyController implements AppStandbyInternal {
         if (!mAppIdleEnabled) return;
 
         final long elapsedRealtime = mInjector.elapsedRealtime();
-
+        final List<UserHandle> linkedProfiles = getCrossProfileTargets(packageName, userId);
         synchronized (mAppIdleLock) {
-            AppUsageHistory appUsage = mAppIdleHistory.reportUsage(packageName, userId,
-                    STANDBY_BUCKET_ACTIVE, REASON_SUB_USAGE_EXEMPTED_SYNC_START,
-                    0,
-                    elapsedRealtime + mExemptedSyncStartTimeoutMillis);
-            maybeInformListeners(packageName, userId, elapsedRealtime,
-                    appUsage.currentBucket, appUsage.bucketingReason, false);
+            reportNoninteractiveUsageCrossUserLocked(packageName, userId, STANDBY_BUCKET_ACTIVE,
+                    REASON_SUB_USAGE_EXEMPTED_SYNC_START, elapsedRealtime,
+                    mExemptedSyncStartTimeoutMillis, linkedProfiles);
+        }
+    }
+
+    /**
+     * Helper method to report indirect user usage of an app and handle reporting the usage
+     * against cross profile connected apps. <br>
+     * Use {@link #reportNoninteractiveUsageLocked(String, int, int, int, long, long)} if
+     * cross profile connected apps do not need to be handled.
+     */
+    private void reportNoninteractiveUsageCrossUserLocked(String packageName, int userId,
+            int bucket, int subReason, long elapsedRealtime, long nextCheckDelay,
+            List<UserHandle> otherProfiles) {
+        reportNoninteractiveUsageLocked(packageName, userId, bucket, subReason, elapsedRealtime,
+                nextCheckDelay);
+        final int size = otherProfiles.size();
+        for (int profileIndex = 0; profileIndex < size; profileIndex++) {
+            final int otherUserId = otherProfiles.get(profileIndex).getIdentifier();
+            reportNoninteractiveUsageLocked(packageName, otherUserId, bucket, subReason,
+                    elapsedRealtime, nextCheckDelay);
+        }
+    }
+
+    /**
+     * Helper method to report indirect user usage of an app. <br>
+     * Use
+     * {@link #reportNoninteractiveUsageCrossUserLocked(String, int, int, int, long, long, List)}
+     * if cross profile connected apps need to be handled.
+     */
+    private void reportNoninteractiveUsageLocked(String packageName, int userId, int bucket,
+            int subReason, long elapsedRealtime, long nextCheckDelay) {
+        final AppUsageHistory appUsage = mAppIdleHistory.reportUsage(packageName, userId, bucket,
+                subReason, 0, elapsedRealtime + nextCheckDelay);
+        mHandler.sendMessageDelayed(
+                mHandler.obtainMessage(MSG_CHECK_PACKAGE_IDLE_STATE, userId, -1, packageName),
+                nextCheckDelay);
+        maybeInformListeners(packageName, userId, elapsedRealtime, appUsage.currentBucket,
+                appUsage.bucketingReason, false);
+    }
+
+    @VisibleForTesting
+    void setChargingState(boolean isCharging) {
+        synchronized (mAppIdleLock) {
+            if (mIsCharging != isCharging) {
+                if (DEBUG) Slog.d(TAG, "Setting mIsCharging to " + isCharging);
+                mIsCharging = isCharging;
+            }
         }
     }
 
@@ -564,7 +665,7 @@ public class AppStandbyController implements AppStandbyInternal {
 
                 // If the bucket was forced by the user/developer, leave it alone.
                 // A usage event will be the only way to bring it out of this forced state
-                if (oldMainReason == REASON_MAIN_FORCED) {
+                if (oldMainReason == REASON_MAIN_FORCED_BY_USER) {
                     return;
                 }
                 final int oldBucket = app.currentBucket;
@@ -611,6 +712,16 @@ public class AppStandbyController implements AppStandbyInternal {
                             : REASON_MAIN_USAGE | REASON_SUB_USAGE_ACTIVE_TIMEOUT;
                     if (DEBUG) {
                         Slog.d(TAG, "    Keeping at WORKING_SET due to min timeout");
+                    }
+                }
+
+                if (app.lastRestrictAttemptElapsedTime > app.lastUsedByUserElapsedTime
+                        && elapsedTimeAdjusted - app.lastUsedByUserElapsedTime
+                        >= mInjector.getAutoRestrictedBucketDelayMs()) {
+                    newBucket = STANDBY_BUCKET_RESTRICTED;
+                    reason = app.lastRestrictReason;
+                    if (DEBUG) {
+                        Slog.d(TAG, "Bringing down to RESTRICTED due to timeout");
                     }
                 }
                 if (DEBUG) {
@@ -682,70 +793,91 @@ public class AppStandbyController implements AppStandbyInternal {
     @Override
     public void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
         if (!mAppIdleEnabled) return;
-        synchronized (mAppIdleLock) {
+        final int eventType = event.getEventType();
+        if ((eventType == UsageEvents.Event.ACTIVITY_RESUMED
+                || eventType == UsageEvents.Event.ACTIVITY_PAUSED
+                || eventType == UsageEvents.Event.SYSTEM_INTERACTION
+                || eventType == UsageEvents.Event.USER_INTERACTION
+                || eventType == UsageEvents.Event.NOTIFICATION_SEEN
+                || eventType == UsageEvents.Event.SLICE_PINNED
+                || eventType == UsageEvents.Event.SLICE_PINNED_PRIV
+                || eventType == UsageEvents.Event.FOREGROUND_SERVICE_START)) {
             final String pkg = event.getPackageName();
-            final int eventType = event.getEventType();
-            // TODO: Ideally this should call isAppIdleFiltered() to avoid calling back
-            // about apps that are on some kind of whitelist anyway.
-            final boolean previouslyIdle = mAppIdleHistory.isIdle(
-                    pkg, userId, elapsedRealtime);
-            // Inform listeners if necessary
-            if ((eventType == UsageEvents.Event.ACTIVITY_RESUMED
-                    || eventType == UsageEvents.Event.ACTIVITY_PAUSED
-                    || eventType == UsageEvents.Event.SYSTEM_INTERACTION
-                    || eventType == UsageEvents.Event.USER_INTERACTION
-                    || eventType == UsageEvents.Event.NOTIFICATION_SEEN
-                    || eventType == UsageEvents.Event.SLICE_PINNED
-                    || eventType == UsageEvents.Event.SLICE_PINNED_PRIV
-                    || eventType == UsageEvents.Event.FOREGROUND_SERVICE_START)) {
+            final List<UserHandle> linkedProfiles = getCrossProfileTargets(pkg, userId);
+            synchronized (mAppIdleLock) {
+                reportEventLocked(pkg, eventType, elapsedRealtime, userId);
 
-                final AppUsageHistory appHistory = mAppIdleHistory.getAppUsageHistory(
-                        pkg, userId, elapsedRealtime);
-                final int prevBucket = appHistory.currentBucket;
-                final int prevBucketReason = appHistory.bucketingReason;
-                final long nextCheckTime;
-                final int subReason = usageEventToSubReason(eventType);
-                final int reason = REASON_MAIN_USAGE | subReason;
-                if (eventType == UsageEvents.Event.NOTIFICATION_SEEN
-                        || eventType == UsageEvents.Event.SLICE_PINNED) {
-                    // Mild usage elevates to WORKING_SET but doesn't change usage time.
-                    mAppIdleHistory.reportUsage(appHistory, pkg,
-                            STANDBY_BUCKET_WORKING_SET, subReason,
-                            0, elapsedRealtime + mNotificationSeenTimeoutMillis);
-                    nextCheckTime = mNotificationSeenTimeoutMillis;
-                } else if (eventType == UsageEvents.Event.SYSTEM_INTERACTION) {
-                    mAppIdleHistory.reportUsage(appHistory, pkg,
-                            STANDBY_BUCKET_ACTIVE, subReason,
-                            0, elapsedRealtime + mSystemInteractionTimeoutMillis);
-                    nextCheckTime = mSystemInteractionTimeoutMillis;
-                } else if (eventType == UsageEvents.Event.FOREGROUND_SERVICE_START) {
-                    // Only elevate bucket if this is the first usage of the app
-                    if (prevBucket != STANDBY_BUCKET_NEVER) return;
-                    mAppIdleHistory.reportUsage(appHistory, pkg,
-                            STANDBY_BUCKET_ACTIVE, subReason,
-                            0, elapsedRealtime + mInitialForegroundServiceStartTimeoutMillis);
-                    nextCheckTime = mInitialForegroundServiceStartTimeoutMillis;
-                } else {
-                    mAppIdleHistory.reportUsage(appHistory, pkg,
-                            STANDBY_BUCKET_ACTIVE, subReason,
-                            elapsedRealtime, elapsedRealtime + mStrongUsageTimeoutMillis);
-                    nextCheckTime = mStrongUsageTimeoutMillis;
-                }
-                mHandler.sendMessageDelayed(mHandler.obtainMessage
-                        (MSG_CHECK_PACKAGE_IDLE_STATE, userId, -1, pkg),
-                        nextCheckTime);
-                final boolean userStartedInteracting =
-                        appHistory.currentBucket == STANDBY_BUCKET_ACTIVE &&
-                        prevBucket != appHistory.currentBucket &&
-                        (prevBucketReason & REASON_MAIN_MASK) != REASON_MAIN_USAGE;
-                maybeInformListeners(pkg, userId, elapsedRealtime,
-                        appHistory.currentBucket, reason, userStartedInteracting);
-
-                if (previouslyIdle) {
-                    notifyBatteryStats(pkg, userId, false);
+                final int size = linkedProfiles.size();
+                for (int profileIndex = 0; profileIndex < size; profileIndex++) {
+                    final int linkedUserId = linkedProfiles.get(profileIndex).getIdentifier();
+                    reportEventLocked(pkg, eventType, elapsedRealtime, linkedUserId);
                 }
             }
         }
+    }
+
+    private void reportEventLocked(String pkg, int eventType, long elapsedRealtime, int userId) {
+        // TODO: Ideally this should call isAppIdleFiltered() to avoid calling back
+        // about apps that are on some kind of whitelist anyway.
+        final boolean previouslyIdle = mAppIdleHistory.isIdle(
+                pkg, userId, elapsedRealtime);
+
+        final AppUsageHistory appHistory = mAppIdleHistory.getAppUsageHistory(
+                pkg, userId, elapsedRealtime);
+        final int prevBucket = appHistory.currentBucket;
+        final int prevBucketReason = appHistory.bucketingReason;
+        final long nextCheckDelay;
+        final int subReason = usageEventToSubReason(eventType);
+        final int reason = REASON_MAIN_USAGE | subReason;
+        if (eventType == UsageEvents.Event.NOTIFICATION_SEEN
+                || eventType == UsageEvents.Event.SLICE_PINNED) {
+            // Mild usage elevates to WORKING_SET but doesn't change usage time.
+            mAppIdleHistory.reportUsage(appHistory, pkg, userId,
+                    STANDBY_BUCKET_WORKING_SET, subReason,
+                    0, elapsedRealtime + mNotificationSeenTimeoutMillis);
+            nextCheckDelay = mNotificationSeenTimeoutMillis;
+        } else if (eventType == UsageEvents.Event.SYSTEM_INTERACTION) {
+            mAppIdleHistory.reportUsage(appHistory, pkg, userId,
+                    STANDBY_BUCKET_ACTIVE, subReason,
+                    0, elapsedRealtime + mSystemInteractionTimeoutMillis);
+            nextCheckDelay = mSystemInteractionTimeoutMillis;
+        } else if (eventType == UsageEvents.Event.FOREGROUND_SERVICE_START) {
+            // Only elevate bucket if this is the first usage of the app
+            if (prevBucket != STANDBY_BUCKET_NEVER) return;
+            mAppIdleHistory.reportUsage(appHistory, pkg, userId,
+                    STANDBY_BUCKET_ACTIVE, subReason,
+                    0, elapsedRealtime + mInitialForegroundServiceStartTimeoutMillis);
+            nextCheckDelay = mInitialForegroundServiceStartTimeoutMillis;
+        } else {
+            mAppIdleHistory.reportUsage(appHistory, pkg, userId,
+                    STANDBY_BUCKET_ACTIVE, subReason,
+                    elapsedRealtime, elapsedRealtime + mStrongUsageTimeoutMillis);
+            nextCheckDelay = mStrongUsageTimeoutMillis;
+        }
+        if (appHistory.currentBucket != prevBucket) {
+            mHandler.sendMessageDelayed(
+                    mHandler.obtainMessage(MSG_CHECK_PACKAGE_IDLE_STATE, userId, -1, pkg),
+                    nextCheckDelay);
+            final boolean userStartedInteracting =
+                    appHistory.currentBucket == STANDBY_BUCKET_ACTIVE
+                            && (prevBucketReason & REASON_MAIN_MASK) != REASON_MAIN_USAGE;
+            maybeInformListeners(pkg, userId, elapsedRealtime,
+                    appHistory.currentBucket, reason, userStartedInteracting);
+        }
+
+        if (previouslyIdle) {
+            notifyBatteryStats(pkg, userId, false);
+        }
+    }
+
+    /**
+     * Note: don't call this with the lock held since it makes calls to other system services.
+     */
+    private @NonNull List<UserHandle> getCrossProfileTargets(String pkg, int userId) {
+        synchronized (mAppIdleLock) {
+            if (!mLinkCrossProfileApps) return Collections.emptyList();
+        }
+        return mInjector.getValidCrossProfileTargets(pkg, userId);
     }
 
     private int usageEventToSubReason(int eventType) {
@@ -782,7 +914,7 @@ public class AppStandbyController implements AppStandbyInternal {
         // Inform listeners if necessary
         if (previouslyIdle != stillIdle) {
             maybeInformListeners(packageName, userId, elapsedRealtime, standbyBucket,
-                    REASON_MAIN_FORCED, false);
+                    REASON_MAIN_FORCED_BY_USER, false);
             if (!stillIdle) {
                 notifyBatteryStats(packageName, userId, idle);
             }
@@ -878,7 +1010,7 @@ public class AppStandbyController implements AppStandbyInternal {
                 // We allow all whitelisted apps, including those that don't want to be whitelisted
                 // for idle mode, because app idle (aka app standby) is really not as big an issue
                 // for controlling who participates vs. doze mode.
-                if (mInjector.isPowerSaveWhitelistExceptIdleApp(packageName)) {
+                if (mInjector.isNonIdleWhitelisted(packageName)) {
                     return true;
                 }
             } catch (RemoteException re) {
@@ -917,8 +1049,22 @@ public class AppStandbyController implements AppStandbyInternal {
         if (isAppSpecial(packageName, appId, userId)) {
             return false;
         } else {
+            synchronized (mAppIdleLock) {
+                if (!mAppIdleEnabled || mIsCharging) {
+                    return false;
+                }
+            }
             return isAppIdleUnfiltered(packageName, userId, elapsedRealtime);
         }
+    }
+
+    static boolean isUserUsage(int reason) {
+        if ((reason & REASON_MAIN_MASK) == REASON_MAIN_USAGE) {
+            final int subReason = reason & REASON_SUB_MASK;
+            return subReason == REASON_SUB_USAGE_USER_INTERACTION
+                    || subReason == REASON_SUB_USAGE_MOVE_TO_FOREGROUND;
+        }
+        return false;
     }
 
     @Override
@@ -1014,18 +1160,85 @@ public class AppStandbyController implements AppStandbyInternal {
         }
     }
 
-    @VisibleForTesting
-    void setAppStandbyBucket(String packageName, int userId, @StandbyBuckets int newBucket,
-            int reason, long elapsedRealtime) {
-        setAppStandbyBucket(packageName, userId, newBucket, reason, elapsedRealtime, false);
+    @Override
+    public void restrictApp(@NonNull String packageName, int userId, int restrictReason) {
+        // If the package is not installed, don't allow the bucket to be set.
+        if (!mInjector.isPackageInstalled(packageName, 0, userId)) {
+            Slog.e(TAG, "Tried to restrict uninstalled app: " + packageName);
+            return;
+        }
+
+        final int reason = REASON_MAIN_FORCED_BY_SYSTEM | (REASON_SUB_MASK & restrictReason);
+        final long nowElapsed = mInjector.elapsedRealtime();
+        setAppStandbyBucket(packageName, userId, STANDBY_BUCKET_RESTRICTED, reason,
+                nowElapsed, false);
     }
 
     @Override
-    public void setAppStandbyBucket(String packageName, int userId, @StandbyBuckets int newBucket,
+    public void setAppStandbyBucket(@NonNull String packageName, int bucket, int userId,
+            int callingUid, int callingPid) {
+        setAppStandbyBuckets(
+                Collections.singletonList(new AppStandbyInfo(packageName, bucket)),
+                userId, callingUid, callingPid);
+    }
+
+    @Override
+    public void setAppStandbyBuckets(@NonNull List<AppStandbyInfo> appBuckets, int userId,
+            int callingUid, int callingPid) {
+        userId = ActivityManager.handleIncomingUser(
+                callingPid, callingUid, userId, false, true, "setAppStandbyBucket", null);
+        final boolean shellCaller = callingUid == Process.ROOT_UID
+                || callingUid == Process.SHELL_UID;
+        final int reason;
+        // The Settings app runs in the system UID but in a separate process. Assume
+        // things coming from other processes are due to the user.
+        if ((UserHandle.isSameApp(callingUid, Process.SYSTEM_UID) && callingPid != Process.myPid())
+                || shellCaller) {
+            reason = REASON_MAIN_FORCED_BY_USER;
+        } else if (UserHandle.isCore(callingUid)) {
+            reason = REASON_MAIN_FORCED_BY_SYSTEM;
+        } else {
+            reason = REASON_MAIN_PREDICTED;
+        }
+        final int packageFlags = PackageManager.MATCH_ANY_USER
+                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE
+                | PackageManager.MATCH_DIRECT_BOOT_AWARE;
+        final int numApps = appBuckets.size();
+        final long elapsedRealtime = mInjector.elapsedRealtime();
+        for (int i = 0; i < numApps; ++i) {
+            final AppStandbyInfo bucketInfo = appBuckets.get(i);
+            final String packageName = bucketInfo.mPackageName;
+            final int bucket = bucketInfo.mStandbyBucket;
+            if (bucket < STANDBY_BUCKET_ACTIVE || bucket > STANDBY_BUCKET_NEVER) {
+                throw new IllegalArgumentException("Cannot set the standby bucket to " + bucket);
+            }
+            final int packageUid = mInjector.getPackageManagerInternal()
+                    .getPackageUid(packageName, packageFlags, userId);
+            // Caller cannot set their own standby state
+            if (packageUid == callingUid) {
+                throw new IllegalArgumentException("Cannot set your own standby bucket");
+            }
+            if (packageUid < 0) {
+                throw new IllegalArgumentException(
+                        "Cannot set standby bucket for non existent package (" + packageName + ")");
+            }
+            setAppStandbyBucket(packageName, userId, bucket, reason, elapsedRealtime, shellCaller);
+        }
+    }
+
+    @VisibleForTesting
+    void setAppStandbyBucket(String packageName, int userId, @StandbyBuckets int newBucket,
+            int reason) {
+        setAppStandbyBucket(
+                packageName, userId, newBucket, reason, mInjector.elapsedRealtime(), false);
+    }
+
+    private void setAppStandbyBucket(String packageName, int userId, @StandbyBuckets int newBucket,
             int reason, long elapsedRealtime, boolean resetTimeout) {
         synchronized (mAppIdleLock) {
             // If the package is not installed, don't allow the bucket to be set.
             if (!mInjector.isPackageInstalled(packageName, 0, userId)) {
+                Slog.e(TAG, "Tried to set bucket of uninstalled app: " + packageName);
                 return;
             }
             AppIdleHistory.AppUsageHistory app = mAppIdleHistory.getAppUsageHistory(packageName,
@@ -1035,15 +1248,66 @@ public class AppStandbyController implements AppStandbyInternal {
             // Don't allow changing bucket if higher than ACTIVE
             if (app.currentBucket < STANDBY_BUCKET_ACTIVE) return;
 
-            // Don't allow prediction to change from/to NEVER
+            // Don't allow prediction to change from/to NEVER or from RESTRICTED.
             if ((app.currentBucket == STANDBY_BUCKET_NEVER
+                    || app.currentBucket == STANDBY_BUCKET_RESTRICTED
                     || newBucket == STANDBY_BUCKET_NEVER)
                     && predicted) {
                 return;
             }
 
             // If the bucket was forced, don't allow prediction to override
-            if ((app.bucketingReason & REASON_MAIN_MASK) == REASON_MAIN_FORCED && predicted) return;
+            if (predicted
+                    && ((app.bucketingReason & REASON_MAIN_MASK) == REASON_MAIN_FORCED_BY_USER
+                    || (app.bucketingReason & REASON_MAIN_MASK) == REASON_MAIN_FORCED_BY_SYSTEM)) {
+                return;
+            }
+
+            final boolean isForcedByUser =
+                    (reason & REASON_MAIN_MASK) == REASON_MAIN_FORCED_BY_USER;
+
+            // If the current bucket is RESTRICTED, only user force or usage should bring it out,
+            // unless the app was put into the bucket due to timing out.
+            if (app.currentBucket == STANDBY_BUCKET_RESTRICTED && !isUserUsage(reason)
+                    && !isForcedByUser
+                    && (app.bucketingReason & REASON_MAIN_MASK) != REASON_MAIN_TIMEOUT) {
+                return;
+            }
+
+            if (newBucket == STANDBY_BUCKET_RESTRICTED) {
+                mAppIdleHistory
+                        .noteRestrictionAttempt(packageName, userId, elapsedRealtime, reason);
+
+                if (isForcedByUser) {
+                    // Only user force can bypass the delay restriction. If the user forced the
+                    // app into the RESTRICTED bucket, then a toast confirming the action
+                    // shouldn't be surprising.
+                    if (Build.IS_DEBUGGABLE) {
+                        Toast.makeText(mContext,
+                                // Since AppStandbyController sits low in the lock hierarchy,
+                                // make sure not to call out with the lock held.
+                                mHandler.getLooper(),
+                                mContext.getResources().getString(
+                                        R.string.as_app_forced_to_restricted_bucket, packageName),
+                                Toast.LENGTH_SHORT)
+                                .show();
+                    } else {
+                        Slog.i(TAG, packageName + " restricted by user");
+                    }
+                } else {
+                    final long timeUntilRestrictPossibleMs = app.lastUsedByUserElapsedTime
+                            + mInjector.getAutoRestrictedBucketDelayMs() - elapsedRealtime;
+                    if (timeUntilRestrictPossibleMs > 0) {
+                        Slog.w(TAG, "Tried to restrict recently used app: " + packageName
+                                + " due to " + reason);
+                        mHandler.sendMessageDelayed(
+                                mHandler.obtainMessage(
+                                        MSG_CHECK_PACKAGE_IDLE_STATE, userId, -1, packageName),
+                                timeUntilRestrictPossibleMs);
+                        return;
+                    }
+                }
+            }
 
             // If the bucket is required to stay in a higher state for a specified duration, don't
             // override unless the duration has passed
@@ -1295,9 +1559,9 @@ public class AppStandbyController implements AppStandbyInternal {
     }
 
     @Override
-    public void dumpUser(IndentingPrintWriter idpw, int userId, String pkg) {
+    public void dumpUser(IndentingPrintWriter idpw, int userId, List<String> pkgs) {
         synchronized (mAppIdleLock) {
-            mAppIdleHistory.dump(idpw, userId, pkg);
+            mAppIdleHistory.dump(idpw, userId, pkgs);
         }
     }
 
@@ -1356,6 +1620,8 @@ public class AppStandbyController implements AppStandbyInternal {
 
         pw.println();
         pw.print("mAppIdleEnabled="); pw.print(mAppIdleEnabled);
+        pw.print(" mIsCharging=");
+        pw.print(mIsCharging);
         pw.println();
         pw.print("mScreenThresholds="); pw.println(Arrays.toString(mAppStandbyScreenThresholds));
         pw.print("mElapsedThresholds="); pw.println(Arrays.toString(mAppStandbyElapsedThresholds));
@@ -1371,12 +1637,19 @@ public class AppStandbyController implements AppStandbyInternal {
 
         private final Context mContext;
         private final Looper mLooper;
-        private IDeviceIdleController mDeviceIdleController;
         private IBatteryStats mBatteryStats;
+        private BatteryManager mBatteryManager;
         private PackageManagerInternal mPackageManagerInternal;
         private DisplayManager mDisplayManager;
         private PowerManager mPowerManager;
+        private PowerWhitelistManager mPowerWhitelistManager;
+        private CrossProfileAppsInternal mCrossProfileAppsInternal;
         int mBootPhase;
+        /**
+         * The minimum amount of time required since the last user interaction before an app can be
+         * automatically placed in the RESTRICTED bucket.
+         */
+        long mAutoRestrictedBucketDelayMs = ONE_DAY;
 
         Injector(Context context, Looper looper) {
             mContext = context;
@@ -1393,14 +1666,22 @@ public class AppStandbyController implements AppStandbyInternal {
 
         void onBootPhase(int phase) {
             if (phase == PHASE_SYSTEM_SERVICES_READY) {
-                mDeviceIdleController = IDeviceIdleController.Stub.asInterface(
-                        ServiceManager.getService(Context.DEVICE_IDLE_CONTROLLER));
+                mPowerWhitelistManager = mContext.getSystemService(PowerWhitelistManager.class);
                 mBatteryStats = IBatteryStats.Stub.asInterface(
                         ServiceManager.getService(BatteryStats.SERVICE_NAME));
                 mPackageManagerInternal = LocalServices.getService(PackageManagerInternal.class);
                 mDisplayManager = (DisplayManager) mContext.getSystemService(
                         Context.DISPLAY_SERVICE);
                 mPowerManager = mContext.getSystemService(PowerManager.class);
+                mBatteryManager = mContext.getSystemService(BatteryManager.class);
+                mCrossProfileAppsInternal = LocalServices.getService(
+                        CrossProfileAppsInternal.class);
+
+                final ActivityManager activityManager =
+                        (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
+                if (activityManager.isLowRamDevice() || ActivityManager.isSmallBatteryDevice()) {
+                    mAutoRestrictedBucketDelayMs = 12 * ONE_HOUR;
+                }
             }
             mBootPhase = phase;
         }
@@ -1432,16 +1713,33 @@ public class AppStandbyController implements AppStandbyInternal {
             return buildFlag && runtimeFlag;
         }
 
-        boolean isPowerSaveWhitelistExceptIdleApp(String packageName) throws RemoteException {
-            return mDeviceIdleController.isPowerSaveWhitelistExceptIdleApp(packageName);
+        boolean isCharging() {
+            return mBatteryManager.isCharging();
+        }
+
+        boolean isNonIdleWhitelisted(String packageName) throws RemoteException {
+            return mPowerWhitelistManager.isWhitelisted(packageName, false);
         }
 
         File getDataSystemDirectory() {
             return Environment.getDataSystemDirectory();
         }
 
+        /**
+         * Return the minimum amount of time that must have passed since the last user usage before
+         * an app can be automatically put into the
+         * {@link android.app.usage.UsageStatsManager#STANDBY_BUCKET_RESTRICTED} bucket.
+         */
+        long getAutoRestrictedBucketDelayMs() {
+            return mAutoRestrictedBucketDelayMs;
+        }
+
         void noteEvent(int event, String packageName, int uid) throws RemoteException {
             mBatteryStats.noteEvent(event, packageName, uid);
+        }
+
+        PackageManagerInternal getPackageManagerInternal() {
+            return mPackageManagerInternal;
         }
 
         boolean isPackageEphemeral(int userId, String packageName) {
@@ -1484,6 +1782,17 @@ public class AppStandbyController implements AppStandbyInternal {
         /** Whether the device is in doze or not. */
         public boolean isDeviceIdleMode() {
             return mPowerManager.isDeviceIdleMode();
+        }
+
+        public List<UserHandle> getValidCrossProfileTargets(String pkg, int userId) {
+            final int uid = mPackageManagerInternal.getPackageUidInternal(pkg, 0, userId);
+            if (uid < 0
+                    || !mPackageManagerInternal.getPackage(uid).isCrossProfile()
+                    || !mCrossProfileAppsInternal
+                            .verifyUidHasInteractAcrossProfilePermission(pkg, uid)) {
+                return Collections.emptyList();
+            }
+            return mCrossProfileAppsInternal.getTargetUserProfiles(pkg, userId);
         }
     }
 
@@ -1535,7 +1844,7 @@ public class AppStandbyController implements AppStandbyInternal {
                     break;
 
                 case MSG_REPORT_SYNC_SCHEDULED:
-                    final boolean exempted = msg.arg1 > 0 ? true : false;
+                    final boolean exempted = msg.arg2 > 0 ? true : false;
                     if (exempted) {
                         reportExemptedSyncScheduled((String) msg.obj, msg.arg1);
                     } else {
@@ -1555,15 +1864,19 @@ public class AppStandbyController implements AppStandbyInternal {
         }
     };
 
-    private final NetworkRequest mNetworkRequest = new NetworkRequest.Builder().build();
-
-    private final ConnectivityManager.NetworkCallback mNetworkCallback
-            = new ConnectivityManager.NetworkCallback() {
+    private class DeviceStateReceiver extends BroadcastReceiver {
         @Override
-        public void onAvailable(Network network) {
-            mConnectivityManager.unregisterNetworkCallback(this);
+        public void onReceive(Context context, Intent intent) {
+            switch (intent.getAction()) {
+                case BatteryManager.ACTION_CHARGING:
+                    setChargingState(true);
+                    break;
+                case BatteryManager.ACTION_DISCHARGING:
+                    setChargingState(false);
+                    break;
+            }
         }
-    };
+    }
 
     private final DisplayManager.DisplayListener mDisplayListener
             = new DisplayManager.DisplayListener() {
@@ -1609,6 +1922,10 @@ public class AppStandbyController implements AppStandbyInternal {
                 "system_interaction_duration";
         private static final String KEY_INITIAL_FOREGROUND_SERVICE_START_HOLD_DURATION =
                 "initial_foreground_service_start_duration";
+        private static final String KEY_AUTO_RESTRICTED_BUCKET_DELAY_MS =
+                "auto_restricted_bucket_delay_ms";
+        private static final String KEY_CROSS_PROFILE_APPS_SHARE_STANDBY_BUCKETS =
+                "cross_profile_apps_share_standby_buckets";
         public static final long DEFAULT_STRONG_USAGE_TIMEOUT = 1 * ONE_HOUR;
         public static final long DEFAULT_NOTIFICATION_TIMEOUT = 12 * ONE_HOUR;
         public static final long DEFAULT_SYSTEM_UPDATE_TIMEOUT = 2 * ONE_HOUR;
@@ -1619,6 +1936,8 @@ public class AppStandbyController implements AppStandbyInternal {
         public static final long DEFAULT_EXEMPTED_SYNC_START_TIMEOUT = 10 * ONE_MINUTE;
         public static final long DEFAULT_UNEXEMPTED_SYNC_SCHEDULED_TIMEOUT = 10 * ONE_MINUTE;
         public static final long DEFAULT_INITIAL_FOREGROUND_SERVICE_START_TIMEOUT = 30 * ONE_MINUTE;
+        public static final long DEFAULT_AUTO_RESTRICTED_BUCKET_DELAY_MS = ONE_DAY;
+        public static final boolean DEFAULT_CROSS_PROFILE_APPS_SHARE_STANDBY_BUCKETS = true;
 
         private final KeyValueListParser mParser = new KeyValueListParser(',');
 
@@ -1666,12 +1985,12 @@ public class AppStandbyController implements AppStandbyInternal {
 
                 String screenThresholdsValue = mParser.getString(KEY_SCREEN_TIME_THRESHOLDS, null);
                 mAppStandbyScreenThresholds = parseLongArray(screenThresholdsValue,
-                        SCREEN_TIME_THRESHOLDS);
+                        SCREEN_TIME_THRESHOLDS, MINIMUM_SCREEN_TIME_THRESHOLDS);
 
                 String elapsedThresholdsValue = mParser.getString(KEY_ELAPSED_TIME_THRESHOLDS,
                         null);
                 mAppStandbyElapsedThresholds = parseLongArray(elapsedThresholdsValue,
-                        ELAPSED_TIME_THRESHOLDS);
+                        ELAPSED_TIME_THRESHOLDS, MINIMUM_ELAPSED_TIME_THRESHOLDS);
                 mCheckIdleIntervalMillis = Math.min(mAppStandbyElapsedThresholds[1] / 4,
                         COMPRESS_TIME ? ONE_MINUTE : 4 * 60 * ONE_MINUTE); // 4 hours
                 mStrongUsageTimeoutMillis = mParser.getDurationMillis(
@@ -1707,8 +2026,8 @@ public class AppStandbyController implements AppStandbyInternal {
 
                 mUnexemptedSyncScheduledTimeoutMillis = mParser.getDurationMillis(
                         KEY_UNEXEMPTED_SYNC_SCHEDULED_HOLD_DURATION,
-                                COMPRESS_TIME ? ONE_MINUTE
-                                        : DEFAULT_UNEXEMPTED_SYNC_SCHEDULED_TIMEOUT); // TODO
+                                COMPRESS_TIME
+                                        ? ONE_MINUTE : DEFAULT_UNEXEMPTED_SYNC_SCHEDULED_TIMEOUT);
 
                 mSystemInteractionTimeoutMillis = mParser.getDurationMillis(
                         KEY_SYSTEM_INTERACTION_HOLD_DURATION,
@@ -1718,6 +2037,16 @@ public class AppStandbyController implements AppStandbyInternal {
                         KEY_INITIAL_FOREGROUND_SERVICE_START_HOLD_DURATION,
                         COMPRESS_TIME ? ONE_MINUTE :
                                 DEFAULT_INITIAL_FOREGROUND_SERVICE_START_TIMEOUT);
+
+                mInjector.mAutoRestrictedBucketDelayMs = Math.max(
+                        COMPRESS_TIME ? ONE_MINUTE : 2 * ONE_HOUR,
+                        mParser.getDurationMillis(KEY_AUTO_RESTRICTED_BUCKET_DELAY_MS,
+                                COMPRESS_TIME
+                                        ? ONE_MINUTE : DEFAULT_AUTO_RESTRICTED_BUCKET_DELAY_MS));
+
+                mLinkCrossProfileApps = mParser.getBoolean(
+                        KEY_CROSS_PROFILE_APPS_SHARE_STANDBY_BUCKETS,
+                        DEFAULT_CROSS_PROFILE_APPS_SHARE_STANDBY_BUCKETS);
             }
 
             // Check if app_idle_enabled has changed. Do this after getting the rest of the settings
@@ -1725,7 +2054,7 @@ public class AppStandbyController implements AppStandbyInternal {
             setAppIdleEnabled(mInjector.isAppIdleEnabled());
         }
 
-        long[] parseLongArray(String values, long[] defaults) {
+        long[] parseLongArray(String values, long[] defaults, long[] minValues) {
             if (values == null) return defaults;
             if (values.isEmpty()) {
                 // Reset to defaults
@@ -1733,13 +2062,19 @@ public class AppStandbyController implements AppStandbyInternal {
             } else {
                 String[] thresholds = values.split("/");
                 if (thresholds.length == THRESHOLD_BUCKETS.length) {
+                    if (minValues.length != THRESHOLD_BUCKETS.length) {
+                        Slog.wtf(TAG, "minValues array is the wrong size");
+                        // Use zeroes as the minimums.
+                        minValues = new long[THRESHOLD_BUCKETS.length];
+                    }
                     long[] array = new long[THRESHOLD_BUCKETS.length];
                     for (int i = 0; i < THRESHOLD_BUCKETS.length; i++) {
                         try {
                             if (thresholds[i].startsWith("P") || thresholds[i].startsWith("p")) {
-                                array[i] = Duration.parse(thresholds[i]).toMillis();
+                                array[i] = Math.max(minValues[i],
+                                        Duration.parse(thresholds[i]).toMillis());
                             } else {
-                                array[i] = Long.parseLong(thresholds[i]);
+                                array[i] = Math.max(minValues[i], Long.parseLong(thresholds[i]));
                             }
                         } catch (NumberFormatException|DateTimeParseException e) {
                             return defaults;

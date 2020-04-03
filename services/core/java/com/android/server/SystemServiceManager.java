@@ -25,9 +25,13 @@ import android.os.SystemClock;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.os.UserManagerInternal;
+import android.util.ArrayMap;
 import android.util.Slog;
 
+import com.android.server.SystemService.TargetUser;
 import com.android.server.utils.TimingsTraceAndSlog;
+
+import dalvik.system.PathClassLoader;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
@@ -47,7 +51,8 @@ public class SystemServiceManager {
 
     // Constants used on onUser(...)
     private static final String START = "Start";
-    private static final String UNLOCK = "Unlock";
+    private static final String UNLOCKING = "Unlocking";
+    private static final String UNLOCKED = "Unlocked";
     private static final String SWITCH = "Switch";
     private static final String STOP = "Stop";
     private static final String CLEANUP = "Cleanup";
@@ -62,6 +67,9 @@ public class SystemServiceManager {
     // Services that should receive lifecycle events.
     private final ArrayList<SystemService> mServices = new ArrayList<SystemService>();
 
+    // Map of paths to PathClassLoader, so we don't load the same path multiple times.
+    private final ArrayMap<String, PathClassLoader> mLoadedPaths = new ArrayMap<>();
+
     private int mCurrentPhase = -1;
 
     private UserManagerInternal mUserManagerInternal;
@@ -75,20 +83,46 @@ public class SystemServiceManager {
      *
      * @return The service instance.
      */
-    @SuppressWarnings("unchecked")
     public SystemService startService(String className) {
-        final Class<SystemService> serviceClass;
+        final Class<SystemService> serviceClass = loadClassFromLoader(className,
+                this.getClass().getClassLoader());
+        return startService(serviceClass);
+    }
+
+    /**
+     * Starts a service by class name and a path that specifies the jar where the service lives.
+     *
+     * @return The service instance.
+     */
+    public SystemService startServiceFromJar(String className, String path) {
+        PathClassLoader pathClassLoader = mLoadedPaths.get(path);
+        if (pathClassLoader == null) {
+            // NB: the parent class loader should always be the system server class loader.
+            // Changing it has implications that require discussion with the mainline team.
+            pathClassLoader = new PathClassLoader(path, this.getClass().getClassLoader());
+            mLoadedPaths.put(path, pathClassLoader);
+        }
+        final Class<SystemService> serviceClass = loadClassFromLoader(className, pathClassLoader);
+        return startService(serviceClass);
+    }
+
+    /*
+     * Loads and initializes a class from the given classLoader. Returns the class.
+     */
+    @SuppressWarnings("unchecked")
+    private static Class<SystemService> loadClassFromLoader(String className,
+            ClassLoader classLoader) {
         try {
-            serviceClass = (Class<SystemService>)Class.forName(className);
+            return (Class<SystemService>) Class.forName(className, true, classLoader);
         } catch (ClassNotFoundException ex) {
-            Slog.i(TAG, "Starting " + className);
             throw new RuntimeException("Failed to create service " + className
-                    + ": service class not found, usually indicates that the caller should "
+                    + " from class loader " + classLoader.toString() + ": service class not "
+                    + "found, usually indicates that the caller should "
                     + "have called PackageManager.hasSystemFeature() to check whether the "
                     + "feature is available on this device before trying to start the "
-                    + "services that implement it", ex);
+                    + "services that implement it. Also ensure that the correct path for the "
+                    + "classloader is supplied, if applicable.", ex);
         }
-        return startService(serviceClass);
     }
 
     /**
@@ -169,7 +203,7 @@ public class SystemServiceManager {
             for (int i = 0; i < serviceLen; i++) {
                 final SystemService service = mServices.get(i);
                 long time = SystemClock.elapsedRealtime();
-                t.traceBegin(service.getClass().getName());
+                t.traceBegin("OnBootPhase " + service.getClass().getName());
                 try {
                     service.onBootPhase(mCurrentPhase);
                 } catch (Exception ex) {
@@ -227,7 +261,14 @@ public class SystemServiceManager {
      * Unlocks the given user.
      */
     public void unlockUser(final @UserIdInt int userHandle) {
-        onUser(UNLOCK, userHandle);
+        onUser(UNLOCKING, userHandle);
+    }
+
+    /**
+     * Called after the user was unlocked.
+     */
+    public void onUserUnlocked(final @UserIdInt int userHandle) {
+        onUser(UNLOCKED, userHandle);
     }
 
     /**
@@ -264,26 +305,26 @@ public class SystemServiceManager {
             @UserIdInt int curUserId, @UserIdInt int prevUserId) {
         t.traceBegin("ssm." + onWhat + "User-" + curUserId);
         Slog.i(TAG, "Calling on" + onWhat + "User " + curUserId);
-        final UserInfo curUserInfo = getUserInfo(curUserId);
-        final UserInfo prevUserInfo = prevUserId == UserHandle.USER_NULL ? null
-                : getUserInfo(prevUserId);
+        final TargetUser curUser = new TargetUser(getUserInfo(curUserId));
+        final TargetUser prevUser = prevUserId == UserHandle.USER_NULL ? null
+                : new TargetUser(getUserInfo(prevUserId));
         final int serviceLen = mServices.size();
         for (int i = 0; i < serviceLen; i++) {
             final SystemService service = mServices.get(i);
             final String serviceName = service.getClass().getName();
-            boolean supported = service.isSupported(curUserInfo);
+            boolean supported = service.isUserSupported(curUser);
 
             // Must check if either curUser or prevUser is supported (for example, if switching from
             // unsupported to supported, we still need to notify the services)
-            if (!supported && prevUserInfo != null) {
-                supported = service.isSupported(prevUserInfo);
+            if (!supported && prevUser != null) {
+                supported = service.isUserSupported(prevUser);
             }
 
             if (!supported) {
                 if (DEBUG) {
                     Slog.d(TAG, "Skipping " + onWhat + "User-" + curUserId + " on service "
                             + serviceName + " because it's not supported (curUser: "
-                            + curUserInfo + ", prevUser:" + prevUserInfo + ")");
+                            + curUser + ", prevUser:" + prevUser + ")");
                 } else {
                     Slog.i(TAG,  "Skipping " + onWhat + "User-" + curUserId + " on "
                             + serviceName);
@@ -295,25 +336,28 @@ public class SystemServiceManager {
             try {
                 switch (onWhat) {
                     case SWITCH:
-                        service.onSwitchUser(prevUserInfo, curUserInfo);
+                        service.onUserSwitching(prevUser, curUser);
                         break;
                     case START:
-                        service.onStartUser(curUserInfo);
+                        service.onUserStarting(curUser);
                         break;
-                    case UNLOCK:
-                        service.onUnlockUser(curUserInfo);
+                    case UNLOCKING:
+                        service.onUserUnlocking(curUser);
+                        break;
+                    case UNLOCKED:
+                        service.onUserUnlocked(curUser);
                         break;
                     case STOP:
-                        service.onStopUser(curUserInfo);
+                        service.onUserStopping(curUser);
                         break;
                     case CLEANUP:
-                        service.onCleanupUser(curUserInfo);
+                        service.onUserStopped(curUser);
                         break;
                     default:
                         throw new IllegalArgumentException(onWhat + " what?");
                 }
             } catch (Exception ex) {
-                Slog.wtf(TAG, "Failure reporting " + onWhat + " of user " + curUserInfo
+                Slog.wtf(TAG, "Failure reporting " + onWhat + " of user " + curUser
                         + " to service " + serviceName, ex);
             }
             warnIfTooLong(SystemClock.elapsedRealtime() - time, service,

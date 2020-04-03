@@ -36,18 +36,15 @@ import android.view.DisplayCutout;
 import android.view.DisplayInfo;
 
 class TestDisplayContent extends DisplayContent {
-    private final ActivityStackSupervisor mSupervisor;
 
-    private TestDisplayContent(ActivityStackSupervisor supervisor, Display display) {
-        super(display, supervisor.mService.mRootActivityContainer);
+    private TestDisplayContent(RootWindowContainer rootWindowContainer, Display display) {
+        super(display, rootWindowContainer);
         // Normally this comes from display-properties as exposed by WM. Without that, just
         // hard-code to FULLSCREEN for tests.
         setWindowingMode(WINDOWING_MODE_FULLSCREEN);
-        mSupervisor = supervisor;
         spyOn(this);
-        spyOn(mDisplayContent);
 
-        final DisplayRotation displayRotation = mDisplayContent.getDisplayRotation();
+        final DisplayRotation displayRotation = getDisplayRotation();
         spyOn(displayRotation);
         doAnswer(invocation -> {
             // Bypass all the rotation animation and display freezing stuff for testing and just
@@ -58,35 +55,21 @@ class TestDisplayContent extends DisplayContent {
             if (oldRotation == rotation) {
                 return false;
             }
-            mDisplayContent.setLayoutNeeded();
+            setLayoutNeeded();
             displayRotation.setRotation(rotation);
             return true;
         }).when(displayRotation).updateRotationUnchecked(anyBoolean());
 
-        final InputMonitor inputMonitor = mDisplayContent.getInputMonitor();
+        final InputMonitor inputMonitor = getInputMonitor();
         spyOn(inputMonitor);
         doNothing().when(inputMonitor).resumeDispatchingLw(any());
-    }
-
-    @SuppressWarnings("TypeParameterUnusedInFormals")
-    @Override
-    ActivityStack createStackUnchecked(int windowingMode, int activityType,
-            int stackId, boolean onTop) {
-        return new ActivityTestsBase.StackBuilder(mSupervisor.mRootActivityContainer)
-                .setDisplay(this)
-                .setWindowingMode(windowingMode)
-                .setActivityType(activityType)
-                .setStackId(stackId)
-                .setOnTop(onTop)
-                .setCreateActivity(false)
-                .build();
     }
 
     public static class Builder {
         private final DisplayInfo mInfo;
         private boolean mCanRotate = true;
         private int mWindowingMode = WINDOWING_MODE_FULLSCREEN;
-        private int mPosition = POSITION_TOP;
+        private int mPosition = POSITION_BOTTOM;
         private final ActivityTaskManagerService mService;
         private boolean mSystemDecorations = false;
 
@@ -141,16 +124,15 @@ class TestDisplayContent extends DisplayContent {
             return this;
         }
         TestDisplayContent build() {
+            SystemServicesTestRule.checkHoldsLock(mService.mGlobalLock);
+
             final int displayId = SystemServicesTestRule.sNextDisplayId++;
             final Display display = new Display(DisplayManagerGlobal.getInstance(), displayId,
                     mInfo, DEFAULT_DISPLAY_ADJUSTMENTS);
-            final TestDisplayContent newDisplay;
-            synchronized (mService.mGlobalLock) {
-                newDisplay = new TestDisplayContent(mService.mStackSupervisor, display);
-                mService.mRootActivityContainer.addChild(newDisplay, mPosition);
-            }
+            final TestDisplayContent newDisplay =
+                    new TestDisplayContent(mService.mRootWindowContainer, display);
             // disable the normal system decorations
-            final DisplayPolicy displayPolicy = newDisplay.mDisplayContent.getDisplayPolicy();
+            final DisplayPolicy displayPolicy = newDisplay.getDisplayPolicy();
             spyOn(displayPolicy);
             if (mSystemDecorations) {
                 doReturn(true).when(newDisplay).supportsSystemDecorations();
@@ -160,14 +142,17 @@ class TestDisplayContent extends DisplayContent {
                 doReturn(false).when(newDisplay).supportsSystemDecorations();
             }
             Configuration c = new Configuration();
-            newDisplay.mDisplayContent.computeScreenConfiguration(c);
+            newDisplay.computeScreenConfiguration(c);
             c.windowConfiguration.setWindowingMode(mWindowingMode);
             newDisplay.onRequestedOverrideConfigurationChanged(c);
-            // This is a rotating display
-            if (mCanRotate) {
-                doReturn(false).when(newDisplay.mDisplayContent)
-                        .handlesOrientationChangeFromDescendant();
+            if (!mCanRotate) {
+                final DisplayRotation displayRotation = newDisplay.getDisplayRotation();
+                doReturn(false).when(displayRotation).respectAppRequestedOrientation();
             }
+            // Please add stubbing before this line. Services will start using this display in other
+            // threads immediately after adding it to hierarchy. Calling doAnswer() type of stubbing
+            // reduces chance of races, but still doesn't eliminate race conditions.
+            mService.mRootWindowContainer.addChild(newDisplay, mPosition);
             return newDisplay;
         }
     }

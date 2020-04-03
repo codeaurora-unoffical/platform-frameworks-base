@@ -16,10 +16,12 @@
 
 package com.android.internal.telephony;
 
-import android.os.Bundle;
+import android.telephony.BarringInfo;
 import android.telephony.CallAttributes;
+import android.telephony.CellIdentity;
 import android.telephony.CellInfo;
 import android.telephony.DataConnectionRealTimeInfo;
+import android.telephony.DisplayInfo;
 import android.telephony.PhoneCapability;
 import android.telephony.PreciseCallState;
 import android.telephony.PreciseDataConnectionState;
@@ -37,13 +39,12 @@ oneway interface IPhoneStateListener {
     void onMessageWaitingIndicatorChanged(boolean mwi);
     void onCallForwardingIndicatorChanged(boolean cfi);
 
-    // we use bundle here instead of CellLocation so it can get the right subclass
-    void onCellLocationChanged(in Bundle location);
+    // Uses CellIdentity which is Parcelable here; will convert to CellLocation in client.
+    void onCellLocationChanged(in CellIdentity location);
     void onCallStateChanged(int state, String incomingNumber);
     void onDataConnectionStateChanged(int state, int networkType);
     void onDataActivity(int direction);
     void onSignalStrengthsChanged(in SignalStrength signalStrength);
-    void onOtaspChanged(in int otaspMode);
     void onCellInfoChanged(in List<CellInfo> cellInfo);
     void onPreciseCallStateChanged(in PreciseCallState callState);
     void onPreciseDataConnectionStateChanged(in PreciseDataConnectionState dataConnectionState);
@@ -54,6 +55,7 @@ oneway interface IPhoneStateListener {
     void onOemHookRawEvent(in byte[] rawData);
     void onCarrierNetworkChange(in boolean active);
     void onUserMobileDataStateChanged(in boolean enabled);
+    void onDisplayInfoChanged(in DisplayInfo displayInfo);
     void onPhoneCapabilityChanged(in PhoneCapability capability);
     void onActiveDataSubIdChanged(in int subId);
     void onRadioPowerStateChanged(in int state);
@@ -63,5 +65,7 @@ oneway interface IPhoneStateListener {
     void onOutgoingEmergencySms(in EmergencyNumber sentEmergencyNumber);
     void onCallDisconnectCauseChanged(in int disconnectCause, in int preciseDisconnectCause);
     void onImsCallDisconnectCauseChanged(in ImsReasonInfo imsReasonInfo);
+    void onRegistrationFailed(in CellIdentity cellIdentity,
+             String chosenPlmn, int domain, int causeCode, int additionalCauseCode);
+    void onBarringInfoChanged(in BarringInfo barringInfo);
 }
-

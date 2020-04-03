@@ -31,7 +31,6 @@ import android.util.Log;
 import android.util.MathUtils;
 import android.util.Size;
 import android.view.DisplayInfo;
-import android.view.WindowManager;
 
 import com.android.systemui.R;
 
@@ -62,6 +61,7 @@ public class ImageWallpaperRenderer implements GLWallpaperRenderer,
     private boolean mScissorMode;
     private float mXOffset;
     private float mYOffset;
+    private boolean mWcgContent;
 
     public ImageWallpaperRenderer(Context context, SurfaceProxy proxy) {
         mWallpaperManager = context.getSystemService(WallpaperManager.class);
@@ -70,8 +70,7 @@ public class ImageWallpaperRenderer implements GLWallpaperRenderer,
         }
 
         DisplayInfo displayInfo = new DisplayInfo();
-        WindowManager wm = context.getSystemService(WindowManager.class);
-        wm.getDefaultDisplay().getDisplayInfo(displayInfo);
+        context.getDisplay().getDisplayInfo(displayInfo);
 
         // We only do transition in portrait currently, b/137962047.
         int orientation = context.getResources().getConfiguration().orientation;
@@ -87,10 +86,19 @@ public class ImageWallpaperRenderer implements GLWallpaperRenderer,
         mImageProcessHelper = new ImageProcessHelper();
         mImageRevealHelper = new ImageRevealHelper(this);
 
+        startProcessingImage();
+    }
+
+    protected void startProcessingImage() {
         if (loadBitmap()) {
             // Compute threshold of the image, this is an async work.
             mImageProcessHelper.start(mBitmap);
         }
+    }
+
+    @Override
+    public boolean isWcgContent() {
+        return mWcgContent;
     }
 
     @Override
@@ -107,20 +115,16 @@ public class ImageWallpaperRenderer implements GLWallpaperRenderer,
         mBitmap = null;
     }
 
-    private boolean loadBitmap() {
+    protected boolean loadBitmap() {
         if (DEBUG) {
             Log.d(TAG, "loadBitmap: mBitmap=" + mBitmap);
         }
         if (mWallpaperManager != null && mBitmap == null) {
-            mBitmap = mWallpaperManager.getBitmap();
+            mBitmap = mWallpaperManager.getBitmap(false /* hardware */);
+            mWcgContent = mWallpaperManager.wallpaperSupportsWcg(WallpaperManager.FLAG_SYSTEM);
             mWallpaperManager.forgetLoadedWallpaper();
             if (mBitmap != null) {
-                float scale = (float) mScissor.height() / mBitmap.getHeight();
-                int surfaceHeight = Math.max(mScissor.height(), mBitmap.getHeight());
-                int surfaceWidth = scale > 1f
-                        ? Math.round(mBitmap.getWidth() * scale)
-                        : mBitmap.getWidth();
-                mSurfaceSize.set(0, 0, surfaceWidth, surfaceHeight);
+                mSurfaceSize.set(0, 0, mBitmap.getWidth(), mBitmap.getHeight());
             }
         }
         if (DEBUG) {
@@ -231,6 +235,7 @@ public class ImageWallpaperRenderer implements GLWallpaperRenderer,
         out.print(prefix); out.print("mYOffset="); out.print(mYOffset);
         out.print(prefix); out.print("threshold="); out.print(mImageProcessHelper.getThreshold());
         out.print(prefix); out.print("mReveal="); out.print(mImageRevealHelper.getReveal());
+        out.print(prefix); out.print("mWcgContent="); out.print(mWcgContent);
         mWallpaper.dump(prefix, fd, out, args);
     }
 }

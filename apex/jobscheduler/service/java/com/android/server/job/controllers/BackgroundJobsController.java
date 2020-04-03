@@ -16,6 +16,8 @@
 
 package com.android.server.job.controllers;
 
+import static com.android.server.job.JobSchedulerService.NEVER_INDEX;
+
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.util.Log;
@@ -23,7 +25,6 @@ import android.util.Slog;
 import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.util.IndentingPrintWriter;
-import com.android.internal.util.Preconditions;
 import com.android.server.AppStateTracker;
 import com.android.server.AppStateTracker.Listener;
 import com.android.server.LocalServices;
@@ -32,6 +33,7 @@ import com.android.server.job.JobStore;
 import com.android.server.job.StateControllerProto;
 import com.android.server.job.StateControllerProto.BackgroundJobsController.TrackedJob;
 
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -59,7 +61,7 @@ public final class BackgroundJobsController extends StateController {
     public BackgroundJobsController(JobSchedulerService service) {
         super(service);
 
-        mAppStateTracker = Preconditions.checkNotNull(
+        mAppStateTracker = Objects.requireNonNull(
                 LocalServices.getService(AppStateTracker.class));
         mAppStateTracker.addListener(mForceAppStandbyListener);
     }
@@ -195,6 +197,9 @@ public final class BackgroundJobsController extends StateController {
             isActive = mAppStateTracker.isUidActive(uid);
         } else {
             isActive = (activeState == KNOWN_ACTIVE);
+        }
+        if (isActive && jobStatus.getStandbyBucket() == NEVER_INDEX) {
+            Slog.wtf(TAG, "App became active but still in NEVER bucket");
         }
         boolean didChange = jobStatus.setBackgroundNotRestrictedConstraintSatisfied(canRun);
         didChange |= jobStatus.setUidActive(isActive);

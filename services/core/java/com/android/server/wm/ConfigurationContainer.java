@@ -39,15 +39,11 @@ import android.app.WindowConfiguration;
 import android.content.res.Configuration;
 import android.graphics.Point;
 import android.graphics.Rect;
-import android.os.IBinder;
 import android.util.proto.ProtoOutputStream;
-import android.view.IWindowContainer;
-import android.view.SurfaceControl;
 
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.PrintWriter;
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 
 /**
@@ -104,12 +100,6 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
     static final int BOUNDS_CHANGE_SIZE = 1 << 1;
 
     /**
-     * Used as a unique, cross-process identifier for this Container. It also serves a minimal
-     * interface to other processes.
-     */
-    RemoteToken mRemoteToken = null;
-
-    /**
      * Returns full configuration applied to this configuration container.
      * This method should be used for getting settings applied in each particular level of the
      * hierarchy.
@@ -123,19 +113,12 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
      * @see #mFullConfiguration
      */
     public void onConfigurationChanged(Configuration newParentConfig) {
-        onConfigurationChanged(newParentConfig, true /*forwardToChildren*/);
-    }
-
-    // TODO(root-unify): Consolidate with onConfigurationChanged() method above once unification is
-    //  done. This is only currently need during the process of unification where we don't want
-    //  configuration forwarded to a child from both parents.
-    public void onConfigurationChanged(Configuration newParentConfig, boolean forwardToChildren) {
         mResolvedTmpConfig.setTo(mResolvedOverrideConfiguration);
         resolveOverrideConfiguration(newParentConfig);
         mFullConfiguration.setTo(newParentConfig);
         mFullConfiguration.updateFrom(mResolvedOverrideConfiguration);
+        onMergedOverrideConfigurationChanged();
         if (!mResolvedTmpConfig.equals(mResolvedOverrideConfiguration)) {
-            onMergedOverrideConfigurationChanged();
             // This depends on the assumption that change-listeners don't do
             // their own override resolution. This way, dependent hierarchies
             // can stay properly synced-up with a primary hierarchy's constraints.
@@ -147,11 +130,13 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
                         mResolvedOverrideConfiguration);
             }
         }
-        if (forwardToChildren) {
-            for (int i = getChildCount() - 1; i >= 0; --i) {
-                final ConfigurationContainer child = getChildAt(i);
-                child.onConfigurationChanged(mFullConfiguration);
-            }
+        for (int i = mChangeListeners.size() - 1; i >= 0; --i) {
+            mChangeListeners.get(i).onMergedOverrideConfigurationChanged(
+                    mMergedOverrideConfiguration);
+        }
+        for (int i = getChildCount() - 1; i >= 0; --i) {
+            final ConfigurationContainer child = getChildAt(i);
+            child.onConfigurationChanged(mFullConfiguration);
         }
     }
 
@@ -545,6 +530,7 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
         }
         mChangeListeners.add(listener);
         listener.onRequestedOverrideConfigurationChanged(mResolvedOverrideConfiguration);
+        listener.onMergedOverrideConfigurationChanged(mMergedOverrideConfiguration);
     }
 
     void unregisterConfigurationChangeListener(ConfigurationContainerListener listener) {
@@ -634,36 +620,4 @@ public abstract class ConfigurationContainer<E extends ConfigurationContainer> {
 
     abstract protected ConfigurationContainer getParent();
 
-    // TODO: Consider moving to WindowContainer once hierarchies and Task/Stack are merged.
-    static class RemoteToken extends IWindowContainer.Stub {
-        final WeakReference<ConfigurationContainer> mWeakRef;
-
-        RemoteToken(ConfigurationContainer container) {
-            mWeakRef = new WeakReference<>(container);
-        }
-
-        ConfigurationContainer getContainer() {
-            return mWeakRef.get();
-        }
-
-        static RemoteToken fromBinder(IBinder binder) {
-            return (RemoteToken) binder;
-        }
-
-        @Override
-        public SurfaceControl getLeash() {
-            throw new RuntimeException("Not implemented");
-        }
-
-        @Override
-        public String toString() {
-            StringBuilder sb = new StringBuilder(128);
-            sb.append("RemoteToken{");
-            sb.append(Integer.toHexString(System.identityHashCode(this)));
-            sb.append(' ');
-            sb.append(mWeakRef.get());
-            sb.append('}');
-            return sb.toString();
-        }
-    }
 }

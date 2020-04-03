@@ -17,7 +17,7 @@
 package com.android.server.wm;
 
 import static com.android.server.wm.ActivityStackSupervisor.REMOVE_FROM_RECENTS;
-import static com.android.server.wm.RootActivityContainer.MATCH_TASK_IN_STACKS_OR_RECENT_TASKS;
+import static com.android.server.wm.RootWindowContainer.MATCH_TASK_IN_STACKS_OR_RECENT_TASKS;
 
 import android.app.ActivityManager;
 import android.app.IAppTask;
@@ -27,7 +27,6 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.UserHandle;
-import android.util.Slog;
 
 /**
  * An implementation of IAppTask, that allows an app to manage its own tasks via
@@ -79,7 +78,7 @@ class AppTaskImpl extends IAppTask.Stub {
         synchronized (mService.mGlobalLock) {
             long origId = Binder.clearCallingIdentity();
             try {
-                Task task = mService.mRootActivityContainer.anyTaskForId(mTaskId,
+                Task task = mService.mRootWindowContainer.anyTaskForId(mTaskId,
                         MATCH_TASK_IN_STACKS_OR_RECENT_TASKS);
                 if (task == null) {
                     throw new IllegalArgumentException("Unable to find task ID " + mTaskId);
@@ -97,12 +96,7 @@ class AppTaskImpl extends IAppTask.Stub {
         // Will bring task to front if it already has a root activity.
         final int callingPid = Binder.getCallingPid();
         final int callingUid = Binder.getCallingUid();
-        if (!mService.isSameApp(callingUid, callingPackage)) {
-            String msg = "Permission Denial: moveToFront() from pid="
-                    + Binder.getCallingPid() + " as package " + callingPackage;
-            Slog.w(TAG, msg);
-            throw new SecurityException(msg);
-        }
+        mService.assertPackageMatchesCallingUid(callingPackage);
         final long origId = Binder.clearCallingIdentity();
         try {
             synchronized (mService.mGlobalLock) {
@@ -117,7 +111,7 @@ class AppTaskImpl extends IAppTask.Stub {
                 final ActivityStarter starter = mService.getActivityStartController().obtainStarter(
                         null /* intent */, "moveToFront");
                 if (starter.shouldAbortBackgroundActivityStart(callingUid, callingPid,
-                        callingPackage, -1, -1, callerApp, null, false, null)) {
+                        callingPackage, -1, -1, callerApp, null, false, false, null)) {
                     if (!mService.isBackgroundActivityStartsEnabled()) {
                         return;
                     }
@@ -131,15 +125,16 @@ class AppTaskImpl extends IAppTask.Stub {
     }
 
     @Override
-    public int startActivity(IBinder whoThread, String callingPackage,
+    public int startActivity(IBinder whoThread, String callingPackage, String callingFeatureId,
             Intent intent, String resolvedType, Bundle bOptions) {
         checkCaller();
+        mService.assertPackageMatchesCallingUid(callingPackage);
 
         int callingUser = UserHandle.getCallingUserId();
         Task task;
         IApplicationThread appThread;
         synchronized (mService.mGlobalLock) {
-            task = mService.mRootActivityContainer.anyTaskForId(mTaskId,
+            task = mService.mRootWindowContainer.anyTaskForId(mTaskId,
                     MATCH_TASK_IN_STACKS_OR_RECENT_TASKS);
             if (task == null) {
                 throw new IllegalArgumentException("Unable to find task ID " + mTaskId);
@@ -153,6 +148,7 @@ class AppTaskImpl extends IAppTask.Stub {
         return mService.getActivityStartController().obtainStarter(intent, "AppTaskImpl")
                 .setCaller(appThread)
                 .setCallingPackage(callingPackage)
+                .setCallingFeatureId(callingFeatureId)
                 .setResolvedType(resolvedType)
                 .setActivityOptions(bOptions)
                 .setUserId(callingUser)
@@ -167,7 +163,7 @@ class AppTaskImpl extends IAppTask.Stub {
         synchronized (mService.mGlobalLock) {
             long origId = Binder.clearCallingIdentity();
             try {
-                Task task = mService.mRootActivityContainer.anyTaskForId(mTaskId,
+                Task task = mService.mRootWindowContainer.anyTaskForId(mTaskId,
                         MATCH_TASK_IN_STACKS_OR_RECENT_TASKS);
                 if (task == null) {
                     throw new IllegalArgumentException("Unable to find task ID " + mTaskId);

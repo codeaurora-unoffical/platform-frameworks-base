@@ -21,20 +21,25 @@ import com.android.systemui.ScreenDecorations;
 import com.android.systemui.SizeCompatModeActivityController;
 import com.android.systemui.SliceBroadcastRelayHandler;
 import com.android.systemui.SystemUI;
+import com.android.systemui.accessibility.SystemActions;
+import com.android.systemui.accessibility.WindowMagnification;
 import com.android.systemui.biometrics.AuthController;
+import com.android.systemui.bubbles.dagger.BubbleModule;
 import com.android.systemui.globalactions.GlobalActionsComponent;
 import com.android.systemui.keyguard.KeyguardViewMediator;
+import com.android.systemui.keyguard.dagger.KeyguardModule;
 import com.android.systemui.pip.PipUI;
 import com.android.systemui.power.PowerUI;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.recents.RecentsModule;
 import com.android.systemui.shortcut.ShortcutKeyDispatcher;
 import com.android.systemui.stackdivider.Divider;
+import com.android.systemui.statusbar.dagger.StatusBarModule;
 import com.android.systemui.statusbar.notification.InstantAppNotifier;
 import com.android.systemui.statusbar.phone.StatusBar;
-import com.android.systemui.statusbar.phone.StatusBarModule;
 import com.android.systemui.statusbar.tv.TvStatusBar;
 import com.android.systemui.theme.ThemeOverlayController;
+import com.android.systemui.toast.ToastUI;
 import com.android.systemui.util.leak.GarbageMonitor;
 import com.android.systemui.volume.VolumeUI;
 
@@ -46,7 +51,8 @@ import dagger.multibindings.IntoMap;
 /**
  * SystemUI objects that are injectable should go here.
  */
-@Module(includes = {RecentsModule.class, StatusBarModule.class})
+@Module(includes = {RecentsModule.class, StatusBarModule.class, BubbleModule.class,
+        KeyguardModule.class})
 public abstract class SystemUIBinder {
     /** Inject into AuthController. */
     @Binds
@@ -139,11 +145,23 @@ public abstract class SystemUIBinder {
     @ClassKey(StatusBar.class)
     public abstract SystemUI bindsStatusBar(StatusBar sysui);
 
+    /** Inject into SystemActions. */
+    @Binds
+    @IntoMap
+    @ClassKey(SystemActions.class)
+    public abstract SystemUI bindSystemActions(SystemActions sysui);
+
     /** Inject into ThemeOverlayController. */
     @Binds
     @IntoMap
     @ClassKey(ThemeOverlayController.class)
     public abstract SystemUI bindThemeOverlayController(ThemeOverlayController sysui);
+
+    /** Inject into ToastUI. */
+    @Binds
+    @IntoMap
+    @ClassKey(ToastUI.class)
+    public abstract SystemUI bindToastUI(ToastUI service);
 
     /** Inject into TvStatusBar. */
     @Binds
@@ -156,4 +174,10 @@ public abstract class SystemUIBinder {
     @IntoMap
     @ClassKey(VolumeUI.class)
     public abstract SystemUI bindVolumeUI(VolumeUI sysui);
+
+    /** Inject into WindowMagnification. */
+    @Binds
+    @IntoMap
+    @ClassKey(WindowMagnification.class)
+    public abstract SystemUI bindWindowMagnification(WindowMagnification sysui);
 }

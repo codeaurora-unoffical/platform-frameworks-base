@@ -18,7 +18,7 @@ package android.inputmethodservice;
 
 import android.annotation.BinderThread;
 import android.annotation.MainThread;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Binder;
@@ -39,10 +39,12 @@ import android.view.inputmethod.InputMethodSubtype;
 import com.android.internal.inputmethod.IInputMethodPrivilegedOperations;
 import com.android.internal.os.HandlerCaller;
 import com.android.internal.os.SomeArgs;
+import com.android.internal.view.IInlineSuggestionsRequestCallback;
 import com.android.internal.view.IInputContext;
 import com.android.internal.view.IInputMethod;
 import com.android.internal.view.IInputMethodSession;
 import com.android.internal.view.IInputSessionCallback;
+import com.android.internal.view.InlineSuggestionsRequestInfo;
 import com.android.internal.view.InputConnectionWrapper;
 
 import java.io.FileDescriptor;
@@ -72,6 +74,7 @@ class IInputMethodWrapper extends IInputMethod.Stub
     private static final int DO_SHOW_SOFT_INPUT = 60;
     private static final int DO_HIDE_SOFT_INPUT = 70;
     private static final int DO_CHANGE_INPUTMETHOD_SUBTYPE = 80;
+    private static final int DO_CREATE_INLINE_SUGGESTIONS_REQUEST = 90;
 
     final WeakReference<AbstractInputMethodService> mTarget;
     final Context mContext;
@@ -216,15 +219,31 @@ class IInputMethodWrapper extends IInputMethod.Stub
             case DO_REVOKE_SESSION:
                 inputMethod.revokeSession((InputMethodSession)msg.obj);
                 return;
-            case DO_SHOW_SOFT_INPUT:
-                inputMethod.showSoftInput(msg.arg1, (ResultReceiver)msg.obj);
+            case DO_SHOW_SOFT_INPUT: {
+                final SomeArgs args = (SomeArgs)msg.obj;
+                inputMethod.showSoftInputWithToken(
+                        msg.arg1, (ResultReceiver) args.arg2, (IBinder) args.arg1);
+                args.recycle();
                 return;
-            case DO_HIDE_SOFT_INPUT:
-                inputMethod.hideSoftInput(msg.arg1, (ResultReceiver)msg.obj);
+            }
+            case DO_HIDE_SOFT_INPUT: {
+                final SomeArgs args = (SomeArgs) msg.obj;
+                inputMethod.hideSoftInputWithToken(msg.arg1, (ResultReceiver) args.arg2,
+                        (IBinder) args.arg1);
+                args.recycle();
                 return;
+            }
             case DO_CHANGE_INPUTMETHOD_SUBTYPE:
                 inputMethod.changeInputMethodSubtype((InputMethodSubtype)msg.obj);
                 return;
+            case DO_CREATE_INLINE_SUGGESTIONS_REQUEST:
+                final SomeArgs args = (SomeArgs) msg.obj;
+                inputMethod.onCreateInlineSuggestionsRequest(
+                        (InlineSuggestionsRequestInfo) args.arg1,
+                        (IInlineSuggestionsRequestCallback) args.arg2);
+                args.recycle();
+                return;
+
         }
         Log.w(TAG, "Unhandled message code: " + msg.what);
     }
@@ -263,6 +282,14 @@ class IInputMethodWrapper extends IInputMethod.Stub
             IInputMethodPrivilegedOperations privOps) {
         mCaller.executeOrSendMessage(
                 mCaller.obtainMessageIOO(DO_INITIALIZE_INTERNAL, displayId, token, privOps));
+    }
+
+    @BinderThread
+    @Override
+    public void onCreateInlineSuggestionsRequest(InlineSuggestionsRequestInfo requestInfo,
+            IInlineSuggestionsRequestCallback cb) {
+        mCaller.executeOrSendMessage(
+                mCaller.obtainMessageOO(DO_CREATE_INLINE_SUGGESTIONS_REQUEST, requestInfo, cb));
     }
 
     @BinderThread
@@ -353,16 +380,16 @@ class IInputMethodWrapper extends IInputMethod.Stub
 
     @BinderThread
     @Override
-    public void showSoftInput(int flags, ResultReceiver resultReceiver) {
-        mCaller.executeOrSendMessage(mCaller.obtainMessageIO(DO_SHOW_SOFT_INPUT,
-                flags, resultReceiver));
+    public void showSoftInput(IBinder showInputToken, int flags, ResultReceiver resultReceiver) {
+        mCaller.executeOrSendMessage(mCaller.obtainMessageIOO(DO_SHOW_SOFT_INPUT,
+                flags, showInputToken, resultReceiver));
     }
 
     @BinderThread
     @Override
-    public void hideSoftInput(int flags, ResultReceiver resultReceiver) {
-        mCaller.executeOrSendMessage(mCaller.obtainMessageIO(DO_HIDE_SOFT_INPUT,
-                flags, resultReceiver));
+    public void hideSoftInput(IBinder hideInputToken, int flags, ResultReceiver resultReceiver) {
+        mCaller.executeOrSendMessage(mCaller.obtainMessageIOO(DO_HIDE_SOFT_INPUT,
+                flags, hideInputToken, resultReceiver));
     }
 
     @BinderThread

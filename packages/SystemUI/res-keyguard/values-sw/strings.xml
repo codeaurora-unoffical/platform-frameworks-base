@@ -85,14 +85,6 @@
     <string name="kg_too_many_failed_pin_attempts_dialog_message" msgid="544687656831558971">"Umeandika vibaya PIN mara <xliff:g id="NUMBER_0">%1$d</xliff:g>. \n\n Jaribu tena baada ya sekunde <xliff:g id="NUMBER_1">%2$d</xliff:g>."</string>
     <string name="kg_too_many_failed_password_attempts_dialog_message" msgid="190984061975729494">"Umeandika vibaya nenosiri lako mara <xliff:g id="NUMBER_0">%1$d</xliff:g>. \n\n Jaribu tena baada ya sekunde <xliff:g id="NUMBER_1">%2$d</xliff:g>."</string>
     <string name="kg_too_many_failed_pattern_attempts_dialog_message" msgid="4252405904570284368">"Umechora vibaya mchoro wako wa kufungua mara <xliff:g id="NUMBER_0">%1$d</xliff:g>. \n\n Jaribu tena baada ya sekunde <xliff:g id="NUMBER_1">%2$d</xliff:g>."</string>
-    <!-- no translation found for kg_failed_attempts_now_erasing_user (9046628517316763961) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_now_erasing_user (3588779327358321092) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_almost_at_erase_profile (6114158710353725041) -->
-    <skip />
-    <!-- no translation found for kg_failed_attempts_almost_at_erase_profile (8345451368768804892) -->
-    <skip />
     <string name="kg_password_wrong_pin_code_pukked" msgid="8047350661459040581">"Nambari ya PIN ya SIM si sahihi, sasa lazima uwasiliane na mtoa huduma za mtandao ndipo ufungue kifaa chako."</string>
     <plurals name="kg_password_wrong_pin_code" formatted="false" msgid="7030584350995485026">
       <item quantity="other">Nambari ya PIN ya SIM si sahihi. Una nafasi zingine <xliff:g id="NUMBER_1">%d</xliff:g> za kujaribu.</item>
@@ -109,6 +101,9 @@
     <string name="keyguard_carrier_default" msgid="6359808469637388586">"Hakuna mtandao."</string>
     <string name="accessibility_ime_switch_button" msgid="9082358310194861329">"Kubadili mbinu ya kuingiza data"</string>
     <string name="airplane_mode" msgid="2528005343938497866">"Hali ya ndegeni"</string>
+    <string name="kg_prompt_reason_prepare_for_update_pin" msgid="8878724145347297575">"Inahitaji PIN ili kujiandaa kwa ajili ya sasisho"</string>
+    <string name="kg_prompt_reason_prepare_for_update_pattern" msgid="4873394344883271519">"Inahitaji mchoro ili kujiandaa kwa ajili ya sasisho"</string>
+    <string name="kg_prompt_reason_prepare_for_update_password" msgid="5625446803865598337">"Inahitaji nenosiri ili kujiandaa kwa ajili ya sasisho"</string>
     <string name="kg_prompt_reason_restart_pattern" msgid="4720554342633852066">"Unafaa kuchora mchoro baada ya kuwasha kifaa upya"</string>
     <string name="kg_prompt_reason_restart_pin" msgid="1587671566498057656">"Unafaa kuweka PIN baada ya kuwasha kifaa upya"</string>
     <string name="kg_prompt_reason_restart_password" msgid="8061279087240952002">"Unafaa kuweka nenosiri baada ya kuwasha kifaa upya"</string>

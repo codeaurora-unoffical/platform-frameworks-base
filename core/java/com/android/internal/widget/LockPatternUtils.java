@@ -25,15 +25,14 @@ import static android.app.admin.DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.PasswordMetrics;
 import android.app.trust.IStrongAuthTracker;
 import android.app.trust.TrustManager;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
 import android.os.AsyncTask;
 import android.os.Handler;
@@ -50,6 +49,7 @@ import android.os.storage.StorageManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.SparseBooleanArray;
 import android.util.SparseIntArray;
 import android.util.SparseLongArray;
 
@@ -87,7 +87,6 @@ public class LockPatternUtils {
      * The interval of the countdown for showing progress of the lockout.
      */
     public static final long FAILED_ATTEMPT_COUNTDOWN_INTERVAL_MS = 1000L;
-
 
     /**
      * This dictates when we start telling the user that continued failed attempts will wipe
@@ -1384,6 +1383,22 @@ public class LockPatternUtils {
         }
     }
 
+    public void reportSuccessfulBiometricUnlock(boolean isStrongBiometric, int userId) {
+        try {
+            getLockSettings().reportSuccessfulBiometricUnlock(isStrongBiometric, userId);
+        } catch (RemoteException e) {
+            Log.e(TAG, "Could not report successful biometric unlock", e);
+        }
+    }
+
+    public void scheduleNonStrongBiometricIdleTimeout(int userId) {
+        try {
+            getLockSettings().scheduleNonStrongBiometricIdleTimeout(userId);
+        } catch (RemoteException e) {
+            Log.e(TAG, "Could not schedule non-strong biometric idle timeout", e);
+        }
+    }
+
     /**
      * @see StrongAuthTracker#getStrongAuthForUser
      */
@@ -1559,7 +1574,8 @@ public class LockPatternUtils {
                         SOME_AUTH_REQUIRED_AFTER_USER_REQUEST,
                         STRONG_AUTH_REQUIRED_AFTER_LOCKOUT,
                         STRONG_AUTH_REQUIRED_AFTER_TIMEOUT,
-                        STRONG_AUTH_REQUIRED_AFTER_USER_LOCKDOWN})
+                        STRONG_AUTH_REQUIRED_AFTER_USER_LOCKDOWN,
+                        STRONG_AUTH_REQUIRED_AFTER_NON_STRONG_BIOMETRICS_TIMEOUT})
         @Retention(RetentionPolicy.SOURCE)
         public @interface StrongAuthFlags {}
 
@@ -1601,6 +1617,17 @@ public class LockPatternUtils {
         public static final int STRONG_AUTH_REQUIRED_AFTER_USER_LOCKDOWN = 0x20;
 
         /**
+         * Strong authentication is required to prepare for unattended upgrade.
+         */
+        public static final int STRONG_AUTH_REQUIRED_FOR_UNATTENDED_UPDATE = 0x40;
+
+        /**
+         * Strong authentication is required because it hasn't been used for a time after a
+         * non-strong biometric (i.e. weak or convenience biometric) is used to unlock device.
+         */
+        public static final int STRONG_AUTH_REQUIRED_AFTER_NON_STRONG_BIOMETRICS_TIMEOUT = 0x80;
+
+        /**
          * Strong auth flags that do not prevent biometric methods from being accepted as auth.
          * If any other flags are set, biometric authentication is disabled.
          */
@@ -1610,6 +1637,10 @@ public class LockPatternUtils {
         private final SparseIntArray mStrongAuthRequiredForUser = new SparseIntArray();
         private final H mHandler;
         private final int mDefaultStrongAuthFlags;
+
+        private final SparseBooleanArray mIsNonStrongBiometricAllowedForUser =
+                new SparseBooleanArray();
+        private final boolean mDefaultIsNonStrongBiometricAllowed = true;
 
         public StrongAuthTracker(Context context) {
             this(context, Looper.myLooper());
@@ -1654,14 +1685,33 @@ public class LockPatternUtils {
          * @return true if unlocking with a biometric method alone is allowed for {@code userId}
          * by the current strong authentication requirements.
          */
-        public boolean isBiometricAllowedForUser(int userId) {
-            return (getStrongAuthForUser(userId) & ~ALLOWING_BIOMETRIC) == 0;
+        public boolean isBiometricAllowedForUser(boolean isStrongBiometric, int userId) {
+            boolean allowed = ((getStrongAuthForUser(userId) & ~ALLOWING_BIOMETRIC) == 0);
+            if (!isStrongBiometric) {
+                allowed &= isNonStrongBiometricAllowedAfterIdleTimeout(userId);
+            }
+            return allowed;
+        }
+
+        /**
+         * @return true if unlocking with a non-strong (i.e. weak or convenience) biometric method
+         * alone is allowed for {@code userId}, otherwise returns false.
+         */
+        public boolean isNonStrongBiometricAllowedAfterIdleTimeout(int userId) {
+            return mIsNonStrongBiometricAllowedForUser.get(userId,
+                    mDefaultIsNonStrongBiometricAllowed);
         }
 
         /**
          * Called when the strong authentication requirements for {@code userId} changed.
          */
         public void onStrongAuthRequiredChanged(int userId) {
+        }
+
+        /**
+         * Called when whether non-strong biometric is allowed for {@code userId} changed.
+         */
+        public void onIsNonStrongBiometricAllowedChanged(int userId) {
         }
 
         protected void handleStrongAuthRequiredChanged(@StrongAuthFlags int strongAuthFlags,
@@ -1677,6 +1727,18 @@ public class LockPatternUtils {
             }
         }
 
+        protected void handleIsNonStrongBiometricAllowedChanged(boolean allowed,
+                int userId) {
+            boolean oldValue = isNonStrongBiometricAllowedAfterIdleTimeout(userId);
+            if (allowed != oldValue) {
+                if (allowed == mDefaultIsNonStrongBiometricAllowed) {
+                    mIsNonStrongBiometricAllowedForUser.delete(userId);
+                } else {
+                    mIsNonStrongBiometricAllowedForUser.put(userId, allowed);
+                }
+                onIsNonStrongBiometricAllowedChanged(userId);
+            }
+        }
 
         protected final IStrongAuthTracker.Stub mStub = new IStrongAuthTracker.Stub() {
             @Override
@@ -1685,10 +1747,17 @@ public class LockPatternUtils {
                 mHandler.obtainMessage(H.MSG_ON_STRONG_AUTH_REQUIRED_CHANGED,
                         strongAuthFlags, userId).sendToTarget();
             }
+
+            @Override
+            public void onIsNonStrongBiometricAllowedChanged(boolean allowed, int userId) {
+                mHandler.obtainMessage(H.MSG_ON_IS_NON_STRONG_BIOMETRIC_ALLOWED_CHANGED,
+                        allowed ? 1 : 0, userId).sendToTarget();
+            }
         };
 
         private class H extends Handler {
             static final int MSG_ON_STRONG_AUTH_REQUIRED_CHANGED = 1;
+            static final int MSG_ON_IS_NON_STRONG_BIOMETRIC_ALLOWED_CHANGED = 2;
 
             public H(Looper looper) {
                 super(looper);
@@ -1699,6 +1768,10 @@ public class LockPatternUtils {
                 switch (msg.what) {
                     case MSG_ON_STRONG_AUTH_REQUIRED_CHANGED:
                         handleStrongAuthRequiredChanged(msg.arg1, msg.arg2);
+                        break;
+                    case MSG_ON_IS_NON_STRONG_BIOMETRIC_ALLOWED_CHANGED:
+                        handleIsNonStrongBiometricAllowedChanged(msg.arg1 == 1 /* allowed */,
+                                msg.arg2);
                         break;
                 }
             }
@@ -1735,8 +1808,11 @@ public class LockPatternUtils {
      */
     public boolean hasSecureLockScreen() {
         if (mHasSecureLockScreen == null) {
-            mHasSecureLockScreen = Boolean.valueOf(mContext.getPackageManager()
-                    .hasSystemFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN));
+            try {
+                mHasSecureLockScreen = Boolean.valueOf(getLockSettings().hasSecureLockScreen());
+            } catch (RemoteException e) {
+                e.rethrowFromSystemServer();
+            }
         }
         return mHasSecureLockScreen.booleanValue();
     }
@@ -1748,5 +1824,34 @@ public class LockPatternUtils {
     public static boolean frpCredentialEnabled(Context context) {
         return FRP_CREDENTIAL_ENABLED && context.getResources().getBoolean(
                 com.android.internal.R.bool.config_enableCredentialFactoryResetProtection);
+    }
+
+    /**
+     * Attempt to rederive the unified work challenge for the specified profile user and unlock the
+     * user. If successful, this would allow the user to leave quiet mode automatically without
+     * additional user authentication.
+     *
+     * This is made possible by the framework storing an encrypted copy of the unified challenge
+     * auth-bound to the primary user's lockscreen. As long as the primery user has unlocked
+     * recently (7 days), the framework will be able to decrypt it and plug the secret into the
+     * unlock flow.
+     *
+     * @return {@code true} if automatic unlocking is successful, {@code false} otherwise.
+     */
+    public boolean tryUnlockWithCachedUnifiedChallenge(int userId) {
+        try {
+            return getLockSettings().tryUnlockWithCachedUnifiedChallenge(userId);
+        } catch (RemoteException re) {
+            return false;
+        }
+    }
+
+    /** Remove cached unified profile challenge, for testing and CTS usage. */
+    public void removeCachedUnifiedChallenge(int userId) {
+        try {
+            getLockSettings().removeCachedUnifiedChallenge(userId);
+        } catch (RemoteException re) {
+            re.rethrowFromSystemServer();
+        }
     }
 }

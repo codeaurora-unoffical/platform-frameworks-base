@@ -17,7 +17,7 @@
 package android.hardware.usb;
 
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.util.Log;
 
@@ -27,6 +27,7 @@ import dalvik.system.CloseGuard;
 
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
+import java.util.Objects;
 
 /**
  * A class representing USB request packet.
@@ -96,7 +97,7 @@ public class UsbRequest {
      */
     public boolean initialize(UsbDeviceConnection connection, UsbEndpoint endpoint) {
         mEndpoint = endpoint;
-        mConnection = Preconditions.checkNotNull(connection, "connection");
+        mConnection = Objects.requireNonNull(connection, "connection");
 
         boolean wasInitialized = native_init(connection, endpoint.getAddress(),
                 endpoint.getAttributes(), endpoint.getMaxPacketSize(), endpoint.getInterval());

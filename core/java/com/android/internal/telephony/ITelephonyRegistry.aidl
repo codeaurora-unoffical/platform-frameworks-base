@@ -19,11 +19,15 @@ package com.android.internal.telephony;
 import android.content.Intent;
 import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
-import android.os.Bundle;
+import android.telephony.BarringInfo;
 import android.telephony.CallQuality;
+import android.telephony.CellIdentity;
 import android.telephony.CellInfo;
+import android.telephony.DisplayInfo;
 import android.telephony.ims.ImsReasonInfo;
 import android.telephony.PhoneCapability;
+import android.telephony.PhysicalChannelConfig;
+import android.telephony.PreciseDataConnectionState;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.emergency.EmergencyNumber;
@@ -60,23 +64,20 @@ interface ITelephonyRegistry {
     @UnsupportedAppUsage(maxTargetSdk = 28)
     void notifyDataActivity(int state);
     void notifyDataActivityForSubscriber(in int subId, int state);
-    void notifyDataConnectionForSubscriber(int phoneId, int subId, int state,
-            boolean isDataConnectivityPossible,
-            String apn, String apnType, in LinkProperties linkProperties,
-            in NetworkCapabilities networkCapabilities, int networkType, boolean roaming);
-    void notifyDataConnectionFailedForSubscriber(int phoneId, int subId, String apnType);
-    @UnsupportedAppUsage(maxTargetSdk = 28)
-    void notifyCellLocation(in Bundle cellLocation);
-    void notifyCellLocationForSubscriber(in int subId, in Bundle cellLocation);
-    @UnsupportedAppUsage(maxTargetSdk = 28)
-    void notifyOtaspChanged(in int subId, in int otaspMode);
+    void notifyDataConnectionForSubscriber(
+            int phoneId, int subId, int apnType, in PreciseDataConnectionState preciseState);
+    @UnsupportedAppUsage
+    void notifyDataConnectionFailed(String apnType);
+    // Uses CellIdentity which is Parcelable here; will convert to CellLocation in client.
+    void notifyCellLocation(in CellIdentity cellLocation);
+    void notifyCellLocationForSubscriber(in int subId, in CellIdentity cellLocation);
     @UnsupportedAppUsage
     void notifyCellInfo(in List<CellInfo> cellInfo);
     void notifyPreciseCallState(int phoneId, int subId, int ringingCallState,
             int foregroundCallState, int backgroundCallState);
     void notifyDisconnectCause(int phoneId, int subId, int disconnectCause,
             int preciseDisconnectCause);
-    void notifyPreciseDataConnectionFailed(int phoneId, int subId, String apnType, String apn,
+    void notifyPreciseDataConnectionFailed(int phoneId, int subId, int apnType, String apn,
             int failCause);
     void notifyCellInfoForSubscriber(in int subId, in List<CellInfo> cellInfo);
     void notifySrvccStateChanged(in int subId, in int lteState);
@@ -87,6 +88,7 @@ interface ITelephonyRegistry {
     void notifyOpportunisticSubscriptionInfoChanged();
     void notifyCarrierNetworkChange(in boolean active);
     void notifyUserMobileDataStateChangedForPhoneId(in int phoneId, in int subId, in boolean state);
+    void notifyDisplayInfoChanged(int slotIndex, int subId, in DisplayInfo displayInfo);
     void notifyPhoneCapabilityChanged(in PhoneCapability capability);
     void notifyActiveDataSubIdChanged(int activeDataSubId);
     void notifyRadioPowerStateChanged(in int phoneId, in int subId, in int state);
@@ -98,4 +100,7 @@ interface ITelephonyRegistry {
     void notifyCallQualityChanged(in CallQuality callQuality, int phoneId, int subId,
             int callNetworkType);
     void notifyImsDisconnectCause(int subId, in ImsReasonInfo imsReasonInfo);
+    void notifyRegistrationFailed(int slotIndex, int subId, in CellIdentity cellIdentity,
+            String chosenPlmn, int domain, int causeCode, int additionalCauseCode);
+    void notifyBarringInfoChanged(int slotIndex, int subId, in BarringInfo barringInfo);
 }

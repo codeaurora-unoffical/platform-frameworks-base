@@ -29,7 +29,9 @@ import android.net.Uri;
 import android.service.carrier.CarrierIdentifier;
 import android.telecom.PhoneAccount;
 import android.telecom.PhoneAccountHandle;
+import android.telephony.CallForwardingInfo;
 import android.telephony.CarrierRestrictionRules;
+import android.telephony.CellIdentity;
 import android.telephony.CellInfo;
 import android.telephony.ClientRequestStats;
 import android.telephony.IccOpenLogicalChannelResponse;
@@ -39,6 +41,7 @@ import android.telephony.NeighboringCellInfo;
 import android.telephony.NetworkScanRequest;
 import android.telephony.PhoneNumberRange;
 import android.telephony.RadioAccessFamily;
+import android.telephony.RadioAccessSpecifier;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.TelephonyHistogram;
@@ -53,6 +56,7 @@ import android.telephony.ims.aidl.IImsRegistration;
 import android.telephony.ims.aidl.IImsRegistrationCallback;
 import com.android.ims.internal.IImsServiceFeatureCallback;
 import com.android.internal.telephony.CellNetworkScanResult;
+import com.android.internal.telephony.IBooleanConsumer;
 import com.android.internal.telephony.IIntegerConsumer;
 import com.android.internal.telephony.INumberVerificationCallback;
 import com.android.internal.telephony.OperatorInfo;
@@ -116,13 +120,6 @@ interface ITelephony {
      */
     boolean isRadioOnForSubscriberWithFeature(int subId, String callingPackage, String callingFeatureId);
 
-    /**
-     * Supply a pin to unlock the SIM.  Blocks until a result is determined.
-     * @param pin The pin to check.
-     * @return whether the operation was a success.
-     */
-    @UnsupportedAppUsage
-    boolean supplyPin(String pin);
 
     /**
      * Supply a pin to unlock the SIM for particular subId.
@@ -132,15 +129,6 @@ interface ITelephony {
      * @return whether the operation was a success.
      */
     boolean supplyPinForSubscriber(int subId, String pin);
-
-    /**
-     * Supply puk to unlock the SIM and set SIM pin to new pin.
-     *  Blocks until a result is determined.
-     * @param puk The puk to check.
-     *        pin The new pin to be set in SIM
-     * @return whether the operation was a success.
-     */
-    boolean supplyPuk(String puk, String pin);
 
     /**
      * Supply puk to unlock the SIM and set SIM pin to new pin.
@@ -159,27 +147,7 @@ interface ITelephony {
      * @return retValue[0] = Phone.PIN_RESULT_SUCCESS on success. Otherwise error code
      *         retValue[1] = number of attempts remaining if known otherwise -1
      */
-    int[] supplyPinReportResult(String pin);
-
-    /**
-     * Supply a pin to unlock the SIM.  Blocks until a result is determined.
-     * Returns a specific success/error code.
-     * @param pin The pin to check.
-     * @return retValue[0] = Phone.PIN_RESULT_SUCCESS on success. Otherwise error code
-     *         retValue[1] = number of attempts remaining if known otherwise -1
-     */
     int[] supplyPinReportResultForSubscriber(int subId, String pin);
-
-    /**
-     * Supply puk to unlock the SIM and set SIM pin to new pin.
-     * Blocks until a result is determined.
-     * Returns a specific success/error code
-     * @param puk The puk to check
-     *        pin The pin to check.
-     * @return retValue[0] = Phone.PIN_RESULT_SUCCESS on success. Otherwise error code
-     *         retValue[1] = number of attempts remaining if known otherwise -1
-     */
-    int[] supplyPukReportResult(String puk, String pin);
 
     /**
      * Supply puk to unlock the SIM and set SIM pin to new pin.
@@ -305,14 +273,15 @@ interface ITelephony {
      */
     boolean isDataConnectivityPossible(int subId);
 
-    Bundle getCellLocation(String callingPkg, String callingFeatureId);
+    // Uses CellIdentity which is Parcelable here; will convert to CellLocation in client.
+    CellIdentity getCellLocation(String callingPkg, String callingFeatureId);
 
     /**
      * Returns the ISO country code equivalent of the current registered
      * operator's MCC (Mobile Country Code).
      * @see android.telephony.TelephonyManager#getNetworkCountryIso
      */
-    String getNetworkCountryIsoForPhone(int phoneId, String callingPkg, String callingFeatureId);
+    String getNetworkCountryIsoForPhone(int phoneId);
 
     /**
      * Returns the neighboring cell information of the device.
@@ -862,6 +831,11 @@ interface ITelephony {
     void disableIms(int slotId);
 
     /**
+    * Toggle framework IMS disables and enables.
+    */
+    void resetIms(int slotIndex);
+
+    /**
      *  Get IImsMmTelFeature binder from ImsResolver that corresponds to the subId and MMTel feature
      *  as well as registering the MmTelFeature for callbacks using the IImsServiceFeatureCallback
      *  interface.
@@ -888,12 +862,13 @@ interface ITelephony {
     /**
     *  @return true if the ImsService to bind to for the slot id specified was set, false otherwise.
     */
-    boolean setImsService(int slotId, boolean isCarrierImsService, String packageName);
+    boolean setBoundImsServiceOverride(int slotIndex, boolean isCarrierService,
+            in int[] featureTypes, in String packageName);
 
     /**
     * @return the package name of the carrier/device ImsService associated with this slot.
     */
-    String getImsService(int slotId, boolean isCarrierImsService);
+    String getBoundImsServicePackage(int slotIndex, boolean isCarrierImsService, int featureType);
 
     /**
      * Get the MmTelFeature state attached to this subscription id.
@@ -955,6 +930,23 @@ interface ITelephony {
             int subId, in OperatorInfo operatorInfo, boolean persisSelection);
 
     /**
+     * Get the allowed network types that store in the telephony provider.
+     *
+     * @param subId the id of the subscription.
+     * @return allowedNetworkTypes the allowed network types.
+     */
+    long getAllowedNetworkTypes(int subId);
+
+    /**
+     * Set the allowed network types.
+     *
+     * @param subId the id of the subscription.
+     * @param allowedNetworkTypes the allowed network types.
+     * @return true on success; false on any failure.
+     */
+    boolean setAllowedNetworkTypes(int subId, long allowedNetworkTypes);
+
+    /**
      * Set the preferred network type.
      * Used for device configuration by some CDMA operators.
      *
@@ -1004,6 +996,11 @@ interface ITelephony {
      * @return {@code true} if manual network selection is allowed, otherwise return {@code false}.
      */
      boolean isManualNetworkSelectionAllowed(int subId);
+
+    /**
+     * Enable or disable always reporting signal strength changes from radio.
+     */
+     void setAlwaysReportSignalStrength(int subId, boolean isEnable);
 
     /**
      * Get P-CSCF address from PCO after data connection is established or modified.
@@ -1133,7 +1130,7 @@ interface ITelephony {
     /**
      * @hide
      */
-    String[] getMergedSubscriberIdsFromGroup(int subId, String callingPackage);
+    String[] getMergedImsisFromGroup(int subId, String callingPackage);
 
     /**
      * Override the operator branding for the current ICCID.
@@ -1626,14 +1623,77 @@ interface ITelephony {
     void carrierActionResetAll(int subId);
 
     /**
-     * Get aggregated video call data usage since boot.
-     * Permissions android.Manifest.permission.READ_NETWORK_USAGE_HISTORY is required.
+     * Gets the voice call forwarding info {@link CallForwardingInfo}, given the call forward
+     * reason.
      *
-     * @param perUidStats True if requesting data usage per uid, otherwise overall usage.
-     * @return Snapshot of video call data usage
+     * @param callForwardingReason the call forwarding reasons which are the bitwise-OR combination
+     * of the following constants:
+     * <ol>
+     * <li>{@link CallForwardingInfo#REASON_BUSY} </li>
+     * <li>{@link CallForwardingInfo#REASON_NO_REPLY} </li>
+     * <li>{@link CallForwardingInfo#REASON_NOT_REACHABLE} </li>
+     * </ol>
+     *
+     * @throws IllegalArgumentException if callForwardingReason is not a bitwise-OR combination
+     * of {@link CallForwardingInfo.REASON_BUSY}, {@link CallForwardingInfo.REASON_BUSY},
+     * {@link CallForwardingInfo.REASON_NOT_REACHABLE}
+     *
+     * @return {@link CallForwardingInfo} with the status {@link CallForwardingInfo#STATUS_ACTIVE}
+     * or {@link CallForwardingInfo#STATUS_INACTIVE} and the target phone number to forward calls
+     * to, if it's available. Otherwise, it will return a {@link CallForwardingInfo} with status
+     * {@link CallForwardingInfo#STATUS_NOT_SUPPORTED} or
+     * {@link CallForwardingInfo#STATUS_FDN_CHECK_FAILURE} depending on the situation.
+     *
      * @hide
      */
-    NetworkStats getVtDataUsage(int subId, boolean perUidStats);
+    CallForwardingInfo getCallForwarding(int subId, int callForwardingReason);
+
+    /**
+     * Sets the voice call forwarding info including status (enable/disable), call forwarding
+     * reason, the number to forward, and the timeout before the forwarding is attempted.
+     *
+     * @param callForwardingInfo {@link CallForwardingInfo} to setup the call forwarding.
+     * Enabling if {@link CallForwardingInfo#getStatus()} returns
+     * {@link CallForwardingInfo#STATUS_ACTIVE}; Disabling if
+     * {@link CallForwardingInfo#getStatus()} returns {@link CallForwardingInfo#STATUS_INACTIVE}.
+     *
+     * @throws IllegalArgumentException if any of the following:
+     * 0) callForwardingInfo is null.
+     * 1) {@link CallForwardingInfo#getStatus()} for callForwardingInfo returns neither
+     * {@link CallForwardingInfo#STATUS_ACTIVE} nor {@link CallForwardingInfo#STATUS_INACTIVE}.
+     * 2) {@link CallForwardingInfo#getReason()} for callForwardingInfo doesn't return the
+     * bitwise-OR combination of {@link CallForwardingInfo.REASON_BUSY},
+     * {@link CallForwardingInfo.REASON_BUSY}, {@link CallForwardingInfo.REASON_NOT_REACHABLE}
+     * 3) {@link CallForwardingInfo#getNumber()} for callForwardingInfo returns null.
+     * 4) {@link CallForwardingInfo#getTimeout()} for callForwardingInfo returns nagetive value.
+     *
+     * @return {@code true} to indicate it was set successfully; {@code false} otherwise.
+     *
+     * @hide
+     */
+    boolean setCallForwarding(int subId, in CallForwardingInfo callForwardingInfo);
+
+    /**
+     * Gets the status of voice call waiting function. Call waiting function enables the waiting
+     * for the incoming call when it reaches the user who is busy to make another call and allows
+     * users to decide whether to switch to the incoming call.
+     *
+     * @return the status of call waiting function.
+     * @hide
+     */
+    int getCallWaitingStatus(int subId);
+
+    /**
+     * Sets the status for voice call waiting function. Call waiting function enables the waiting
+     * for the incoming call when it reaches the user who is busy to make another call and allows
+     * users to decide whether to switch to the incoming call.
+     *
+     * @param isEnable {@code true} to enable; {@code false} to disable.
+     * @return {@code true} to indicate it was set successfully; {@code false} otherwise.
+     *
+     * @hide
+     */
+    boolean setCallWaitingStatus(int subId, boolean isEnable);
 
     /**
      * Policy control of data connection. Usually used when data limit is passed.
@@ -1754,14 +1814,6 @@ interface ITelephony {
      * @return boolean Return true if the switch succeeds, false if the switch fails.
      */
     boolean switchSlots(in int[] physicalSlots);
-
-    /**
-     * Sets radio indication update mode. This can be used to control the behavior of indication
-     * update from modem to Android frameworks. For example, by default several indication updates
-     * are turned off when screen is off, but in some special cases (e.g. carkit is connected but
-     * screen is off) we want to turn on those indications even when the screen is off.
-     */
-    void setRadioIndicationUpdateMode(int subId, int filters, int mode);
 
     /**
      * Returns whether mobile data roaming is enabled on the subscription with id {@code subId}.
@@ -2010,6 +2062,17 @@ interface ITelephony {
      */
     boolean getImsProvisioningStatusForCapability(int subId, int capability, int tech);
 
+    /**
+     * Get the provisioning status for the IMS Rcs capability specified.
+     */
+    boolean getRcsProvisioningStatusForCapability(int subId, int capability);
+
+    /**
+     * Set the provisioning status for the IMS Rcs capability using the specified subscription.
+     */
+    void setRcsProvisioningStatusForCapability(int subId, int capability,
+            boolean isProvisioned);
+
     /** Is the capability and tech flagged as provisioned in the cache */
     boolean isMmTelCapabilityProvisionedInCache(int subId, int capability, int tech);
 
@@ -2109,6 +2172,11 @@ interface ITelephony {
     int getRadioHalVersion();
 
     /**
+     * Get the current calling package name.
+     */
+    String getCurrentPackageName();
+
+    /**
      * Returns true if the specified type of application (e.g. {@link #APPTYPE_CSIM} is present
      * on the UICC card.
      * @hide
@@ -2120,6 +2188,11 @@ interface ITelephony {
     boolean isDataEnabledForApn(int apnType, int subId, String callingPackage);
 
     boolean isApnMetered(int apnType, int subId);
+
+    oneway void setSystemSelectionChannels(in List<RadioAccessSpecifier> specifiers,
+            int subId, IBooleanConsumer resultCallback);
+
+    boolean isMvnoMatched(int subId, int mvnoType, String mvnoMatchData);
 
     /**
      * Enqueue a pending sms Consumer, which will answer with the user specified selection for an
@@ -2149,7 +2222,43 @@ interface ITelephony {
     boolean isDataAllowedInVoiceCall(int subId);
 
     /**
+     * Set whether a subscription always allows MMS connection.
+     */
+    boolean setAlwaysAllowMmsData(int subId, boolean allow);
+
+    /**
      * Command line command to enable or disable handling of CEP data for test purposes.
      */
     oneway void setCepEnabled(boolean isCepEnabled);
+
+    /**
+     * Notify Rcs auto config received.
+     */
+    void notifyRcsAutoConfigurationReceived(int subId, in byte[] config, boolean isCompressed);
+
+    boolean isIccLockEnabled(int subId);
+
+    int setIccLockEnabled(int subId, boolean enabled, String password);
+
+    int changeIccLockPassword(int subId, String oldPassword, String newPassword);
+
+    /**
+     * Request for receiving user activity notification
+     */
+    oneway void requestUserActivityNotification();
+
+    /**
+     * Called when userActivity is signalled in the power manager.
+     * This is safe to call from any thread, with any window manager locks held or not.
+     */
+    oneway void userActivity();
+
+    /**
+     * Get the user manual network selection.
+     * Return empty string if in automatic selection.
+     *
+     * @param subId the id of the subscription
+     * @return operatorinfo on success
+     */
+    String getManualNetworkSelectionPlmn(int subId);
 }

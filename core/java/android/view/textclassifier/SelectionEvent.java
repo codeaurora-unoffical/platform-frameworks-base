@@ -140,6 +140,7 @@ public final class SelectionEvent implements Parcelable {
     private int mEnd;
     private int mSmartStart;
     private int mSmartEnd;
+    private boolean mUseDefaultTextClassifier;
 
     SelectionEvent(
             int start, int end,
@@ -149,7 +150,7 @@ public final class SelectionEvent implements Parcelable {
         mAbsoluteStart = start;
         mAbsoluteEnd = end;
         mEventType = eventType;
-        mEntityType = Preconditions.checkNotNull(entityType);
+        mEntityType = Objects.requireNonNull(entityType);
         mResultId = resultId;
         mInvocationMethod = invocationMethod;
     }
@@ -175,6 +176,7 @@ public final class SelectionEvent implements Parcelable {
         mSmartStart = in.readInt();
         mSmartEnd = in.readInt();
         mUserId = in.readInt();
+        mUseDefaultTextClassifier = in.readBoolean();
     }
 
     @Override
@@ -204,6 +206,7 @@ public final class SelectionEvent implements Parcelable {
         dest.writeInt(mSmartStart);
         dest.writeInt(mSmartEnd);
         dest.writeInt(mUserId);
+        dest.writeBoolean(mUseDefaultTextClassifier);
     }
 
     @Override
@@ -257,7 +260,7 @@ public final class SelectionEvent implements Parcelable {
     public static SelectionEvent createSelectionModifiedEvent(
             int start, int end, @NonNull TextClassification classification) {
         Preconditions.checkArgument(end >= start, "end cannot be less than start");
-        Preconditions.checkNotNull(classification);
+        Objects.requireNonNull(classification);
         final String entityType = classification.getEntityCount() > 0
                 ? classification.getEntity(0)
                 : TextClassifier.TYPE_UNKNOWN;
@@ -281,7 +284,7 @@ public final class SelectionEvent implements Parcelable {
     public static SelectionEvent createSelectionModifiedEvent(
             int start, int end, @NonNull TextSelection selection) {
         Preconditions.checkArgument(end >= start, "end cannot be less than start");
-        Preconditions.checkNotNull(selection);
+        Objects.requireNonNull(selection);
         final String entityType = selection.getEntityCount() > 0
                 ? selection.getEntity(0)
                 : TextClassifier.TYPE_UNKNOWN;
@@ -329,7 +332,7 @@ public final class SelectionEvent implements Parcelable {
             int start, int end, @SelectionEvent.ActionType int actionType,
             @NonNull TextClassification classification) {
         Preconditions.checkArgument(end >= start, "end cannot be less than start");
-        Preconditions.checkNotNull(classification);
+        Objects.requireNonNull(classification);
         checkActionType(actionType);
         final String entityType = classification.getEntityCount() > 0
                 ? classification.getEntity(0)
@@ -398,7 +401,7 @@ public final class SelectionEvent implements Parcelable {
     }
 
     void setEntityType(@EntityType String entityType) {
-        mEntityType = Preconditions.checkNotNull(entityType);
+        mEntityType = Objects.requireNonNull(entityType);
     }
 
     /**
@@ -425,6 +428,26 @@ public final class SelectionEvent implements Parcelable {
     @UserIdInt
     public int getUserId() {
         return mUserId;
+    }
+
+    /**
+     * Sets whether to use the default text classifier to handle this request.
+     * This will be ignored if it is not the system text classifier to handle this request.
+     *
+     * @hide
+     */
+    void setUseDefaultTextClassifier(boolean useDefaultTextClassifier) {
+        mUseDefaultTextClassifier = useDefaultTextClassifier;
+    }
+
+    /**
+     * Returns whether to use the default text classifier to handle this request. This
+     * will be ignored if it is not the system text classifier to handle this request.
+     *
+     * @hide
+     */
+    public boolean getUseDefaultTextClassifier() {
+        return mUseDefaultTextClassifier;
     }
 
     /**
@@ -642,7 +665,8 @@ public final class SelectionEvent implements Parcelable {
         return Objects.hash(mAbsoluteStart, mAbsoluteEnd, mEventType, mEntityType,
                 mWidgetVersion, mPackageName, mUserId, mWidgetType, mInvocationMethod, mResultId,
                 mEventTime, mDurationSinceSessionStart, mDurationSincePreviousEvent,
-                mEventIndex, mSessionId, mStart, mEnd, mSmartStart, mSmartEnd);
+                mEventIndex, mSessionId, mStart, mEnd, mSmartStart, mSmartEnd,
+                mUseDefaultTextClassifier);
     }
 
     @Override
@@ -673,7 +697,8 @@ public final class SelectionEvent implements Parcelable {
                 && mStart == other.mStart
                 && mEnd == other.mEnd
                 && mSmartStart == other.mSmartStart
-                && mSmartEnd == other.mSmartEnd;
+                && mSmartEnd == other.mSmartEnd
+                && mUseDefaultTextClassifier == other.mUseDefaultTextClassifier;
     }
 
     @Override
@@ -683,12 +708,13 @@ public final class SelectionEvent implements Parcelable {
                         + "widgetVersion=%s, packageName=%s, widgetType=%s, invocationMethod=%s, "
                         + "userId=%d, resultId=%s, eventTime=%d, durationSinceSessionStart=%d, "
                         + "durationSincePreviousEvent=%d, eventIndex=%d,"
-                        + "sessionId=%s, start=%d, end=%d, smartStart=%d, smartEnd=%d}",
+                        + "sessionId=%s, start=%d, end=%d, smartStart=%d, smartEnd=%d, "
+                        + "mUseDefaultTextClassifier=%b}",
                 mAbsoluteStart, mAbsoluteEnd, mEventType, mEntityType,
                 mWidgetVersion, mPackageName, mWidgetType, mInvocationMethod,
                 mUserId, mResultId, mEventTime, mDurationSinceSessionStart,
                 mDurationSincePreviousEvent, mEventIndex,
-                mSessionId, mStart, mEnd, mSmartStart, mSmartEnd);
+                mSessionId, mStart, mEnd, mSmartStart, mSmartEnd, mUseDefaultTextClassifier);
     }
 
     public static final @android.annotation.NonNull Creator<SelectionEvent> CREATOR = new Creator<SelectionEvent>() {

@@ -29,9 +29,11 @@ import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Person;
 import android.content.Context;
-import android.content.Intent;
 import android.content.pm.LauncherApps;
 import android.content.pm.ShortcutInfo;
+import android.graphics.Color;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.Icon;
 import android.os.Bundle;
 import android.os.Parcelable;
@@ -39,8 +41,11 @@ import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.Log;
 
+import com.android.internal.graphics.ColorUtils;
 import com.android.internal.util.ArrayUtils;
+import com.android.internal.util.ContrastColorUtil;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.people.PeopleHubNotificationListenerKt;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,8 +73,8 @@ public class BubbleExperimentConfig {
 
     private static final String WHITELISTED_AUTO_BUBBLE_APPS = "whitelisted_auto_bubble_apps";
 
-    private static final String ALLOW_BUBBLE_MENU = "allow_bubble_screenshot_menu";
-    private static final boolean ALLOW_BUBBLE_MENU_DEFAULT = false;
+    private static final String ALLOW_BUBBLE_OVERFLOW = "allow_bubble_overflow";
+    private static final boolean ALLOW_BUBBLE_OVERFLOW_DEFAULT = false;
 
     /**
      * When true, if a notification has the information necessary to bubble (i.e. valid
@@ -82,6 +87,15 @@ public class BubbleExperimentConfig {
         return Settings.Secure.getInt(context.getContentResolver(),
                 ALLOW_ANY_NOTIF_TO_BUBBLE,
                 ALLOW_ANY_NOTIF_TO_BUBBLE_DEFAULT ? 1 : 0) != 0;
+    }
+
+    /**
+     * When true, show a menu with dismissed and aged-out bubbles.
+     */
+    static boolean allowBubbleOverflow(Context context) {
+        return Settings.Secure.getInt(context.getContentResolver(),
+                ALLOW_BUBBLE_OVERFLOW,
+                ALLOW_BUBBLE_OVERFLOW_DEFAULT ? 1 : 0) != 0;
     }
 
     /**
@@ -126,16 +140,6 @@ public class BubbleExperimentConfig {
     }
 
     /**
-     * When true, show a menu when a bubble is long-pressed, which will allow the user to take
-     * actions on that bubble.
-     */
-    static boolean allowBubbleScreenshotMenu(Context context) {
-        return Settings.Secure.getInt(context.getContentResolver(),
-                ALLOW_BUBBLE_MENU,
-                ALLOW_BUBBLE_MENU_DEFAULT ? 1 : 0) != 0;
-    }
-
-    /**
      * If {@link #allowAnyNotifToBubble(Context)} is true, this method creates and adds
      * {@link android.app.Notification.BubbleMetadata} to the notification entry as long as
      * the notification has necessary info for BubbleMetadata.
@@ -176,7 +180,7 @@ public class BubbleExperimentConfig {
             ShortcutInfo info = getShortcutInfo(context, entry.getSbn().getPackageName(),
                     entry.getSbn().getUser(), shortcutId);
             if (info != null) {
-                metadata = createForShortcut(context, entry);
+                metadata = createForShortcut(shortcutId);
             }
 
             // Replace existing metadata with shortcut, or we're bubbling for experiment
@@ -227,42 +231,43 @@ public class BubbleExperimentConfig {
         List<Person> personList = getPeopleFromNotification(entry);
         if (personList.size() > 0) {
             final Person person = personList.get(0);
-
             if (person != null) {
                 icon = person.getIcon();
+                if (icon == null) {
+                    // Lets try and grab the icon constructed by the layout
+                    Drawable d = PeopleHubNotificationListenerKt.extractAvatarFromRow(entry);
+                    if (d instanceof  BitmapDrawable) {
+                        icon = Icon.createWithBitmap(((BitmapDrawable) d).getBitmap());
+                    }
+                }
             }
         }
         if (icon == null) {
-            icon = notification.getLargeIcon() != null
-                    ? notification.getLargeIcon()
-                    : notification.getSmallIcon();
+            boolean shouldTint = notification.getLargeIcon() == null;
+            icon = shouldTint
+                    ? notification.getSmallIcon()
+                    : notification.getLargeIcon();
+            if (shouldTint) {
+                int notifColor = entry.getSbn().getNotification().color;
+                notifColor = ColorUtils.setAlphaComponent(notifColor, 255);
+                notifColor = ContrastColorUtil.findContrastColor(notifColor, Color.WHITE,
+                        true /* findFg */, 3f);
+                icon.setTint(notifColor);
+            }
         }
         if (intent != null) {
             return new Notification.BubbleMetadata.Builder()
+                    .createIntentBubble(intent, icon)
                     .setDesiredHeight(BUBBLE_HEIGHT)
-                    .setIcon(icon)
-                    .setIntent(intent)
                     .build();
         }
         return null;
     }
 
-    static Notification.BubbleMetadata createForShortcut(Context context, NotificationEntry entry) {
-        // ShortcutInfo does not return an icon, instead a Drawable, lets just use
-        // notification icon for BubbleMetadata.
-        Icon icon = entry.getSbn().getNotification().getSmallIcon();
-
-        // ShortcutInfo does not return the intent, lets make a fake but identifiable
-        // intent so we can still add bubbleMetadata
-        if (sDummyShortcutIntent == null) {
-            Intent i = new Intent(SHORTCUT_DUMMY_INTENT);
-            sDummyShortcutIntent = PendingIntent.getActivity(context, 0, i,
-                    PendingIntent.FLAG_UPDATE_CURRENT);
-        }
+    static Notification.BubbleMetadata createForShortcut(String shortcutId) {
         return new Notification.BubbleMetadata.Builder()
                 .setDesiredHeight(BUBBLE_HEIGHT)
-                .setIcon(icon)
-                .setIntent(sDummyShortcutIntent)
+                .createShortcutBubble(shortcutId)
                 .build();
     }
 
@@ -282,10 +287,6 @@ public class BubbleExperimentConfig {
         return shortcuts != null && shortcuts.size() > 0
                 ? shortcuts.get(0)
                 : null;
-    }
-
-    static boolean isShortcutIntent(PendingIntent intent) {
-        return intent.equals(sDummyShortcutIntent);
     }
 
     static List<Person> getPeopleFromNotification(NotificationEntry entry) {

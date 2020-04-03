@@ -16,12 +16,11 @@
 
 package android.inputmethodservice;
 
-import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_NONE;
+import static android.view.WindowInsets.Type.navigationBars;
 import static android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS;
-import static android.view.WindowManager.LayoutParams.PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND;
 
 import static java.lang.annotation.RetentionPolicy.SOURCE;
 
@@ -32,10 +31,11 @@ import android.annotation.IntDef;
 import android.annotation.MainThread;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityManager;
 import android.app.Dialog;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
@@ -43,10 +43,12 @@ import android.database.ContentObserver;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.net.Uri;
+import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.RemoteException;
 import android.os.ResultReceiver;
 import android.os.SystemClock;
 import android.provider.Settings;
@@ -57,6 +59,7 @@ import android.text.method.MovementMethod;
 import android.util.Log;
 import android.util.PrintWriterPrinter;
 import android.util.Printer;
+import android.util.Size;
 import android.view.Gravity;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
@@ -70,11 +73,14 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.animation.AnimationUtils;
+import android.view.autofill.AutofillId;
 import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.CursorAnchorInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
+import android.view.inputmethod.InlineSuggestionsRequest;
+import android.view.inputmethod.InlineSuggestionsResponse;
 import android.view.inputmethod.InputBinding;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputContentInfo;
@@ -91,6 +97,8 @@ import com.android.internal.inputmethod.IInputContentUriToken;
 import com.android.internal.inputmethod.IInputMethodPrivilegedOperations;
 import com.android.internal.inputmethod.InputMethodPrivilegedOperations;
 import com.android.internal.inputmethod.InputMethodPrivilegedOperationsRegistry;
+import com.android.internal.view.IInlineSuggestionsRequestCallback;
+import com.android.internal.view.InlineSuggestionsRequestInfo;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -436,6 +444,42 @@ public class InputMethodService extends AbstractInputMethodService {
     final Insets mTmpInsets = new Insets();
     final int[] mTmpLocation = new int[2];
 
+    /**
+     * We use a separate {@code mInlineLock} to make sure {@code mInlineSuggestionSession} is
+     * only accessed synchronously. Although when the lock is introduced, all the calls are from
+     * the main thread so the lock is not really necessarily (but for the same reason it also
+     * doesn't hurt), it's still being added as a safety guard to make sure in the future we
+     * don't add more code causing race condition when updating the {@code
+     * mInlineSuggestionSession}.
+     */
+    private final Object mInlineLock = new Object();
+    @GuardedBy("mInlineLock")
+    @Nullable
+    private InlineSuggestionSession mInlineSuggestionSession;
+
+    private boolean mAutomotiveHideNavBarForKeyboard;
+    private boolean mIsAutomotive;
+
+    /**
+     * An opaque {@link Binder} token of window requesting {@link InputMethodImpl#showSoftInput}
+     * The original app window token is passed from client app window.
+     * {@link com.android.server.inputmethod.InputMethodManagerService} creates a unique dummy
+     * token to identify this window.
+     * This dummy token is only valid for a single call to {@link InputMethodImpl#showSoftInput},
+     * after which it is set null until next call.
+     */
+    private IBinder mCurShowInputToken;
+
+    /**
+     * An opaque {@link Binder} token of window requesting {@link InputMethodImpl#hideSoftInput}
+     * The original app window token is passed from client app window.
+     * {@link com.android.server.inputmethod.InputMethodManagerService} creates a unique dummy
+     * token to identify this window.
+     * This dummy token is only valid for a single call to {@link InputMethodImpl#hideSoftInput},
+     * after which it is set {@code null} until next call.
+     */
+    private IBinder mCurHideInputToken;
+
     final ViewTreeObserver.OnComputeInternalInsetsListener mInsetsComputer = info -> {
         onComputeInsets(mTmpInsets);
         if (isExtractViewShown()) {
@@ -475,6 +519,10 @@ public class InputMethodService extends AbstractInputMethodService {
      * all of the standard behavior for an input method.
      */
     public class InputMethodImpl extends AbstractInputMethodImpl {
+
+        private boolean mSystemCallingShowSoftInput;
+        private boolean mSystemCallingHideSoftInput;
+
         /**
          * {@inheritDoc}
          * @hide
@@ -491,6 +539,21 @@ public class InputMethodService extends AbstractInputMethodService {
             InputMethodPrivilegedOperationsRegistry.put(token, mPrivOps);
             updateInputMethodDisplay(displayId);
             attachToken(token);
+        }
+
+        /**
+         * {@inheritDoc}
+         * @hide
+         */
+        @MainThread
+        @Override
+        public void onCreateInlineSuggestionsRequest(
+                @NonNull InlineSuggestionsRequestInfo requestInfo,
+                @NonNull IInlineSuggestionsRequestCallback cb) {
+            if (DEBUG) {
+                Log.d(TAG, "InputMethodService received onCreateInlineSuggestionsRequest()");
+            }
+            handleOnCreateInlineSuggestionsRequest(requestInfo, cb);
         }
 
         /**
@@ -515,12 +578,10 @@ public class InputMethodService extends AbstractInputMethodService {
         @Override
         public void updateInputMethodDisplay(int displayId) {
             // Update display for adding IME window to the right display.
-            if (displayId != DEFAULT_DISPLAY) {
-                // TODO(b/111364446) Need to address context lifecycle issue if need to re-create
-                // for update resources & configuration correctly when show soft input
-                // in non-default display.
-                updateDisplay(displayId);
-            }
+            // TODO(b/111364446) Need to address context lifecycle issue if need to re-create
+            // for update resources & configuration correctly when show soft input
+            // in non-default display.
+            updateDisplay(displayId);
         }
 
         /**
@@ -550,6 +611,10 @@ public class InputMethodService extends AbstractInputMethodService {
         public void unbindInput() {
             if (DEBUG) Log.v(TAG, "unbindInput(): binding=" + mInputBinding
                     + " ic=" + mInputConnection);
+            // Unbind input is per process per display.
+            // TODO(b/150902448): free-up IME surface when target is changing.
+            //  e.g. DisplayContent#setInputMethodTarget()
+            removeImeSurface();
             onUnbindInput();
             mInputBinding = null;
             mInputConnection = null;
@@ -597,11 +662,32 @@ public class InputMethodService extends AbstractInputMethodService {
 
         /**
          * {@inheritDoc}
+         * @hide
+         */
+        @MainThread
+        @Override
+        public void hideSoftInputWithToken(int flags, ResultReceiver resultReceiver,
+                IBinder hideInputToken) {
+            mSystemCallingHideSoftInput = true;
+            mCurHideInputToken = hideInputToken;
+            hideSoftInput(flags, resultReceiver);
+            mCurHideInputToken = null;
+            mSystemCallingHideSoftInput = false;
+        }
+
+        /**
+         * {@inheritDoc}
          */
         @MainThread
         @Override
         public void hideSoftInput(int flags, ResultReceiver resultReceiver) {
             if (DEBUG) Log.v(TAG, "hideSoftInput()");
+            if (getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R
+                    && !mSystemCallingHideSoftInput) {
+                Log.e(TAG, "IME shouldn't call hideSoftInput on itself."
+                        + " Use requestHideSelf(int) itself");
+                return;
+            }
             final boolean wasVisible = mIsPreRendered
                     ? mDecorViewVisible && mWindowVisible : isInputViewShown();
             applyVisibilityInInsetsConsumerIfNecessary(false /* setVisible */);
@@ -629,11 +715,33 @@ public class InputMethodService extends AbstractInputMethodService {
 
         /**
          * {@inheritDoc}
+         * @hide
+         */
+        @MainThread
+        @Override
+        public void showSoftInputWithToken(int flags, ResultReceiver resultReceiver,
+                IBinder showInputToken) {
+            mSystemCallingShowSoftInput = true;
+            mCurShowInputToken = showInputToken;
+            showSoftInput(flags, resultReceiver);
+            mCurShowInputToken = null;
+            mSystemCallingShowSoftInput = false;
+        }
+
+        /**
+         * {@inheritDoc}
          */
         @MainThread
         @Override
         public void showSoftInput(int flags, ResultReceiver resultReceiver) {
             if (DEBUG) Log.v(TAG, "showSoftInput()");
+            // TODO(b/148086656): Disallow IME developers from calling InputMethodImpl methods.
+            if (getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R
+                    && !mSystemCallingShowSoftInput) {
+                Log.e(TAG," IME shouldn't call showSoftInput on itself."
+                        + " Use requestShowSelf(int) itself");
+                return;
+            }
             final boolean wasVisible = mIsPreRendered
                     ? mDecorViewVisible && mWindowVisible : isInputViewShown();
             if (dispatchOnShowInputRequested(flags, false)) {
@@ -668,11 +776,115 @@ public class InputMethodService extends AbstractInputMethodService {
         public void changeInputMethodSubtype(InputMethodSubtype subtype) {
             dispatchOnCurrentInputMethodSubtypeChanged(subtype);
         }
+
+        /**
+         * {@inheritDoc}
+         * @hide
+         */
+        @Override
+        public void setCurrentShowInputToken(IBinder showInputToken) {
+            mCurShowInputToken = showInputToken;
+        }
+
+        /**
+         * {@inheritDoc}
+         * @hide
+         */
+        @Override
+        public void setCurrentHideInputToken(IBinder hideInputToken) {
+            mCurHideInputToken = hideInputToken;
+        }
+    }
+
+    // TODO(b/137800469): Add detailed docs explaining the inline suggestions process.
+    /**
+     * This method should be implemented by subclass which supports displaying autofill inline
+     * suggestion.
+     *
+     * @param uiExtras the extras that contain the UI renderer related information
+     * @return an {@link InlineSuggestionsRequest} to be sent to Autofill.
+     */
+    @Nullable
+    public InlineSuggestionsRequest onCreateInlineSuggestionsRequest(@NonNull Bundle uiExtras) {
+        return null;
+    }
+
+    /**
+     * Called when Autofill responds back with {@link InlineSuggestionsResponse} containing
+     * inline suggestions.
+     *
+     * <p>Should be implemented by subclasses.</p>
+     *
+     * @param response {@link InlineSuggestionsResponse} passed back by Autofill.
+     * @return Whether the IME will use and render  the inline suggestions.
+     */
+    public boolean onInlineSuggestionsResponse(@NonNull InlineSuggestionsResponse response) {
+        return false;
+    }
+
+    @MainThread
+    private void handleOnCreateInlineSuggestionsRequest(
+            @NonNull InlineSuggestionsRequestInfo requestInfo,
+            @NonNull IInlineSuggestionsRequestCallback callback) {
+        if (!mInputStarted) {
+            try {
+                Log.w(TAG, "onStartInput() not called yet");
+                callback.onInlineSuggestionsUnsupported();
+            } catch (RemoteException e) {
+                Log.w(TAG, "Failed to call onInlineSuggestionsUnsupported.", e);
+            }
+            return;
+        }
+
+        synchronized (mInlineLock) {
+            if (mInlineSuggestionSession != null) {
+                mInlineSuggestionSession.invalidateSession();
+            }
+            mInlineSuggestionSession = new InlineSuggestionSession(requestInfo.getComponentName(),
+                    callback, this::getEditorInfoPackageName, this::getEditorInfoAutofillId,
+                    () -> onCreateInlineSuggestionsRequest(requestInfo.getUiExtras()),
+                    this::getHostInputToken, this::onInlineSuggestionsResponse, mInputViewStarted);
+        }
+    }
+
+    @Nullable
+    private String getEditorInfoPackageName() {
+        if (mInputEditorInfo != null) {
+            return mInputEditorInfo.packageName;
+        }
+        return null;
+    }
+
+    @Nullable
+    private AutofillId getEditorInfoAutofillId() {
+        if (mInputEditorInfo != null) {
+            return mInputEditorInfo.autofillId;
+        }
+        return null;
+    }
+
+    /**
+     * Returns the {@link IBinder} input token from the host view root.
+     */
+    @Nullable
+    private IBinder getHostInputToken() {
+        ViewRootImpl viewRoot = null;
+        if (mRootView != null) {
+            viewRoot = mRootView.getViewRootImpl();
+        }
+        return viewRoot == null ? null : viewRoot.getInputToken();
     }
 
     private void notifyImeHidden() {
         setImeWindowStatus(IME_ACTIVE | IME_INVISIBLE, mBackDisposition);
         onPreRenderedWindowVisibilityChanged(false /* setVisible */);
+    }
+
+    private void removeImeSurface() {
+        if (!mShowInputRequested && !mWindowVisible) {
+            // hiding a window removes its surface.
+            mWindow.hide();
+        }
     }
 
     private void setImeWindowStatus(int visibilityFlags, int backDisposition) {
@@ -792,6 +1004,14 @@ public class InputMethodService extends AbstractInputMethodService {
          */
         public final void notifyImeHidden() {
             InputMethodService.this.notifyImeHidden();
+        }
+
+        /**
+         * Notify IME that surface can be now removed.
+         * @hide
+         */
+        public final void removeImeSurface() {
+            InputMethodService.this.removeImeSurface();
         }
     }
     
@@ -1014,6 +1234,11 @@ public class InputMethodService extends AbstractInputMethodService {
         super.onCreate();
         mImm = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
         mSettingsObserver = SettingsObserver.createAndRegister(this);
+
+        mIsAutomotive = isAutomotive();
+        mAutomotiveHideNavBarForKeyboard = getApplicationContext().getResources().getBoolean(
+                com.android.internal.R.bool.config_automotiveHideNavBarForKeyboard);
+
         // TODO(b/111364446) Need to address context lifecycle issue if need to re-create
         // for update resources & configuration correctly when show soft input
         // in non-default display.
@@ -1021,16 +1246,20 @@ public class InputMethodService extends AbstractInputMethodService {
                 Context.LAYOUT_INFLATER_SERVICE);
         mWindow = new SoftInputWindow(this, "InputMethod", mTheme, null, null, mDispatcherState,
                 WindowManager.LayoutParams.TYPE_INPUT_METHOD, Gravity.BOTTOM, false);
-        mWindow.getWindow().setFitWindowInsetsTypes(WindowInsets.Type.systemBars());
-        mWindow.getWindow().addPrivateFlags(PRIVATE_FLAG_ONLY_DRAW_BOTTOM_BAR_BACKGROUND);
+        mWindow.getWindow().getAttributes().setFitInsetsTypes(WindowInsets.Type.statusBars());
+
+        // IME layout should always be inset by navigation bar, no matter its current visibility,
+        // unless automotive requests it, since automotive may hide the navigation bar.
         mWindow.getWindow().getDecorView().setOnApplyWindowInsetsListener(
                 (v, insets) -> v.onApplyWindowInsets(
-                        new WindowInsets.Builder(insets).setSystemWindowInsets(
-                                android.graphics.Insets.of(
-                                        insets.getSystemWindowInsetLeft(),
-                                        insets.getSystemWindowInsetTop(),
-                                        insets.getSystemWindowInsetRight(),
-                                        insets.getStableInsetBottom())).build()));
+                        new WindowInsets.Builder(insets).setInsets(
+                                navigationBars(),
+                                mIsAutomotive && mAutomotiveHideNavBarForKeyboard
+                                        ? android.graphics.Insets.NONE
+                                        : insets.getInsetsIgnoringVisibility(navigationBars())
+                                )
+                                .build()));
+
         // For ColorView in DecorView to work, FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS needs to be set
         // by default (but IME developers can opt this out later if they want a new behavior).
         mWindow.getWindow().setFlags(
@@ -1247,8 +1476,9 @@ public class InputMethodService extends AbstractInputMethodService {
      * screen orientation changes.
      */
     public int getMaxWidth() {
-        WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        return wm.getDefaultDisplay().getWidth();
+        final WindowManager windowManager = getSystemService(WindowManager.class);
+        final Size windowSize = windowManager.getCurrentWindowMetrics().getSize();
+        return windowSize.getWidth();
     }
     
     /**
@@ -1979,6 +2209,11 @@ public class InputMethodService extends AbstractInputMethodService {
             if (!mInputViewStarted) {
                 if (DEBUG) Log.v(TAG, "CALL: onStartInputView");
                 mInputViewStarted = true;
+                synchronized (mInlineLock) {
+                    if (mInlineSuggestionSession != null) {
+                        mInlineSuggestionSession.notifyOnStartInputView(getEditorInfoAutofillId());
+                    }
+                }
                 onStartInputView(mInputEditorInfo, false);
             }
         } else if (!mCandidatesViewStarted) {
@@ -2008,7 +2243,8 @@ public class InputMethodService extends AbstractInputMethodService {
         if (!isVisibilityAppliedUsingInsetsConsumer()) {
             return;
         }
-        mPrivOps.applyImeVisibility(setVisible);
+        mPrivOps.applyImeVisibility(setVisible
+                ? mCurShowInputToken : mCurHideInputToken, setVisible);
     }
 
     private boolean isVisibilityAppliedUsingInsetsConsumer() {
@@ -2018,6 +2254,11 @@ public class InputMethodService extends AbstractInputMethodService {
     private void finishViews(boolean finishingInput) {
         if (mInputViewStarted) {
             if (DEBUG) Log.v(TAG, "CALL: onFinishInputView");
+            synchronized (mInlineLock) {
+                if (mInlineSuggestionSession != null) {
+                    mInlineSuggestionSession.notifyOnFinishInputView(getEditorInfoAutofillId());
+                }
+            }
             onFinishInputView(finishingInput);
         } else if (mCandidatesViewStarted) {
             if (DEBUG) Log.v(TAG, "CALL: onFinishCandidatesView");
@@ -2130,6 +2371,11 @@ public class InputMethodService extends AbstractInputMethodService {
             if (mShowInputRequested) {
                 if (DEBUG) Log.v(TAG, "CALL: onStartInputView");
                 mInputViewStarted = true;
+                synchronized (mInlineLock) {
+                    if (mInlineSuggestionSession != null) {
+                        mInlineSuggestionSession.notifyOnStartInputView(getEditorInfoAutofillId());
+                    }
+                }
                 onStartInputView(mInputEditorInfo, restarting);
                 startExtractingText(true);
             } else if (mCandidatesVisibility == View.VISIBLE) {
@@ -3065,6 +3311,11 @@ public class InputMethodService extends AbstractInputMethodService {
                 | (isInputViewShown()
                         ? (mCanPreRender ? (mWindowVisible ? IME_VISIBLE : IME_INVISIBLE)
                         : IME_VISIBLE) : 0);
+    }
+
+    private boolean isAutomotive() {
+        return getApplicationContext().getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE);
     }
 
     /**

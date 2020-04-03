@@ -22,8 +22,8 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemService;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityThread;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -64,7 +64,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <p>The media router API is not thread-safe; all interactions with it must be
  * done from the main thread of the process.</p>
+ *
+ * <p>
+ * We recommend using {@link android.media.MediaRouter2} APIs for new applications.
+ * </p>
  */
+//TODO: Link androidx.media2.MediaRouter when we are ready.
 @SystemService(Context.MEDIA_ROUTER_SERVICE)
 public class MediaRouter {
     private static final String TAG = "MediaRouter";

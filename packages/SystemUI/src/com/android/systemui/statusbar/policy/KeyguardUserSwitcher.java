@@ -35,7 +35,7 @@ import com.android.systemui.Interpolators;
 import com.android.systemui.R;
 import com.android.systemui.qs.tiles.UserDetailItemView;
 import com.android.systemui.statusbar.phone.KeyguardStatusBarView;
-import com.android.systemui.statusbar.phone.NotificationPanelView;
+import com.android.systemui.statusbar.phone.NotificationPanelViewController;
 
 /**
  * Manages the user switcher on the Keyguard.
@@ -57,7 +57,8 @@ public class KeyguardUserSwitcher {
     private boolean mAnimating;
 
     public KeyguardUserSwitcher(Context context, ViewStub userSwitcher,
-            KeyguardStatusBarView statusBarView, NotificationPanelView panelView) {
+            KeyguardStatusBarView statusBarView,
+            NotificationPanelViewController panelViewController) {
         boolean keyguardUserSwitcherEnabled =
                 context.getResources().getBoolean(R.bool.config_keyguardUserSwitcher) || ALWAYS_ON;
         UserSwitcherController userSwitcherController = Dependency.get(UserSwitcherController.class);
@@ -67,7 +68,7 @@ public class KeyguardUserSwitcher {
             reinflateViews();
             mStatusBarView = statusBarView;
             mStatusBarView.setKeyguardUserSwitcher(this);
-            panelView.setKeyguardUserSwitcher(this);
+            panelViewController.setKeyguardUserSwitcher(this);
             mAdapter = new Adapter(context, userSwitcherController, this);
             mAdapter.registerDataSetObserver(mDataSetObserver);
             mUserSwitcherController = userSwitcherController;
@@ -256,6 +257,7 @@ public class KeyguardUserSwitcher {
 
         private Context mContext;
         private KeyguardUserSwitcher mKeyguardUserSwitcher;
+        private View mCurrentUserView;
 
         public Adapter(Context context, UserSwitcherController controller,
                 KeyguardUserSwitcher kgu) {
@@ -284,6 +286,9 @@ public class KeyguardUserSwitcher {
             // Disable the icon if switching is disabled
             v.setAvatarEnabled(item.isSwitchToEnabled);
             convertView.setActivated(item.isCurrent);
+            if (item.isCurrent) {
+                mCurrentUserView = convertView;
+            }
             convertView.setTag(item);
             return convertView;
         }
@@ -296,6 +301,12 @@ public class KeyguardUserSwitcher {
                 // tapping the guest user while it's current clears the session.
                 mKeyguardUserSwitcher.hideIfNotSimple(true /* animate */);
             } else if (user.isSwitchToEnabled) {
+                if (!user.isAddUser && !user.isRestricted && !user.isDisabledByAdmin) {
+                    if (mCurrentUserView != null) {
+                        mCurrentUserView.setActivated(false);
+                    }
+                    v.setActivated(true);
+                }
                 switchTo(user);
             }
         }

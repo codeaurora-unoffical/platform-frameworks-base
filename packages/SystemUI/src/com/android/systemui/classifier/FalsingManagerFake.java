@@ -35,7 +35,7 @@ public class FalsingManagerFake implements FalsingManager {
     private boolean mIsReportingEnabled;
 
     @Override
-    public void onSucccessfulUnlock() {
+    public void onSuccessfulUnlock() {
 
     }
 
@@ -90,7 +90,7 @@ public class FalsingManagerFake implements FalsingManager {
     }
 
     @Override
-    public boolean isClassiferEnabled() {
+    public boolean isClassifierEnabled() {
         return mIsClassiferEnabled;
     }
 

@@ -4,9 +4,8 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
-import android.os.WorkSourceProto;
 import android.provider.Settings;
 import android.provider.Settings.Global;
 import android.util.Log;
@@ -150,7 +149,7 @@ public class WorkSource implements Parcelable {
     }
 
     /**
-     * Returns the size of this work source.
+     * Returns the number of uids in this work source.
      * @hide
      */
     @TestApi

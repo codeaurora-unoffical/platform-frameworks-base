@@ -16,13 +16,18 @@
 
 package android.telephony;
 
+import android.annotation.ElapsedRealtimeLong;
 import android.annotation.NonNull;
-import android.annotation.UnsupportedAppUsage;
+import android.annotation.SystemApi;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.PersistableBundle;
+import android.os.SystemClock;
+
+import com.android.telephony.Rlog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -74,6 +79,10 @@ public class SignalStrength implements Parcelable {
     /* The type of signal measurement */
     private static final String MEASUREMENT_TYPE_RSCP = "rscp";
 
+    // Timestamp of SignalStrength since boot
+    // Effectively final. Timestamp is set during construction of SignalStrength
+    private long mTimestampMillis;
+
     CellSignalStrengthCdma mCdma;
     CellSignalStrengthGsm mGsm;
     CellSignalStrengthWcdma mWcdma;
@@ -84,8 +93,7 @@ public class SignalStrength implements Parcelable {
     /**
      * Create a new SignalStrength from a intent notifier Bundle
      *
-     * This method is used by PhoneStateIntentReceiver and maybe by
-     * external applications.
+     * This method may be used by external applications.
      *
      * @param m Bundle from intent notifier
      * @return newly created SignalStrength
@@ -132,6 +140,7 @@ public class SignalStrength implements Parcelable {
         mTdscdma = tdscdma;
         mLte = lte;
         mNr = nr;
+        mTimestampMillis = SystemClock.elapsedRealtime();
     }
 
     /**
@@ -275,8 +284,8 @@ public class SignalStrength implements Parcelable {
      *
      * @hide
      */
-    @UnsupportedAppUsage
-    public SignalStrength(SignalStrength s) {
+    @SystemApi
+    public SignalStrength(@NonNull SignalStrength s) {
         copyFrom(s);
     }
 
@@ -291,6 +300,7 @@ public class SignalStrength implements Parcelable {
         mTdscdma = new CellSignalStrengthTdscdma(s.mTdscdma);
         mLte = new CellSignalStrengthLte(s.mLte);
         mNr = new CellSignalStrengthNr(s.mNr);
+        mTimestampMillis = s.getTimestampMillis();
     }
 
     /**
@@ -308,6 +318,7 @@ public class SignalStrength implements Parcelable {
         mTdscdma = in.readParcelable(CellSignalStrengthTdscdma.class.getClassLoader());
         mLte = in.readParcelable(CellSignalStrengthLte.class.getClassLoader());
         mNr = in.readParcelable(CellSignalStrengthLte.class.getClassLoader());
+        mTimestampMillis = in.readLong();
     }
 
     /**
@@ -320,9 +331,20 @@ public class SignalStrength implements Parcelable {
         out.writeParcelable(mTdscdma, flags);
         out.writeParcelable(mLte, flags);
         out.writeParcelable(mNr, flags);
+        out.writeLong(mTimestampMillis);
     }
 
     /**
+     * @return timestamp in milliseconds since boot for {@link SignalStrength}.
+     * This timestamp reports the approximate time that the signal was measured and reported
+     * by the modem. It can be used to compare the recency of {@link SignalStrength} instances.
+     */
+    @ElapsedRealtimeLong
+    public long getTimestampMillis() {
+        return mTimestampMillis;
+    }
+
+   /**
      * {@link Parcelable#describeContents}
      */
     public int describeContents() {
@@ -332,17 +354,16 @@ public class SignalStrength implements Parcelable {
     /**
      * {@link Parcelable.Creator}
      *
-     * @hide
      */
-    @UnsupportedAppUsage
-    public static final @android.annotation.NonNull Parcelable.Creator<SignalStrength> CREATOR = new Parcelable.Creator() {
-        public SignalStrength createFromParcel(Parcel in) {
-            return new SignalStrength(in);
-        }
+    public static final @android.annotation.NonNull Parcelable.Creator<SignalStrength> CREATOR =
+            new Parcelable.Creator<SignalStrength>() {
+                public SignalStrength createFromParcel(Parcel in) {
+                    return new SignalStrength(in);
+                }
 
-        public SignalStrength[] newArray(int size) {
-            return new SignalStrength[size];
-        }
+                public SignalStrength[] newArray(int size) {
+                    return new SignalStrength[size];
+                }
     };
 
     /**

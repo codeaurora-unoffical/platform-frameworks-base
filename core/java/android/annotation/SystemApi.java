@@ -23,6 +23,7 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PACKAGE;
 import static java.lang.annotation.ElementType.TYPE;
 
+import java.lang.annotation.Repeatable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -40,6 +41,7 @@ import java.lang.annotation.Target;
  */
 @Target({TYPE, FIELD, METHOD, CONSTRUCTOR, ANNOTATION_TYPE, PACKAGE})
 @Retention(RetentionPolicy.RUNTIME)
+@Repeatable(SystemApi.Container.class) // TODO(b/146727827): make this non-repeatable
 public @interface SystemApi {
     enum Client {
         /**
@@ -47,14 +49,21 @@ public @interface SystemApi {
          * This is the default value for {@link #client}.
          */
         PRIVILEGED_APPS,
-    }
 
-    enum Process {
         /**
-         * Specifies that the SystemAPI is available in every Java processes.
-         * This is the default value for {@link #process}.
+         * Specifies that the intended clients of a SystemApi are used by classes in
+         * <pre>BOOTCLASSPATH</pre> in mainline modules. Mainline modules can also expose
+         * this type of system APIs too when they're used only by the non-updatable
+         * platform code.
          */
-        ALL,
+        MODULE_LIBRARIES,
+
+        /**
+         * Specifies that the system API is available only in the system server process.
+         * Use this to expose APIs from code loaded by the system server process <em>but</em>
+         * not in <pre>BOOTCLASSPATH</pre>.
+         */
+        SYSTEM_SERVER
     }
 
     /**
@@ -63,7 +72,11 @@ public @interface SystemApi {
     Client client() default android.annotation.SystemApi.Client.PRIVILEGED_APPS;
 
     /**
-     * The process(es) that this SystemAPI is available
+     * Container for {@link SystemApi} that allows it to be applied repeatedly to types.
      */
-    Process process() default android.annotation.SystemApi.Process.ALL;
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(TYPE)
+    @interface Container {
+        SystemApi[] value();
+    }
 }

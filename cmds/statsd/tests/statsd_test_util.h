@@ -14,12 +14,16 @@
 
 #pragma once
 
+#include <aidl/android/os/BnPullAtomCallback.h>
+#include <aidl/android/os/IPullAtomCallback.h>
+#include <aidl/android/os/IPullAtomResultReceiver.h>
 #include <gtest/gtest.h>
+
 #include "frameworks/base/cmds/statsd/src/stats_log.pb.h"
 #include "frameworks/base/cmds/statsd/src/statsd_config.pb.h"
 #include "src/StatsLogProcessor.h"
-#include "src/logd/LogEvent.h"
 #include "src/hash.h"
+#include "src/logd/LogEvent.h"
 #include "src/stats_log_util.h"
 #include "statslog.h"
 
@@ -27,7 +31,18 @@ namespace android {
 namespace os {
 namespace statsd {
 
+using ::aidl::android::os::BnPullAtomCallback;
+using ::aidl::android::os::IPullAtomCallback;
+using ::aidl::android::os::IPullAtomResultReceiver;
+using android::util::ProtoReader;
 using google::protobuf::RepeatedPtrField;
+using Status = ::ndk::ScopedAStatus;
+
+const int SCREEN_STATE_ATOM_ID = android::util::SCREEN_STATE_CHANGED;
+const int UID_PROCESS_STATE_ATOM_ID = android::util::UID_PROCESS_STATE_CHANGED;
+
+// Converts a ProtoOutputStream to a StatsLogReport proto.
+StatsLogReport outputStreamToProto(ProtoOutputStream* proto);
 
 // Create AtomMatcher proto to simply match a specific atom type.
 AtomMatcher CreateSimpleAtomMatcher(const string& name, int atomId);
@@ -217,9 +232,10 @@ std::unique_ptr<LogEvent> CreateUidProcessStateChangedEvent(
 AttributionNodeInternal CreateAttribution(const int& uid, const string& tag);
 
 // Create a statsd log event processor upon the start time in seconds, config and key.
-sp<StatsLogProcessor> CreateStatsLogProcessor(const int64_t timeBaseNs,
-                                              const int64_t currentTimeNs,
-                                              const StatsdConfig& config, const ConfigKey& key);
+sp<StatsLogProcessor> CreateStatsLogProcessor(const int64_t timeBaseNs, const int64_t currentTimeNs,
+                                              const StatsdConfig& config, const ConfigKey& key,
+                                              const shared_ptr<IPullAtomCallback>& puller = nullptr,
+                                              const int32_t atomTag = 0 /*for puller only*/);
 
 // Util function to sort the log events by timestamp.
 void sortLogEventsByTimestamp(std::vector<std::unique_ptr<LogEvent>> *events);
@@ -270,6 +286,12 @@ void backfillDimensionPath(ConfigMetricsReportList* config_report_list);
 bool backfillDimensionPath(const DimensionsValue& path,
                            const google::protobuf::RepeatedPtrField<DimensionsValue>& leafValues,
                            DimensionsValue* dimension);
+
+class FakeSubsystemSleepCallback : public BnPullAtomCallback {
+public:
+    Status onPullAtom(int atomTag,
+                      const shared_ptr<IPullAtomResultReceiver>& resultReceiver) override;
+};
 
 template <typename T>
 void backfillDimensionPath(const DimensionsValue& whatPath,

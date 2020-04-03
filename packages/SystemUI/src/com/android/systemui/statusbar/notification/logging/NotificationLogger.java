@@ -11,7 +11,7 @@
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
- * limitations under the License
+ * limitations under the License.
  */
 package com.android.systemui.statusbar.notification.logging;
 
@@ -32,13 +32,14 @@ import androidx.annotation.Nullable;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.internal.statusbar.NotificationVisibility;
-import com.android.systemui.UiOffloadThread;
+import com.android.systemui.dagger.qualifiers.UiBackground;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController.StateListener;
 import com.android.systemui.statusbar.NotificationListener;
 import com.android.systemui.statusbar.notification.NotificationEntryListener;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.dagger.NotificationsModule;
 import com.android.systemui.statusbar.notification.stack.ExpandableViewState;
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
@@ -47,15 +48,14 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import javax.inject.Inject;
-import javax.inject.Singleton;
 
 /**
  * Handles notification logging, in particular, logging which notifications are visible and which
  * are not.
  */
-@Singleton
 public class NotificationLogger implements StateListener {
     private static final String TAG = "NotificationLogger";
 
@@ -68,7 +68,7 @@ public class NotificationLogger implements StateListener {
 
     // Dependencies:
     private final NotificationListenerService mNotificationListener;
-    private final UiOffloadThread mUiOffloadThread;
+    private final Executor mUiBgExecutor;
     private final NotificationEntryManager mEntryManager;
     private HeadsUpManager mHeadsUpManager;
     private final ExpansionStateLogger mExpansionStateLogger;
@@ -191,14 +191,16 @@ public class NotificationLogger implements StateListener {
         }
     }
 
-    @Inject
+    /**
+     * Injected constructor. See {@link NotificationsModule}.
+     */
     public NotificationLogger(NotificationListener notificationListener,
-            UiOffloadThread uiOffloadThread,
+            @UiBackground Executor uiBgExecutor,
             NotificationEntryManager entryManager,
             StatusBarStateController statusBarStateController,
             ExpansionStateLogger expansionStateLogger) {
         mNotificationListener = notificationListener;
-        mUiOffloadThread = uiOffloadThread;
+        mUiBgExecutor = uiBgExecutor;
         mEntryManager = entryManager;
         mBarService = IStatusBarService.Stub.asInterface(
                 ServiceManager.getService(Context.STATUS_BAR_SERVICE));
@@ -211,7 +213,8 @@ public class NotificationLogger implements StateListener {
             public void onEntryRemoved(
                     NotificationEntry entry,
                     NotificationVisibility visibility,
-                    boolean removedByUser) {
+                    boolean removedByUser,
+                    int reason) {
                 if (removedByUser && visibility != null) {
                     logNotificationClear(entry.getKey(), entry.getSbn(), visibility);
                 }
@@ -293,6 +296,9 @@ public class NotificationLogger implements StateListener {
         }
     }
 
+    /**
+     * Logs Notification inflation error
+     */
     private void logNotificationError(
             StatusBarNotification notification,
             Exception exception) {
@@ -319,7 +325,7 @@ public class NotificationLogger implements StateListener {
         final NotificationVisibility[] newlyVisibleAr = cloneVisibilitiesAsArr(newlyVisible);
         final NotificationVisibility[] noLongerVisibleAr = cloneVisibilitiesAsArr(noLongerVisible);
 
-        mUiOffloadThread.submit(() -> {
+        mUiBgExecutor.execute(() -> {
             try {
                 mBarService.onNotificationVisibilityChanged(newlyVisibleAr, noLongerVisibleAr);
             } catch (RemoteException e) {
@@ -429,13 +435,13 @@ public class NotificationLogger implements StateListener {
          * Notification key -> last logged expansion state, should be accessed in UI thread only.
          */
         private final Map<String, Boolean> mLoggedExpansionState = new ArrayMap<>();
-        private final UiOffloadThread mUiOffloadThread;
+        private final Executor mUiBgExecutor;
         @VisibleForTesting
         IStatusBarService mBarService;
 
         @Inject
-        public ExpansionStateLogger(UiOffloadThread uiOffloadThread) {
-            mUiOffloadThread = uiOffloadThread;
+        public ExpansionStateLogger(@UiBackground Executor uiBgExecutor) {
+            mUiBgExecutor = uiBgExecutor;
             mBarService =
                     IStatusBarService.Stub.asInterface(
                             ServiceManager.getService(Context.STATUS_BAR_SERVICE));
@@ -513,7 +519,7 @@ public class NotificationLogger implements StateListener {
             }
             mLoggedExpansionState.put(key, state.mIsExpanded);
             final State stateToBeLogged = new State(state);
-            mUiOffloadThread.submit(() -> {
+            mUiBgExecutor.execute(() -> {
                 try {
                     mBarService.onNotificationExpansionChanged(key, stateToBeLogged.mIsUserAction,
                             stateToBeLogged.mIsExpanded, stateToBeLogged.mLocation.ordinal());

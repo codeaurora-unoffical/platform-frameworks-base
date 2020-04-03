@@ -32,7 +32,9 @@ import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA_OVERLAY;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_STARTING;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL;
+import static android.view.WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
 import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD;
 import static android.view.WindowManager.LayoutParams.TYPE_STATUS_BAR;
 
@@ -82,13 +84,15 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.util.Arrays;
 import java.util.LinkedList;
+import java.util.List;
 
 /**
  * Tests for the {@link WindowState} class.
  *
  * Build/Install/Run:
- *  atest FrameworksServicesTests:WindowStateTests
+ *  atest WmTests:WindowStateTests
  */
 @SmallTest
 @Presubmit
@@ -247,9 +251,11 @@ public class WindowStateTests extends WindowTestsBase {
 
         // b/145812508: special legacy use-case for transparent/translucent windows.
         appWindow.mAttrs.format = PixelFormat.TRANSPARENT;
+        appWindow.mAttrs.alpha = 0;
         assertTrue(appWindow.canBeImeTarget());
 
         appWindow.mAttrs.format = PixelFormat.OPAQUE;
+        appWindow.mAttrs.alpha = 1;
         appWindow.mAttrs.flags &= ~FLAG_ALT_FOCUSABLE_IM;
         assertFalse(appWindow.canBeImeTarget());
         appWindow.mAttrs.flags &= ~FLAG_NOT_FOCUSABLE;
@@ -272,9 +278,8 @@ public class WindowStateTests extends WindowTestsBase {
         spyOn(appWindow);
         spyOn(controller);
         spyOn(stack);
-        doReturn(true).when(controller).isMinimizedDock();
-        doReturn(true).when(controller).isHomeStackResizable();
-        doReturn(stack).when(appWindow).getStack();
+        stack.setFocusable(false);
+        doReturn(stack).when(appWindow).getRootTask();
 
         // Make sure canBeImeTarget is false due to shouldIgnoreInput is true;
         assertFalse(appWindow.canBeImeTarget());
@@ -319,11 +324,18 @@ public class WindowStateTests extends WindowTestsBase {
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD);
         final WindowState first = createWindow(null, TYPE_APPLICATION, activity, "first");
         final WindowState second = createWindow(null, TYPE_APPLICATION, activity, "second");
-        second.mAttrs.flags |= WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
 
         testPrepareWindowToDisplayDuringRelayout(first, false /* expectedWakeupCalled */,
                 true /* expectedCurrentLaunchCanTurnScreenOn */);
-        testPrepareWindowToDisplayDuringRelayout(second, true /* expectedWakeupCalled */,
+        testPrepareWindowToDisplayDuringRelayout(second, false /* expectedWakeupCalled */,
+                true /* expectedCurrentLaunchCanTurnScreenOn */);
+
+        // Call prepareWindowToDisplayDuringRelayout for two windows from the same activity, one of
+        // which has FLAG_TURN_SCREEN_ON. The first processed one should trigger the wakeup.
+        second.mAttrs.flags |= WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
+        testPrepareWindowToDisplayDuringRelayout(first, true /* expectedWakeupCalled */,
+                false /* expectedCurrentLaunchCanTurnScreenOn */);
+        testPrepareWindowToDisplayDuringRelayout(second, false /* expectedWakeupCalled */,
                 false /* expectedCurrentLaunchCanTurnScreenOn */);
 
         // Call prepareWindowToDisplayDuringRelayout for two window that have FLAG_TURN_SCREEN_ON
@@ -414,11 +426,13 @@ public class WindowStateTests extends WindowTestsBase {
         statusBar.mHasSurface = true;
         assertTrue(statusBar.isVisible());
         mDisplayContent.getInsetsStateController().getSourceProvider(ITYPE_STATUS_BAR)
-                .setWindow(statusBar, null /* frameProvider */);
+                .setWindow(statusBar, null /* frameProvider */, null /* imeFrameProvider */);
         mDisplayContent.getInsetsStateController().onBarControlTargetChanged(
                 app, null /* fakeTopControlling */, app, null /* fakeNavControlling */);
+        final InsetsSource source = new InsetsSource(ITYPE_STATUS_BAR);
+        source.setVisible(false);
         mDisplayContent.getInsetsStateController().getSourceProvider(ITYPE_STATUS_BAR)
-                .onInsetsModified(app, new InsetsSource(ITYPE_STATUS_BAR));
+                .onInsetsModified(app, source);
         waitUntilHandlersIdle();
         assertFalse(statusBar.isVisible());
     }
@@ -518,7 +532,8 @@ public class WindowStateTests extends WindowTestsBase {
     public void testVisibilityChangeSwitchUser() {
         final WindowState window = createWindow(null, TYPE_APPLICATION, "app");
         window.mHasSurface = true;
-        window.setShowToOwnerOnlyLocked(true);
+        spyOn(window);
+        doReturn(false).when(window).showForAllUsers();
 
         mWm.mCurrentUserId = 1;
         window.switchUser(mWm.mCurrentUserId);
@@ -529,6 +544,31 @@ public class WindowStateTests extends WindowTestsBase {
         window.switchUser(mWm.mCurrentUserId);
         assertTrue(window.isVisible());
         assertTrue(window.isVisibleByPolicy());
+    }
+
+    @Test
+    public void testRequestDrawIfNeeded() {
+        final WindowState startingApp = createWindow(null /* parent */,
+                TYPE_BASE_APPLICATION, "startingApp");
+        final WindowState startingWindow = createWindow(null /* parent */,
+                TYPE_APPLICATION_STARTING, startingApp.mToken, "starting");
+        startingApp.mActivityRecord.startingWindow = startingWindow;
+        final WindowState keyguardHostWindow = mNotificationShadeWindow;
+        final WindowState allDrawnApp = mAppWindow;
+        allDrawnApp.mActivityRecord.allDrawn = true;
+
+        // The waiting list is used to ensure the content is ready when turning on screen.
+        final List<WindowState> outWaitingForDrawn = mDisplayContent.mWaitingForDrawn;
+        final List<WindowState> visibleWindows = Arrays.asList(mChildAppWindowAbove,
+                keyguardHostWindow, allDrawnApp, startingApp, startingWindow);
+        visibleWindows.forEach(w -> {
+            w.mHasSurface = true;
+            w.requestDrawIfNeeded(outWaitingForDrawn);
+        });
+
+        // Keyguard host window should be always contained. The drawn app or app with starting
+        // window are unnecessary to draw.
+        assertEquals(Arrays.asList(keyguardHostWindow, startingWindow), outWaitingForDrawn);
     }
 
     @Test
@@ -567,7 +607,7 @@ public class WindowStateTests extends WindowTestsBase {
 
         // Mock active recents animation
         RecentsAnimationController recentsController = mock(RecentsAnimationController.class);
-        when(recentsController.isAnimatingTask(win0.mActivityRecord.getTask())).thenReturn(true);
+        when(recentsController.shouldApplyInputConsumer(win0.mActivityRecord)).thenReturn(true);
         mWm.setRecentsAnimationController(recentsController);
         assertTrue(win0.cantReceiveTouchInput());
     }
@@ -580,9 +620,10 @@ public class WindowStateTests extends WindowTestsBase {
     }
 
     @Test
-    public void testCantReceiveTouchWhenShouldIgnoreInput() {
+    public void testCantReceiveTouchWhenNotFocusable() {
         final WindowState win0 = createWindow(null, TYPE_APPLICATION, "win0");
-        win0.mActivityRecord.getStack().setAdjustedForMinimizedDock(1 /* Any non 0 value works */);
+        win0.mActivityRecord.getStack().setWindowingMode(WINDOWING_MODE_SPLIT_SCREEN_PRIMARY);
+        win0.mActivityRecord.getStack().setFocusable(false);
         assertTrue(win0.cantReceiveTouchInput());
     }
 }

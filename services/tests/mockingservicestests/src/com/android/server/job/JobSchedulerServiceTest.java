@@ -50,6 +50,7 @@ import android.net.NetworkPolicyManager;
 import android.os.BatteryManagerInternal;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.os.SystemClock;
 
 import com.android.server.AppStateTracker;
@@ -95,6 +96,7 @@ public class JobSchedulerServiceTest {
                 .initMocks(this)
                 .strictness(Strictness.LENIENT)
                 .mockStatic(LocalServices.class)
+                .mockStatic(ServiceManager.class)
                 .startMocking();
 
         // Called in JobSchedulerService constructor.
@@ -105,6 +107,7 @@ public class JobSchedulerServiceTest {
                 .when(() -> LocalServices.getService(AppStandbyInternal.class));
         doReturn(mock(UsageStatsManagerInternal.class))
                 .when(() -> LocalServices.getService(UsageStatsManagerInternal.class));
+        when(mContext.getString(anyInt())).thenReturn("some_test_string");
         // Called in BackgroundJobsController constructor.
         doReturn(mock(AppStateTracker.class))
                 .when(() -> LocalServices.getService(AppStateTracker.class));
@@ -681,8 +684,6 @@ public class JobSchedulerServiceTest {
                 mService.new MaybeReadyJobQueueFunctor();
         mService.mConstants.MIN_READY_NON_ACTIVE_JOBS_COUNT = 5;
         mService.mConstants.MAX_NON_ACTIVE_JOB_BATCH_DELAY_MS = HOUR_IN_MILLIS;
-        mService.mConstants.MIN_CONNECTIVITY_COUNT = 2;
-        mService.mConstants.MIN_READY_JOBS_COUNT = 1;
 
         JobStatus job = createJobStatus(
                 "testRareJobBatching",

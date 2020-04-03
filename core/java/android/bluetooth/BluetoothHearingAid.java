@@ -23,7 +23,7 @@ import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.SystemApi;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.os.Binder;
 import android.os.IBinder;
@@ -468,63 +468,6 @@ public final class BluetoothHearingAid implements BluetoothProfile {
                 return "disconnecting";
             default:
                 return "<unknown state " + state + ">";
-        }
-    }
-
-    /**
-     * Get the volume of the device.
-     *
-     * <p> The volume is between -128 dB (mute) to 0 dB.
-     *
-     * @return volume of the hearing aid device.
-     * @hide
-     */
-    @RequiresPermission(Manifest.permission.BLUETOOTH)
-    public int getVolume() {
-        if (VDBG) {
-            log("getVolume()");
-        }
-        final IBluetoothHearingAid service = getService();
-        try {
-            if (service != null && isEnabled()) {
-                return service.getVolume();
-            }
-            if (service == null) Log.w(TAG, "Proxy not attached to service");
-            return 0;
-        } catch (RemoteException e) {
-            Log.e(TAG, "Stack:" + Log.getStackTraceString(new Throwable()));
-            return 0;
-        }
-    }
-
-    /**
-     * Tells remote device to adjust volume. Uses the following values:
-     * <ul>
-     * <li>{@link AudioManager#ADJUST_LOWER}</li>
-     * <li>{@link AudioManager#ADJUST_RAISE}</li>
-     * <li>{@link AudioManager#ADJUST_MUTE}</li>
-     * <li>{@link AudioManager#ADJUST_UNMUTE}</li>
-     * </ul>
-     *
-     * @param direction One of the supported adjust values.
-     * @hide
-     */
-    @RequiresPermission(Manifest.permission.BLUETOOTH)
-    public void adjustVolume(int direction) {
-        if (DBG) log("adjustVolume(" + direction + ")");
-
-        final IBluetoothHearingAid service = getService();
-        try {
-            if (service == null) {
-                Log.w(TAG, "Proxy not attached to service");
-                return;
-            }
-
-            if (!isEnabled()) return;
-
-            service.adjustVolume(direction);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Stack:" + Log.getStackTraceString(new Throwable()));
         }
     }
 

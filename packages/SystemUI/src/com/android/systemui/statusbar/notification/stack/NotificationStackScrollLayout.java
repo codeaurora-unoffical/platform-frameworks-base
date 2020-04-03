@@ -16,6 +16,9 @@
 
 package com.android.systemui.statusbar.notification.stack;
 
+import static android.service.notification.NotificationStats.DISMISSAL_SHADE;
+import static android.service.notification.NotificationStats.DISMISS_SENTIMENT_NEUTRAL;
+
 import static com.android.systemui.Dependency.ALLOW_NOTIFICATION_LONG_PRESS_NAME;
 import static com.android.systemui.statusbar.notification.ActivityLaunchAnimator.ExpandAnimationParameters;
 import static com.android.systemui.statusbar.notification.stack.NotificationSectionsManager.BUCKET_SILENT;
@@ -57,6 +60,7 @@ import android.util.Log;
 import android.util.MathUtils;
 import android.util.Pair;
 import android.view.ContextThemeWrapper;
+import android.view.DisplayCutout;
 import android.view.InputDevice;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -77,8 +81,11 @@ import android.widget.ScrollView;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.graphics.ColorUtils;
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.UiEvent;
+import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.statusbar.IStatusBarService;
+import com.android.internal.statusbar.NotificationVisibility;
 import com.android.keyguard.KeyguardSliceView;
 import com.android.settingslib.Utils;
 import com.android.systemui.Dependency;
@@ -88,7 +95,6 @@ import com.android.systemui.Interpolators;
 import com.android.systemui.R;
 import com.android.systemui.SwipeHelper;
 import com.android.systemui.colorextraction.SysuiColorExtractor;
-import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin.MenuItem;
@@ -99,7 +105,9 @@ import com.android.systemui.plugins.statusbar.StatusBarStateController.StateList
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.DragDownHelper.DragDownCallback;
 import com.android.systemui.statusbar.EmptyShadeView;
+import com.android.systemui.statusbar.FeatureFlags;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
+import com.android.systemui.statusbar.NotificationLockscreenUserManager.UserChangedListener;
 import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.NotificationShelf;
 import com.android.systemui.statusbar.RemoteInputController;
@@ -107,20 +115,24 @@ import com.android.systemui.statusbar.StatusBarState;
 import com.android.systemui.statusbar.SysuiStatusBarStateController;
 import com.android.systemui.statusbar.notification.DynamicPrivacyController;
 import com.android.systemui.statusbar.notification.FakeShadowView;
+import com.android.systemui.statusbar.notification.ForegroundServiceDismissalFeatureController;
 import com.android.systemui.statusbar.notification.NotificationEntryListener;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
-import com.android.systemui.statusbar.notification.NotificationSectionsFeatureManager;
 import com.android.systemui.statusbar.notification.NotificationUtils;
 import com.android.systemui.statusbar.notification.ShadeViewRefactor;
 import com.android.systemui.statusbar.notification.ShadeViewRefactor.RefactorComponent;
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
+import com.android.systemui.statusbar.notification.collection.NotifCollection;
+import com.android.systemui.statusbar.notification.collection.NotifPipeline;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.collection.notifcollection.DismissedByUserStats;
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
-import com.android.systemui.statusbar.notification.people.PeopleHubSectionFooterViewAdapter;
 import com.android.systemui.statusbar.notification.row.ActivatableNotificationView;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.notification.row.ExpandableView;
 import com.android.systemui.statusbar.notification.row.FooterView;
+import com.android.systemui.statusbar.notification.row.ForegroundServiceDungeonView;
 import com.android.systemui.statusbar.notification.row.NotificationBlockingHelperManager;
 import com.android.systemui.statusbar.notification.row.NotificationGuts;
 import com.android.systemui.statusbar.notification.row.NotificationGutsManager;
@@ -134,7 +146,7 @@ import com.android.systemui.statusbar.phone.LockscreenGestureLogger;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.statusbar.phone.NotificationGroupManager.OnGroupChangeListener;
 import com.android.systemui.statusbar.phone.NotificationIconAreaController;
-import com.android.systemui.statusbar.phone.NotificationPanelView;
+import com.android.systemui.statusbar.phone.NotificationPanelViewController;
 import com.android.systemui.statusbar.phone.ScrimController;
 import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.StatusBar;
@@ -331,6 +343,12 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             return true;
         }
     };
+    private final UserChangedListener mLockscreenUserChangeListener = new UserChangedListener() {
+        @Override
+        public void onUserChanged(int userId) {
+            updateSensitiveness(false /* animated */);
+        }
+    };
     private StatusBar mStatusBar;
     private int[] mTempInt2 = new int[2];
     private boolean mGenerateChildOrderChangedEvent;
@@ -478,12 +496,15 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     private NotificationIconAreaController mIconAreaController;
     private final NotificationLockscreenUserManager mLockscreenUserManager;
     private final Rect mTmpRect = new Rect();
-    private final NotificationEntryManager mEntryManager =
-            Dependency.get(NotificationEntryManager.class);
+    private final FeatureFlags mFeatureFlags;
+    private final NotifPipeline mNotifPipeline;
+    private final NotifCollection mNotifCollection;
+    private final NotificationEntryManager mEntryManager;
     private final IStatusBarService mBarService = IStatusBarService.Stub.asInterface(
             ServiceManager.getService(Context.STATUS_BAR_SERVICE));
     @VisibleForTesting
     protected final MetricsLogger mMetricsLogger = Dependency.get(MetricsLogger.class);
+    protected final UiEventLogger mUiEventLogger;
     private final NotificationRemoteInputManager mRemoteInputManager =
             Dependency.get(NotificationRemoteInputManager.class);
     private final SysuiColorExtractor mColorExtractor = Dependency.get(SysuiColorExtractor.class);
@@ -496,15 +517,18 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     protected boolean mClearAllEnabled;
 
     private Interpolator mHideXInterpolator = Interpolators.FAST_OUT_SLOW_IN;
-    private NotificationPanelView mNotificationPanel;
-    private final ShadeController mShadeController = Dependency.get(ShadeController.class);
+    private NotificationPanelViewController mNotificationPanelController;
 
     private final NotificationGutsManager mNotificationGutsManager;
     private final NotificationSectionsManager mSectionsManager;
+    private final ForegroundServiceSectionController mFgsSectionController;
+    private ForegroundServiceDungeonView mFgsSectionView;
     private boolean mAnimateBottomOnLayout;
     private float mLastSentAppear;
     private float mLastSentExpandedHeight;
     private boolean mWillExpand;
+
+    private int mWaterfallTopInset;
 
     @Inject
     public NotificationStackScrollLayout(
@@ -513,17 +537,22 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             @Named(ALLOW_NOTIFICATION_LONG_PRESS_NAME) boolean allowLongPress,
             NotificationRoundnessManager notificationRoundnessManager,
             DynamicPrivacyController dynamicPrivacyController,
-            ConfigurationController configurationController,
-            ActivityStarter activityStarter,
-            StatusBarStateController statusBarStateController,
+            SysuiStatusBarStateController statusBarStateController,
             HeadsUpManagerPhone headsUpManager,
             KeyguardBypassController keyguardBypassController,
             FalsingManager falsingManager,
             NotificationLockscreenUserManager notificationLockscreenUserManager,
             NotificationGutsManager notificationGutsManager,
-            NotificationSectionsFeatureManager sectionsFeatureManager,
-            PeopleHubSectionFooterViewAdapter peopleHubViewAdapter,
-            ZenModeController zenController) {
+            ZenModeController zenController,
+            NotificationSectionsManager notificationSectionsManager,
+            ForegroundServiceSectionController fgsSectionController,
+            ForegroundServiceDismissalFeatureController fgsFeatureController,
+            FeatureFlags featureFlags,
+            NotifPipeline notifPipeline,
+            NotificationEntryManager entryManager,
+            NotifCollection notifCollection,
+            UiEventLogger uiEventLogger
+    ) {
         super(context, attrs, 0, 0);
         Resources res = getResources();
 
@@ -539,23 +568,16 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         mKeyguardBypassController = keyguardBypassController;
         mFalsingManager = falsingManager;
         mZenController = zenController;
+        mFgsSectionController = fgsSectionController;
 
-        int[] buckets = sectionsFeatureManager.getNotificationBuckets();
-        mSectionsManager =
-                new NotificationSectionsManager(
-                        this,
-                        activityStarter,
-                        statusBarStateController,
-                        configurationController,
-                        peopleHubViewAdapter,
-                        buckets.length);
-        mSectionsManager.initialize(LayoutInflater.from(context));
+        mSectionsManager = notificationSectionsManager;
+        mSectionsManager.initialize(this, LayoutInflater.from(context));
         mSectionsManager.setOnClearGentleNotifsClickListener(v -> {
             // Leave the shade open if there will be other notifs left over to clear
             final boolean closeShade = !hasActiveClearableNotifications(ROWS_HIGH_PRIORITY);
             clearNotifications(ROWS_GENTLE, closeShade);
         });
-        mSections = mSectionsManager.createSectionsForBuckets(buckets);
+        mSections = mSectionsManager.createSectionsForBuckets();
 
         mAmbientState = new AmbientState(context, mSectionsManager, mHeadsUpManager);
         mBgColor = context.getColor(R.color.notification_shade_background_color);
@@ -576,6 +598,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         mRoundnessManager.setAnimatedChildren(mChildrenToAddAnimated);
         mRoundnessManager.setOnRoundingChangedCallback(this::invalidate);
         addOnExpandedHeightChangedListener(mRoundnessManager::setExpanded);
+        mLockscreenUserManager.addUserChangedListener(mLockscreenUserChangeListener);
         setOutlineProvider(mOutlineProvider);
 
         // Blocking helper manager wants to know the expanded state, update as well.
@@ -606,19 +629,41 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             }
         }, HIGH_PRIORITY, Settings.Secure.NOTIFICATION_DISMISS_RTL);
 
-        mEntryManager.addNotificationEntryListener(new NotificationEntryListener() {
-            @Override
-            public void onPreEntryUpdated(NotificationEntry entry) {
-                if (entry.rowExists() && !entry.getSbn().isClearable()) {
-                    // If the row already exists, the user may have performed a dismiss action on
-                    // the notification. Since it's not clearable we should snap it back.
-                    snapViewIfNeeded(entry);
+        mFeatureFlags = featureFlags;
+        mNotifPipeline = notifPipeline;
+        mEntryManager = entryManager;
+        mNotifCollection = notifCollection;
+        if (mFeatureFlags.isNewNotifPipelineRenderingEnabled()) {
+            mNotifPipeline.addCollectionListener(new NotifCollectionListener() {
+                @Override
+                public void onEntryUpdated(NotificationEntry entry) {
+                    NotificationStackScrollLayout.this.onEntryUpdated(entry);
                 }
-            }
-        });
+            });
+        } else {
+            mEntryManager.addNotificationEntryListener(new NotificationEntryListener() {
+                @Override
+                public void onPreEntryUpdated(NotificationEntry entry) {
+                    NotificationStackScrollLayout.this.onEntryUpdated(entry);
+                }
+            });
+        }
+
         dynamicPrivacyController.addListener(this);
         mDynamicPrivacyController = dynamicPrivacyController;
-        mStatusbarStateController = (SysuiStatusBarStateController) statusBarStateController;
+        mStatusbarStateController = statusBarStateController;
+        initializeForegroundServiceSection(fgsFeatureController);
+        mUiEventLogger = uiEventLogger;
+    }
+
+    private void initializeForegroundServiceSection(
+            ForegroundServiceDismissalFeatureController featureController) {
+        if (featureController.isForegroundServiceDismissalEnabled()) {
+            LayoutInflater li = LayoutInflater.from(mContext);
+            mFgsSectionView =
+                    (ForegroundServiceDungeonView) mFgsSectionController.createView(li);
+            addView(mFgsSectionView, -1);
+        }
     }
 
     private void updateDismissRtlSetting(boolean dismissRtl) {
@@ -696,7 +741,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
     public void updateFooter() {
         boolean showDismissView = mClearAllEnabled && hasActiveClearableNotifications(ROWS_ALL);
-        boolean showFooterView = (showDismissView || mEntryManager.hasActiveNotifications())
+        boolean showFooterView = (showDismissView || hasActiveNotifications())
                 && mStatusBarState != StatusBarState.KEYGUARD
                 && !mRemoteInputManager.getController().isRemoteInputActive();
 
@@ -775,7 +820,6 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         mBgColor = mContext.getColor(R.color.notification_shade_background_color);
         updateBackgroundDimming();
         mShelf.onUiModeChanged();
-        mSectionsManager.onUiModeChanged();
     }
 
     @ShadeViewRefactor(RefactorComponent.DECORATOR)
@@ -1592,8 +1636,8 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
     @ShadeViewRefactor(RefactorComponent.COORDINATOR)
     private ExpandableView getChildAtPosition(float touchX, float touchY) {
-        return getChildAtPosition(touchX, touchY, true /* requireMinHeight */);
-
+        return getChildAtPosition(
+                touchX, touchY, true /* requireMinHeight */, true /* ignoreDecors */);
     }
 
     /**
@@ -1602,17 +1646,18 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
      * @param touchX           the x coordinate
      * @param touchY           the y coordinate
      * @param requireMinHeight Whether a minimum height is required for a child to be returned.
+     * @param ignoreDecors     Whether decors can be returned
      * @return the child at the given location.
      */
     @ShadeViewRefactor(RefactorComponent.COORDINATOR)
     private ExpandableView getChildAtPosition(float touchX, float touchY,
-            boolean requireMinHeight) {
+            boolean requireMinHeight, boolean ignoreDecors) {
         // find the view under the pointer, accounting for GONE views
         final int count = getChildCount();
         for (int childIdx = 0; childIdx < count; childIdx++) {
             ExpandableView slidingChild = (ExpandableView) getChildAt(childIdx);
             if (slidingChild.getVisibility() != VISIBLE
-                    || slidingChild instanceof StackScrollerDecorView) {
+                    || (ignoreDecors && slidingChild instanceof StackScrollerDecorView)) {
                 continue;
             }
             float childTop = slidingChild.getTranslationY();
@@ -1701,6 +1746,12 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     @ShadeViewRefactor(RefactorComponent.COORDINATOR)
     public WindowInsets onApplyWindowInsets(WindowInsets insets) {
         mBottomInset = insets.getSystemWindowInsetBottom();
+
+        mWaterfallTopInset = 0;
+        final DisplayCutout cutout = insets.getDisplayCutout();
+        if (cutout != null) {
+            mWaterfallTopInset = cutout.getWaterfallInsets().top;
+        }
 
         if (ANCHOR_SCROLLING) {
             // TODO
@@ -3379,7 +3430,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         if (currentIndex == -1) {
             boolean isTransient = false;
             if (child instanceof ExpandableNotificationRow
-                    && ((ExpandableNotificationRow) child).getTransientContainer() != null) {
+                    && child.getTransientContainer() != null) {
                 isTransient = true;
             }
             Log.e(TAG, "Attempting to re-position "
@@ -3392,10 +3443,10 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         if (child != null && child.getParent() == this && currentIndex != newIndex) {
             mChangePositionInProgress = true;
-            ((ExpandableView) child).setChangingPosition(true);
+            child.setChangingPosition(true);
             removeView(child);
             addView(child, newIndex);
-            ((ExpandableView) child).setChangingPosition(false);
+            child.setChangingPosition(false);
             mChangePositionInProgress = false;
             if (mIsExpanded && mAnimationsEnabled && child.getVisibility() != View.GONE) {
                 mChildrenChangingPositions.add(child);
@@ -4120,7 +4171,9 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             case MotionEvent.ACTION_DOWN: {
                 final int y = (int) ev.getY();
                 mScrolledToTopOnFirstDown = isScrolledToTop();
-                if (getChildAtPosition(ev.getX(), y, false /* requireMinHeight */) == null) {
+                final ExpandableView childAtTouchPos = getChildAtPosition(
+                        ev.getX(), y, false /* requireMinHeight */, false /* ignoreDecors */);
+                if (childAtTouchPos == null) {
                     setIsBeingDragged(false);
                     recycleVelocityTracker();
                     break;
@@ -4626,7 +4679,8 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     }
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
-    private void setHideSensitive(boolean hideSensitive, boolean animate) {
+    private void updateSensitiveness(boolean animate) {
+        boolean hideSensitive = mLockscreenUserManager.isAnyProfilePublicMode();
         if (hideSensitive != mAmbientState.isHideSensitive()) {
             int childCount = getChildCount();
             for (int i = 0; i < childCount; i++) {
@@ -5297,7 +5351,9 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
     @ShadeViewRefactor(RefactorComponent.COORDINATOR)
     public int getMinExpansionHeight() {
-        return mShelf.getIntrinsicHeight() - (mShelf.getIntrinsicHeight() - mStatusBarHeight) / 2;
+        return mShelf.getIntrinsicHeight()
+                - (mShelf.getIntrinsicHeight() - mStatusBarHeight + mWaterfallTopInset) / 2
+                + mWaterfallTopInset;
     }
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
@@ -5321,7 +5377,6 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
     private void onStatePostChange() {
         boolean onKeyguard = onKeyguard();
-        boolean publicMode = mLockscreenUserManager.isAnyProfilePublicMode();
 
         if (mHeadsUpAppearanceController != null) {
             mHeadsUpAppearanceController.onStateChanged();
@@ -5329,7 +5384,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         SysuiStatusBarStateController state = (SysuiStatusBarStateController)
                 Dependency.get(StatusBarStateController.class);
-        setHideSensitive(publicMode, state.goingToFullShade() /* animate */);
+        updateSensitiveness(state.goingToFullShade() /* animate */);
         setDimmed(onKeyguard, state.fromShadeLocked() /* animate */);
         setExpandingEnabled(!onKeyguard);
         ActivatableNotificationView activatedChild = getActivatedChild();
@@ -5469,12 +5524,13 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
     public void manageNotifications(View v) {
-        Intent intent = new Intent(Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS);
+        Intent intent = new Intent(Settings.ACTION_NOTIFICATION_HISTORY);
         mStatusBar.startActivity(intent, true, true, Intent.FLAG_ACTIVITY_SINGLE_TOP);
     }
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
-    private void clearNotifications(
+    @VisibleForTesting
+    void clearNotifications(
             @SelectedRows int selection,
             boolean closeShade) {
         // animate-swipe all dismissable notifications, then animate the shade closed
@@ -5517,39 +5573,21 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             }
         }
 
+        // Log dismiss event even if there's nothing to dismiss
+        mUiEventLogger.log(NotificationPanelEvent.fromSelection(selection));
+
         if (viewsToRemove.isEmpty()) {
             if (closeShade) {
-                mShadeController.animateCollapsePanels(CommandQueue.FLAG_EXCLUDE_NONE);
+                Dependency.get(ShadeController.class).animateCollapsePanels(
+                        CommandQueue.FLAG_EXCLUDE_NONE);
             }
             return;
         }
 
-        performDismissAllAnimations(viewsToHide, closeShade, () -> {
-            for (ExpandableNotificationRow rowToRemove : viewsToRemove) {
-                if (canChildBeDismissed(rowToRemove)) {
-                    if (selection == ROWS_ALL) {
-                        // TODO: This is a listener method; we shouldn't be calling it. Can we just
-                        // call performRemoveNotification as below?
-                        mEntryManager.removeNotification(
-                                rowToRemove.getEntry().getKey(),
-                                null /* ranking */,
-                                NotificationListenerService.REASON_CANCEL_ALL);
-                    } else {
-                        mEntryManager.performRemoveNotification(
-                                rowToRemove.getEntry().getSbn(),
-                                NotificationListenerService.REASON_CANCEL_ALL);
-                    }
-                } else {
-                    rowToRemove.resetTranslation();
-                }
-            }
-            if (selection == ROWS_ALL) {
-                try {
-                    mBarService.onClearAllNotifications(mLockscreenUserManager.getCurrentUserId());
-                } catch (Exception ex) {
-                }
-            }
-        });
+        performDismissAllAnimations(
+                viewsToHide,
+                closeShade,
+                () -> onDismissAllAnimationsEnd(viewsToRemove, selection));
     }
 
     private boolean includeChildInDismissAll(
@@ -5577,11 +5615,12 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         final Runnable onSlideAwayAnimationComplete = () -> {
             if (closeShade) {
-                mShadeController.addPostCollapseAction(() -> {
+                Dependency.get(ShadeController.class).addPostCollapseAction(() -> {
                     setDismissAllInProgress(false);
                     onAnimationComplete.run();
                 });
-                mShadeController.animateCollapsePanels(CommandQueue.FLAG_EXCLUDE_NONE);
+                Dependency.get(ShadeController.class).animateCollapsePanels(
+                        CommandQueue.FLAG_EXCLUDE_NONE);
             } else {
                 setDismissAllInProgress(false);
                 onAnimationComplete.run();
@@ -5640,15 +5679,17 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
      */
     @ShadeViewRefactor(RefactorComponent.STATE_RESOLVER)
     public void onUpdateRowStates() {
-        changeViewPosition(mFooterView, -1);
 
         // The following views will be moved to the end of mStackScroller. This counter represents
         // the offset from the last child. Initialized to 1 for the very last position. It is post-
         // incremented in the following "changeViewPosition" calls so that its value is correct for
         // subsequent calls.
         int offsetFromEnd = 1;
-        changeViewPosition(mEmptyShadeView,
-                getChildCount() - offsetFromEnd++);
+        if (mFgsSectionView != null) {
+            changeViewPosition(mFgsSectionView, getChildCount() - offsetFromEnd++);
+        }
+        changeViewPosition(mFooterView, getChildCount() - offsetFromEnd++);
+        changeViewPosition(mEmptyShadeView, getChildCount() - offsetFromEnd++);
 
         // No post-increment for this call because it is the last one. Make sure to add one if
         // another "changeViewPosition" call is ever added.
@@ -5657,8 +5698,9 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     }
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
-    public void setNotificationPanel(NotificationPanelView notificationPanelView) {
-        mNotificationPanel = notificationPanelView;
+    public void setNotificationPanelController(
+            NotificationPanelViewController notificationPanelViewController) {
+        mNotificationPanelController = notificationPanelViewController;
     }
 
     public void updateIconAreaViews() {
@@ -6205,6 +6247,11 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         }
 
         @Override
+        public void onSnooze(StatusBarNotification sbn, int hours) {
+            mStatusBar.setNotificationSnoozed(sbn, hours);
+        }
+
+        @Override
         public boolean shouldDismissQuickly() {
             return NotificationStackScrollLayout.this.isExpanded() && mAmbientState.isFullyAwake();
         }
@@ -6263,8 +6310,6 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             }
 
             if (view instanceof PeopleHubView) {
-                PeopleHubView row = (PeopleHubView) view;
-                row.dismiss(false);
                 mSectionsManager.hidePeopleRow();
             }
 
@@ -6289,8 +6334,11 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         @Override
         public View getChildAtPosition(MotionEvent ev) {
-            View child = NotificationStackScrollLayout.this.getChildAtPosition(ev.getX(),
-                    ev.getY());
+            View child = NotificationStackScrollLayout.this.getChildAtPosition(
+                    ev.getX(),
+                    ev.getY(),
+                    true /* requireMinHeight */,
+                    false /* ignoreDecors */);
             if (child instanceof ExpandableNotificationRow) {
                 ExpandableNotificationRow row = (ExpandableNotificationRow) child;
                 ExpandableNotificationRow parent = row.getNotificationParent();
@@ -6385,6 +6433,83 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         return false;
     }
 
+    // --------------------- NotificationEntryManager/NotifPipeline methods ------------------------
+
+    private void onEntryUpdated(NotificationEntry entry) {
+        // If the row already exists, the user may have performed a dismiss action on the
+        // notification. Since it's not clearable we should snap it back.
+        if (entry.rowExists() && !entry.getSbn().isClearable()) {
+            snapViewIfNeeded(entry);
+        }
+    }
+
+    private boolean hasActiveNotifications() {
+        if (mFeatureFlags.isNewNotifPipelineRenderingEnabled()) {
+            return mNotifPipeline.getShadeList().isEmpty();
+        } else {
+            return mEntryManager.hasActiveNotifications();
+        }
+    }
+
+    /**
+     * Called after the animations for a "clear all notifications" action has ended.
+     */
+    private void onDismissAllAnimationsEnd(
+            List<ExpandableNotificationRow> viewsToRemove,
+            @SelectedRows int selectedRows) {
+        if (mFeatureFlags.isNewNotifPipelineRenderingEnabled()) {
+            if (selectedRows == ROWS_ALL) {
+                mNotifCollection.dismissAllNotifications(mLockscreenUserManager.getCurrentUserId());
+            } else {
+                final List<Pair<NotificationEntry, DismissedByUserStats>>
+                        entriesWithRowsDismissedFromShade = new ArrayList<>();
+                final List<DismissedByUserStats> dismissalUserStats = new ArrayList<>();
+                final int numVisibleEntries = mNotifPipeline.getShadeListCount();
+                for (int i = 0; i < viewsToRemove.size(); i++) {
+                    final NotificationEntry entry = viewsToRemove.get(i).getEntry();
+                    final DismissedByUserStats stats =
+                            new DismissedByUserStats(
+                                    DISMISSAL_SHADE,
+                                    DISMISS_SENTIMENT_NEUTRAL,
+                                    NotificationVisibility.obtain(
+                                            entry.getKey(),
+                                            entry.getRanking().getRank(),
+                                            numVisibleEntries,
+                                            true,
+                                            NotificationLogger.getNotificationLocation(entry)));
+                    entriesWithRowsDismissedFromShade.add(
+                            new Pair<NotificationEntry, DismissedByUserStats>(entry, stats));
+                }
+                mNotifCollection.dismissNotifications(entriesWithRowsDismissedFromShade);
+            }
+        } else {
+            for (ExpandableNotificationRow rowToRemove : viewsToRemove) {
+                if (canChildBeDismissed(rowToRemove)) {
+                    if (selectedRows == ROWS_ALL) {
+                        // TODO: This is a listener method; we shouldn't be calling it. Can we just
+                        // call performRemoveNotification as below?
+                        mEntryManager.removeNotification(
+                                rowToRemove.getEntry().getKey(),
+                                null /* ranking */,
+                                NotificationListenerService.REASON_CANCEL_ALL);
+                    } else {
+                        mEntryManager.performRemoveNotification(
+                                rowToRemove.getEntry().getSbn(),
+                                NotificationListenerService.REASON_CANCEL_ALL);
+                    }
+                } else {
+                    rowToRemove.resetTranslation();
+                }
+            }
+            if (selectedRows == ROWS_ALL) {
+                try {
+                    mBarService.onClearAllNotifications(mLockscreenUserManager.getCurrentUserId());
+                } catch (Exception ex) {
+                }
+            }
+        }
+    }
+
     // ---------------------- DragDownHelper.OnDragDownListener ------------------------------------
 
     @ShadeViewRefactor(RefactorComponent.INPUT)
@@ -6393,8 +6518,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         /* Only ever called as a consequence of a lockscreen expansion gesture. */
         @Override
         public boolean onDraggedDown(View startingChild, int dragLengthY) {
-            if (mStatusBarState == StatusBarState.KEYGUARD
-                    && mEntryManager.hasActiveNotifications()) {
+            if (mStatusBarState == StatusBarState.KEYGUARD && hasActiveNotifications()) {
                 mLockscreenGestureLogger.write(
                         MetricsEvent.ACTION_LS_SHADE,
                         (int) (dragLengthY / mDisplayMetrics.density),
@@ -6402,7 +6526,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
                 if (!mAmbientState.isDozing() || startingChild != null) {
                     // We have notifications, go to locked shade.
-                    mShadeController.goToLockedShade(startingChild);
+                    Dependency.get(ShadeController.class).goToLockedShade(startingChild);
                     if (startingChild instanceof ExpandableNotificationRow) {
                         ExpandableNotificationRow row = (ExpandableNotificationRow) startingChild;
                         row.onExpandedByGesture(true /* drag down is always an open */);
@@ -6441,7 +6565,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         @Override
         public void setEmptyDragAmount(float amount) {
-            mNotificationPanel.setEmptyDragAmount(amount);
+            mNotificationPanelController.setEmptyDragAmount(amount);
         }
 
         @Override
@@ -6622,4 +6746,35 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     public static final int ROWS_HIGH_PRIORITY = 1;
     /** Only rows where entry.isHighPriority() is false. */
     public static final int ROWS_GENTLE = 2;
+
+    /**
+     * Enum for UiEvent logged from this class
+     */
+    enum NotificationPanelEvent implements UiEventLogger.UiEventEnum {
+        INVALID(0),
+        @UiEvent(doc = "User dismissed all notifications from notification panel.")
+        DISMISS_ALL_NOTIFICATIONS_PANEL(312),
+        @UiEvent(doc = "User dismissed all silent notifications from notification panel.")
+        DISMISS_SILENT_NOTIFICATIONS_PANEL(314);
+        private final int mId;
+        NotificationPanelEvent(int id) {
+            mId = id;
+        }
+        @Override public int getId() {
+            return mId;
+        }
+
+        public static UiEventLogger.UiEventEnum fromSelection(@SelectedRows int selection) {
+            if (selection == ROWS_ALL) {
+                return DISMISS_ALL_NOTIFICATIONS_PANEL;
+            }
+            if (selection == ROWS_GENTLE) {
+                return DISMISS_SILENT_NOTIFICATIONS_PANEL;
+            }
+            if (NotificationStackScrollLayout.DEBUG) {
+                throw new IllegalArgumentException("Unexpected selection" + selection);
+            }
+            return INVALID;
+        }
+    }
 }

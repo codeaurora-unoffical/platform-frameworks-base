@@ -251,6 +251,9 @@ enum Action {
     // ACTION: Create a Settings shortcut item.
     ACTION_SETTINGS_CREATE_SHORTCUT = 829;
 
+    // ACTION: A tile in Settings information architecture is clicked
+    ACTION_SETTINGS_TILE_CLICK = 830;
+
     // ACTION: Settings advanced button is expanded
     ACTION_SETTINGS_ADVANCED_BUTTON_EXPAND = 834;
 
@@ -699,6 +702,28 @@ enum Action {
     // CATEGORY: SETTINGS
     // OS: R
     ACTION_DASHBOARD_VISIBLE_TIME = 1729;
+
+    // ACTION: Allow "Access all files" for an app
+    APP_SPECIAL_PERMISSION_MANAGE_EXT_STRG_ALLOW = 1730;
+
+    // ACTION: Deny "Access all files" for an app
+    APP_SPECIAL_PERMISSION_MANAGE_EXT_STRG_DENY = 1731;
+
+    // ACTION: Battery feature usage
+    ACTION_BATTERY_OPTION_FEATURE_USAGE = 1732;
+
+    // ACTION: Battery feature runtime event
+    ACTION_BATTERY_OPTION_RUNTIME_EVENT = 1733;
+
+    // ACTION: Settings > Developer Options > Toggle on Wireless debugging
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACTION_ADB_WIRELESS_ON = 1734;
+
+    // ACTION: Settings > Developer Options > Toggle off Wireless debugging
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACTION_ADB_WIRELESS_OFF = 1735;
 }
 
 /**
@@ -713,7 +738,7 @@ enum PageId {
     // OS: 6.0
     ACCESSIBILITY = 2;
 
-    // OPEN: Settings > Accessibility > Captions
+    // OPEN: Settings > Accessibility > Captions preference
     // CATEGORY: SETTINGS
     // OS: 6.0
     ACCESSIBILITY_CAPTION_PROPERTIES = 3;
@@ -2467,4 +2492,145 @@ enum PageId {
     // CATEGORY: SETTINGS
     // OS: R
     ACCOUNT_WORK = 1807;
+
+    // OPEN: Settings > Developer Options > Bug report handler
+    // CATEGORY: SETTINGS
+    // OS: R
+    SETTINGS_BUGREPORT_HANDLER = 1808;
+
+    // Panel for adding Wi-Fi networks
+    // CATEGORY: SETTINGS
+    // OS: R
+    PANEL_ADD_WIFI_NETWORKS = 1809;
+
+    // OPEN: Settings > Accessibility > Enable accessibility service > Show tutorial dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_TOGGLE_SCREEN_ACCESSIBILITY_BUTTON = 1810;
+
+    // OPEN: Settings > Accessibility > Enable accessibility service > Show tutorial dialog in
+    // gesture mode
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_TOGGLE_SCREEN_GESTURE_NAVIGATION = 1811;
+
+    // OPEN: Settings > Accessibility > Edit shortcut dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_ACCESSIBILITY_SERVICE_EDIT_SHORTCUT = 1812;
+
+    // OPEN: Settings > Accessibility > Magnification > Edit shortcut dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_MAGNIFICATION_EDIT_SHORTCUT = 1813;
+
+    // OPEN: Settings > Accessibility > Color correction > Edit shortcut dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_DALTONIZER_EDIT_SHORTCUT = 1814;
+
+    // OPEN: Settings > Accessibility > Magnification > Settings
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACCESSIBILITY_MAGNIFICATION_SETTINGS = 1815;
+
+    // OPEN: Settings > Accessibility > Magnification > Settings > Magnification area dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_MAGNIFICATION_CAPABILITY = 1816;
+
+    // OPEN: Settings > Accessibility > Color inversion
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACCESSIBILITY_COLOR_INVERSION_SETTINGS = 1817;
+
+    // OPEN: Settings > Accessibility > Color inversion > Edit shortcut dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    DIALOG_COLOR_INVERSION_EDIT_SHORTCUT = 1818;
+
+    // OPEN: Settings > Accessibility > Captions preference > Captions appearance
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACCESSIBILITY_CAPTION_APPEARANCE = 1819;
+
+    // OPEN: Settings > Accessibility > Captions preference > More options
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACCESSIBILITY_CAPTION_MORE_OPTIONS = 1820;
+
+    // OPEN: Settings > Battery > Battery share
+    // CATEGORY: SETTINGS
+    // OS: R
+    FUELGAUGE_BATTERY_SHARE = 1821;
+
+    // OPEN: Settings -> Apps & Notifications -> Special App Access
+    // CATEGORY: SETTINGS
+    // OS: R
+    MANAGE_EXTERNAL_STORAGE = 1822;
+
+    // Open: Settings > DND > People
+    // OS: R
+    DND_PEOPLE = 1823;
+
+    // OPEN: Settings > Apps and notifications > App info > one of any app > Open by default
+    //       > Open supported links
+    // CATEGORY: SETTINGS
+    // OS: R
+    OPEN_SUPPORTED_LINKS = 1824;
+
+    // OPEN: Settings > Display > Dark theme > Set start time dialog
+    DIALOG_DARK_THEME_SET_START_TIME = 1825;
+
+    // OPEN: Settings > Display > Dark theme > Set end time dialog
+    DIALOG_DARK_THEME_SET_END_TIME = 1826;
+
+    // OPEN: Settings -> Sound -> Vibrate for calls
+    // CATEGORY: SETTINGS
+    // OS: R
+    VIBRATE_FOR_CALLS = 1827;
+
+    // OPEN: Settings > Connected devices > Connection preferences > NFC
+    // CATEGORY: SETTINGS
+    // OS: R
+    CONNECTION_DEVICE_ADVANCED_NFC = 1828;
+
+    // OPEN: Settings -> Apps & Notifications -> Special App Access
+    INTERACT_ACROSS_PROFILES = 1829;
+
+    // OPEN: Settings > Notifications > (app or conversations) > conversation
+    NOTIFICATION_CONVERSATION_SETTINGS = 1830;
+
+    // OPEN: Settings > Developer Options > Wireless debugging
+    // CATEGORY: SETTINGS
+    // OS: R
+    SETTINGS_ADB_WIRELESS = 1831;
+
+    // OPEN: Settings > Developer Options > Wireless debugging
+    //   > Pair device with pairing code > Pairing code dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    ADB_WIRELESS_DEVICE_PAIRING_DIALOG = 1832;
+
+    // OPEN: Settings > Developer Options > Wireless debugging
+    //   > Pair device with QR code > Scan QR code > Pairing device dialog
+    // CATEGORY: SETTINGS
+    // OS: R
+    ADB_WIRELESS_DEVICE_QR_PAIRING_DIALOG = 1833;
+
+    // OPEN: Settings > apps & notifications > notifications > conversations
+    // CATEGORY: SETTINGS
+    // OS: R
+    NOTIFICATION_CONVERSATION_LIST_SETTINGS = 1834;
+
+    // Panel for Media Output Group operation
+    // CATEGORY: SETTINGS
+    // OS: R
+    PANEL_MEDIA_OUTPUT_GROUP = 1835;
+
+    // OPEN: Settings > Developer Options > Wireless debugging
+    //   > Click on paired device
+    // CATEGORY: SETTINGS
+    // OS: R
+    ADB_WIRELESS_DEVICE_DETAILS = 1836;
 }

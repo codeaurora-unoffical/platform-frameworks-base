@@ -60,7 +60,7 @@ public class ActivityStackSupervisorTests extends ActivityTestsBase {
 
     @Before
     public void setUp() throws Exception {
-        mFullscreenStack = mRootActivityContainer.getDefaultDisplay().createStack(
+        mFullscreenStack = mRootWindowContainer.getDefaultDisplay().createStack(
                 WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, true /* onTop */);
     }
 
@@ -113,7 +113,7 @@ public class ActivityStackSupervisorTests extends ActivityTestsBase {
     public void testHandleNonResizableTaskOnSecondaryDisplay() {
         // Create an unresizable task on secondary display.
         final DisplayContent newDisplay = addNewDisplayContentAt(DisplayContent.POSITION_TOP);
-        final ActivityStack stack = new StackBuilder(mRootActivityContainer)
+        final ActivityStack stack = new StackBuilder(mRootWindowContainer)
                 .setDisplay(newDisplay).build();
         final ActivityRecord unresizableActivity = stack.getTopNonFinishingActivity();
         final Task task = unresizableActivity.getTask();
@@ -143,5 +143,34 @@ public class ActivityStackSupervisorTests extends ActivityTestsBase {
         verify(taskChangeNotifier, never()).notifyActivityForcedResizable(anyInt() /* taskId */,
                 anyInt() /* reason */, anyString() /* packageName */);
         verify(taskChangeNotifier, never()).notifyActivityDismissingDockedStack();
+    }
+
+    /**
+     * Ensures that notify focus task changes.
+     */
+    @Test
+    public void testNotifyTaskFocusChanged() {
+        final ActivityRecord fullScreenActivityA = new ActivityBuilder(mService).setCreateTask(true)
+                .setStack(mFullscreenStack).build();
+        final Task taskA = fullScreenActivityA.getTask();
+
+        final TaskChangeNotificationController taskChangeNotifier =
+                mService.getTaskChangeNotificationController();
+        spyOn(taskChangeNotifier);
+
+        mService.setResumedActivityUncheckLocked(fullScreenActivityA, "resumeA");
+        verify(taskChangeNotifier).notifyTaskFocusChanged(eq(taskA.mTaskId) /* taskId */,
+                eq(true) /* focused */);
+        reset(taskChangeNotifier);
+
+        final ActivityRecord fullScreenActivityB = new ActivityBuilder(mService).setCreateTask(true)
+                .setStack(mFullscreenStack).build();
+        final Task taskB = fullScreenActivityB.getTask();
+
+        mService.setResumedActivityUncheckLocked(fullScreenActivityB, "resumeB");
+        verify(taskChangeNotifier).notifyTaskFocusChanged(eq(taskA.mTaskId) /* taskId */,
+                eq(false) /* focused */);
+        verify(taskChangeNotifier).notifyTaskFocusChanged(eq(taskB.mTaskId) /* taskId */,
+                eq(true) /* focused */);
     }
 }

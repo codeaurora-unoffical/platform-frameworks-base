@@ -17,9 +17,10 @@
 package android.net.wifi.p2p;
 
 import android.annotation.IntDef;
+import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.annotation.UnsupportedAppUsage;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -34,7 +35,7 @@ import java.util.Locale;
  */
 public final class WifiP2pWfdInfo implements Parcelable {
 
-    private boolean mWfdEnabled;
+    private boolean mEnabled;
 
     /** Device information bitmap */
     private int mDeviceInfo;
@@ -61,6 +62,9 @@ public final class WifiP2pWfdInfo implements Parcelable {
      * {@link #mDeviceInfo} & {@link #DEVICE_TYPE} is one of {@link #DEVICE_TYPE_WFD_SOURCE},
      * {@link #DEVICE_TYPE_PRIMARY_SINK}, {@link #DEVICE_TYPE_SECONDARY_SINK} or
      * {@link #DEVICE_TYPE_SOURCE_OR_PRIMARY_SINK}.
+     *
+     * The bit definition is listed in 5.1.2 WFD Device Information Subelement in
+     * Wi-Fi Display Technical Specification.
      */
     private static final int DEVICE_TYPE                            = 1 << 1 | 1 << 0;
     private static final int COUPLED_SINK_SUPPORT_AT_SOURCE         = 1 << 2;
@@ -69,6 +73,8 @@ public final class WifiP2pWfdInfo implements Parcelable {
     private static final int SESSION_AVAILABLE_BIT2                 = 1 << 5;
     private static final int SESSION_AVAILABLE                      =
             SESSION_AVAILABLE_BIT2 | SESSION_AVAILABLE_BIT1;
+    /* The support of Content Protection using the HDCP system 2.0/2.1. */
+    private static final int CONTENT_PROTECTION_SUPPORT             = 1 << 8;
 
     private int mCtrlPort;
 
@@ -80,15 +86,15 @@ public final class WifiP2pWfdInfo implements Parcelable {
     /** @hide */
     @UnsupportedAppUsage
     public WifiP2pWfdInfo(int devInfo, int ctrlPort, int maxTput) {
-        mWfdEnabled = true;
+        mEnabled = true;
         mDeviceInfo = devInfo;
         mCtrlPort = ctrlPort;
         mMaxThroughput = maxTput;
     }
 
     /** Returns true is Wifi Display is enabled, false otherwise. */
-    public boolean isWfdEnabled() {
-        return mWfdEnabled;
+    public boolean isEnabled() {
+        return mEnabled;
     }
 
     /**
@@ -96,8 +102,8 @@ public final class WifiP2pWfdInfo implements Parcelable {
      *
      * @param enabled true to enable Wifi Display, false to disable
      */
-    public void setWfdEnabled(boolean enabled) {
-        mWfdEnabled = enabled;
+    public void setEnabled(boolean enabled) {
+        mEnabled = enabled;
     }
 
     /**
@@ -146,18 +152,38 @@ public final class WifiP2pWfdInfo implements Parcelable {
         }
     }
 
+    /**
+     * @return true if Content Protection using the HDCP system 2.0/2.1 is supported.
+     */
+    public boolean isContentProtectionSupported() {
+        return (mDeviceInfo & CONTENT_PROTECTION_SUPPORT) != 0;
+    }
+
+    /**
+     * Sets whether Content Protection using the HDCP system 2.0/2.1 is supported.
+     *
+     * @param enabled true to indicate that Content Protection is supported, false otherwise.
+     */
+    public void setContentProtectionSupported(boolean enabled) {
+        if (enabled) {
+            mDeviceInfo |= CONTENT_PROTECTION_SUPPORT;
+        } else {
+            mDeviceInfo &= ~CONTENT_PROTECTION_SUPPORT;
+        }
+    }
+
     /** Returns the TCP port at which the WFD Device listens for RTSP messages. */
     public int getControlPort() {
         return mCtrlPort;
     }
 
     /** Sets the TCP port at which the WFD Device listens for RTSP messages. */
-    public void setControlPort(int port) {
+    public void setControlPort(@IntRange(from = 0) int port) {
         mCtrlPort = port;
     }
 
     /** Sets the maximum average throughput capability of the WFD Device, in megabits/second. */
-    public void setMaxThroughput(int maxThroughput) {
+    public void setMaxThroughput(@IntRange(from = 0) int maxThroughput) {
         mMaxThroughput = maxThroughput;
     }
 
@@ -175,7 +201,7 @@ public final class WifiP2pWfdInfo implements Parcelable {
     @Override
     public String toString() {
         StringBuffer sbuf = new StringBuffer();
-        sbuf.append("WFD enabled: ").append(mWfdEnabled);
+        sbuf.append("WFD enabled: ").append(mEnabled);
         sbuf.append("WFD DeviceInfo: ").append(mDeviceInfo);
         sbuf.append("\n WFD CtrlPort: ").append(mCtrlPort);
         sbuf.append("\n WFD MaxThroughput: ").append(mMaxThroughput);
@@ -190,7 +216,7 @@ public final class WifiP2pWfdInfo implements Parcelable {
     /** Copy constructor. */
     public WifiP2pWfdInfo(@Nullable WifiP2pWfdInfo source) {
         if (source != null) {
-            mWfdEnabled = source.mWfdEnabled;
+            mEnabled = source.mEnabled;
             mDeviceInfo = source.mDeviceInfo;
             mCtrlPort = source.mCtrlPort;
             mMaxThroughput = source.mMaxThroughput;
@@ -200,14 +226,14 @@ public final class WifiP2pWfdInfo implements Parcelable {
     /** Implement the Parcelable interface */
     @Override
     public void writeToParcel(@NonNull Parcel dest, int flags) {
-        dest.writeInt(mWfdEnabled ? 1 : 0);
+        dest.writeInt(mEnabled ? 1 : 0);
         dest.writeInt(mDeviceInfo);
         dest.writeInt(mCtrlPort);
         dest.writeInt(mMaxThroughput);
     }
 
     private void readFromParcel(Parcel in) {
-        mWfdEnabled = (in.readInt() == 1);
+        mEnabled = (in.readInt() == 1);
         mDeviceInfo = in.readInt();
         mCtrlPort = in.readInt();
         mMaxThroughput = in.readInt();

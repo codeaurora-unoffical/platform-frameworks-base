@@ -31,7 +31,6 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.util.Log;
-import android.util.StatsLog;
 import android.view.ISystemGestureExclusionListener;
 import android.view.InputChannel;
 import android.view.InputDevice;
@@ -54,6 +53,11 @@ import com.android.systemui.plugins.PluginListener;
 import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.system.QuickStepContract;
+import com.android.systemui.shared.system.SysUiStatsLog;
+import com.android.systemui.shared.tracing.ProtoTraceable;
+import com.android.systemui.tracing.ProtoTracer;
+import com.android.systemui.tracing.nano.EdgeBackGestureHandlerProto;
+import com.android.systemui.tracing.nano.SystemUiTraceProto;
 
 import java.io.PrintWriter;
 import java.util.concurrent.Executor;
@@ -62,7 +66,7 @@ import java.util.concurrent.Executor;
  * Utility class to handle edge swipes for back gesture
  */
 public class EdgeBackGestureHandler implements DisplayListener,
-        PluginListener<NavigationEdgeBackPlugin> {
+        PluginListener<NavigationEdgeBackPlugin>, ProtoTraceable<SystemUiTraceProto> {
 
     private static final String TAG = "EdgeBackGestureHandler";
     private static final int MAX_LONG_PRESS_TIMEOUT = SystemProperties.getInt(
@@ -97,6 +101,8 @@ public class EdgeBackGestureHandler implements DisplayListener,
 
     // The edge width where touch down is allowed
     private int mEdgeWidth;
+    // The bottom gesture area height
+    private int mBottomGestureHeight;
     // The slop to distinguish between horizontal and vertical motion
     private final float mTouchSlop;
     // Duration after which we consider the event as longpress.
@@ -131,23 +137,23 @@ public class EdgeBackGestureHandler implements DisplayListener,
                     mOverviewProxyService.notifyBackAction(true, (int) mDownPoint.x,
                             (int) mDownPoint.y, false /* isButton */, !mIsOnLeftEdge);
                     int backtype = (mInRejectedExclusion
-                            ? StatsLog.BACK_GESTURE__TYPE__COMPLETED_REJECTED :
-                            StatsLog.BACK_GESTURE__TYPE__COMPLETED);
-                    StatsLog.write(StatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
+                            ? SysUiStatsLog.BACK_GESTURE__TYPE__COMPLETED_REJECTED :
+                            SysUiStatsLog.BACK_GESTURE__TYPE__COMPLETED);
+                    SysUiStatsLog.write(SysUiStatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
                             (int) mDownPoint.y, mIsOnLeftEdge
-                                    ? StatsLog.BACK_GESTURE__X_LOCATION__LEFT :
-                                    StatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
+                                    ? SysUiStatsLog.BACK_GESTURE__X_LOCATION__LEFT :
+                                    SysUiStatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
                 }
 
                 @Override
                 public void cancelBack() {
                     mOverviewProxyService.notifyBackAction(false, (int) mDownPoint.x,
                             (int) mDownPoint.y, false /* isButton */, !mIsOnLeftEdge);
-                    int backtype = StatsLog.BACK_GESTURE__TYPE__INCOMPLETE;
-                    StatsLog.write(StatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
+                    int backtype = SysUiStatsLog.BACK_GESTURE__TYPE__INCOMPLETE;
+                    SysUiStatsLog.write(SysUiStatsLog.BACK_GESTURE_REPORTED_REPORTED, backtype,
                             (int) mDownPoint.y, mIsOnLeftEdge
-                                    ? StatsLog.BACK_GESTURE__X_LOCATION__LEFT :
-                                    StatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
+                                    ? SysUiStatsLog.BACK_GESTURE__X_LOCATION__LEFT :
+                                    SysUiStatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
                 }
             };
 
@@ -159,6 +165,7 @@ public class EdgeBackGestureHandler implements DisplayListener,
         mMainExecutor = context.getMainExecutor();
         mOverviewProxyService = overviewProxyService;
         mPluginManager = pluginManager;
+        Dependency.get(ProtoTracer.class).add(this);
 
         // Reduce the default touch slop to ensure that we can intercept the gesture
         // before the app starts to react to it.
@@ -174,6 +181,8 @@ public class EdgeBackGestureHandler implements DisplayListener,
     public void updateCurrentUserResources(Resources res) {
         mEdgeWidth = res.getDimensionPixelSize(
                 com.android.internal.R.dimen.config_backGestureInset);
+        mBottomGestureHeight = res.getDimensionPixelSize(
+                com.android.internal.R.dimen.navigation_bar_gesture_height);
     }
 
     /**
@@ -300,7 +309,7 @@ public class EdgeBackGestureHandler implements DisplayListener,
         layoutParams.setTitle(TAG + mContext.getDisplayId());
         layoutParams.accessibilityTitle = mContext.getString(R.string.nav_bar_edge_panel);
         layoutParams.windowAnimations = 0;
-        layoutParams.setFitWindowInsetsTypes(0 /* types */);
+        layoutParams.setFitInsetsTypes(0 /* types */);
         return layoutParams;
     }
 
@@ -316,6 +325,11 @@ public class EdgeBackGestureHandler implements DisplayListener,
             return false;
         }
 
+        // Disallow if we are in the bottom gesture area
+        if (y >= (mDisplaySize.y - mBottomGestureHeight)) {
+            return false;
+        }
+
         // Always allow if the user is in a transient sticky immersive state
         if (mIsNavBarShownTransiently) {
             return true;
@@ -325,10 +339,10 @@ public class EdgeBackGestureHandler implements DisplayListener,
         if (isInExcludedRegion) {
             mOverviewProxyService.notifyBackAction(false /* completed */, -1, -1,
                     false /* isButton */, !mIsOnLeftEdge);
-            StatsLog.write(StatsLog.BACK_GESTURE_REPORTED_REPORTED,
-                    StatsLog.BACK_GESTURE__TYPE__INCOMPLETE_EXCLUDED, y,
-                    mIsOnLeftEdge ? StatsLog.BACK_GESTURE__X_LOCATION__LEFT :
-                            StatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
+            SysUiStatsLog.write(SysUiStatsLog.BACK_GESTURE_REPORTED_REPORTED,
+                    SysUiStatsLog.BACK_GESTURE__TYPE__INCOMPLETE_EXCLUDED, y,
+                    mIsOnLeftEdge ? SysUiStatsLog.BACK_GESTURE__X_LOCATION__LEFT :
+                            SysUiStatsLog.BACK_GESTURE__X_LOCATION__RIGHT);
         } else {
             mInRejectedExclusion = mUnrestrictedExcludeRegion.contains(x, y);
         }
@@ -361,6 +375,7 @@ public class EdgeBackGestureHandler implements DisplayListener,
                 mDownPoint.set(ev.getX(), ev.getY());
                 mThresholdCrossed = false;
             }
+
         } else if (mAllowGesture) {
             if (!mThresholdCrossed) {
                 if (action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -390,6 +405,8 @@ public class EdgeBackGestureHandler implements DisplayListener,
             // forward touch
             mEdgeBackPlugin.onMotionEvent(ev);
         }
+
+        Dependency.get(ProtoTracer.class).update();
     }
 
     @Override
@@ -406,9 +423,7 @@ public class EdgeBackGestureHandler implements DisplayListener,
     }
 
     private void updateDisplaySize() {
-        mContext.getSystemService(DisplayManager.class)
-                .getDisplay(mDisplayId)
-                .getRealSize(mDisplaySize);
+        mContext.getDisplay().getRealSize(mDisplaySize);
         if (mEdgeBackPlugin != null) {
             mEdgeBackPlugin.setDisplaySize(mDisplaySize);
         }
@@ -447,6 +462,14 @@ public class EdgeBackGestureHandler implements DisplayListener,
         pw.println("  mUnrestrictedExcludeRegion=" + mUnrestrictedExcludeRegion);
         pw.println("  mIsAttached=" + mIsAttached);
         pw.println("  mEdgeWidth=" + mEdgeWidth);
+    }
+
+    @Override
+    public void writeToProto(SystemUiTraceProto proto) {
+        if (proto.edgeBackGestureHandler == null) {
+            proto.edgeBackGestureHandler = new EdgeBackGestureHandlerProto();
+        }
+        proto.edgeBackGestureHandler.allowGesture = mAllowGesture;
     }
 
     class SysUiInputEventReceiver extends InputEventReceiver {

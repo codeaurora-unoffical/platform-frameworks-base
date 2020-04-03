@@ -16,120 +16,74 @@
 
 package com.android.systemui.screenrecord;
 
-import android.Manifest;
 import android.app.Activity;
-import android.content.Context;
-import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.media.projection.MediaProjectionManager;
+import android.app.PendingIntent;
 import android.os.Bundle;
-import android.util.Log;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.Button;
-import android.widget.CheckBox;
-import android.widget.Toast;
+import android.widget.Switch;
 
 import com.android.systemui.R;
+
+import javax.inject.Inject;
 
 /**
  * Activity to select screen recording options
  */
 public class ScreenRecordDialog extends Activity {
-    private static final String TAG = "ScreenRecord";
-    private static final int REQUEST_CODE_VIDEO_ONLY = 200;
-    private static final int REQUEST_CODE_VIDEO_TAPS = 201;
-    private static final int REQUEST_CODE_PERMISSIONS = 299;
-    private static final int REQUEST_CODE_VIDEO_AUDIO = 300;
-    private static final int REQUEST_CODE_VIDEO_AUDIO_TAPS = 301;
-    private static final int REQUEST_CODE_PERMISSIONS_AUDIO = 399;
-    private boolean mUseAudio;
-    private boolean mShowTaps;
+    private static final long DELAY_MS = 3000;
+    private static final long INTERVAL_MS = 1000;
+
+    private final RecordingController mController;
+    private Switch mAudioSwitch;
+    private Switch mTapsSwitch;
+
+    @Inject
+    public ScreenRecordDialog(RecordingController controller) {
+        mController = controller;
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        Window window = getWindow();
+        // Inflate the decor view, so the attributes below are not overwritten by the theme.
+        window.getDecorView();
+        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        window.setGravity(Gravity.TOP);
+
         setContentView(R.layout.screen_record_dialog);
 
-        final CheckBox micCheckBox = findViewById(R.id.checkbox_mic);
-        final CheckBox tapsCheckBox = findViewById(R.id.checkbox_taps);
-
-        final Button recordButton = findViewById(R.id.record_button);
-        recordButton.setOnClickListener(v -> {
-            mUseAudio = micCheckBox.isChecked();
-            mShowTaps = tapsCheckBox.isChecked();
-            Log.d(TAG, "Record button clicked: audio " + mUseAudio + ", taps " + mShowTaps);
-
-            if (mUseAudio && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "Requesting permission for audio");
-                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},
-                        REQUEST_CODE_PERMISSIONS_AUDIO);
-            } else {
-                requestScreenCapture();
-            }
+        Button cancelBtn = findViewById(R.id.button_cancel);
+        cancelBtn.setOnClickListener(v -> {
+            finish();
         });
+
+        Button startBtn = findViewById(R.id.button_start);
+        startBtn.setOnClickListener(v -> {
+            requestScreenCapture();
+            finish();
+        });
+
+        mAudioSwitch = findViewById(R.id.screenrecord_audio_switch);
+        mTapsSwitch = findViewById(R.id.screenrecord_taps_switch);
     }
 
     private void requestScreenCapture() {
-        MediaProjectionManager mediaProjectionManager = (MediaProjectionManager) getSystemService(
-                Context.MEDIA_PROJECTION_SERVICE);
-        Intent permissionIntent = mediaProjectionManager.createScreenCaptureIntent();
-
-        if (mUseAudio) {
-            startActivityForResult(permissionIntent,
-                    mShowTaps ? REQUEST_CODE_VIDEO_AUDIO_TAPS : REQUEST_CODE_VIDEO_AUDIO);
-        } else {
-            startActivityForResult(permissionIntent,
-                    mShowTaps ? REQUEST_CODE_VIDEO_TAPS : REQUEST_CODE_VIDEO_ONLY);
-        }
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        mShowTaps = (requestCode == REQUEST_CODE_VIDEO_TAPS
-                || requestCode == REQUEST_CODE_VIDEO_AUDIO_TAPS);
-        switch (requestCode) {
-            case REQUEST_CODE_VIDEO_TAPS:
-            case REQUEST_CODE_VIDEO_AUDIO_TAPS:
-            case REQUEST_CODE_VIDEO_ONLY:
-            case REQUEST_CODE_VIDEO_AUDIO:
-                if (resultCode == RESULT_OK) {
-                    mUseAudio = (requestCode == REQUEST_CODE_VIDEO_AUDIO
-                            || requestCode == REQUEST_CODE_VIDEO_AUDIO_TAPS);
-                    startForegroundService(
-                            RecordingService.getStartIntent(this, resultCode, data, mUseAudio,
-                                    mShowTaps));
-                } else {
-                    Toast.makeText(this,
-                            getResources().getString(R.string.screenrecord_permission_error),
-                            Toast.LENGTH_SHORT).show();
-                }
-                finish();
-                break;
-            case REQUEST_CODE_PERMISSIONS:
-                int permission = checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-                if (permission != PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this,
-                            getResources().getString(R.string.screenrecord_permission_error),
-                            Toast.LENGTH_SHORT).show();
-                    finish();
-                } else {
-                    requestScreenCapture();
-                }
-                break;
-            case REQUEST_CODE_PERMISSIONS_AUDIO:
-                int videoPermission = checkSelfPermission(
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE);
-                int audioPermission = checkSelfPermission(Manifest.permission.RECORD_AUDIO);
-                if (videoPermission != PackageManager.PERMISSION_GRANTED
-                        || audioPermission != PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this,
-                            getResources().getString(R.string.screenrecord_permission_error),
-                            Toast.LENGTH_SHORT).show();
-                    finish();
-                } else {
-                    requestScreenCapture();
-                }
-                break;
-        }
+        boolean useAudio = mAudioSwitch.isChecked();
+        boolean showTaps = mTapsSwitch.isChecked();
+        PendingIntent startIntent = PendingIntent.getForegroundService(this,
+                RecordingService.REQUEST_CODE,
+                RecordingService.getStartIntent(
+                        ScreenRecordDialog.this, RESULT_OK, null, useAudio, showTaps),
+                PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent stopIntent = PendingIntent.getService(this,
+                RecordingService.REQUEST_CODE,
+                RecordingService.getStopIntent(this),
+                PendingIntent.FLAG_UPDATE_CURRENT);
+        mController.startCountdown(DELAY_MS, INTERVAL_MS, startIntent, stopIntent);
     }
 }

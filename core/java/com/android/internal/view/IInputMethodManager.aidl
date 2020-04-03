@@ -41,9 +41,9 @@ interface IInputMethodManager {
             boolean allowsImplicitlySelectedSubtypes);
     InputMethodSubtype getLastInputMethodSubtype();
 
-    boolean showSoftInput(in IInputMethodClient client, int flags,
+    boolean showSoftInput(in IInputMethodClient client, IBinder windowToken, int flags,
             in ResultReceiver resultReceiver);
-    boolean hideSoftInput(in IInputMethodClient client, int flags,
+    boolean hideSoftInput(in IInputMethodClient client, IBinder windowToken, int flags,
             in ResultReceiver resultReceiver);
     // If windowToken is null, this just does startInput().  Otherwise this reports that a window
     // has gained focus, and if 'attribute' is non-null then also does startInput.

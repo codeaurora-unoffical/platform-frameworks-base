@@ -21,6 +21,7 @@ import static android.app.usage.UsageEvents.Event.CONFIGURATION_CHANGE;
 import static android.app.usage.UsageEvents.Event.DEVICE_EVENT_PACKAGE_NAME;
 import static android.app.usage.UsageEvents.Event.DEVICE_SHUTDOWN;
 import static android.app.usage.UsageEvents.Event.FLUSH_TO_DISK;
+import static android.app.usage.UsageEvents.Event.LOCUS_ID_SET;
 import static android.app.usage.UsageEvents.Event.NOTIFICATION_INTERRUPTION;
 import static android.app.usage.UsageEvents.Event.SHORTCUT_INVOCATION;
 import static android.app.usage.UsageEvents.Event.USER_STOPPED;
@@ -30,6 +31,8 @@ import static android.app.usage.UsageStatsManager.USAGE_SOURCE_TASK_ROOT_ACTIVIT
 
 import android.Manifest;
 import android.annotation.NonNull;
+import android.annotation.Nullable;
+import android.annotation.UserIdInt;
 import android.app.ActivityManager;
 import android.app.AppOpsManager;
 import android.app.IUidObserver;
@@ -52,10 +55,12 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.LocusId;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.ParceledListSlice;
+import android.content.pm.ShortcutServiceInternal;
 import android.content.pm.UserInfo;
 import android.content.res.Configuration;
 import android.os.Binder;
@@ -81,6 +86,7 @@ import android.util.SparseIntArray;
 
 import com.android.internal.content.PackageMonitor;
 import com.android.internal.os.BackgroundThread;
+import com.android.internal.util.CollectionUtils;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.util.IndentingPrintWriter;
 import com.android.server.LocalServices;
@@ -99,6 +105,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -152,6 +159,8 @@ public class UsageStatsService extends SystemService implements
     PackageManagerInternal mPackageManagerInternal;
     // Do not use directly. Call getDpmInternal() instead
     DevicePolicyManagerInternal mDpmInternal;
+    // Do not use directly. Call getShortcutServiceInternal() instead
+    ShortcutServiceInternal mShortcutServiceInternal;
 
     private final SparseArray<UserUsageStatsService> mUserState = new SparseArray<>();
     private final SparseBooleanArray mUserUnlockedStates = new SparseBooleanArray();
@@ -263,6 +272,8 @@ public class UsageStatsService extends SystemService implements
         if (phase == PHASE_SYSTEM_SERVICES_READY) {
             // initialize mDpmInternal
             getDpmInternal();
+            // initialize mShortcutServiceInternal
+            getShortcutServiceInternal();
 
             if (ENABLE_KERNEL_UPDATES && KERNEL_COUNTER_FILE.exists()) {
                 try {
@@ -369,7 +380,7 @@ public class UsageStatsService extends SystemService implements
     /**
      * Fetches a map (package_name:install_time) of installed packages for the given user. This
      * map contains all installed packages, including those packages which have been uninstalled
-     * with the DONT_DELETE_DATA flag.
+     * with the DELETE_KEEP_DATA flag.
      * This is a helper method which should only be called when the given user's usage stats service
      * is initialized; it performs a heavy query to package manager so do not call it otherwise.
      * <br/>
@@ -394,6 +405,13 @@ public class UsageStatsService extends SystemService implements
             mDpmInternal = LocalServices.getService(DevicePolicyManagerInternal.class);
         }
         return mDpmInternal;
+    }
+
+    private ShortcutServiceInternal getShortcutServiceInternal() {
+        if (mShortcutServiceInternal == null) {
+            mShortcutServiceInternal = LocalServices.getService(ShortcutServiceInternal.class);
+        }
+        return mShortcutServiceInternal;
     }
 
     private void readUsageSourceSetting() {
@@ -463,6 +481,38 @@ public class UsageStatsService extends SystemService implements
 
     private boolean shouldObfuscateInstantAppsForCaller(int callingUid, int userId) {
         return !mPackageManagerInternal.canAccessInstantApps(callingUid, userId);
+    }
+
+    private boolean shouldHideShortcutInvocationEvents(int userId, String callingPackage,
+            int callingPid, int callingUid) {
+        final ShortcutServiceInternal shortcutServiceInternal = getShortcutServiceInternal();
+        if (shortcutServiceInternal != null) {
+            return !shortcutServiceInternal.hasShortcutHostPermission(userId, callingPackage,
+                    callingPid, callingUid);
+        }
+        return true; // hide by default if we can't verify visibility
+    }
+
+    private boolean shouldHideLocusIdEvents(int callingPid, int callingUid) {
+        if (callingUid == Process.SYSTEM_UID) {
+            return false;
+        }
+        return !(getContext().checkPermission(
+                android.Manifest.permission.ACCESS_LOCUS_ID_USAGE_STATS, callingPid, callingUid)
+                == PackageManager.PERMISSION_GRANTED);
+    }
+
+    /**
+     * Obfuscate both {@link UsageEvents.Event#NOTIFICATION_SEEN} and
+     * {@link UsageEvents.Event#NOTIFICATION_INTERRUPTION} events if the provided calling uid does
+     * not hold the {@link android.Manifest.permission.MANAGE_NOTIFICATIONS} permission.
+     */
+    private boolean shouldObfuscateNotificationEvents(int callingPid, int callingUid) {
+        if (callingUid == Process.SYSTEM_UID) {
+            return false;
+        }
+        return !(getContext().checkPermission(android.Manifest.permission.MANAGE_NOTIFICATIONS,
+                callingPid, callingUid) == PackageManager.PERMISSION_GRANTED);
     }
 
     private static void deleteRecursively(File f) {
@@ -1003,8 +1053,7 @@ public class UsageStatsService extends SystemService implements
     /**
      * Called by the Binder stub.
      */
-    UsageEvents queryEvents(int userId, long beginTime, long endTime,
-            boolean shouldObfuscateInstantApps) {
+    UsageEvents queryEvents(int userId, long beginTime, long endTime, int flags) {
         synchronized (mLock) {
             if (!mUserUnlockedStates.get(userId)) {
                 Slog.w(TAG, "Failed to query events for locked user " + userId);
@@ -1015,7 +1064,7 @@ public class UsageStatsService extends SystemService implements
             if (service == null) {
                 return null; // user was stopped or removed
             }
-            return service.queryEvents(beginTime, endTime, shouldObfuscateInstantApps);
+            return service.queryEvents(beginTime, endTime, flags);
         }
     }
 
@@ -1074,7 +1123,7 @@ public class UsageStatsService extends SystemService implements
 
             boolean checkin = false;
             boolean compact = false;
-            String pkg = null;
+            final ArrayList<String> pkgs = new ArrayList<>();
 
             if (args != null) {
                 for (int i = 0; i < args.length; i++) {
@@ -1105,7 +1154,11 @@ public class UsageStatsService extends SystemService implements
                             // dump everything for all users
                             final int numUsers = mUserState.size();
                             for (int user = 0; user < numUsers; user++) {
-                                ipw.println("user=" + mUserState.keyAt(user));
+                                final int userId = mUserState.keyAt(user);
+                                if (!mUserUnlockedStates.get(userId)) {
+                                    continue;
+                                }
+                                ipw.println("user=" + userId);
                                 ipw.increaseIndent();
                                 mUserState.valueAt(user).dumpFile(ipw, null);
                                 ipw.decreaseIndent();
@@ -1126,7 +1179,11 @@ public class UsageStatsService extends SystemService implements
                             // dump info for all users
                             final int numUsers = mUserState.size();
                             for (int user = 0; user < numUsers; user++) {
-                                ipw.println("user=" + mUserState.keyAt(user));
+                                final int userId = mUserState.keyAt(user);
+                                if (!mUserUnlockedStates.get(userId)) {
+                                    continue;
+                                }
+                                ipw.println("user=" + userId);
                                 ipw.increaseIndent();
                                 mUserState.valueAt(user).dumpDatabaseInfo(ipw);
                                 ipw.decreaseIndent();
@@ -1159,8 +1216,7 @@ public class UsageStatsService extends SystemService implements
                         return;
                     } else if (arg != null && !arg.startsWith("-")) {
                         // Anything else that doesn't start with '-' is a pkg to filter
-                        pkg = arg;
-                        break;
+                        pkgs.add(arg);
                     }
                 }
             }
@@ -1171,17 +1227,19 @@ public class UsageStatsService extends SystemService implements
                 idpw.printPair("user", userId);
                 idpw.println();
                 idpw.increaseIndent();
-                if (checkin) {
-                    mUserState.valueAt(i).checkin(idpw);
-                } else {
-                    mUserState.valueAt(i).dump(idpw, pkg, compact);
-                    idpw.println();
+                if (mUserUnlockedStates.get(userId)) {
+                    if (checkin) {
+                        mUserState.valueAt(i).checkin(idpw);
+                    } else {
+                        mUserState.valueAt(i).dump(idpw, pkgs, compact);
+                        idpw.println();
+                    }
                 }
-                mAppStandby.dumpUser(idpw, userId, pkg);
+                mAppStandby.dumpUser(idpw, userId, pkgs);
                 idpw.decreaseIndent();
             }
 
-            if (pkg == null) {
+            if (CollectionUtils.isEmpty(pkgs)) {
                 pw.println();
                 mAppStandby.dumpState(args, pw);
             }
@@ -1197,13 +1255,17 @@ public class UsageStatsService extends SystemService implements
     private int parseUserIdFromArgs(String[] args, int index, IndentingPrintWriter ipw) {
         final int userId;
         try {
-            userId = Integer.valueOf(args[index + 1]);
+            userId = Integer.parseInt(args[index + 1]);
         } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
             ipw.println("invalid user specified.");
             return UserHandle.USER_NULL;
         }
         if (mUserState.indexOfKey(userId) < 0) {
             ipw.println("the specified user does not exist.");
+            return UserHandle.USER_NULL;
+        }
+        if (!mUserUnlockedStates.get(userId)) {
+            ipw.println("the specified user is currently in a locked state.");
             return UserHandle.USER_NULL;
         }
         return userId;
@@ -1414,14 +1476,25 @@ public class UsageStatsService extends SystemService implements
                 return null;
             }
 
-            final boolean obfuscateInstantApps = shouldObfuscateInstantAppsForCaller(
-                    Binder.getCallingUid(), UserHandle.getCallingUserId());
-
             final int userId = UserHandle.getCallingUserId();
+            final int callingUid = Binder.getCallingUid();
+            final int callingPid = Binder.getCallingPid();
+            final boolean obfuscateInstantApps = shouldObfuscateInstantAppsForCaller(
+                    callingUid, userId);
+
             final long token = Binder.clearCallingIdentity();
             try {
-                return UsageStatsService.this.queryEvents(userId, beginTime, endTime,
-                        obfuscateInstantApps);
+                final boolean hideShortcutInvocationEvents = shouldHideShortcutInvocationEvents(
+                        userId, callingPackage, callingPid, callingUid);
+                final boolean hideLocusIdEvents = shouldHideLocusIdEvents(callingPid, callingUid);
+                final boolean obfuscateNotificationEvents = shouldObfuscateNotificationEvents(
+                        callingPid, callingUid);
+                int flags = UsageEvents.SHOW_ALL_EVENT_DATA;
+                if (obfuscateInstantApps) flags |= UsageEvents.OBFUSCATE_INSTANT_APPS;
+                if (hideShortcutInvocationEvents) flags |= UsageEvents.HIDE_SHORTCUT_EVENTS;
+                if (hideLocusIdEvents) flags |= UsageEvents.HIDE_LOCUS_EVENTS;
+                if (obfuscateNotificationEvents) flags |= UsageEvents.OBFUSCATE_NOTIFICATION_EVENTS;
+                return UsageStatsService.this.queryEvents(userId, beginTime, endTime, flags);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -1452,19 +1525,31 @@ public class UsageStatsService extends SystemService implements
                 return null;
             }
 
-            if (userId != UserHandle.getCallingUserId()) {
+            final int callingUserId = UserHandle.getCallingUserId();
+            if (userId != callingUserId) {
                 getContext().enforceCallingPermission(
                         Manifest.permission.INTERACT_ACROSS_USERS_FULL,
                         "No permission to query usage stats for this user");
             }
 
+            final int callingUid = Binder.getCallingUid();
+            final int callingPid = Binder.getCallingPid();
             final boolean obfuscateInstantApps = shouldObfuscateInstantAppsForCaller(
-                    Binder.getCallingUid(), UserHandle.getCallingUserId());
+                    callingUid, callingUserId);
 
             final long token = Binder.clearCallingIdentity();
             try {
-                return UsageStatsService.this.queryEvents(userId, beginTime, endTime,
-                        obfuscateInstantApps);
+                final boolean hideShortcutInvocationEvents = shouldHideShortcutInvocationEvents(
+                        userId, callingPackage, callingPid, callingUid);
+                final boolean obfuscateNotificationEvents = shouldObfuscateNotificationEvents(
+                        callingPid, callingUid);
+                boolean hideLocusIdEvents = shouldHideLocusIdEvents(callingPid, callingUid);
+                int flags = UsageEvents.SHOW_ALL_EVENT_DATA;
+                if (obfuscateInstantApps) flags |= UsageEvents.OBFUSCATE_INSTANT_APPS;
+                if (hideShortcutInvocationEvents) flags |= UsageEvents.HIDE_SHORTCUT_EVENTS;
+                if (hideLocusIdEvents) flags |= UsageEvents.HIDE_LOCUS_EVENTS;
+                if (obfuscateNotificationEvents) flags |= UsageEvents.OBFUSCATE_NOTIFICATION_EVENTS;
+                return UsageStatsService.this.queryEvents(userId, beginTime, endTime, flags);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -1568,44 +1653,16 @@ public class UsageStatsService extends SystemService implements
         }
 
         @Override
-        public void setAppStandbyBucket(String packageName,
-                int bucket, int userId) {
+        public void setAppStandbyBucket(String packageName, int bucket, int userId) {
             getContext().enforceCallingPermission(Manifest.permission.CHANGE_APP_IDLE_STATE,
                     "No permission to change app standby state");
 
-            if (bucket < UsageStatsManager.STANDBY_BUCKET_ACTIVE
-                    || bucket > UsageStatsManager.STANDBY_BUCKET_NEVER) {
-                throw new IllegalArgumentException("Cannot set the standby bucket to " + bucket);
-            }
             final int callingUid = Binder.getCallingUid();
-            try {
-                userId = ActivityManager.getService().handleIncomingUser(
-                        Binder.getCallingPid(), callingUid, userId, false, true,
-                        "setAppStandbyBucket", null);
-            } catch (RemoteException re) {
-                throw re.rethrowFromSystemServer();
-            }
-            final boolean shellCaller = callingUid == 0 || callingUid == Process.SHELL_UID;
-            final boolean systemCaller = UserHandle.isCore(callingUid);
-            final int reason = systemCaller
-                    ? UsageStatsManager.REASON_MAIN_FORCED
-                    : UsageStatsManager.REASON_MAIN_PREDICTED;
+            final int callingPid = Binder.getCallingPid();
             final long token = Binder.clearCallingIdentity();
             try {
-                final int packageUid = mPackageManagerInternal.getPackageUid(packageName,
-                        PackageManager.MATCH_ANY_USER | PackageManager.MATCH_DIRECT_BOOT_UNAWARE
-                        | PackageManager.MATCH_DIRECT_BOOT_AWARE, userId);
-                // Caller cannot set their own standby state
-                if (packageUid == callingUid) {
-                    throw new IllegalArgumentException("Cannot set your own standby bucket");
-                }
-                if (packageUid < 0) {
-                    throw new IllegalArgumentException(
-                            "Cannot set standby bucket for non existent package (" + packageName
-                                    + ")");
-                }
-                mAppStandby.setAppStandbyBucket(packageName, userId, bucket, reason,
-                        SystemClock.elapsedRealtime(), shellCaller);
+                mAppStandby.setAppStandbyBucket(packageName, bucket, userId,
+                        callingUid, callingPid);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -1643,37 +1700,11 @@ public class UsageStatsService extends SystemService implements
                     "No permission to change app standby state");
 
             final int callingUid = Binder.getCallingUid();
-            try {
-                userId = ActivityManager.getService().handleIncomingUser(
-                        Binder.getCallingPid(), callingUid, userId, false, true,
-                        "setAppStandbyBucket", null);
-            } catch (RemoteException re) {
-                throw re.rethrowFromSystemServer();
-            }
-            final boolean shellCaller = callingUid == 0 || callingUid == Process.SHELL_UID;
-            final int reason = shellCaller
-                    ? UsageStatsManager.REASON_MAIN_FORCED
-                    : UsageStatsManager.REASON_MAIN_PREDICTED;
+            final int callingPid = Binder.getCallingPid();
             final long token = Binder.clearCallingIdentity();
             try {
-                final long elapsedRealtime = SystemClock.elapsedRealtime();
-                List<AppStandbyInfo> bucketList = appBuckets.getList();
-                for (AppStandbyInfo bucketInfo : bucketList) {
-                    final String packageName = bucketInfo.mPackageName;
-                    final int bucket = bucketInfo.mStandbyBucket;
-                    if (bucket < UsageStatsManager.STANDBY_BUCKET_ACTIVE
-                            || bucket > UsageStatsManager.STANDBY_BUCKET_NEVER) {
-                        throw new IllegalArgumentException(
-                                "Cannot set the standby bucket to " + bucket);
-                    }
-                    // Caller cannot set their own standby state
-                    if (mPackageManagerInternal.getPackageUid(packageName,
-                            PackageManager.MATCH_ANY_USER, userId) == callingUid) {
-                        throw new IllegalArgumentException("Cannot set your own standby bucket");
-                    }
-                    mAppStandby.setAppStandbyBucket(packageName, userId, bucket, reason,
-                            elapsedRealtime, shellCaller);
-                }
+                mAppStandby.setAppStandbyBuckets(appBuckets.getList(), userId,
+                        callingUid, callingPid);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -2041,6 +2072,17 @@ public class UsageStatsService extends SystemService implements
         }
 
         @Override
+        public void reportLocusUpdate(@NonNull ComponentName activity, @UserIdInt int userId,
+                @Nullable LocusId locusId, @NonNull  IBinder appToken) {
+            Event event = new Event(LOCUS_ID_SET, SystemClock.elapsedRealtime());
+            event.mLocusId = locusId.getId();
+            event.mPackage = activity.getPackageName();
+            event.mClass = activity.getClassName();
+            event.mInstanceId = appToken.hashCode();
+            reportEventOrAddToQueue(userId, event);
+        }
+
+        @Override
         public void reportContentProviderUsage(String name, String packageName, int userId) {
             mAppStandby.postReportContentProviderUsage(name, packageName, userId);
         }
@@ -2120,6 +2162,11 @@ public class UsageStatsService extends SystemService implements
                 boolean obfuscateInstantApps) {
             return UsageStatsService.this.queryUsageStats(
                     userId, intervalType, beginTime, endTime, obfuscateInstantApps);
+        }
+
+        @Override
+        public UsageEvents queryEventsForUser(int userId, long beginTime, long endTime, int flags) {
+            return UsageStatsService.this.queryEvents(userId, beginTime, endTime, flags);
         }
 
         @Override

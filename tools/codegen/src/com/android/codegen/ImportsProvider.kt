@@ -39,6 +39,7 @@ interface ImportsProvider {
     val ParcelWith: String get() { return classRef("com.android.internal.util.DataClass.ParcelWith") }
     val PluralOf: String get() { return classRef("com.android.internal.util.DataClass.PluralOf") }
     val Each: String get() { return classRef("com.android.internal.util.DataClass.Each") }
+    val MaySetToNull: String get() { return classRef("com.android.internal.util.DataClass.MaySetToNull") }
     val DataClassGenerated: String get() { return classRef("com.android.internal.util.DataClass.Generated") }
     val DataClassSuppressConstDefs: String get() { return classRef("com.android.internal.util.DataClass.SuppressConstDefsGeneration") }
     val DataClassSuppress: String get() { return classRef("com.android.internal.util.DataClass.Suppress") }
@@ -46,7 +47,7 @@ interface ImportsProvider {
     val Parcelling: String get() { return classRef("com.android.internal.util.Parcelling") }
     val Parcelable: String get() { return classRef("android.os.Parcelable") }
     val Parcel: String get() { return classRef("android.os.Parcel") }
-    val UnsupportedAppUsage: String get() { return classRef("android.annotation.UnsupportedAppUsage") }
+    val UnsupportedAppUsage: String get() { return classRef("android.compat.annotation.UnsupportedAppUsage") }
 
     /**
      * Optionally shortens a class reference if there's a corresponding import present

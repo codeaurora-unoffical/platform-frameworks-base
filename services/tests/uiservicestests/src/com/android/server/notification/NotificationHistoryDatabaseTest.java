@@ -44,6 +44,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.internal.matchers.Not;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -63,7 +64,6 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
     Context mContext;
     @Mock
     AlarmManager mAlarmManager;
-    TestFileAttrProvider mFileAttrProvider;
 
     NotificationHistoryDatabase mDataBase;
 
@@ -102,11 +102,9 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
         when(mContext.getUser()).thenReturn(getContext().getUser());
         when(mContext.getPackageName()).thenReturn(getContext().getPackageName());
 
-        mFileAttrProvider = new TestFileAttrProvider();
         mRootDir = new File(mContext.getFilesDir(), "NotificationHistoryDatabaseTest");
 
-        mDataBase = new NotificationHistoryDatabase(
-                mContext, mFileWriteHandler, mRootDir, mFileAttrProvider);
+        mDataBase = new NotificationHistoryDatabase(mContext, mFileWriteHandler, mRootDir);
         mDataBase.init();
     }
 
@@ -126,7 +124,7 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
         // add 5 files with a creation date of "today"
         for (long i = cal.getTimeInMillis(); i >= 5; i--) {
             File file = mock(File.class);
-            mFileAttrProvider.creationDates.put(file, i);
+            when(file.getName()).thenReturn(String.valueOf(i));
             AtomicFile af = new AtomicFile(file);
             expectedFiles.add(af);
             mDataBase.mHistoryFiles.addLast(af);
@@ -136,7 +134,7 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
         // Add 5 more files more than retainDays old
         for (int i = 5; i >= 0; i--) {
             File file = mock(File.class);
-            mFileAttrProvider.creationDates.put(file, cal.getTimeInMillis() - i);
+            when(file.getName()).thenReturn(String.valueOf(cal.getTimeInMillis() - i));
             AtomicFile af = new AtomicFile(file);
             mDataBase.mHistoryFiles.addLast(af);
         }
@@ -164,10 +162,10 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
     }
 
     @Test
-    public void testOnlyOneWriteRunnableInQueue() {
+    public void testForceWriteToDisk_bypassesExistingWrites() {
         when(mFileWriteHandler.hasCallbacks(any())).thenReturn(true);
         mDataBase.forceWriteToDisk();
-        verify(mFileWriteHandler, never()).post(any());
+        verify(mFileWriteHandler, times(1)).post(any());
     }
 
     @Test
@@ -183,6 +181,20 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
         mDataBase.addNotification(n2);
         assertThat(mDataBase.mBuffer.getNotificationsToWrite()).contains(n2);
         verify(mFileWriteHandler, times(1)).postDelayed(any(), anyLong());
+    }
+
+    @Test
+    public void testAddNotification_newestFirst() {
+        HistoricalNotification n = getHistoricalNotification(1);
+        HistoricalNotification n2 = getHistoricalNotification(2);
+
+        mDataBase.addNotification(n);
+
+        // second add should not trigger another write
+        mDataBase.addNotification(n2);
+
+        assertThat(mDataBase.mBuffer.getNotificationsToWrite().get(0)).isEqualTo(n2);
+        assertThat(mDataBase.mBuffer.getNotificationsToWrite().get(1)).isEqualTo(n);
     }
 
     @Test
@@ -225,12 +237,117 @@ public class NotificationHistoryDatabaseTest extends UiServiceTestCase {
         verify(af2, never()).openRead();
     }
 
-    private class TestFileAttrProvider implements NotificationHistoryDatabase.FileAttrProvider {
-        public Map<File, Long> creationDates = new HashMap<>();
+    @Test
+    public void testRemoveNotificationRunnable() throws Exception {
+        NotificationHistory nh = mock(NotificationHistory.class);
+        NotificationHistoryDatabase.RemoveNotificationRunnable rnr =
+                mDataBase.new RemoveNotificationRunnable("pkg", 123);
+        rnr.setNotificationHistory(nh);
 
-        @Override
-        public long getCreationTime(File file) {
-            return creationDates.get(file);
-        }
+        AtomicFile af = mock(AtomicFile.class);
+        when(af.getBaseFile()).thenReturn(new File(mRootDir, "af"));
+        mDataBase.mHistoryFiles.addLast(af);
+
+        when(nh.removeNotificationFromWrite("pkg", 123)).thenReturn(true);
+
+        mDataBase.mBuffer = mock(NotificationHistory.class);
+
+        rnr.run();
+
+        verify(mDataBase.mBuffer).removeNotificationFromWrite("pkg", 123);
+        verify(af).openRead();
+        verify(nh).removeNotificationFromWrite("pkg", 123);
+        verify(af).startWrite();
+    }
+
+    @Test
+    public void testRemoveNotificationRunnable_noChanges() throws Exception {
+        NotificationHistory nh = mock(NotificationHistory.class);
+        NotificationHistoryDatabase.RemoveNotificationRunnable rnr =
+                mDataBase.new RemoveNotificationRunnable("pkg", 123);
+        rnr.setNotificationHistory(nh);
+
+        AtomicFile af = mock(AtomicFile.class);
+        when(af.getBaseFile()).thenReturn(new File(mRootDir, "af"));
+        mDataBase.mHistoryFiles.addLast(af);
+
+        when(nh.removeNotificationFromWrite("pkg", 123)).thenReturn(false);
+
+        mDataBase.mBuffer = mock(NotificationHistory.class);
+
+        rnr.run();
+
+        verify(mDataBase.mBuffer).removeNotificationFromWrite("pkg", 123);
+        verify(af).openRead();
+        verify(nh).removeNotificationFromWrite("pkg", 123);
+        verify(af, never()).startWrite();
+    }
+
+    @Test
+    public void testRemoveConversationRunnable() throws Exception {
+        NotificationHistory nh = mock(NotificationHistory.class);
+        NotificationHistoryDatabase.RemoveConversationRunnable rcr =
+                mDataBase.new RemoveConversationRunnable("pkg", "convo");
+        rcr.setNotificationHistory(nh);
+
+        AtomicFile af = mock(AtomicFile.class);
+        when(af.getBaseFile()).thenReturn(new File(mRootDir, "af"));
+        mDataBase.mHistoryFiles.addLast(af);
+
+        when(nh.removeConversationFromWrite("pkg", "convo")).thenReturn(true);
+
+        mDataBase.mBuffer = mock(NotificationHistory.class);
+
+        rcr.run();
+
+        verify(mDataBase.mBuffer).removeConversationFromWrite("pkg", "convo");
+        verify(af).openRead();
+        verify(nh).removeConversationFromWrite("pkg", "convo");
+        verify(af).startWrite();
+    }
+
+    @Test
+    public void testRemoveConversationRunnable_noChanges() throws Exception {
+        NotificationHistory nh = mock(NotificationHistory.class);
+        NotificationHistoryDatabase.RemoveConversationRunnable rcr =
+                mDataBase.new RemoveConversationRunnable("pkg", "convo");
+        rcr.setNotificationHistory(nh);
+
+        AtomicFile af = mock(AtomicFile.class);
+        when(af.getBaseFile()).thenReturn(new File(mRootDir, "af"));
+        mDataBase.mHistoryFiles.addLast(af);
+
+        when(nh.removeConversationFromWrite("pkg", "convo")).thenReturn(false);
+
+        mDataBase.mBuffer = mock(NotificationHistory.class);
+
+        rcr.run();
+
+        verify(mDataBase.mBuffer).removeConversationFromWrite("pkg", "convo");
+        verify(af).openRead();
+        verify(nh).removeConversationFromWrite("pkg", "convo");
+        verify(af, never()).startWrite();
+    }
+
+    @Test
+    public void testWriteBufferRunnable() throws Exception {
+        NotificationHistory nh = mock(NotificationHistory.class);
+        when(nh.getPooledStringsToWrite()).thenReturn(new String[]{});
+        when(nh.getNotificationsToWrite()).thenReturn(new ArrayList<>());
+        NotificationHistoryDatabase.WriteBufferRunnable wbr =
+                mDataBase.new WriteBufferRunnable();
+
+        mDataBase.mBuffer = nh;
+        wbr.currentTime = 5;
+        wbr.latestNotificationsFile = mock(AtomicFile.class);
+        File file = mock(File.class);
+        when(file.getName()).thenReturn("5");
+        when(wbr.latestNotificationsFile.getBaseFile()).thenReturn(file);
+
+        wbr.run();
+
+        assertThat(mDataBase.mHistoryFiles.size()).isEqualTo(1);
+        assertThat(mDataBase.mBuffer).isNotEqualTo(nh);
+        verify(mAlarmManager, times(1)).setExactAndAllowWhileIdle(anyInt(), anyLong(), any());
     }
 }

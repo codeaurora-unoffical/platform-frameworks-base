@@ -33,6 +33,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.IntentSender.SendIntentException;
+import android.content.LocusId;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
@@ -97,6 +98,7 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.os.BackgroundThread;
+import com.android.internal.util.CollectionUtils;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.util.FastXmlSerializer;
 import com.android.internal.util.Preconditions;
@@ -132,6 +134,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -273,6 +276,10 @@ public class ShortcutService extends IShortcutService.Stub {
 
     @GuardedBy("mLock")
     private final ArrayList<ShortcutChangeListener> mListeners = new ArrayList<>(1);
+
+    @GuardedBy("mLock")
+    private final ArrayList<LauncherApps.ShortcutChangeCallback> mShortcutChangeCallbacks =
+            new ArrayList<>(1);
 
     @GuardedBy("mLock")
     private long mRawLastResetTime;
@@ -429,17 +436,17 @@ public class ShortcutService extends IShortcutService.Stub {
 
     @VisibleForTesting
     ShortcutService(Context context, Looper looper, boolean onlyForPackageManagerApis) {
-        mContext = Preconditions.checkNotNull(context);
+        mContext = Objects.requireNonNull(context);
         LocalServices.addService(ShortcutServiceInternal.class, new LocalService());
         mHandler = new Handler(looper);
         mIPackageManager = AppGlobals.getPackageManager();
-        mPackageManagerInternal = Preconditions.checkNotNull(
+        mPackageManagerInternal = Objects.requireNonNull(
                 LocalServices.getService(PackageManagerInternal.class));
-        mUserManagerInternal = Preconditions.checkNotNull(
+        mUserManagerInternal = Objects.requireNonNull(
                 LocalServices.getService(UserManagerInternal.class));
-        mUsageStatsManagerInternal = Preconditions.checkNotNull(
+        mUsageStatsManagerInternal = Objects.requireNonNull(
                 LocalServices.getService(UsageStatsManagerInternal.class));
-        mActivityManagerInternal = Preconditions.checkNotNull(
+        mActivityManagerInternal = Objects.requireNonNull(
                 LocalServices.getService(ActivityManagerInternal.class));
 
         mShortcutRequestPinProcessor = new ShortcutRequestPinProcessor(this, mLock);
@@ -1637,8 +1644,12 @@ public class ShortcutService extends IShortcutService.Stub {
      * - Sends a notification to LauncherApps
      * - Write to file
      */
-    void packageShortcutsChanged(@NonNull String packageName, @UserIdInt int userId) {
+    void packageShortcutsChanged(@NonNull String packageName, @UserIdInt int userId,
+            @Nullable List<ShortcutInfo> addedOrUpdatedShortcuts,
+            @Nullable List<ShortcutInfo> removedShortcuts) {
         notifyListeners(packageName, userId);
+        notifyShortcutChangeCallbacks(packageName, userId, addedOrUpdatedShortcuts,
+                removedShortcuts);
         scheduleSaveUser(userId);
     }
 
@@ -1666,6 +1677,34 @@ public class ShortcutService extends IShortcutService.Stub {
         });
     }
 
+    private void notifyShortcutChangeCallbacks(@NonNull String packageName, @UserIdInt int userId,
+            @Nullable List<ShortcutInfo> addedOrUpdatedShortcuts,
+            @Nullable List<ShortcutInfo> removedShortcuts) {
+        final UserHandle user = UserHandle.of(userId);
+        injectPostToHandler(() -> {
+            try {
+                final ArrayList<LauncherApps.ShortcutChangeCallback> copy;
+                synchronized (mLock) {
+                    if (!isUserUnlockedL(userId)) {
+                        return;
+                    }
+
+                    copy = new ArrayList<>(mShortcutChangeCallbacks);
+                }
+                for (int i = copy.size() - 1; i >= 0; i--) {
+                    if (!CollectionUtils.isEmpty(addedOrUpdatedShortcuts)) {
+                        copy.get(i).onShortcutsAddedOrUpdated(packageName, addedOrUpdatedShortcuts,
+                                user);
+                    }
+                    if (!CollectionUtils.isEmpty(removedShortcuts)) {
+                        copy.get(i).onShortcutsRemoved(packageName, removedShortcuts, user);
+                    }
+                }
+            } catch (Exception ignore) {
+            }
+        });
+    }
+
     /**
      * Clean up / validate an incoming shortcut.
      * - Make sure all mandatory fields are set.
@@ -1680,7 +1719,7 @@ public class ShortcutService extends IShortcutService.Stub {
                     "Re-publishing ShortcutInfo returned by server is not supported."
                     + " Some information such as icon may lost from shortcut.");
         }
-        Preconditions.checkNotNull(shortcut, "Null shortcut detected");
+        Objects.requireNonNull(shortcut, "Null shortcut detected");
         if (shortcut.getActivity() != null) {
             Preconditions.checkState(
                     shortcut.getPackage().equals(shortcut.getActivity().getPackageName()),
@@ -1703,7 +1742,7 @@ public class ShortcutService extends IShortcutService.Stub {
             ShortcutInfo.validateIcon(shortcut.getIcon());
         }
 
-        shortcut.replaceFlags(0);
+        shortcut.replaceFlags(shortcut.getFlags() & ShortcutInfo.FLAG_LONG_LIVED);
     }
 
     private void fixUpIncomingShortcutInfo(@NonNull ShortcutInfo shortcut, boolean forUpdate) {
@@ -1760,6 +1799,8 @@ public class ShortcutService extends IShortcutService.Stub {
         final boolean unlimited = injectHasUnlimitedShortcutsApiCallsPermission(
                 injectBinderCallingPid(), injectBinderCallingUid());
 
+        List<ShortcutInfo> removedShortcuts = null;
+
         synchronized (mLock) {
             throwIfUserLockedL(userId);
 
@@ -1785,7 +1826,7 @@ public class ShortcutService extends IShortcutService.Stub {
             }
 
             // First, remove all un-pinned; dynamic shortcuts
-            ps.deleteAllDynamicShortcuts(/*ignoreInvisible=*/ true);
+            removedShortcuts = ps.deleteAllDynamicShortcuts(/*ignoreInvisible=*/ true);
 
             // Then, add/update all.  We need to make sure to take over "pinned" flag.
             for (int i = 0; i < size; i++) {
@@ -1796,7 +1837,7 @@ public class ShortcutService extends IShortcutService.Stub {
             // Lastly, adjust the ranks.
             ps.adjustRanks();
         }
-        packageShortcutsChanged(packageName, userId);
+        packageShortcutsChanged(packageName, userId, newShortcuts, removedShortcuts);
 
         verifyStates();
 
@@ -1814,6 +1855,8 @@ public class ShortcutService extends IShortcutService.Stub {
 
         final boolean unlimited = injectHasUnlimitedShortcutsApiCallsPermission(
                 injectBinderCallingPid(), injectBinderCallingUid());
+
+        List<ShortcutInfo> changedShortcuts = null;
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
@@ -1877,12 +1920,17 @@ public class ShortcutService extends IShortcutService.Stub {
                 if (replacingIcon || source.hasStringResources()) {
                     fixUpShortcutResourceNamesAndValues(target);
                 }
+
+                if (changedShortcuts == null) {
+                    changedShortcuts = new ArrayList<>(1);
+                }
+                changedShortcuts.add(target);
             }
 
             // Lastly, adjust the ranks.
             ps.adjustRanks();
         }
-        packageShortcutsChanged(packageName, userId);
+        packageShortcutsChanged(packageName, userId, changedShortcuts, null);
 
         verifyStates();
 
@@ -1900,6 +1948,8 @@ public class ShortcutService extends IShortcutService.Stub {
 
         final boolean unlimited = injectHasUnlimitedShortcutsApiCallsPermission(
                 injectBinderCallingPid(), injectBinderCallingUid());
+
+        List<ShortcutInfo> changedShortcuts = null;
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
@@ -1932,12 +1982,17 @@ public class ShortcutService extends IShortcutService.Stub {
 
                 // Add it.
                 ps.addOrReplaceDynamicShortcut(newShortcut);
+
+                if (changedShortcuts == null) {
+                    changedShortcuts = new ArrayList<>(1);
+                }
+                changedShortcuts.add(newShortcut);
             }
 
             // Lastly, adjust the ranks.
             ps.adjustRanks();
         }
-        packageShortcutsChanged(packageName, userId);
+        packageShortcutsChanged(packageName, userId, changedShortcuts, null);
 
         verifyStates();
 
@@ -1945,9 +2000,53 @@ public class ShortcutService extends IShortcutService.Stub {
     }
 
     @Override
+    public void pushDynamicShortcut(String packageName, ShortcutInfo shortcut,
+            @UserIdInt int userId) {
+        verifyCaller(packageName, userId);
+        verifyShortcutInfoPackage(packageName, shortcut);
+
+        final boolean unlimited = injectHasUnlimitedShortcutsApiCallsPermission(
+                injectBinderCallingPid(), injectBinderCallingUid());
+
+        synchronized (mLock) {
+            throwIfUserLockedL(userId);
+
+            final ShortcutPackage ps = getPackageShortcutsForPublisherLocked(packageName, userId);
+
+            ps.ensureNotImmutable(shortcut.getId(), /*ignoreInvisible=*/ true);
+            fillInDefaultActivity(Arrays.asList(shortcut));
+
+            if (!shortcut.hasRank()) {
+                shortcut.setRank(0);
+            }
+            // Initialize the implicit ranks for ShortcutPackage.adjustRanks().
+            ps.clearAllImplicitRanks();
+            shortcut.setImplicitRank(0);
+
+            // Validate the shortcut.
+            fixUpIncomingShortcutInfo(shortcut, /* forUpdate= */ false);
+
+            // When ranks are changing, we need to insert between ranks, so set the
+            // "rank changed" flag.
+            shortcut.setRankChanged();
+
+            // Push it.
+            if (!ps.pushDynamicShortcut(shortcut)) {
+                return;
+            }
+
+            // Lastly, adjust the ranks.
+            ps.adjustRanks();
+        }
+        packageShortcutsChanged(packageName, userId, Collections.singletonList(shortcut), null);
+
+        verifyStates();
+    }
+
+    @Override
     public boolean requestPinShortcut(String packageName, ShortcutInfo shortcut,
             IntentSender resultIntent, int userId) {
-        Preconditions.checkNotNull(shortcut);
+        Objects.requireNonNull(shortcut);
         Preconditions.checkArgument(shortcut.isEnabled(), "Shortcut must be enabled");
         return requestPinItem(packageName, userId, shortcut, null, null, resultIntent);
     }
@@ -1955,7 +2054,7 @@ public class ShortcutService extends IShortcutService.Stub {
     @Override
     public Intent createShortcutResultIntent(String packageName, ShortcutInfo shortcut, int userId)
             throws RemoteException {
-        Preconditions.checkNotNull(shortcut);
+        Objects.requireNonNull(shortcut);
         Preconditions.checkArgument(shortcut.isEnabled(), "Shortcut must be enabled");
         verifyCaller(packageName, userId);
         verifyShortcutInfoPackage(packageName, shortcut);
@@ -1977,10 +2076,14 @@ public class ShortcutService extends IShortcutService.Stub {
      * After validating the caller, it passes the request to {@link #mShortcutRequestPinProcessor}.
      * Either {@param shortcut} or {@param appWidget} should be non-null.
      */
-    private boolean requestPinItem(String packageName, int userId, ShortcutInfo shortcut,
+    private boolean requestPinItem(String callingPackage, int userId, ShortcutInfo shortcut,
             AppWidgetProviderInfo appWidget, Bundle extras, IntentSender resultIntent) {
-        verifyCaller(packageName, userId);
-        verifyShortcutInfoPackage(packageName, shortcut);
+        verifyCaller(callingPackage, userId);
+        if (shortcut == null || !injectHasAccessShortcutsPermission(
+                injectBinderCallingPid(), injectBinderCallingUid())) {
+            // Verify if caller is the shortcut owner, only if caller doesn't have ACCESS_SHORTCUTS.
+            verifyShortcutInfoPackage(callingPackage, shortcut);
+        }
 
         final boolean ret;
         synchronized (mLock) {
@@ -1994,14 +2097,16 @@ public class ShortcutService extends IShortcutService.Stub {
             // someone already), then we just replace the existing one with this new one,
             // and then proceed the rest of the process.
             if (shortcut != null) {
+                final String shortcutPackage = shortcut.getPackage();
                 final ShortcutPackage ps = getPackageShortcutsForPublisherLocked(
-                        packageName, userId);
+                        shortcutPackage, userId);
                 final String id = shortcut.getId();
                 if (ps.isShortcutExistsAndInvisibleToPublisher(id)) {
 
                     ps.updateInvisibleShortcutForPinRequestWith(shortcut);
 
-                    packageShortcutsChanged(packageName, userId);
+                    packageShortcutsChanged(shortcutPackage, userId,
+                            Collections.singletonList(shortcut), null);
                 }
             }
 
@@ -2019,7 +2124,7 @@ public class ShortcutService extends IShortcutService.Stub {
     public void disableShortcuts(String packageName, List shortcutIds,
             CharSequence disabledMessage, int disabledMessageResId, @UserIdInt int userId) {
         verifyCaller(packageName, userId);
-        Preconditions.checkNotNull(shortcutIds, "shortcutIds must be provided");
+        Objects.requireNonNull(shortcutIds, "shortcutIds must be provided");
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
@@ -2046,7 +2151,8 @@ public class ShortcutService extends IShortcutService.Stub {
             // We may have removed dynamic shortcuts which may have left a gap, so adjust the ranks.
             ps.adjustRanks();
         }
-        packageShortcutsChanged(packageName, userId);
+        // TODO: Disabling dynamic shortcuts will removed them if not pinned. Cover all cases.
+        packageShortcutsChanged(packageName, userId, null, null);
 
         verifyStates();
     }
@@ -2054,7 +2160,9 @@ public class ShortcutService extends IShortcutService.Stub {
     @Override
     public void enableShortcuts(String packageName, List shortcutIds, @UserIdInt int userId) {
         verifyCaller(packageName, userId);
-        Preconditions.checkNotNull(shortcutIds, "shortcutIds must be provided");
+        Objects.requireNonNull(shortcutIds, "shortcutIds must be provided");
+
+        List<ShortcutInfo> changedShortcuts = null;
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
@@ -2070,9 +2178,18 @@ public class ShortcutService extends IShortcutService.Stub {
                     continue;
                 }
                 ps.enableWithId(id);
+
+                final ShortcutInfo si = ps.findShortcutById(id);
+                if (si != null) {
+                    if (changedShortcuts == null) {
+                        changedShortcuts = new ArrayList<>(1);
+                    }
+                    changedShortcuts.add(si);
+                }
             }
         }
-        packageShortcutsChanged(packageName, userId);
+
+        packageShortcutsChanged(packageName, userId, changedShortcuts, null);
 
         verifyStates();
     }
@@ -2081,7 +2198,10 @@ public class ShortcutService extends IShortcutService.Stub {
     public void removeDynamicShortcuts(String packageName, List shortcutIds,
             @UserIdInt int userId) {
         verifyCaller(packageName, userId);
-        Preconditions.checkNotNull(shortcutIds, "shortcutIds must be provided");
+        Objects.requireNonNull(shortcutIds, "shortcutIds must be provided");
+
+        List<ShortcutInfo> changedShortcuts = null;
+        List<ShortcutInfo> removedShortcuts = null;
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
@@ -2096,13 +2216,25 @@ public class ShortcutService extends IShortcutService.Stub {
                 if (!ps.isShortcutExistsAndVisibleToPublisher(id)) {
                     continue;
                 }
-                ps.deleteDynamicWithId(id, /*ignoreInvisible=*/ true);
+                final ShortcutInfo si = ps.findShortcutById(id);
+                final boolean removed = ps.deleteDynamicWithId(id, /*ignoreInvisible=*/ true);
+                if (removed) {
+                    if (removedShortcuts == null) {
+                        removedShortcuts = new ArrayList<>(1);
+                    }
+                    removedShortcuts.add(si);
+                } else {
+                    if (changedShortcuts == null) {
+                        changedShortcuts = new ArrayList<>(1);
+                    }
+                    changedShortcuts.add(si);
+                }
             }
 
             // We may have removed dynamic shortcuts which may have left a gap, so adjust the ranks.
             ps.adjustRanks();
         }
-        packageShortcutsChanged(packageName, userId);
+        packageShortcutsChanged(packageName, userId, changedShortcuts, removedShortcuts);
 
         verifyStates();
     }
@@ -2111,56 +2243,91 @@ public class ShortcutService extends IShortcutService.Stub {
     public void removeAllDynamicShortcuts(String packageName, @UserIdInt int userId) {
         verifyCaller(packageName, userId);
 
+        List<ShortcutInfo> changedShortcuts = null;
+        List<ShortcutInfo> removedShortcuts = null;
+
         synchronized (mLock) {
             throwIfUserLockedL(userId);
 
             final ShortcutPackage ps = getPackageShortcutsForPublisherLocked(packageName, userId);
-            ps.deleteAllDynamicShortcuts(/*ignoreInvisible=*/ true);
+
+            removedShortcuts = ps.deleteAllDynamicShortcuts(/*ignoreInvisible=*/ true);
         }
-        packageShortcutsChanged(packageName, userId);
+
+        // TODO: Pinned and cached shortcuts are not removed, add those to changedShortcuts list
+        packageShortcutsChanged(packageName, userId, changedShortcuts, removedShortcuts);
 
         verifyStates();
     }
 
     @Override
-    public ParceledListSlice<ShortcutInfo> getDynamicShortcuts(String packageName,
+    public void removeLongLivedShortcuts(String packageName, List shortcutIds,
             @UserIdInt int userId) {
         verifyCaller(packageName, userId);
+        Objects.requireNonNull(shortcutIds, "shortcutIds must be provided");
+
+        List<ShortcutInfo> changedShortcuts = null;
+        List<ShortcutInfo> removedShortcuts = null;
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
 
-            return getShortcutsWithQueryLocked(
-                    packageName, userId, ShortcutInfo.CLONE_REMOVE_FOR_CREATOR,
-                    ShortcutInfo::isDynamicVisible);
+            final ShortcutPackage ps = getPackageShortcutsForPublisherLocked(packageName, userId);
+
+            ps.ensureImmutableShortcutsNotIncludedWithIds((List<String>) shortcutIds,
+                    /*ignoreInvisible=*/ true);
+
+            for (int i = shortcutIds.size() - 1; i >= 0; i--) {
+                final String id = Preconditions.checkStringNotEmpty((String) shortcutIds.get(i));
+
+                final ShortcutInfo si = ps.findShortcutById(id);
+                final boolean removed = ps.deleteLongLivedWithId(id, /*ignoreInvisible=*/ true);
+
+                if (si != null) {
+                    if (removed) {
+                        if (removedShortcuts == null) {
+                            removedShortcuts = new ArrayList<>(1);
+                        }
+                        removedShortcuts.add(si);
+                    } else {
+                        if (changedShortcuts == null) {
+                            changedShortcuts = new ArrayList<>(1);
+                        }
+                        changedShortcuts.add(si);
+                    }
+                }
+            }
+
+            // We may have removed dynamic shortcuts which may have left a gap, so adjust the ranks.
+            ps.adjustRanks();
         }
+        packageShortcutsChanged(packageName, userId, changedShortcuts, removedShortcuts);
+
+        verifyStates();
     }
 
     @Override
-    public ParceledListSlice<ShortcutInfo> getManifestShortcuts(String packageName,
-            @UserIdInt int userId) {
+    public ParceledListSlice<ShortcutInfo> getShortcuts(String packageName,
+            @ShortcutManager.ShortcutMatchFlags int matchFlags, @UserIdInt int userId) {
         verifyCaller(packageName, userId);
 
         synchronized (mLock) {
             throwIfUserLockedL(userId);
 
-            return getShortcutsWithQueryLocked(
-                    packageName, userId, ShortcutInfo.CLONE_REMOVE_FOR_CREATOR,
-                    ShortcutInfo::isManifestVisible);
-        }
-    }
+            final boolean matchDynamic = (matchFlags & ShortcutManager.FLAG_MATCH_DYNAMIC) != 0;
+            final boolean matchPinned = (matchFlags & ShortcutManager.FLAG_MATCH_PINNED) != 0;
+            final boolean matchManifest = (matchFlags & ShortcutManager.FLAG_MATCH_MANIFEST) != 0;
+            final boolean matchCached = (matchFlags & ShortcutManager.FLAG_MATCH_CACHED) != 0;
 
-    @Override
-    public ParceledListSlice<ShortcutInfo> getPinnedShortcuts(String packageName,
-            @UserIdInt int userId) {
-        verifyCaller(packageName, userId);
-
-        synchronized (mLock) {
-            throwIfUserLockedL(userId);
+            final int shortcutFlags = (matchDynamic ? ShortcutInfo.FLAG_DYNAMIC : 0)
+                    | (matchPinned ? ShortcutInfo.FLAG_PINNED : 0)
+                    | (matchManifest ? ShortcutInfo.FLAG_MANIFEST : 0)
+                    | (matchCached ? ShortcutInfo.FLAG_CACHED : 0);
 
             return getShortcutsWithQueryLocked(
                     packageName, userId, ShortcutInfo.CLONE_REMOVE_FOR_CREATOR,
-                    ShortcutInfo::isPinnedVisible);
+                    (ShortcutInfo si) ->
+                            si.isVisibleToPublisher() && (si.getFlags() & shortcutFlags) != 0);
         }
     }
 
@@ -2256,7 +2423,7 @@ public class ShortcutService extends IShortcutService.Stub {
     public void reportShortcutUsed(String packageName, String shortcutId, int userId) {
         verifyCaller(packageName, userId);
 
-        Preconditions.checkNotNull(shortcutId);
+        Objects.requireNonNull(shortcutId);
 
         if (DEBUG) {
             Slog.d(TAG, String.format("reportShortcutUsed: Shortcut %s package %s used on user %d",
@@ -2574,7 +2741,7 @@ public class ShortcutService extends IShortcutService.Stub {
         public List<ShortcutInfo> getShortcuts(int launcherUserId,
                 @NonNull String callingPackage, long changedSince,
                 @Nullable String packageName, @Nullable List<String> shortcutIds,
-                @Nullable ComponentName componentName,
+                @Nullable List<LocusId> locusIds, @Nullable ComponentName componentName,
                 int queryFlags, int userId, int callingPid, int callingUid) {
             final ArrayList<ShortcutInfo> ret = new ArrayList<>();
 
@@ -2595,15 +2762,16 @@ public class ShortcutService extends IShortcutService.Stub {
 
                 if (packageName != null) {
                     getShortcutsInnerLocked(launcherUserId,
-                            callingPackage, packageName, shortcutIds, changedSince,
+                            callingPackage, packageName, shortcutIds, locusIds, changedSince,
                             componentName, queryFlags, userId, ret, cloneFlag,
                             callingPid, callingUid);
                 } else {
                     final List<String> shortcutIdsF = shortcutIds;
+                    final List<LocusId> locusIdsF = locusIds;
                     getUserShortcutsLocked(userId).forAllPackages(p -> {
                         getShortcutsInnerLocked(launcherUserId,
-                                callingPackage, p.getPackageName(), shortcutIdsF, changedSince,
-                                componentName, queryFlags, userId, ret, cloneFlag,
+                                callingPackage, p.getPackageName(), shortcutIdsF, locusIdsF,
+                                changedSince, componentName, queryFlags, userId, ret, cloneFlag,
                                 callingPid, callingUid);
                     });
                 }
@@ -2613,12 +2781,15 @@ public class ShortcutService extends IShortcutService.Stub {
 
         @GuardedBy("ShortcutService.this.mLock")
         private void getShortcutsInnerLocked(int launcherUserId, @NonNull String callingPackage,
-                @Nullable String packageName, @Nullable List<String> shortcutIds, long changedSince,
+                @Nullable String packageName, @Nullable List<String> shortcutIds,
+                @Nullable List<LocusId> locusIds, long changedSince,
                 @Nullable ComponentName componentName, int queryFlags,
                 int userId, ArrayList<ShortcutInfo> ret, int cloneFlag,
                 int callingPid, int callingUid) {
             final ArraySet<String> ids = shortcutIds == null ? null
                     : new ArraySet<>(shortcutIds);
+            final ArraySet<LocusId> locIds = locusIds == null ? null
+                    : new ArraySet<>(locusIds);
 
             final ShortcutUser user = getUserShortcutsLocked(userId);
             final ShortcutPackage p = user.getPackageShortcutsIfExists(packageName);
@@ -2628,6 +2799,7 @@ public class ShortcutService extends IShortcutService.Stub {
             final boolean matchDynamic = (queryFlags & ShortcutQuery.FLAG_MATCH_DYNAMIC) != 0;
             final boolean matchPinned = (queryFlags & ShortcutQuery.FLAG_MATCH_PINNED) != 0;
             final boolean matchManifest = (queryFlags & ShortcutQuery.FLAG_MATCH_MANIFEST) != 0;
+            final boolean matchCached = (queryFlags & ShortcutQuery.FLAG_MATCH_CACHED) != 0;
 
             final boolean canAccessAllShortcuts =
                     canSeeAnyPinnedShortcut(callingPackage, launcherUserId, callingPid, callingUid);
@@ -2644,6 +2816,9 @@ public class ShortcutService extends IShortcutService.Stub {
                         if (ids != null && !ids.contains(si.getId())) {
                             return false;
                         }
+                        if (locIds != null && !locIds.contains(si.getLocusId())) {
+                            return false;
+                        }
                         if (componentName != null) {
                             if (si.getActivity() != null
                                     && !si.getActivity().equals(componentName)) {
@@ -2657,6 +2832,9 @@ public class ShortcutService extends IShortcutService.Stub {
                             return true;
                         }
                         if (matchManifest && si.isDeclaredInManifest()) {
+                            return true;
+                        }
+                        if (matchCached && si.isCached()) {
                             return true;
                         }
                         return false;
@@ -2713,7 +2891,9 @@ public class ShortcutService extends IShortcutService.Stub {
                 @NonNull List<String> shortcutIds, int userId) {
             // Calling permission must be checked by LauncherAppsImpl.
             Preconditions.checkStringNotEmpty(packageName, "packageName");
-            Preconditions.checkNotNull(shortcutIds, "shortcutIds");
+            Objects.requireNonNull(shortcutIds, "shortcutIds");
+
+            List<ShortcutInfo> changedShortcuts = null;
 
             synchronized (mLock) {
                 throwIfUserLockedL(userId);
@@ -2724,8 +2904,111 @@ public class ShortcutService extends IShortcutService.Stub {
                 launcher.attemptToRestoreIfNeededAndSave();
 
                 launcher.pinShortcuts(userId, packageName, shortcutIds, /*forPinRequest=*/ false);
+
+                final ShortcutPackage sp = getUserShortcutsLocked(userId)
+                        .getPackageShortcutsIfExists(packageName);
+                if (sp != null) {
+                    for (int i = 0; i < shortcutIds.size(); i++) {
+                        final ShortcutInfo si = sp.findShortcutById(shortcutIds.get(i));
+                        if (si != null) {
+                            if (changedShortcuts == null) {
+                                changedShortcuts = new ArrayList<>(1);
+                            }
+                            changedShortcuts.add(si);
+                        }
+                    }
+                }
             }
-            packageShortcutsChanged(packageName, userId);
+            // TODO: Include previously pinned shortcuts since they are not pinned anymore.
+            packageShortcutsChanged(packageName, userId, changedShortcuts, null);
+
+            verifyStates();
+        }
+
+        @Override
+        public void cacheShortcuts(int launcherUserId,
+                @NonNull String callingPackage, @NonNull String packageName,
+                @NonNull List<String> shortcutIds, int userId) {
+            updateCachedShortcutsInternal(launcherUserId, callingPackage, packageName, shortcutIds,
+                    userId, /* doCache= */ true);
+        }
+
+        @Override
+        public void uncacheShortcuts(int launcherUserId,
+                @NonNull String callingPackage, @NonNull String packageName,
+                @NonNull List<String> shortcutIds, int userId) {
+            updateCachedShortcutsInternal(launcherUserId, callingPackage, packageName, shortcutIds,
+                    userId, /* doCache= */ false);
+        }
+
+        @Override
+        public List<ShortcutManager.ShareShortcutInfo> getShareTargets(
+                @NonNull String callingPackage, @NonNull IntentFilter intentFilter, int userId) {
+            return ShortcutService.this.getShareTargets(
+                    callingPackage, intentFilter, userId).getList();
+        }
+
+        private void updateCachedShortcutsInternal(int launcherUserId,
+                @NonNull String callingPackage, @NonNull String packageName,
+                @NonNull List<String> shortcutIds, int userId, boolean doCache) {
+            // Calling permission must be checked by LauncherAppsImpl.
+            Preconditions.checkStringNotEmpty(packageName, "packageName");
+            Objects.requireNonNull(shortcutIds, "shortcutIds");
+
+            List<ShortcutInfo> changedShortcuts = null;
+            List<ShortcutInfo> removedShortcuts = null;
+
+            synchronized (mLock) {
+                throwIfUserLockedL(userId);
+                throwIfUserLockedL(launcherUserId);
+
+                final int idSize = shortcutIds.size();
+                final ShortcutPackage sp = getUserShortcutsLocked(userId)
+                        .getPackageShortcutsIfExists(packageName);
+                if (idSize == 0 || sp == null) {
+                    return;
+                }
+
+                for (int i = 0; i < idSize; i++) {
+                    final String id = Preconditions.checkStringNotEmpty(shortcutIds.get(i));
+                    final ShortcutInfo si = sp.findShortcutById(id);
+                    if (si == null || doCache == si.isCached()) {
+                        continue;
+                    }
+
+                    if (doCache) {
+                        if (si.isDynamic() && si.isLongLived()) {
+                            si.addFlags(ShortcutInfo.FLAG_CACHED);
+                            if (changedShortcuts == null) {
+                                changedShortcuts = new ArrayList<>(1);
+                            }
+                            changedShortcuts.add(si);
+                        } else {
+                            Log.w(TAG, "Only dynamic long lived shortcuts can get cached. Ignoring"
+                                    + "shortcut " + si.getId());
+                        }
+                    } else {
+                        boolean removed = false;
+                        if (si.isDynamic()) {
+                            si.clearFlags(ShortcutInfo.FLAG_CACHED);
+                        } else {
+                            removed = sp.deleteLongLivedWithId(id, /*ignoreInvisible=*/ true);
+                        }
+                        if (removed) {
+                            if (removedShortcuts == null) {
+                                removedShortcuts = new ArrayList<>(1);
+                            }
+                            removedShortcuts.add(si);
+                        } else {
+                            if (changedShortcuts == null) {
+                                changedShortcuts = new ArrayList<>(1);
+                            }
+                            changedShortcuts.add(si);
+                        }
+                    }
+                }
+            }
+            packageShortcutsChanged(packageName, userId, changedShortcuts, removedShortcuts);
 
             verifyStates();
         }
@@ -2766,16 +3049,24 @@ public class ShortcutService extends IShortcutService.Stub {
         @Override
         public void addListener(@NonNull ShortcutChangeListener listener) {
             synchronized (mLock) {
-                mListeners.add(Preconditions.checkNotNull(listener));
+                mListeners.add(Objects.requireNonNull(listener));
+            }
+        }
+
+        @Override
+        public void addShortcutChangeCallback(
+                @NonNull LauncherApps.ShortcutChangeCallback callback) {
+            synchronized (mLock) {
+                mShortcutChangeCallbacks.add(Objects.requireNonNull(callback));
             }
         }
 
         @Override
         public int getShortcutIconResId(int launcherUserId, @NonNull String callingPackage,
                 @NonNull String packageName, @NonNull String shortcutId, int userId) {
-            Preconditions.checkNotNull(callingPackage, "callingPackage");
-            Preconditions.checkNotNull(packageName, "packageName");
-            Preconditions.checkNotNull(shortcutId, "shortcutId");
+            Objects.requireNonNull(callingPackage, "callingPackage");
+            Objects.requireNonNull(packageName, "packageName");
+            Objects.requireNonNull(shortcutId, "shortcutId");
 
             synchronized (mLock) {
                 throwIfUserLockedL(userId);
@@ -2800,9 +3091,9 @@ public class ShortcutService extends IShortcutService.Stub {
         public ParcelFileDescriptor getShortcutIconFd(int launcherUserId,
                 @NonNull String callingPackage, @NonNull String packageName,
                 @NonNull String shortcutId, int userId) {
-            Preconditions.checkNotNull(callingPackage, "callingPackage");
-            Preconditions.checkNotNull(packageName, "packageName");
-            Preconditions.checkNotNull(shortcutId, "shortcutId");
+            Objects.requireNonNull(callingPackage, "callingPackage");
+            Objects.requireNonNull(packageName, "packageName");
+            Objects.requireNonNull(shortcutId, "shortcutId");
 
             synchronized (mLock) {
                 throwIfUserLockedL(userId);
@@ -2854,7 +3145,7 @@ public class ShortcutService extends IShortcutService.Stub {
         public boolean requestPinAppWidget(@NonNull String callingPackage,
                 @NonNull AppWidgetProviderInfo appWidget, @Nullable Bundle extras,
                 @Nullable IntentSender resultIntent, int userId) {
-            Preconditions.checkNotNull(appWidget);
+            Objects.requireNonNull(appWidget);
             return requestPinItem(callingPackage, userId, null, appWidget, extras, resultIntent);
         }
 
@@ -2865,7 +3156,7 @@ public class ShortcutService extends IShortcutService.Stub {
 
         @Override
         public boolean isForegroundDefaultLauncher(@NonNull String callingPackage, int callingUid) {
-            Preconditions.checkNotNull(callingPackage);
+            Objects.requireNonNull(callingPackage);
 
             final int userId = UserHandle.getUserId(callingUid);
             final ComponentName defaultLauncher = getDefaultLauncher(userId);
@@ -3411,7 +3702,7 @@ public class ShortcutService extends IShortcutService.Stub {
     List<ResolveInfo> queryActivities(@NonNull Intent baseIntent,
             @NonNull String packageName, @Nullable ComponentName activity, int userId) {
 
-        baseIntent.setPackage(Preconditions.checkNotNull(packageName));
+        baseIntent.setPackage(Objects.requireNonNull(packageName));
         if (activity != null) {
             baseIntent.setComponent(activity);
         }
@@ -3529,7 +3820,7 @@ public class ShortcutService extends IShortcutService.Stub {
     @Nullable
     ComponentName injectGetPinConfirmationActivity(@NonNull String launcherPackageName,
             int launcherUserId, int requestType) {
-        Preconditions.checkNotNull(launcherPackageName);
+        Objects.requireNonNull(launcherPackageName);
         String action = requestType == LauncherApps.PinItemRequest.REQUEST_TYPE_SHORTCUT ?
                 LauncherApps.ACTION_CONFIRM_PIN_SHORTCUT :
                 LauncherApps.ACTION_CONFIRM_PIN_APPWIDGET;

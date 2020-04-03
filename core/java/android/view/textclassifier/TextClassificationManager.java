@@ -19,21 +19,20 @@ package android.view.textclassifier;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemService;
-import android.annotation.UnsupportedAppUsage;
 import android.app.ActivityThread;
+import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.os.ServiceManager;
 import android.provider.DeviceConfig;
 import android.provider.DeviceConfig.Properties;
-import android.service.textclassifier.TextClassifierService;
 import android.view.textclassifier.TextClassifier.TextClassifierType;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.IndentingPrintWriter;
-import com.android.internal.util.Preconditions;
 
 import java.lang.ref.WeakReference;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -62,16 +61,13 @@ public final class TextClassificationManager {
     @Nullable
     private TextClassifier mLocalTextClassifier;
     @GuardedBy("mLock")
-    @Nullable
-    private TextClassifier mSystemTextClassifier;
-    @GuardedBy("mLock")
     private TextClassificationSessionFactory mSessionFactory;
     @GuardedBy("mLock")
     private TextClassificationConstants mSettings;
 
     /** @hide */
     public TextClassificationManager(Context context) {
-        mContext = Preconditions.checkNotNull(context);
+        mContext = Objects.requireNonNull(context);
         mSessionFactory = mDefaultSessionFactory;
         mSettingsObserver = new SettingsObserver(this);
     }
@@ -91,8 +87,8 @@ public final class TextClassificationManager {
         synchronized (mLock) {
             if (mCustomTextClassifier != null) {
                 return mCustomTextClassifier;
-            } else if (isSystemTextClassifierEnabled()) {
-                return getSystemTextClassifier();
+            } else if (getSettings().isSystemTextClassifierEnabled()) {
+                return getSystemTextClassifier(SystemTextClassifier.SYSTEM);
             } else {
                 return getLocalTextClassifier();
             }
@@ -116,6 +112,7 @@ public final class TextClassificationManager {
      *
      * @see TextClassifier#LOCAL
      * @see TextClassifier#SYSTEM
+     * @see TextClassifier#DEFAULT_SERVICE
      * @hide
      */
     @UnsupportedAppUsage
@@ -124,7 +121,7 @@ public final class TextClassificationManager {
             case TextClassifier.LOCAL:
                 return getLocalTextClassifier();
             default:
-                return getSystemTextClassifier();
+                return getSystemTextClassifier(type);
         }
     }
 
@@ -157,10 +154,10 @@ public final class TextClassificationManager {
     @NonNull
     public TextClassifier createTextClassificationSession(
             @NonNull TextClassificationContext classificationContext) {
-        Preconditions.checkNotNull(classificationContext);
+        Objects.requireNonNull(classificationContext);
         final TextClassifier textClassifier =
                 mSessionFactory.createTextClassificationSession(classificationContext);
-        Preconditions.checkNotNull(textClassifier, "Session Factory should never return null");
+        Objects.requireNonNull(textClassifier, "Session Factory should never return null");
         return textClassifier;
     }
 
@@ -170,8 +167,8 @@ public final class TextClassificationManager {
      */
     public TextClassifier createTextClassificationSession(
             TextClassificationContext classificationContext, TextClassifier textClassifier) {
-        Preconditions.checkNotNull(classificationContext);
-        Preconditions.checkNotNull(textClassifier);
+        Objects.requireNonNull(classificationContext);
+        Objects.requireNonNull(textClassifier);
         return new TextClassificationSession(classificationContext, textClassifier);
     }
 
@@ -204,21 +201,22 @@ public final class TextClassificationManager {
         }
     }
 
-    private TextClassifier getSystemTextClassifier() {
+    /** @hide */
+    private TextClassifier getSystemTextClassifier(@TextClassifierType int type) {
         synchronized (mLock) {
-            if (mSystemTextClassifier == null && isSystemTextClassifierEnabled()) {
+            if (getSettings().isSystemTextClassifierEnabled()) {
                 try {
-                    mSystemTextClassifier = new SystemTextClassifier(mContext, getSettings());
-                    Log.d(LOG_TAG, "Initialized SystemTextClassifier");
+                    Log.d(LOG_TAG, "Initializing SystemTextClassifier, type = " + type);
+                    return new SystemTextClassifier(
+                            mContext,
+                            getSettings(),
+                            /* useDefault= */ type == TextClassifier.DEFAULT_SERVICE);
                 } catch (ServiceManager.ServiceNotFoundException e) {
                     Log.e(LOG_TAG, "Could not initialize SystemTextClassifier", e);
                 }
             }
+            return TextClassifier.NO_OP;
         }
-        if (mSystemTextClassifier != null) {
-            return mSystemTextClassifier;
-        }
-        return TextClassifier.NO_OP;
     }
 
     /**
@@ -240,11 +238,6 @@ public final class TextClassificationManager {
         }
     }
 
-    private boolean isSystemTextClassifierEnabled() {
-        return getSettings().isSystemTextClassifierEnabled()
-                && TextClassifierService.getServiceComponentName(mContext) != null;
-    }
-
     /** @hide */
     @VisibleForTesting
     public void invalidateForTesting() {
@@ -261,7 +254,6 @@ public final class TextClassificationManager {
     private void invalidateTextClassifiers() {
         synchronized (mLock) {
             mLocalTextClassifier = null;
-            mSystemTextClassifier = null;
         }
     }
 
@@ -274,13 +266,14 @@ public final class TextClassificationManager {
     /** @hide **/
     public void dump(IndentingPrintWriter pw) {
         getLocalTextClassifier().dump(pw);
-        getSystemTextClassifier().dump(pw);
+        getSystemTextClassifier(TextClassifier.DEFAULT_SERVICE).dump(pw);
+        getSystemTextClassifier(TextClassifier.SYSTEM).dump(pw);
         getSettings().dump(pw);
     }
 
     /** @hide */
     public static TextClassificationConstants getSettings(Context context) {
-        Preconditions.checkNotNull(context);
+        Objects.requireNonNull(context);
         final TextClassificationManager tcm =
                 context.getSystemService(TextClassificationManager.class);
         if (tcm != null) {

@@ -23,6 +23,7 @@ import android.content.Context;
 
 import androidx.annotation.Nullable;
 
+import com.android.keyguard.KeyguardViewController;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.dock.DockManagerImpl;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
@@ -30,7 +31,7 @@ import com.android.systemui.power.EnhancedEstimates;
 import com.android.systemui.power.EnhancedEstimatesImpl;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.recents.RecentsImplementation;
-import com.android.systemui.stackdivider.Divider;
+import com.android.systemui.stackdivider.DividerModule;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationLockscreenUserManagerImpl;
@@ -38,17 +39,19 @@ import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.phone.HeadsUpManagerPhone;
 import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.KeyguardEnvironmentImpl;
+import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.ShadeControllerImpl;
+import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
+import com.android.systemui.statusbar.policy.ConfigurationController;
+import com.android.systemui.statusbar.policy.DeviceProvisionedController;
+import com.android.systemui.statusbar.policy.DeviceProvisionedControllerImpl;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
-
-import java.util.Optional;
 
 import javax.inject.Named;
 import javax.inject.Singleton;
 
 import dagger.Binds;
-import dagger.Lazy;
 import dagger.Module;
 import dagger.Provides;
 
@@ -56,8 +59,8 @@ import dagger.Provides;
  * A dagger module for injecting default implementations of components of System UI that may be
  * overridden by the System UI implementation.
  */
-@Module
-abstract class SystemUIDefaultModule {
+@Module(includes = {DividerModule.class})
+public abstract class SystemUIDefaultModule {
 
     @Singleton
     @Provides
@@ -93,16 +96,14 @@ abstract class SystemUIDefaultModule {
 
     @Singleton
     @Provides
-    static Divider provideDivider(Context context, Optional<Lazy<Recents>> recentsOptionalLazy) {
-        return new Divider(context, recentsOptionalLazy);
-    }
-
-    @Singleton
-    @Provides
-    static HeadsUpManagerPhone provideHeadsUpManagerPhone(Context context,
+    static HeadsUpManagerPhone provideHeadsUpManagerPhone(
+            Context context,
             StatusBarStateController statusBarStateController,
-            KeyguardBypassController bypassController) {
-        return new HeadsUpManagerPhone(context, statusBarStateController, bypassController);
+            KeyguardBypassController bypassController,
+            NotificationGroupManager groupManager,
+            ConfigurationController configurationController) {
+        return new HeadsUpManagerPhone(context, statusBarStateController, bypassController,
+                groupManager, configurationController);
     }
 
     @Binds
@@ -114,4 +115,12 @@ abstract class SystemUIDefaultModule {
             CommandQueue commandQueue) {
         return new Recents(context, recentsImplementation, commandQueue);
     }
+
+    @Binds
+    abstract DeviceProvisionedController bindDeviceProvisionedController(
+            DeviceProvisionedControllerImpl deviceProvisionedController);
+
+    @Binds
+    abstract KeyguardViewController bindKeyguardViewController(
+            StatusBarKeyguardViewManager statusBarKeyguardViewManager);
 }

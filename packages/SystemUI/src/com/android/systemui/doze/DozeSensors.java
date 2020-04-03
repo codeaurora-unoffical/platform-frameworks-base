@@ -80,8 +80,7 @@ public class DozeSensors {
 
     public DozeSensors(Context context, AlarmManager alarmManager, AsyncSensorManager sensorManager,
             DozeParameters dozeParameters, AmbientDisplayConfiguration config, WakeLock wakeLock,
-            Callback callback, Consumer<Boolean> proxCallback, AlwaysOnDisplayPolicy policy,
-            DozeLog dozeLog) {
+            Callback callback, Consumer<Boolean> proxCallback, DozeLog dozeLog) {
         mContext = context;
         mAlarmManager = alarmManager;
         mSensorManager = sensorManager;
@@ -98,14 +97,14 @@ public class DozeSensors {
                         mSensorManager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION),
                         null /* setting */,
                         dozeParameters.getPulseOnSigMotion(),
-                        DozeEvent.PULSE_REASON_SENSOR_SIGMOTION, false /* touchCoords */,
+                        DozeLog.PULSE_REASON_SENSOR_SIGMOTION, false /* touchCoords */,
                         false /* touchscreen */, dozeLog),
                 mPickupSensor = new TriggerSensor(
                         mSensorManager.getDefaultSensor(Sensor.TYPE_PICK_UP_GESTURE),
                         Settings.Secure.DOZE_PICK_UP_GESTURE,
                         true /* settingDef */,
                         config.dozePickupSensorAvailable(),
-                        DozeEvent.REASON_SENSOR_PICKUP, false /* touchCoords */,
+                        DozeLog.REASON_SENSOR_PICKUP, false /* touchCoords */,
                         false /* touchscreen */,
                         false /* ignoresSetting */,
                         dozeLog),
@@ -113,7 +112,7 @@ public class DozeSensors {
                         findSensorWithType(config.doubleTapSensorType()),
                         Settings.Secure.DOZE_DOUBLE_TAP_GESTURE,
                         true /* configured */,
-                        DozeEvent.REASON_SENSOR_DOUBLE_TAP,
+                        DozeLog.REASON_SENSOR_DOUBLE_TAP,
                         dozeParameters.doubleTapReportsTouchCoordinates(),
                         true /* touchscreen */,
                         dozeLog),
@@ -121,7 +120,7 @@ public class DozeSensors {
                         findSensorWithType(config.tapSensorType()),
                         Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
                         true /* configured */,
-                        DozeEvent.REASON_SENSOR_TAP,
+                        DozeLog.REASON_SENSOR_TAP,
                         false /* reports touch coordinates */,
                         true /* touchscreen */,
                         dozeLog),
@@ -130,7 +129,7 @@ public class DozeSensors {
                         Settings.Secure.DOZE_PULSE_ON_LONG_PRESS,
                         false /* settingDef */,
                         true /* configured */,
-                        DozeEvent.PULSE_REASON_SENSOR_LONG_PRESS,
+                        DozeLog.PULSE_REASON_SENSOR_LONG_PRESS,
                         true /* reports touch coordinates */,
                         true /* touchscreen */,
                         dozeLog),
@@ -138,7 +137,7 @@ public class DozeSensors {
                         new SensorManagerPlugin.Sensor(TYPE_WAKE_DISPLAY),
                         Settings.Secure.DOZE_WAKE_DISPLAY_GESTURE,
                         mConfig.wakeScreenGestureAvailable() && alwaysOn,
-                        DozeEvent.REASON_SENSOR_WAKE_UP,
+                        DozeLog.REASON_SENSOR_WAKE_UP,
                         false /* reports touch coordinates */,
                         false /* touchscreen */,
                         dozeLog),
@@ -146,7 +145,7 @@ public class DozeSensors {
                         new SensorManagerPlugin.Sensor(TYPE_WAKE_LOCK_SCREEN),
                         Settings.Secure.DOZE_WAKE_LOCK_SCREEN_GESTURE,
                         mConfig.wakeScreenGestureAvailable(),
-                        DozeEvent.PULSE_REASON_SENSOR_WAKE_LOCK_SCREEN,
+                        DozeLog.PULSE_REASON_SENSOR_WAKE_LOCK_SCREEN,
                         false /* reports touch coordinates */,
                         false /* touchscreen */,
                         mConfig.getWakeLockScreenDebounce(),
@@ -154,7 +153,7 @@ public class DozeSensors {
         };
 
         mProximitySensor = new ProximitySensor(context.getResources(), sensorManager);
-
+        setProxListening(false);  // Don't immediately start listening when we register.
         mProximitySensor.register(
                 proximityEvent -> {
                     if (proximityEvent != null) {
@@ -262,7 +261,7 @@ public class DozeSensors {
 
     private final ContentObserver mSettingsObserver = new ContentObserver(mHandler) {
         @Override
-        public void onChange(boolean selfChange, Uri uri, int userId) {
+        public void onChange(boolean selfChange, Iterable<Uri> uris, int flags, int userId) {
             if (userId != ActivityManager.getCurrentUser()) {
                 return;
             }
@@ -526,7 +525,7 @@ public class DozeSensors {
 
         /**
          * Called when a sensor requests a pulse
-         * @param pulseReason Requesting sensor, e.g. {@link DozeEvent#REASON_SENSOR_PICKUP}
+         * @param pulseReason Requesting sensor, e.g. {@link DozeLog#REASON_SENSOR_PICKUP}
          * @param screenX the location on the screen where the sensor fired or -1
          *                if the sensor doesn't support reporting screen locations.
          * @param screenY the location on the screen where the sensor fired or -1

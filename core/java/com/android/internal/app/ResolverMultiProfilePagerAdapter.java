@@ -16,8 +16,11 @@
 
 package com.android.internal.app;
 
+import android.annotation.Nullable;
 import android.content.Context;
+import android.os.UserHandle;
 import android.view.LayoutInflater;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ListView;
 
@@ -34,8 +37,10 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
     private final ResolverProfileDescriptor[] mItems;
 
     ResolverMultiProfilePagerAdapter(Context context,
-            ResolverListAdapter adapter) {
-        super(context, /* currentPage */ 0);
+            ResolverListAdapter adapter,
+            UserHandle personalProfileUserHandle,
+            UserHandle workProfileUserHandle) {
+        super(context, /* currentPage */ 0, personalProfileUserHandle, workProfileUserHandle);
         mItems = new ResolverProfileDescriptor[] {
                 createProfileDescriptor(adapter)
         };
@@ -44,8 +49,11 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
     ResolverMultiProfilePagerAdapter(Context context,
             ResolverListAdapter personalAdapter,
             ResolverListAdapter workAdapter,
-            @Profile int defaultProfile) {
-        super(context, /* currentPage */ defaultProfile);
+            @Profile int defaultProfile,
+            UserHandle personalProfileUserHandle,
+            UserHandle workProfileUserHandle) {
+        super(context, /* currentPage */ defaultProfile, personalProfileUserHandle,
+                workProfileUserHandle);
         mItems = new ResolverProfileDescriptor[] {
                 createProfileDescriptor(personalAdapter),
                 createProfileDescriptor(workAdapter)
@@ -81,8 +89,27 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
     }
 
     @Override
-    ResolverListAdapter getAdapterForIndex(int pageIndex) {
+    @VisibleForTesting
+    public ResolverListAdapter getAdapterForIndex(int pageIndex) {
         return mItems[pageIndex].resolverListAdapter;
+    }
+
+    @Override
+    public ViewGroup instantiateItem(ViewGroup container, int position) {
+        setupListAdapter(position);
+        return super.instantiateItem(container, position);
+    }
+
+    @Override
+    @Nullable
+    ResolverListAdapter getListAdapterForUserHandle(UserHandle userHandle) {
+        if (getActiveListAdapter().getUserHandle() == userHandle) {
+            return getActiveListAdapter();
+        } else if (getInactiveListAdapter() != null
+                && getInactiveListAdapter().getUserHandle() == userHandle) {
+            return getInactiveListAdapter();
+        }
+        return null;
     }
 
     @Override
@@ -101,13 +128,64 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
     }
 
     @Override
+    public ResolverListAdapter getPersonalListAdapter() {
+        return getAdapterForIndex(PROFILE_PERSONAL);
+    }
+
+    @Override
+    @Nullable
+    public ResolverListAdapter getWorkListAdapter() {
+        return getAdapterForIndex(PROFILE_WORK);
+    }
+
+    @Override
     ResolverListAdapter getCurrentRootAdapter() {
         return getActiveListAdapter();
     }
 
     @Override
-    ListView getCurrentAdapterView() {
+    ListView getActiveAdapterView() {
         return getListViewForIndex(getCurrentPage());
+    }
+
+    @Override
+    @Nullable
+    ViewGroup getInactiveAdapterView() {
+        if (getCount() == 1) {
+            return null;
+        }
+        return getListViewForIndex(1 - getCurrentPage());
+    }
+
+    @Override
+    String getMetricsCategory() {
+        return ResolverActivity.METRICS_CATEGORY_RESOLVER;
+    }
+
+    @Override
+    protected void showWorkProfileOffEmptyState(ResolverListAdapter activeListAdapter,
+            View.OnClickListener listener) {
+        showEmptyState(activeListAdapter,
+                R.drawable.ic_work_apps_off,
+                R.string.resolver_turn_on_work_apps_view,
+                /* subtitleRes */ 0,
+                listener);
+    }
+
+    @Override
+    protected void showNoPersonalToWorkIntentsEmptyState(ResolverListAdapter activeListAdapter) {
+        showEmptyState(activeListAdapter,
+                R.drawable.ic_sharing_disabled,
+                R.string.resolver_cant_access_work_apps,
+                R.string.resolver_cant_access_work_apps_explanation);
+    }
+
+    @Override
+    protected void showNoWorkToPersonalIntentsEmptyState(ResolverListAdapter activeListAdapter) {
+        showEmptyState(activeListAdapter,
+                R.drawable.ic_sharing_disabled,
+                R.string.resolver_cant_access_personal_apps,
+                R.string.resolver_cant_access_personal_apps_explanation);
     }
 
     class ResolverProfileDescriptor extends ProfileDescriptor {

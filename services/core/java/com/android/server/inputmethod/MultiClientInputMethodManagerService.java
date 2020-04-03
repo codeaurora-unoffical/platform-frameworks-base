@@ -73,6 +73,7 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.inputmethod.IMultiClientInputMethod;
 import com.android.internal.inputmethod.IMultiClientInputMethodPrivilegedOperations;
 import com.android.internal.inputmethod.IMultiClientInputMethodSession;
+import com.android.internal.inputmethod.SoftInputShowHideReason;
 import com.android.internal.inputmethod.StartInputFlags;
 import com.android.internal.inputmethod.StartInputReason;
 import com.android.internal.inputmethod.UnbindReason;
@@ -82,10 +83,12 @@ import com.android.internal.os.TransferPipe;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.util.IndentingPrintWriter;
 import com.android.internal.util.function.pooled.PooledLambda;
+import com.android.internal.view.IInlineSuggestionsRequestCallback;
 import com.android.internal.view.IInputContext;
 import com.android.internal.view.IInputMethodClient;
 import com.android.internal.view.IInputMethodManager;
 import com.android.internal.view.IInputMethodSession;
+import com.android.internal.view.InlineSuggestionsRequestInfo;
 import com.android.internal.view.InputBindResult;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
@@ -167,12 +170,7 @@ public final class MultiClientInputMethodManagerService {
             LocalServices.addService(InputMethodManagerInternal.class,
                     new InputMethodManagerInternal() {
                         @Override
-                        public void setInteractive(boolean interactive) {
-                            reportNotSupported();
-                        }
-
-                        @Override
-                        public void hideCurrentInputMethod() {
+                        public void hideCurrentInputMethod(@SoftInputShowHideReason int reason) {
                             reportNotSupported();
                         }
 
@@ -186,6 +184,30 @@ public final class MultiClientInputMethodManagerService {
                         public List<InputMethodInfo> getEnabledInputMethodListAsUser(
                                 @UserIdInt int userId) {
                             return userIdToInputMethodInfoMapper.getAsList(userId);
+                        }
+
+                        @Override
+                        public void onCreateInlineSuggestionsRequest(int userId,
+                                InlineSuggestionsRequestInfo requestInfo,
+                                IInlineSuggestionsRequestCallback cb) {
+                            try {
+                                //TODO(b/137800469): support multi client IMEs.
+                                cb.onInlineSuggestionsUnsupported();
+                            } catch (RemoteException e) {
+                                Slog.w(TAG, "Failed to call onInlineSuggestionsUnsupported.", e);
+                            }
+                        }
+
+                        @Override
+                        public boolean switchToInputMethod(String imeId, @UserIdInt int userId) {
+                            reportNotSupported();
+                            return false;
+                        }
+
+                        @Override
+                        public void registerInputMethodListListener(
+                                InputMethodListListener listener) {
+                            reportNotSupported();
                         }
                     });
         }
@@ -1429,7 +1451,8 @@ public final class MultiClientInputMethodManagerService {
         @BinderThread
         @Override
         public boolean showSoftInput(
-                IInputMethodClient client, int flags, ResultReceiver resultReceiver) {
+                IInputMethodClient client, IBinder token, int flags,
+                ResultReceiver resultReceiver) {
             final int callingUid = Binder.getCallingUid();
             final int callingPid = Binder.getCallingPid();
             final int userId = UserHandle.getUserId(callingUid);
@@ -1472,7 +1495,8 @@ public final class MultiClientInputMethodManagerService {
         @BinderThread
         @Override
         public boolean hideSoftInput(
-                IInputMethodClient client, int flags, ResultReceiver resultReceiver) {
+                IInputMethodClient client, IBinder windowToken, int flags,
+                ResultReceiver resultReceiver) {
             final int callingUid = Binder.getCallingUid();
             final int callingPid = Binder.getCallingPid();
             final int userId = UserHandle.getUserId(callingUid);

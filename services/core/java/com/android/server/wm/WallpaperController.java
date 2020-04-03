@@ -121,7 +121,7 @@ class WallpaperController {
 
         mFindResults.resetTopWallpaper = true;
         if (w.mActivityRecord != null && !w.mActivityRecord.isVisible()
-                && !w.mActivityRecord.isAnimating(TRANSITION)) {
+                && !w.mActivityRecord.isAnimating(TRANSITION | PARENTS)) {
 
             // If this window's app token is hidden and not animating, it is of no interest to us.
             if (DEBUG_WALLPAPER) Slog.v(TAG, "Skipping hidden and not animating token: " + w);
@@ -139,7 +139,7 @@ class WallpaperController {
         }
 
         final boolean keyguardGoingAwayWithWallpaper = (w.mActivityRecord != null
-                && w.mActivityRecord.isAnimating(TRANSITION)
+                && w.mActivityRecord.isAnimating(TRANSITION | PARENTS)
                 && AppTransition.isKeyguardGoingAwayTransit(w.mActivityRecord.getTransit())
                 && (w.mActivityRecord.getTransitFlags()
                         & TRANSIT_FLAG_KEYGUARD_GOING_AWAY_WITH_WALLPAPER) != 0);
@@ -162,9 +162,11 @@ class WallpaperController {
 
         final RecentsAnimationController recentsAnimationController =
                 mService.getRecentsAnimationController();
-        final boolean animationWallpaper = w.mActivityRecord != null
-                && w.mActivityRecord.getAnimation() != null
-                && w.mActivityRecord.getAnimation().getShowWallpaper();
+        final WindowContainer animatingContainer =
+                w.mActivityRecord != null ? w.mActivityRecord.getAnimatingContainer() : null;
+        final boolean animationWallpaper = animatingContainer != null
+                && animatingContainer.getAnimation() != null
+                && animatingContainer.getAnimation().getShowWallpaper();
         final boolean hasWallpaper = (w.mAttrs.flags & FLAG_SHOW_WALLPAPER) != 0
                 || animationWallpaper;
         final boolean isRecentsTransitionTarget = (recentsAnimationController != null
@@ -228,14 +230,14 @@ class WallpaperController {
         if (DEBUG_WALLPAPER) Slog.v(TAG, "Wallpaper vis: target " + wallpaperTarget + ", obscured="
                 + (wallpaperTarget != null ? Boolean.toString(wallpaperTarget.mObscured) : "??")
                 + " animating=" + ((wallpaperTarget != null && wallpaperTarget.mActivityRecord != null)
-                ? wallpaperTarget.mActivityRecord.isAnimating(TRANSITION) : null)
+                ? wallpaperTarget.mActivityRecord.isAnimating(TRANSITION | PARENTS) : null)
                 + " prev=" + mPrevWallpaperTarget
                 + " recentsAnimationWallpaperVisible=" + isAnimatingWithRecentsComponent);
         return (wallpaperTarget != null
                 && (!wallpaperTarget.mObscured
                         || isAnimatingWithRecentsComponent
                         || (wallpaperTarget.mActivityRecord != null
-                        && wallpaperTarget.mActivityRecord.isAnimating(TRANSITION))))
+                        && wallpaperTarget.mActivityRecord.isAnimating(TRANSITION | PARENTS))))
                 || mPrevWallpaperTarget != null;
     }
 
@@ -667,8 +669,7 @@ class WallpaperController {
      * Adjusts the wallpaper windows if the input display has a pending wallpaper layout or one of
      * the opening apps should be a wallpaper target.
      */
-    void adjustWallpaperWindowsForAppTransitionIfNeeded(ArraySet<ActivityRecord> openingApps,
-            ArraySet<ActivityRecord> changingApps) {
+    void adjustWallpaperWindowsForAppTransitionIfNeeded(ArraySet<ActivityRecord> openingApps) {
         boolean adjust = false;
         if ((mDisplayContent.pendingLayoutChanges & FINISH_LAYOUT_REDO_WALLPAPER) != 0) {
             adjust = true;
@@ -678,15 +679,6 @@ class WallpaperController {
                 if (activity.windowsCanBeWallpaperTarget()) {
                     adjust = true;
                     break;
-                }
-            }
-            if (!adjust) {
-                for (int i = changingApps.size() - 1; i >= 0; --i) {
-                    final ActivityRecord activity = changingApps.valueAt(i);
-                    if (activity.windowsCanBeWallpaperTarget()) {
-                        adjust = true;
-                        break;
-                    }
                 }
             }
         }
