@@ -60,6 +60,7 @@ import com.android.internal.statusbar.StatusBarIcon;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.view.AppearanceRegion;
 import com.android.server.LocalServices;
+import com.android.server.UiThread;
 import com.android.server.notification.NotificationDelegate;
 import com.android.server.policy.GlobalActionsProvider;
 import com.android.server.power.ShutdownThread;
@@ -663,12 +664,13 @@ public class StatusBarManagerService extends IStatusBarService.Stub implements D
 
     @Override
     public void showAuthenticationDialog(Bundle bundle, IBiometricServiceReceiverInternal receiver,
-            int biometricModality, boolean requireConfirmation, int userId, String opPackageName) {
+            int biometricModality, boolean requireConfirmation, int userId, String opPackageName,
+            long operationId) {
         enforceBiometricDialog();
         if (mBar != null) {
             try {
                 mBar.showAuthenticationDialog(bundle, receiver, biometricModality,
-                        requireConfirmation, userId, opPackageName);
+                        requireConfirmation, userId, opPackageName, operationId);
             } catch (RemoteException ex) {
             }
         }
@@ -1118,7 +1120,7 @@ public class StatusBarManagerService extends IStatusBarService.Stub implements D
     }
 
     private void notifyBarAttachChanged() {
-        mHandler.post(() -> {
+        UiThread.getHandler().post(() -> {
             if (mGlobalActionListener == null) return;
             mGlobalActionListener.onGlobalActionsAvailableChanged(mBar != null);
         });

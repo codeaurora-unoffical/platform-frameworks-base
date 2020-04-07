@@ -34,6 +34,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.util.AttributeSet;
+import android.util.Slog;
 import android.view.Choreographer;
 import android.view.Display;
 import android.view.InsetsState;
@@ -67,12 +68,15 @@ import com.android.systemui.R;
 import com.android.systemui.shared.system.WindowManagerWrapper;
 import com.android.systemui.statusbar.FlingAnimationUtils;
 
+import java.util.function.Consumer;
+
 /**
  * Docked stack divider.
  */
 public class DividerView extends FrameLayout implements OnTouchListener,
         OnComputeInternalInsetsListener {
     private static final String TAG = "DividerView";
+    private static final boolean DEBUG = Divider.DEBUG;
 
     public interface DividerCallbacks {
         void onDraggingStart();
@@ -164,6 +168,10 @@ public class DividerView extends FrameLayout implements OnTouchListener,
 
     // The view is removed or in the process of been removed from the system.
     private boolean mRemoved;
+
+    // Whether the surface for this view has been hidden regardless of actual visibility. This is
+    // used interact with keyguard.
+    private boolean mSurfaceHidden = false;
 
     private final Handler mHandler = new Handler() {
         @Override
@@ -414,6 +422,10 @@ public class DividerView extends FrameLayout implements OnTouchListener,
 
     /** Unlike setVisible, this directly hides the surface without changing view visibility. */
     void setHidden(boolean hidden) {
+        if (mSurfaceHidden == hidden) {
+            return;
+        }
+        mSurfaceHidden = hidden;
         post(() -> {
             final SurfaceControl sc = getWindowSurfaceControl();
             if (sc == null) {
@@ -428,6 +440,10 @@ public class DividerView extends FrameLayout implements OnTouchListener,
             t.apply();
             mTiles.releaseTransaction(t);
         });
+    }
+
+    boolean isHidden() {
+        return mSurfaceHidden;
     }
 
     public boolean startDragging(boolean animate, boolean touching) {
@@ -615,6 +631,7 @@ public class DividerView extends FrameLayout implements OnTouchListener,
             cancelFlingAnimation();
             updateDockSide();
         }
+        if (DEBUG) Slog.d(TAG, "Getting fling " + position + "->" + snapTarget.position);
         final boolean taskPositionSameAtEnd = snapTarget.flag == SnapTarget.FLAG_NONE;
         ValueAnimator anim = ValueAnimator.ofInt(position, snapTarget.position);
         anim.addUpdateListener(animation -> resizeStackDelayed((int) animation.getAnimatedValue(),
@@ -622,16 +639,21 @@ public class DividerView extends FrameLayout implements OnTouchListener,
                         ? TASK_POSITION_SAME
                         : snapTarget.taskPosition,
                 snapTarget));
-        Runnable endAction = () -> {
+        Consumer<Boolean> endAction = cancelled -> {
+            if (DEBUG) Slog.d(TAG, "End Fling " + cancelled + " min:" + mIsInMinimizeInteraction);
+            final boolean wasMinimizeInteraction = mIsInMinimizeInteraction;
+            // Reset minimized divider position after unminimized state animation finishes.
+            if (!cancelled && !mDockedStackMinimized && mIsInMinimizeInteraction) {
+                mIsInMinimizeInteraction = false;
+            }
             boolean dismissed = commitSnapFlags(snapTarget);
             mWindowManagerProxy.setResizing(false);
             updateDockSide();
             mCurrentAnimator = null;
             mEntranceAnimationRunning = false;
             mExitAnimationRunning = false;
-            if (!dismissed) {
-                WindowManagerProxy.applyResizeSplits((mIsInMinimizeInteraction
-                        ? mSnapTargetBeforeMinimized : snapTarget).position, mSplitLayout);
+            if (!dismissed && !wasMinimizeInteraction) {
+                WindowManagerProxy.applyResizeSplits(snapTarget.position, mSplitLayout);
             }
             if (mCallback != null) {
                 mCallback.onDraggingEnd();
@@ -655,12 +677,6 @@ public class DividerView extends FrameLayout implements OnTouchListener,
                 }
             }
         };
-        Runnable notCancelledEndAction = () -> {
-            // Reset minimized divider position after unminimized state animation finishes
-            if (!mDockedStackMinimized && mIsInMinimizeInteraction) {
-                mIsInMinimizeInteraction = false;
-            }
-        };
         anim.addListener(new AnimatorListenerAdapter() {
 
             private boolean mCancelled;
@@ -682,15 +698,11 @@ public class DividerView extends FrameLayout implements OnTouchListener,
                     delay = mSfChoreographer.getSurfaceFlingerOffsetMs();
                 }
                 if (delay == 0) {
-                    if (!mCancelled) {
-                        notCancelledEndAction.run();
-                    }
-                    endAction.run();
+                    endAction.accept(mCancelled);
                 } else {
-                    if (!mCancelled) {
-                        mHandler.postDelayed(notCancelledEndAction, delay);
-                    }
-                    mHandler.postDelayed(endAction, delay);
+                    final Boolean cancelled = mCancelled;
+                    if (DEBUG) Slog.d(TAG, "Posting endFling " + cancelled + " d:" + delay + "ms");
+                    mHandler.postDelayed(() -> endAction.accept(cancelled), delay);
                 }
             }
         });
@@ -887,6 +899,7 @@ public class DividerView extends FrameLayout implements OnTouchListener,
 
     public void setMinimizedDockStack(boolean minimized, long animDuration,
             boolean isHomeStackResizable) {
+        if (DEBUG) Slog.d(TAG, "setMinDock: " + mDockedStackMinimized + "->" + minimized);
         mHomeStackResizable = isHomeStackResizable;
         updateDockSide();
         if (!isHomeStackResizable) {
@@ -932,6 +945,15 @@ public class DividerView extends FrameLayout implements OnTouchListener,
                 .setInterpolator(Interpolators.FAST_OUT_SLOW_IN)
                 .setDuration(animDuration)
                 .start();
+    }
+
+    // Needed to end any currently playing animations when they might compete with other anims
+    // (specifically, IME adjust animation immediately after leaving minimized). Someday maybe
+    // these can be unified, but not today.
+    void finishAnimations() {
+        if (mCurrentAnimator != null) {
+            mCurrentAnimator.end();
+        }
     }
 
     public void setAdjustedForIme(boolean adjustedForIme, long animDuration) {
@@ -1049,6 +1071,11 @@ public class DividerView extends FrameLayout implements OnTouchListener,
         mDividerPositionX = dockedRect.right;
         mDividerPositionY = dockedRect.bottom;
 
+        if (DEBUG) {
+            Slog.d(TAG, "Resizing split surfaces: " + dockedRect + " " + dockedTaskRect
+                    + " " + otherRect + " " + otherTaskRect);
+        }
+
         t.setPosition(mTiles.mPrimarySurface, dockedTaskRect.left, dockedTaskRect.top);
         Rect crop = new Rect(dockedRect);
         crop.offsetTo(-Math.min(dockedTaskRect.left - dockedRect.left, 0),
@@ -1071,7 +1098,7 @@ public class DividerView extends FrameLayout implements OnTouchListener,
 
     void setResizeDimLayer(Transaction t, boolean primary, float alpha) {
         SurfaceControl dim = primary ? mTiles.mPrimaryDim : mTiles.mSecondaryDim;
-        if (alpha <= 0.f) {
+        if (alpha <= 0.001f) {
             t.hide(dim);
         } else {
             t.setAlpha(dim, alpha);

@@ -727,8 +727,9 @@ public class WifiManager {
 
     /**
      *  If Soft Ap client is blocked, this reason code means that client doesn't exist in the
-     *  specified configuration {@link SoftApConfiguration.Builder#setClientList(List, List)}
-     *  and the {@link SoftApConfiguration.Builder#enableClientControlByUser(true)}
+     *  specified configuration {@link SoftApConfiguration.Builder#setBlockedClientList(List)}
+     *  and {@link SoftApConfiguration.Builder#setAllowedClientList(List)}
+     *  and the {@link SoftApConfiguration.Builder#setClientControlByUserEnabled(boolean)}
      *  is configured as well.
      *  @hide
      */
@@ -1352,7 +1353,7 @@ public class WifiManager {
         try {
             ParceledListSlice<WifiConfiguration> parceledList =
                     mService.getConfiguredNetworks(mContext.getOpPackageName(),
-                            mContext.getFeatureId());
+                            mContext.getAttributionTag());
             if (parceledList == null) {
                 return Collections.emptyList();
             }
@@ -1369,7 +1370,7 @@ public class WifiManager {
         try {
             ParceledListSlice<WifiConfiguration> parceledList =
                     mService.getPrivilegedConfiguredNetworks(mContext.getOpPackageName(),
-                            mContext.getFeatureId());
+                            mContext.getAttributionTag());
             if (parceledList == null) {
                 return Collections.emptyList();
             }
@@ -1898,7 +1899,7 @@ public class WifiManager {
             @NonNull List<WifiNetworkSuggestion> networkSuggestions) {
         try {
             return mService.addNetworkSuggestions(
-                    networkSuggestions, mContext.getOpPackageName(), mContext.getFeatureId());
+                    networkSuggestions, mContext.getOpPackageName(), mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2563,7 +2564,7 @@ public class WifiManager {
      *        valid values from {@link ScanResult}'s {@code WIFI_STANDARD_}
      * @return {@code true} if supported, {@code false} otherwise.
      */
-    public boolean isWifiStandardSupported(@ScanResult.WifiStandard int standard) {
+    public boolean isWifiStandardSupported(@WifiAnnotations.WifiStandard int standard) {
         try {
             return mService.isWifiStandardSupported(standard);
         } catch (RemoteException e) {
@@ -2680,8 +2681,8 @@ public class WifiManager {
     public boolean startScan(WorkSource workSource) {
         try {
             String packageName = mContext.getOpPackageName();
-            String featureId = mContext.getFeatureId();
-            return mService.startScan(packageName, featureId);
+            String attributionTag = mContext.getAttributionTag();
+            return mService.startScan(packageName, attributionTag);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2713,7 +2714,7 @@ public class WifiManager {
     public WifiInfo getConnectionInfo() {
         try {
             return mService.getConnectionInfo(mContext.getOpPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2728,35 +2729,38 @@ public class WifiManager {
     public List<ScanResult> getScanResults() {
         try {
             return mService.getScanResults(mContext.getOpPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
     /**
-     * Return the filtered ScanResults which may be authenticated by the suggested network
-     * configurations.
-     * @param networkSuggestions The list of {@link WifiNetworkSuggestion}
-     * @param scanResults The scan results to be filtered, this is optional, if it is null or
-     * empty, wifi system would use the recent scan results in the system.
-     * @return The map of {@link WifiNetworkSuggestion} and the list of {@link ScanResult} which
-     * may be authenticated by the corresponding network configuration.
+     * Get the filtered ScanResults which match the network configurations specified by the
+     * {@code networkSuggestionsToMatch}. Suggestions which use {@link WifiConfiguration} use
+     * SSID and the security type to match. Suggestions which use {@link PasspointConfigration}
+     * use the matching rules of Hotspot 2.0.
+     * @param networkSuggestionsToMatch The list of {@link WifiNetworkSuggestion} to match against.
+     * These may or may not be suggestions which are installed on the device.
+     * @param scanResults The scan results to be filtered. Optional - if not provided(empty list),
+     * the Wi-Fi service will use the most recent scan results which the system has.
+     * @return The map of {@link WifiNetworkSuggestion} to the list of {@link ScanResult}
+     * corresponding to networks which match them.
      * @hide
      */
     @SystemApi
     @RequiresPermission(allOf = {ACCESS_FINE_LOCATION, ACCESS_WIFI_STATE})
     @NonNull
     public Map<WifiNetworkSuggestion, List<ScanResult>> getMatchingScanResults(
-            @NonNull List<WifiNetworkSuggestion> networkSuggestions,
+            @NonNull List<WifiNetworkSuggestion> networkSuggestionsToMatch,
             @Nullable List<ScanResult> scanResults) {
-        if (networkSuggestions == null) {
+        if (networkSuggestionsToMatch == null) {
             throw new IllegalArgumentException("networkSuggestions must not be null.");
         }
         try {
             return mService.getMatchingScanResults(
-                    networkSuggestions, scanResults,
-                    mContext.getOpPackageName(), mContext.getFeatureId());
+                    networkSuggestionsToMatch, scanResults,
+                    mContext.getOpPackageName(), mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2826,7 +2830,7 @@ public class WifiManager {
      */
     @Nullable
     @SystemApi
-    @RequiresPermission(android.Manifest.permission.CONNECTIVITY_INTERNAL)
+    @RequiresPermission(android.Manifest.permission.NETWORK_SETTINGS)
     public String getCountryCode() {
         try {
             return mService.getCountryCode();
@@ -2902,28 +2906,6 @@ public class WifiManager {
      */
     public boolean isWifiEnabled() {
         return getWifiState() == WIFI_STATE_ENABLED;
-    }
-
-    /**
-     * Return TX packet counter, for CTS test of WiFi watchdog.
-     * @param listener is the interface to receive result
-     *
-     * @hide for CTS test only
-     */
-    // TODO(b/144036594): add @TestApi
-    public void getTxPacketCount(@NonNull TxPacketCountListener listener) {
-        if (listener == null) throw new IllegalArgumentException("listener cannot be null");
-        Binder binder = new Binder();
-        TxPacketCountListenerProxy listenerProxy =
-                new TxPacketCountListenerProxy(mLooper, listener);
-        try {
-            mService.getTxPacketCount(mContext.getOpPackageName(), binder, listenerProxy,
-                    listener.hashCode());
-        } catch (RemoteException e) {
-            listenerProxy.onFailure(ERROR);
-        } catch (SecurityException e) {
-            listenerProxy.onFailure(NOT_AUTHORIZED);
-        }
     }
 
     /**
@@ -3195,7 +3177,7 @@ public class WifiManager {
                     new LocalOnlyHotspotCallbackProxy(this, executor, callback);
             try {
                 String packageName = mContext.getOpPackageName();
-                String featureId = mContext.getFeatureId();
+                String featureId = mContext.getAttributionTag();
                 int returnCode = mService.startLocalOnlyHotspot(proxy, packageName, featureId,
                         config);
                 if (returnCode != LocalOnlyHotspotCallback.REQUEST_REGISTERED) {
@@ -3372,7 +3354,7 @@ public class WifiManager {
      */
     @NonNull
     @SystemApi
-    @RequiresPermission(android.Manifest.permission.ACCESS_WIFI_STATE)
+    @RequiresPermission(android.Manifest.permission.NETWORK_SETTINGS)
     public SoftApConfiguration getSoftApConfiguration() {
         try {
             return mService.getSoftApConfiguration();
@@ -3406,9 +3388,10 @@ public class WifiManager {
      * If the API is called while the tethered soft AP is enabled, the configuration will apply to
      * the current soft AP if the new configuration only includes
      * {@link SoftApConfiguration.Builder#setMaxNumberOfClients(int)}
-     * or {@link SoftApConfiguration.Builder#setShutdownTimeoutMillis(int)}
-     * or {@link SoftApConfiguration.Builder#enableClientControlByUser(boolean)}
-     * or {@link SoftApConfiguration.Builder#setClientList(List, List)}.
+     * or {@link SoftApConfiguration.Builder#setShutdownTimeoutMillis(long)}
+     * or {@link SoftApConfiguration.Builder#setClientControlByUserEnabled(boolean)}
+     * or {@link SoftApConfiguration.Builder#setBlockedClientList(List)}
+     * or {@link SoftApConfiguration.Builder#setAllowedClientList(List)}
      *
      * Otherwise, the configuration changes will be applied when the Soft AP is next started
      * (the framework will not stop/start the AP).
@@ -3575,56 +3558,6 @@ public class WifiManager {
          * @deprecated This API is deprecated
          */
         public abstract void onFailed(int reason);
-    }
-
-    /** Interface for callback invocation on a TX packet count poll action {@hide} */
-    public interface TxPacketCountListener {
-        /**
-         * The operation succeeded
-         * @param count TX packet counter
-         */
-        public void onSuccess(int count);
-        /**
-         * The operation failed
-         * @param reason The reason for failure could be one of
-         * {@link #ERROR}, {@link #IN_PROGRESS} or {@link #BUSY}
-         */
-        public void onFailure(int reason);
-    }
-
-    /**
-     * Callback proxy for TxPacketCountListener objects.
-     *
-     * @hide
-     */
-    private class TxPacketCountListenerProxy extends ITxPacketCountListener.Stub {
-        private final Handler mHandler;
-        private final TxPacketCountListener mCallback;
-
-        TxPacketCountListenerProxy(Looper looper, TxPacketCountListener callback) {
-            mHandler = new Handler(looper);
-            mCallback = callback;
-        }
-
-        @Override
-        public void onSuccess(int count) {
-            if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "TxPacketCounterProxy: onSuccess: count=" + count);
-            }
-            mHandler.post(() -> {
-                mCallback.onSuccess(count);
-            });
-        }
-
-        @Override
-        public void onFailure(int reason) {
-            if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "TxPacketCounterProxy: onFailure: reason=" + reason);
-            }
-            mHandler.post(() -> {
-                mCallback.onFailure(reason);
-            });
-        }
     }
 
     /**
@@ -4989,7 +4922,7 @@ public class WifiManager {
      * @hide
      */
     @SystemApi
-    @RequiresPermission(android.Manifest.permission.CONNECTIVITY_INTERNAL)
+    @RequiresPermission(android.Manifest.permission.NETWORK_SETTINGS)
     public void factoryReset() {
         try {
             mService.factoryReset(mContext.getOpPackageName());
@@ -5886,7 +5819,7 @@ public class WifiManager {
         try {
             mService.registerSuggestionConnectionStatusListener(new Binder(),
                     new SuggestionConnectionStatusListenerProxy(executor, listener),
-                    listener.hashCode(), mContext.getOpPackageName(), mContext.getFeatureId());
+                    listener.hashCode(), mContext.getOpPackageName(), mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -5986,22 +5919,22 @@ public class WifiManager {
     }
 
     /**
-     * Callback interface for framework to receive network status changes and trigger of updating
+     * Callback interface for framework to receive network status updates and trigger of updating
      * {@link WifiUsabilityStatsEntry}.
      *
      * @hide
      */
     @SystemApi
-    public interface ScoreChangeCallback {
+    public interface ScoreUpdateObserver {
         /**
          * Called by applications to indicate network status.
          *
          * @param sessionId The ID to indicate current Wi-Fi network connection obtained from
-         *                  {@link WifiConnectedNetworkScorer#start(int)}.
+         *                  {@link WifiConnectedNetworkScorer#onStart(int)}.
          * @param score The score representing link quality of current Wi-Fi network connection.
          *              Populated by connected network scorer in applications..
          */
-        void onScoreChange(int sessionId, int score);
+        void notifyScoreUpdate(int sessionId, int score);
 
         /**
          * Called by applications to trigger an update of {@link WifiUsabilityStatsEntry}.
@@ -6009,36 +5942,36 @@ public class WifiManager {
          * {@link addOnWifiUsabilityStatsListener(Executor, OnWifiUsabilityStatsListener)}.
          *
          * @param sessionId The ID to indicate current Wi-Fi network connection obtained from
-         *                  {@link WifiConnectedNetworkScorer#start(int)}.
+         *                  {@link WifiConnectedNetworkScorer#onStart(int)}.
          */
-        void onTriggerUpdateOfWifiUsabilityStats(int sessionId);
+        void triggerUpdateOfWifiUsabilityStats(int sessionId);
     }
 
     /**
-     * Callback proxy for {@link ScoreChangeCallback} objects.
+     * Callback proxy for {@link ScoreUpdateObserver} objects.
      *
      * @hide
      */
-    private class ScoreChangeCallbackProxy implements ScoreChangeCallback {
-        private final IScoreChangeCallback mScoreChangeCallback;
+    private class ScoreUpdateObserverProxy implements ScoreUpdateObserver {
+        private final IScoreUpdateObserver mScoreUpdateObserver;
 
-        private ScoreChangeCallbackProxy(IScoreChangeCallback callback) {
-            mScoreChangeCallback = callback;
+        private ScoreUpdateObserverProxy(IScoreUpdateObserver observer) {
+            mScoreUpdateObserver = observer;
         }
 
         @Override
-        public void onScoreChange(int sessionId, int score) {
+        public void notifyScoreUpdate(int sessionId, int score) {
             try {
-                mScoreChangeCallback.onScoreChange(sessionId, score);
+                mScoreUpdateObserver.notifyScoreUpdate(sessionId, score);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
         }
 
         @Override
-        public void onTriggerUpdateOfWifiUsabilityStats(int sessionId) {
+        public void triggerUpdateOfWifiUsabilityStats(int sessionId) {
             try {
-                mScoreChangeCallback.onTriggerUpdateOfWifiUsabilityStats(sessionId);
+                mScoreUpdateObserver.triggerUpdateOfWifiUsabilityStats(sessionId);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
@@ -6058,21 +5991,21 @@ public class WifiManager {
          * Called by framework to indicate the start of a network connection.
          * @param sessionId The ID to indicate current Wi-Fi network connection.
          */
-        void start(int sessionId);
+        void onStart(int sessionId);
 
         /**
          * Called by framework to indicate the end of a network connection.
          * @param sessionId The ID to indicate current Wi-Fi network connection obtained from
-         *                  {@link WifiConnectedNetworkScorer#start(int)}.
+         *                  {@link WifiConnectedNetworkScorer#onStart(int)}.
          */
-        void stop(int sessionId);
+        void onStop(int sessionId);
 
         /**
          * Framework sets callback for score change events after application sets its scorer.
-         * @param cbImpl The instance for {@link WifiManager#ScoreChangeCallback}. Should be
+         * @param observerImpl The instance for {@link WifiManager#ScoreUpdateObserver}. Should be
          * implemented and instantiated by framework.
          */
-        void setScoreChangeCallback(@NonNull ScoreChangeCallback cbImpl);
+        void onSetScoreUpdateObserver(@NonNull ScoreUpdateObserver observerImpl);
     }
 
     /**
@@ -6090,32 +6023,32 @@ public class WifiManager {
         }
 
         @Override
-        public void start(int sessionId) {
+        public void onStart(int sessionId) {
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "WifiConnectedNetworkScorer: " + "start: sessionId=" + sessionId);
+                Log.v(TAG, "WifiConnectedNetworkScorer: " + "onStart: sessionId=" + sessionId);
             }
             Binder.clearCallingIdentity();
-            mExecutor.execute(() -> mScorer.start(sessionId));
+            mExecutor.execute(() -> mScorer.onStart(sessionId));
         }
 
         @Override
-        public void stop(int sessionId) {
+        public void onStop(int sessionId) {
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "WifiConnectedNetworkScorer: " + "stop: sessionId=" + sessionId);
+                Log.v(TAG, "WifiConnectedNetworkScorer: " + "onStop: sessionId=" + sessionId);
             }
             Binder.clearCallingIdentity();
-            mExecutor.execute(() -> mScorer.stop(sessionId));
+            mExecutor.execute(() -> mScorer.onStop(sessionId));
         }
 
         @Override
-        public void setScoreChangeCallback(IScoreChangeCallback cbImpl) {
+        public void onSetScoreUpdateObserver(IScoreUpdateObserver observerImpl) {
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "WifiConnectedNetworkScorer: "
-                        + "setScoreChangeCallback: cbImpl=" + cbImpl);
+                        + "onSetScoreUpdateObserver: observerImpl=" + observerImpl);
             }
             Binder.clearCallingIdentity();
-            mExecutor.execute(() -> mScorer.setScoreChangeCallback(
-                    new ScoreChangeCallbackProxy(cbImpl)));
+            mExecutor.execute(() -> mScorer.onSetScoreUpdateObserver(
+                    new ScoreUpdateObserverProxy(observerImpl)));
         }
     }
 

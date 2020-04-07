@@ -18,6 +18,7 @@ package com.android.systemui.qs;
 
 import android.app.Notification;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.Icon;
 import android.media.session.MediaSession;
@@ -25,7 +26,9 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import com.android.settingslib.media.MediaDevice;
 import com.android.systemui.R;
@@ -50,16 +53,21 @@ public class QSMediaPlayer extends MediaControlPanel {
             R.id.action4
     };
 
+    private final QSPanel mParent;
+
     /**
      * Initialize quick shade version of player
      * @param context
      * @param parent
      * @param manager
+     * @param foregroundExecutor
      * @param backgroundExecutor
      */
     public QSMediaPlayer(Context context, ViewGroup parent, NotificationMediaManager manager,
-            Executor backgroundExecutor) {
-        super(context, parent, manager, R.layout.qs_media_panel, QS_ACTION_IDS, backgroundExecutor);
+            Executor foregroundExecutor, Executor backgroundExecutor) {
+        super(context, parent, manager, R.layout.qs_media_panel, QS_ACTION_IDS, foregroundExecutor,
+                backgroundExecutor);
+        mParent = (QSPanel) parent;
     }
 
     /**
@@ -106,5 +114,45 @@ public class QSMediaPlayer extends MediaControlPanel {
             ImageButton thisBtn = mMediaNotifView.findViewById(QS_ACTION_IDS[i]);
             thisBtn.setVisibility(View.GONE);
         }
+
+        // Set up long press menu
+        View guts = mMediaNotifView.findViewById(R.id.media_guts);
+        View options = mMediaNotifView.findViewById(R.id.qs_media_controls_options);
+        options.setMinimumHeight(guts.getHeight());
+
+        View clearView = options.findViewById(R.id.remove);
+        clearView.setOnClickListener(b -> {
+            mParent.removeMediaPlayer(QSMediaPlayer.this);
+        });
+        ImageView removeIcon = options.findViewById(R.id.remove_icon);
+        removeIcon.setImageTintList(ColorStateList.valueOf(iconColor));
+        TextView removeText = options.findViewById(R.id.remove_text);
+        removeText.setTextColor(iconColor);
+
+        TextView cancelView = options.findViewById(R.id.cancel);
+        cancelView.setTextColor(iconColor);
+        cancelView.setOnClickListener(b -> {
+            options.setVisibility(View.GONE);
+            guts.setVisibility(View.VISIBLE);
+        });
+        // ... but don't enable it yet, and make sure is reset when the session is updated
+        mMediaNotifView.setOnLongClickListener(null);
+        options.setVisibility(View.GONE);
+        guts.setVisibility(View.VISIBLE);
+    }
+
+    @Override
+    public void clearControls() {
+        super.clearControls();
+
+        View guts = mMediaNotifView.findViewById(R.id.media_guts);
+        View options = mMediaNotifView.findViewById(R.id.qs_media_controls_options);
+
+        mMediaNotifView.setOnLongClickListener(v -> {
+            // Replace player view with close/cancel view
+            guts.setVisibility(View.GONE);
+            options.setVisibility(View.VISIBLE);
+            return true; // consumed click
+        });
     }
 }

@@ -724,6 +724,26 @@ enum Action {
     // CATEGORY: SETTINGS
     // OS: R
     ACTION_ADB_WIRELESS_OFF = 1735;
+
+    // ACTION: Change Wi-Fi hotspot name
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACTION_SETTINGS_CHANGE_WIFI_HOTSPOT_NAME = 1736;
+
+    // ACTION: Change Wi-Fi hotspot password
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACTION_SETTINGS_CHANGE_WIFI_HOTSPOT_PASSWORD = 1737;
+
+    // ACTION: Settings > Security > Toggle on Confirm Sim deletion
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACTION_CONFIRM_SIM_DELETION_ON = 1738;
+
+    // ACTION: Settings > Security > Toggle off Confirm Sim deletion
+    // CATEGORY: SETTINGS
+    // OS: R
+    ACTION_CONFIRM_SIM_DELETION_OFF = 1739;
 }
 
 /**

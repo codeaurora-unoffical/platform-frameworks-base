@@ -40,11 +40,13 @@ import android.os.UserHandle;
 import android.util.Slog;
 
 import com.android.internal.annotations.Immutable;
+import com.android.internal.util.CollectionUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
@@ -175,7 +177,6 @@ public final class PermissionManager {
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
-    @SystemApi
     @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
     public void grantDefaultPermissionsToLuiApp(
             @NonNull String packageName, @NonNull UserHandle user,
@@ -197,7 +198,6 @@ public final class PermissionManager {
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
-    @SystemApi
     @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
     public void revokeDefaultPermissionsFromLuiApps(
             @NonNull String[] packageNames, @NonNull UserHandle user,
@@ -219,7 +219,6 @@ public final class PermissionManager {
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
-    @SystemApi
     @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
     public void grantDefaultPermissionsToEnabledImsServices(
             @NonNull String[] packageNames, @NonNull UserHandle user,
@@ -241,7 +240,6 @@ public final class PermissionManager {
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
-    @SystemApi
     @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
     public void grantDefaultPermissionsToEnabledTelephonyDataServices(
             @NonNull String[] packageNames, @NonNull UserHandle user,
@@ -263,7 +261,6 @@ public final class PermissionManager {
      * @param callback The callback provided by caller to be notified when revoke completes
      * @hide
      */
-    @SystemApi
     @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
     public void revokeDefaultPermissionsFromDisabledTelephonyDataServices(
             @NonNull String[] packageNames, @NonNull UserHandle user,
@@ -285,7 +282,6 @@ public final class PermissionManager {
      * @param callback The callback provided by caller to be notified when grant completes
      * @hide
      */
-    @SystemApi
     @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS_TO_TELEPHONY_DEFAULTS)
     public void grantDefaultPermissionsToEnabledCarrierApps(@NonNull String[] packageNames,
             @NonNull UserHandle user, @NonNull @CallbackExecutor Executor executor,
@@ -296,6 +292,46 @@ public final class PermissionManager {
             executor.execute(() -> callback.accept(true));
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Gets the list of packages that have permissions that specified
+     * {@code requestDontAutoRevokePermissions=true} in their
+     * {@code application} manifest declaration.
+     *
+     * @return the list of packages for current user
+     * @hide
+     */
+    @SystemApi
+    @NonNull
+    @RequiresPermission(Manifest.permission.ADJUST_RUNTIME_PERMISSIONS_POLICY)
+    public Set<String> getAutoRevokeExemptionRequestedPackages() {
+        try {
+            return CollectionUtils.toSet(mPermissionManager.getAutoRevokeExemptionRequestedPackages(
+                    mContext.getUser().getIdentifier()));
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Gets the list of packages that have permissions that specified
+     * {@code allowDontAutoRevokePermissions=true} in their
+     * {@code application} manifest declaration.
+     *
+     * @return the list of packages for current user
+     * @hide
+     */
+    @SystemApi
+    @NonNull
+    @RequiresPermission(Manifest.permission.ADJUST_RUNTIME_PERMISSIONS_POLICY)
+    public Set<String> getAutoRevokeExemptionGrantedPackages() {
+        try {
+            return CollectionUtils.toSet(mPermissionManager.getAutoRevokeExemptionGrantedPackages(
+                    mContext.getUser().getIdentifier()));
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
     }
 

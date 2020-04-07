@@ -18,6 +18,7 @@ package com.android.server.autofill;
 
 import static android.service.autofill.AutofillFieldClassificationService.EXTRA_SCORES;
 import static android.service.autofill.FillRequest.FLAG_MANUAL_REQUEST;
+import static android.service.autofill.FillRequest.FLAG_PASSWORD_INPUT_TYPE;
 import static android.service.autofill.FillRequest.INVALID_REQUEST_ID;
 import static android.view.autofill.AutofillManager.ACTION_RESPONSE_EXPIRED;
 import static android.view.autofill.AutofillManager.ACTION_START_SESSION;
@@ -113,7 +114,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * A session for a given activity.
@@ -137,7 +140,6 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
     private final Handler mHandler;
     private final Object mLock;
     private final AutoFillUI mUi;
-    private final Context mContext;
 
     private final MetricsLogger mMetricsLogger = new MetricsLogger();
 
@@ -307,7 +309,52 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
     /**
      * Receiver of assist data from the app's {@link Activity}.
      */
-    private final IAssistDataReceiver mAssistReceiver = new IAssistDataReceiver.Stub() {
+    private final AssistDataReceiverImpl mAssistReceiver = new AssistDataReceiverImpl();
+
+    /**
+     * TODO(b/151867668): improve how asynchronous data dependencies are handled, without using
+     * CountDownLatch.
+     */
+    private final class AssistDataReceiverImpl extends IAssistDataReceiver.Stub {
+
+        @GuardedBy("mLock")
+        private InlineSuggestionsRequest mPendingInlineSuggestionsRequest;
+        @GuardedBy("mLock")
+        private FillRequest mPendingFillRequest;
+        @GuardedBy("mLock")
+        private CountDownLatch mCountDownLatch = new CountDownLatch(0);
+
+        @Nullable Consumer<InlineSuggestionsRequest> newAutofillRequestLocked(
+                boolean isInlineRequest) {
+            mCountDownLatch = new CountDownLatch(isInlineRequest ? 2 : 1);
+            mPendingFillRequest = null;
+            mPendingInlineSuggestionsRequest = null;
+            return isInlineRequest ? (inlineSuggestionsRequest) -> {
+                synchronized (mLock) {
+                    if (mCountDownLatch.getCount() == 0) {
+                        return;
+                    }
+                    mPendingInlineSuggestionsRequest = inlineSuggestionsRequest;
+                    mCountDownLatch.countDown();
+                    maybeRequestFillLocked();
+                }
+            } : null;
+        }
+
+        void maybeRequestFillLocked() {
+            if (mCountDownLatch.getCount() > 0 || mPendingFillRequest == null) {
+                return;
+            }
+            if (mPendingInlineSuggestionsRequest != null) {
+                mPendingFillRequest = new FillRequest(mPendingFillRequest.getId(),
+                        mPendingFillRequest.getFillContexts(), mPendingFillRequest.getClientState(),
+                        mPendingFillRequest.getFlags(), mPendingInlineSuggestionsRequest);
+            }
+            mRemoteFillService.onFillRequest(mPendingFillRequest);
+            mPendingInlineSuggestionsRequest = null;
+            mPendingFillRequest = null;
+        }
+
         @Override
         public void onHandleAssistData(Bundle resultData) throws RemoteException {
             if (mRemoteFillService == null) {
@@ -402,17 +449,23 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
 
                 final ArrayList<FillContext> contexts =
                         mergePreviousSessionLocked(/* forSave= */ false);
-
-                final Optional<InlineSuggestionsRequest> inlineSuggestionsRequest =
-                        mInlineSuggestionSession.waitAndGetInlineSuggestionsRequest();
                 request = new FillRequest(requestId, contexts, mClientState, flags,
-                        inlineSuggestionsRequest.orElse(null));
+                        /*inlineSuggestionsRequest=*/null);
+
+                if (mCountDownLatch.getCount() > 0) {
+                    mPendingFillRequest = request;
+                    mCountDownLatch.countDown();
+                    maybeRequestFillLocked();
+                } else {
+                    // TODO(b/151867668): ideally this case should not happen, but it was
+                    //  observed, we should figure out why and fix.
+                    mRemoteFillService.onFillRequest(request);
+                }
             }
 
             if (mActivityToken != null) {
                 mService.sendActivityAssistDataToContentCapture(mActivityToken, resultData);
             }
-            mRemoteFillService.onFillRequest(request);
         }
 
         @Override
@@ -605,9 +658,15 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
     private void maybeRequestInlineSuggestionsRequestThenFillLocked(@NonNull ViewState viewState,
             int newState, int flags) {
         if (isInlineSuggestionsEnabledLocked()) {
-            mInlineSuggestionSession.onCreateInlineSuggestionsRequest(mCurrentViewId);
+            Consumer<InlineSuggestionsRequest> inlineSuggestionsRequestConsumer =
+                    mAssistReceiver.newAutofillRequestLocked(/*isInlineRequest=*/ true);
+            if (inlineSuggestionsRequestConsumer != null) {
+                mInlineSuggestionSession.onCreateInlineSuggestionsRequest(mCurrentViewId,
+                        inlineSuggestionsRequestConsumer);
+            }
+        } else {
+            mAssistReceiver.newAutofillRequestLocked(/*isInlineRequest=*/ false);
         }
-
         requestNewFillResponseLocked(viewState, newState, flags);
     }
 
@@ -625,7 +684,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
                         + ", flags=" + flags + ")");
             }
             mForAugmentedAutofillOnly = true;
-            triggerAugmentedAutofillLocked();
+            triggerAugmentedAutofillLocked(flags);
             return;
         }
 
@@ -695,7 +754,6 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
         mLock = lock;
         mUi = ui;
         mHandler = handler;
-        mContext = context;
         mRemoteFillService = serviceComponentName == null ? null
                 : new RemoteFillService(context, serviceComponentName, userId, this,
                         bindInstantServiceAllowed);
@@ -709,7 +767,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
         setClientLocked(client);
 
         mInlineSuggestionSession = new InlineSuggestionSession(inputMethodManagerInternal, userId,
-                componentName);
+                componentName, handler, mLock);
 
         mMetricsLogger.write(newLogMaker(MetricsEvent.AUTOFILL_SESSION_STARTED)
                 .addTaggedData(MetricsEvent.FIELD_AUTOFILL_FLAGS, flags));
@@ -836,7 +894,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
             }
 
             // Although "standard" autofill is disabled, it might still trigger augmented autofill
-            if (triggerAugmentedAutofillLocked() != null) {
+            if (triggerAugmentedAutofillLocked(requestFlags) != null) {
                 mForAugmentedAutofillOnly = true;
                 if (sDebug) {
                     Slog.d(TAG, "Service disabled autofill for " + mComponentName
@@ -2467,7 +2525,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
                         // triggered augmented autofill
                         if (!isSameViewEntered) {
                             if (sDebug) Slog.d(TAG, "trigger augmented autofill.");
-                            triggerAugmentedAutofillLocked();
+                            triggerAugmentedAutofillLocked(flags);
                         } else {
                             if (sDebug) Slog.d(TAG, "skip augmented autofill for same view.");
                         }
@@ -2664,7 +2722,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
     private boolean requestShowInlineSuggestionsLocked(@NonNull FillResponse response,
             @Nullable String filterText) {
         final Optional<InlineSuggestionsRequest> inlineSuggestionsRequest =
-                mInlineSuggestionSession.waitAndGetInlineSuggestionsRequest();
+                mInlineSuggestionSession.getInlineSuggestionsRequest();
         if (!inlineSuggestionsRequest.isPresent()) {
             Log.w(TAG, "InlineSuggestionsRequest unavailable");
             return false;
@@ -2679,11 +2737,10 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
 
         InlineSuggestionsResponse inlineSuggestionsResponse =
                 InlineSuggestionFactory.createInlineSuggestionsResponse(
-                        inlineSuggestionsRequest.get(),
-                        response, filterText, response.getInlineActions(), mCurrentViewId, mContext,
+                        inlineSuggestionsRequest.get(), response, filterText, mCurrentViewId,
                         this, () -> {
                             synchronized (mLock) {
-                                requestHideFillUi(mCurrentViewId);
+                                mInlineSuggestionSession.hideInlineSuggestionsUi(mCurrentViewId);
                             }
                         }, remoteRenderService);
         if (inlineSuggestionsResponse == null) {
@@ -2865,8 +2922,8 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
 
         // The default autofill service cannot fullfill the request, let's check if the augmented
         // autofill service can.
-        mAugmentedAutofillDestroyer = triggerAugmentedAutofillLocked();
-        if (mAugmentedAutofillDestroyer == null) {
+        mAugmentedAutofillDestroyer = triggerAugmentedAutofillLocked(flags);
+        if (mAugmentedAutofillDestroyer == null && ((flags & FLAG_PASSWORD_INPUT_TYPE) == 0)) {
             if (sVerbose) {
                 Slog.v(TAG, "canceling session " + id + " when service returned null and it cannot "
                         + "be augmented. AutofillableIds: " + autofillableIds);
@@ -2876,8 +2933,14 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
             removeSelf();
         } else {
             if (sVerbose) {
-                Slog.v(TAG, "keeping session " + id + " when service returned null but "
-                        + "it can be augmented. AutofillableIds: " + autofillableIds);
+                if ((flags & FLAG_PASSWORD_INPUT_TYPE) != 0) {
+                    Slog.v(TAG, "keeping session " + id + " when service returned null and "
+                            + "augmented service is disabled for password fields. "
+                            + "AutofillableIds: " + autofillableIds);
+                } else {
+                    Slog.v(TAG, "keeping session " + id + " when service returned null but "
+                            + "it can be augmented. AutofillableIds: " + autofillableIds);
+                }
             }
             mAugmentedAutofillableIds = autofillableIds;
             try {
@@ -2891,12 +2954,20 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
     /**
      * Tries to trigger Augmented Autofill when the standard service could not fulfill a request.
      *
+     * <p> The request may not have been sent when this method returns as it may be waiting for
+     * the inline suggestion request asynchronously.
+     *
      * @return callback to destroy the autofill UI, or {@code null} if not supported.
      */
     // TODO(b/123099468): might need to call it in other places, like when the service returns a
     // non-null response but without datasets (for example, just SaveInfo)
     @GuardedBy("mLock")
-    private Runnable triggerAugmentedAutofillLocked() {
+    private Runnable triggerAugmentedAutofillLocked(int flags) {
+        // (TODO: b/141703197) Fix later by passing info to service.
+        if ((flags & FLAG_PASSWORD_INPUT_TYPE) != 0) {
+            return null;
+        }
+
         // Check if Smart Suggestions is supported...
         final @SmartSuggestionMode int supportedModes = mService
                 .getSupportedSmartSuggestionModesLocked();
@@ -2968,6 +3039,21 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
 
         final AutofillId focusedId = AutofillId.withoutSession(mCurrentViewId);
 
+        final Consumer<InlineSuggestionsRequest> requestAugmentedAutofill =
+                (inlineSuggestionsRequest) -> {
+                    remoteService.onRequestAutofillLocked(id, mClient, taskId, mComponentName,
+                            focusedId,
+                            currentValue, inlineSuggestionsRequest,
+                            /*inlineSuggestionsCallback=*/
+                            response -> mInlineSuggestionSession.onInlineSuggestionsResponse(
+                                    mCurrentViewId, response),
+                            /*onErrorCallback=*/ () -> {
+                                synchronized (mLock) {
+                                    cancelAugmentedAutofillLocked();
+                                }
+                            }, mService.getRemoteInlineSuggestionRenderServiceLocked());
+                };
+
         // There are 3 cases when augmented autofill should ask IME for a new request:
         // 1. standard autofill provider is None
         // 2. standard autofill provider doesn't support inline (and returns null response)
@@ -2975,21 +3061,12 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
         // doesn't want autofill
         if (mForAugmentedAutofillOnly || !isInlineSuggestionsEnabledLocked()) {
             if (sDebug) Slog.d(TAG, "Create inline request for augmented autofill");
-            mInlineSuggestionSession.onCreateInlineSuggestionsRequest(mCurrentViewId);
+            mInlineSuggestionSession.onCreateInlineSuggestionsRequest(mCurrentViewId,
+                    /*requestConsumer=*/ requestAugmentedAutofill);
+        } else {
+            requestAugmentedAutofill.accept(
+                    mInlineSuggestionSession.getInlineSuggestionsRequest().orElse(null));
         }
-
-        Optional<InlineSuggestionsRequest> inlineSuggestionsRequest =
-                mInlineSuggestionSession.waitAndGetInlineSuggestionsRequest();
-        remoteService.onRequestAutofillLocked(id, mClient, taskId, mComponentName, focusedId,
-                currentValue, inlineSuggestionsRequest.orElse(null),
-                response -> mInlineSuggestionSession.onInlineSuggestionsResponse(
-                        mCurrentViewId, response),
-                () -> {
-                    synchronized (mLock) {
-                        cancelAugmentedAutofillLocked();
-                    }
-                }, mService.getRemoteInlineSuggestionRenderServiceLocked());
-
         if (mAugmentedAutofillDestroyer == null) {
             mAugmentedAutofillDestroyer = () -> remoteService.onDestroyAutofillWindowsRequest();
         }
@@ -3372,6 +3449,8 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
                 final List<AutofillId> ids = new ArrayList<>(entryCount);
                 final List<AutofillValue> values = new ArrayList<>(entryCount);
                 boolean waitingDatasetAuth = false;
+                boolean hideHighlight = (entryCount == 1
+                        && dataset.getFieldIds().get(0).equals(mCurrentViewId));
                 for (int i = 0; i < entryCount; i++) {
                     if (dataset.getFieldValues().get(i) == null) {
                         continue;
@@ -3395,7 +3474,7 @@ final class Session implements RemoteFillService.FillServiceCallbacks, ViewState
                     }
                     if (sDebug) Slog.d(TAG, "autoFillApp(): the buck is on the app: " + dataset);
 
-                    mClient.autofill(id, ids, values);
+                    mClient.autofill(id, ids, values, hideHighlight);
                     if (dataset.getId() != null) {
                         if (mSelectedDatasetIds == null) {
                             mSelectedDatasetIds = new ArrayList<>();

@@ -680,8 +680,6 @@ interface IPackageManager {
 
     String getWellbeingPackageName();
 
-    String[] getTelephonyPackageNames();
-
     String getAppPredictionServicePackageName();
 
     String getSystemCaptionsServicePackageName();
@@ -748,4 +746,6 @@ interface IPackageManager {
     void clearMimeGroup(String packageName, String group);
 
     List<String> getMimeGroup(String packageName, String group);
+
+    boolean isAutoRevokeWhitelisted(String packageName);
 }

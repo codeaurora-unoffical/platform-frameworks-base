@@ -48,7 +48,9 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Region;
+import android.graphics.drawable.VectorDrawable;
 import android.hardware.display.DisplayManager;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -120,13 +122,14 @@ public class ScreenDecorations extends SystemUI implements Tunable {
     protected int mRoundedDefaultBottom;
     @VisibleForTesting
     protected View[] mOverlays;
-    private DisplayCutoutView[] mCutoutViews;
+    private DisplayCutoutView[] mCutoutViews = new DisplayCutoutView[BOUNDS_POSITION_LENGTH];
     private float mDensity;
     private WindowManager mWindowManager;
     private int mRotation;
     private SecureSetting mColorInversionSetting;
-    private boolean mPendingRotationChange;
     private Handler mHandler;
+    private boolean mPendingRotationChange;
+    private boolean mIsRoundedCornerMultipleRadius;
 
     private CameraAvailabilityListener.CameraTransitionCallback mCameraTransitionCallback =
             new CameraAvailabilityListener.CameraTransitionCallback() {
@@ -193,6 +196,8 @@ public class ScreenDecorations extends SystemUI implements Tunable {
         mRotation = mContext.getDisplay().getRotation();
         mWindowManager = mContext.getSystemService(WindowManager.class);
         mDisplayManager = mContext.getSystemService(DisplayManager.class);
+        mIsRoundedCornerMultipleRadius = mContext.getResources().getBoolean(
+                R.bool.config_roundedCornerMultipleRadius);
         updateRoundedCornerRadii();
         setupDecorations();
         setupCameraListener();
@@ -571,15 +576,22 @@ public class ScreenDecorations extends SystemUI implements Tunable {
                 com.android.internal.R.dimen.rounded_corner_radius_top);
         final int newRoundedDefaultBottom = mContext.getResources().getDimensionPixelSize(
                 com.android.internal.R.dimen.rounded_corner_radius_bottom);
-
         final boolean roundedCornersChanged = mRoundedDefault != newRoundedDefault
                 || mRoundedDefaultBottom != newRoundedDefaultBottom
                 || mRoundedDefaultTop != newRoundedDefaultTop;
 
         if (roundedCornersChanged) {
-            mRoundedDefault = newRoundedDefault;
-            mRoundedDefaultTop = newRoundedDefaultTop;
-            mRoundedDefaultBottom = newRoundedDefaultBottom;
+            // If config_roundedCornerMultipleRadius set as true, ScreenDecorations respect the
+            // max(width, height) size of drawable/rounded.xml instead of rounded_corner_radius
+            if (mIsRoundedCornerMultipleRadius) {
+                final VectorDrawable d = (VectorDrawable) mContext.getDrawable(R.drawable.rounded);
+                mRoundedDefault = Math.max(d.getIntrinsicWidth(), d.getIntrinsicHeight());
+                mRoundedDefaultTop = mRoundedDefaultBottom = mRoundedDefault;
+            } else {
+                mRoundedDefault = newRoundedDefault;
+                mRoundedDefaultTop = newRoundedDefaultTop;
+                mRoundedDefaultBottom = newRoundedDefaultBottom;
+            }
             onTuningChanged(SIZE, null);
         }
     }
@@ -630,7 +642,8 @@ public class ScreenDecorations extends SystemUI implements Tunable {
     }
 
     private boolean hasRoundedCorners() {
-        return mRoundedDefault > 0 || mRoundedDefaultBottom > 0 || mRoundedDefaultTop > 0;
+        return mRoundedDefault > 0 || mRoundedDefaultBottom > 0 || mRoundedDefaultTop > 0
+                || mIsRoundedCornerMultipleRadius;
     }
 
     private boolean shouldShowRoundedCorner(@BoundsPosition int pos) {
@@ -725,7 +738,8 @@ public class ScreenDecorations extends SystemUI implements Tunable {
         private final Rect mBoundingRect = new Rect();
         private final Path mBoundingPath = new Path();
         // Don't initialize these yet because they may never exist
-        private Rect mProtectionRect;
+        private RectF mProtectionRect;
+        private RectF mProtectionRectOrig;
         private Path mProtectionPath;
         private Path mProtectionPathOrig;
         private Rect mTotalBounds = new Rect();
@@ -818,7 +832,11 @@ public class ScreenDecorations extends SystemUI implements Tunable {
                 mProtectionPath = new Path();
             }
             mProtectionPathOrig.set(protectionPath);
-            mProtectionRect = pathBounds;
+            if (mProtectionRectOrig == null) {
+                mProtectionRectOrig = new RectF();
+                mProtectionRect = new RectF();
+            }
+            mProtectionRectOrig.set(pathBounds);
         }
 
         void setShowProtection(boolean shouldShow) {
@@ -898,6 +916,7 @@ public class ScreenDecorations extends SystemUI implements Tunable {
                 // Reset the protection path so we don't aggregate rotations
                 mProtectionPath.set(mProtectionPathOrig);
                 mProtectionPath.transform(m);
+                m.mapRect(mProtectionRect, mProtectionRectOrig);
             }
         }
 
@@ -964,7 +983,8 @@ public class ScreenDecorations extends SystemUI implements Tunable {
             if (mShowProtection) {
                 // Make sure that our measured height encompases the protection
                 mTotalBounds.union(mBoundingRect);
-                mTotalBounds.union(mProtectionRect);
+                mTotalBounds.union((int) mProtectionRect.left, (int) mProtectionRect.top,
+                        (int) mProtectionRect.right, (int) mProtectionRect.bottom);
                 setMeasuredDimension(
                         resolveSizeAndState(mTotalBounds.width(), widthMeasureSpec, 0),
                         resolveSizeAndState(mTotalBounds.height(), heightMeasureSpec, 0));

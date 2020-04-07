@@ -31,6 +31,7 @@ import android.os.UserHandle
 import android.provider.Settings
 import android.service.controls.Control
 import android.service.controls.actions.ControlAction
+import android.util.ArrayMap
 import android.util.Log
 import com.android.internal.annotations.VisibleForTesting
 import com.android.systemui.Dumpable
@@ -71,6 +72,11 @@ class ControlsControllerImpl @Inject constructor (
     }
 
     private var userChanging: Boolean = true
+
+    private var loadCanceller: Runnable? = null
+
+    private var seedingInProgress = false
+    private val seedingCallbacks = mutableListOf<Consumer<Boolean>>()
 
     private var currentUser = UserHandle.of(ActivityManager.getCurrentUser())
     override val currentUserId
@@ -127,7 +133,7 @@ class ControlsControllerImpl @Inject constructor (
     internal val settingObserver = object : ContentObserver(null) {
         override fun onChange(
             selfChange: Boolean,
-            uris: MutableIterable<Uri>,
+            uris: Collection<Uri>,
             flags: Int,
             userId: Int
         ) {
@@ -213,8 +219,9 @@ class ControlsControllerImpl @Inject constructor (
         if (!confirmAvailability()) {
             if (userChanging) {
                 // Try again later, userChanging should not last forever. If so, we have bigger
-                // problems
-                executor.executeDelayed(
+                // problems. This will return a runnable that allows to cancel the delayed version,
+                // it will not be able to cancel the load if
+                loadCanceller = executor.executeDelayed(
                         { loadForComponent(componentName, dataCallback) },
                         USER_CHANGE_RETRY_DELAY,
                         TimeUnit.MILLISECONDS
@@ -224,10 +231,11 @@ class ControlsControllerImpl @Inject constructor (
             }
             return
         }
-        bindingController.bindAndLoad(
+        loadCanceller = bindingController.bindAndLoad(
                 componentName,
                 object : ControlsBindingController.LoadCallback {
                     override fun accept(controls: List<Control>) {
+                        loadCanceller = null
                         executor.execute {
                             val favoritesForComponentKeys = Favorites
                                 .getControlsForComponent(componentName).map { it.controlId }
@@ -238,7 +246,11 @@ class ControlsControllerImpl @Inject constructor (
                             }
                             val removed = findRemoved(favoritesForComponentKeys.toSet(), controls)
                             val controlsWithFavorite = controls.map {
-                                ControlStatus(it, it.controlId in favoritesForComponentKeys)
+                                ControlStatus(
+                                    it,
+                                    componentName,
+                                    it.controlId in favoritesForComponentKeys
+                                )
                             }
                             val loadData = createLoadDataObject(
                                 Favorites.getControlsForComponent(componentName)
@@ -247,26 +259,114 @@ class ControlsControllerImpl @Inject constructor (
                                 controlsWithFavorite,
                                 favoritesForComponentKeys
                             )
-
                             dataCallback.accept(loadData)
                         }
                     }
 
                     override fun error(message: String) {
-                        val loadData = Favorites.getControlsForComponent(componentName).let {
-                            controls ->
+                        loadCanceller = null
+                        executor.execute {
+                            val loadData = Favorites.getControlsForComponent(componentName)
+                                .let { controls ->
                                 val keys = controls.map { it.controlId }
                                 createLoadDataObject(
-                                    controls.map { createRemovedStatus(componentName, it, false) },
-                                    keys,
-                                    true
+                                        controls.map {
+                                            createRemovedStatus(componentName, it, false)
+                                        },
+                                        keys,
+                                        true
                                 )
+                            }
+                            dataCallback.accept(loadData)
                         }
-
-                        dataCallback.accept(loadData)
                     }
                 }
         )
+    }
+
+    override fun addSeedingFavoritesCallback(callback: Consumer<Boolean>): Boolean {
+        if (!seedingInProgress) return false
+        executor.execute {
+            // status may have changed by this point, so check again and inform the
+            // caller if necessary
+            if (seedingInProgress) seedingCallbacks.add(callback)
+            else callback.accept(false)
+        }
+        return true
+    }
+
+    override fun seedFavoritesForComponent(
+        componentName: ComponentName,
+        callback: Consumer<Boolean>
+    ) {
+        Log.i(TAG, "Beginning request to seed favorites for: $componentName")
+        if (!confirmAvailability()) {
+            if (userChanging) {
+                // Try again later, userChanging should not last forever. If so, we have bigger
+                // problems. This will return a runnable that allows to cancel the delayed version,
+                // it will not be able to cancel the load if
+                executor.executeDelayed(
+                    { seedFavoritesForComponent(componentName, callback) },
+                    USER_CHANGE_RETRY_DELAY,
+                    TimeUnit.MILLISECONDS
+                )
+            } else {
+                callback.accept(false)
+            }
+            return
+        }
+        seedingInProgress = true
+        bindingController.bindAndLoadSuggested(
+            componentName,
+            object : ControlsBindingController.LoadCallback {
+                override fun accept(controls: List<Control>) {
+                    executor.execute {
+                        val structureToControls =
+                            ArrayMap<CharSequence, MutableList<ControlInfo>>()
+
+                        controls.forEach {
+                            val structure = it.structure ?: ""
+                            val list = structureToControls.get(structure)
+                                ?: mutableListOf<ControlInfo>()
+                            list.add(
+                                ControlInfo(it.controlId, it.title, it.subtitle, it.deviceType))
+                            structureToControls.put(structure, list)
+                        }
+
+                        structureToControls.forEach {
+                            (s, cs) -> Favorites.replaceControls(
+                                StructureInfo(componentName, s, cs))
+                        }
+
+                        persistenceWrapper.storeFavorites(Favorites.getAllStructures())
+                        callback.accept(true)
+                        endSeedingCall(true)
+                    }
+                }
+
+                override fun error(message: String) {
+                    Log.e(TAG, "Unable to seed favorites: $message")
+                    executor.execute {
+                        callback.accept(false)
+                        endSeedingCall(false)
+                    }
+                }
+            }
+        )
+    }
+
+    private fun endSeedingCall(state: Boolean) {
+        seedingInProgress = false
+        seedingCallbacks.forEach {
+            it.accept(state)
+        }
+        seedingCallbacks.clear()
+    }
+
+    override fun cancelLoad() {
+        loadCanceller?.let {
+            executor.execute(it)
+        }
     }
 
     private fun createRemovedStatus(
@@ -286,7 +386,7 @@ class ControlsControllerImpl @Inject constructor (
                 .setTitle(controlInfo.controlTitle)
                 .setDeviceType(controlInfo.deviceType)
                 .build()
-        return ControlStatus(control, true, setRemoved)
+        return ControlStatus(control, componentName, true, setRemoved)
     }
 
     private fun findRemoved(favoriteKeys: Set<String>, list: List<Control>): Set<String> {
@@ -419,10 +519,12 @@ private object Favorites {
             s.controls.forEach { c ->
                 val (sName, ci) = controlsById.get(c.controlId)?.let { updatedControl ->
                     val controlInfo = if (updatedControl.title != c.controlTitle ||
+                        updatedControl.subtitle != c.controlSubtitle ||
                         updatedControl.deviceType != c.deviceType) {
                         changed = true
                         c.copy(
                             controlTitle = updatedControl.title,
+                            controlSubtitle = updatedControl.subtitle,
                             deviceType = updatedControl.deviceType
                         )
                     } else { c }
@@ -485,10 +587,12 @@ private object Favorites {
                 updatedStructure
             } else { s }
 
-            structures.add(newStructure)
+            if (!newStructure.controls.isEmpty()) {
+                structures.add(newStructure)
+            }
         }
 
-        if (!replaced) {
+        if (!replaced && !updatedStructure.controls.isEmpty()) {
             structures.add(updatedStructure)
         }
 

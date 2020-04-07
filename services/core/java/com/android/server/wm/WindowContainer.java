@@ -40,6 +40,7 @@ import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_APP_TRANSITIO
 import static com.android.server.wm.WindowContainer.AnimationFlags.CHILDREN;
 import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
+import static com.android.server.wm.WindowContainerChildProto.WINDOW_CONTAINER;
 import static com.android.server.wm.WindowContainerProto.CONFIGURATION_CONTAINER;
 import static com.android.server.wm.WindowContainerProto.ORIENTATION;
 import static com.android.server.wm.WindowContainerProto.SURFACE_ANIMATOR;
@@ -274,7 +275,7 @@ class WindowContainer<E extends WindowContainer> extends ConfigurationContainer<
     RemoteToken mRemoteToken = null;
 
     BLASTSyncEngine mBLASTSyncEngine = new BLASTSyncEngine();
-    SurfaceControl.Transaction mBLASTSyncTransaction = new SurfaceControl.Transaction();
+    SurfaceControl.Transaction mBLASTSyncTransaction;
     boolean mUsingBLASTSyncTransaction = false;
     BLASTSyncEngine.TransactionReadyListener mWaitingListener;
     int mWaitingSyncId;
@@ -282,6 +283,7 @@ class WindowContainer<E extends WindowContainer> extends ConfigurationContainer<
     WindowContainer(WindowManagerService wms) {
         mWmService = wms;
         mPendingTransaction = wms.mTransactionFactory.get();
+        mBLASTSyncTransaction = wms.mTransactionFactory.get();
         mSurfaceAnimator = new SurfaceAnimator(this, this::onAnimationFinished, wms);
         mSurfaceFreezer = new SurfaceFreezer(this, wms);
     }
@@ -1819,7 +1821,23 @@ class WindowContainer<E extends WindowContainer> extends ConfigurationContainer<
         if (mSurfaceAnimator.isAnimating()) {
             mSurfaceAnimator.dumpDebug(proto, SURFACE_ANIMATOR);
         }
+
+        // add children to proto
+        for (int i = 0; i < getChildCount(); i++) {
+            final long childToken = proto.start(WindowContainerProto.CHILDREN);
+            final E child = getChildAt(i);
+            child.dumpDebug(proto, child.getProtoFieldId(), logLevel);
+            proto.end(childToken);
+        }
         proto.end(token);
+    }
+
+    /**
+     * @return a proto field id to identify where to add the derived class to the generic window
+     * container proto.
+     */
+    long getProtoFieldId() {
+        return WINDOW_CONTAINER;
     }
 
     private ForAllWindowsConsumerWrapper obtainConsumerWrapper(Consumer<WindowState> consumer) {
@@ -2086,9 +2104,11 @@ class WindowContainer<E extends WindowContainer> extends ConfigurationContainer<
 
         // Delaying animation start isn't compatible with remote animations at all.
         if (controller != null && !mSurfaceAnimator.isAnimationStartDelayed()) {
+            final Rect localBounds = new Rect(mTmpRect);
+            localBounds.offsetTo(mTmpPoint.x, mTmpPoint.y);
             final RemoteAnimationController.RemoteAnimationRecord adapters =
-                    controller.createRemoteAnimationRecord(this, mTmpPoint, mTmpRect,
-                            (isChanging ? mSurfaceFreezer.mFreezeBounds : null));
+                    controller.createRemoteAnimationRecord(this, mTmpPoint, localBounds,
+                            mTmpRect, (isChanging ? mSurfaceFreezer.mFreezeBounds : null));
             resultAdapters = new Pair<>(adapters.mAdapter, adapters.mThumbnailAdapter);
         } else if (isChanging) {
             final float durationScale = mWmService.getTransitionAnimationScaleLocked();
@@ -2441,24 +2461,36 @@ class WindowContainer<E extends WindowContainer> extends ConfigurationContainer<
         mWaitingSyncId = -1;
     }
 
-    boolean prepareForSync(BLASTSyncEngine.TransactionReadyListener waitingListener,
-            int waitingId) {
+    /**
+     * Returns true if any of the children elected to participate in the Sync
+     */
+    boolean addChildrenToSyncSet(int localId) {
         boolean willSync = false;
-        if (!isVisible()) {
-            return willSync;
-        }
-        mUsingBLASTSyncTransaction = true;
 
-        int localId = mBLASTSyncEngine.startSyncSet(this);
         for (int i = 0; i < mChildren.size(); i++) {
             final WindowContainer child = mChildren.get(i);
-            willSync = mBLASTSyncEngine.addToSyncSet(localId, child) | willSync;
+            willSync |= mBLASTSyncEngine.addToSyncSet(localId, child);
         }
+        return willSync;
+    }
+
+    boolean prepareForSync(BLASTSyncEngine.TransactionReadyListener waitingListener,
+            int waitingId) {
+        boolean willSync = true;
+
+        // If we are invisible, no need to sync, likewise if we are already engaged in a sync,
+        // we can't support overlapping syncs on a single container yet.
+        if (!isVisible() || mWaitingListener != null) {
+            return false;
+        }
+        mUsingBLASTSyncTransaction = true;
 
         // Make sure to set these before we call setReady in case the sync was a no-op
         mWaitingSyncId = waitingId;
         mWaitingListener = waitingListener;
 
+        int localId = mBLASTSyncEngine.startSyncSet(this);
+        willSync |= addChildrenToSyncSet(localId);
         mBLASTSyncEngine.setReady(localId);
 
         return willSync;

@@ -17,6 +17,7 @@
 package android.media.tv.tunerresourcemanager;
 
 import android.annotation.CallbackExecutor;
+import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresFeature;
@@ -27,6 +28,8 @@ import android.os.Binder;
 import android.os.RemoteException;
 import android.util.Log;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.concurrent.Executor;
 
 /**
@@ -60,11 +63,25 @@ public class TunerResourceManager {
     private static final String TAG = "TunerResourceManager";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
-    public static final int INVALID_FRONTEND_ID = -1;
-    public static final int INVALID_CAS_SESSION_RESOURCE_ID = -1;
-    public static final int INVALID_LNB_ID = -1;
-    public static final int INVALID_TV_INPUT_DEVICE_ID = -1;
-    public static final int INVALID_TV_INPUT_PORT_ID = -1;
+    public static final int INVALID_RESOURCE_HANDLE = -1;
+    /**
+     * Tuner resource type to help generate resource handle
+     */
+    @IntDef({
+        TUNER_RESOURCE_TYPE_FRONTEND,
+        TUNER_RESOURCE_TYPE_DEMUX,
+        TUNER_RESOURCE_TYPE_DESCRAMBLER,
+        TUNER_RESOURCE_TYPE_LNB,
+        TUNER_RESOURCE_TYPE_CAS_SESSION,
+     })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface TunerResourceType {}
+
+    public static final int TUNER_RESOURCE_TYPE_FRONTEND = 0;
+    public static final int TUNER_RESOURCE_TYPE_DEMUX = 1;
+    public static final int TUNER_RESOURCE_TYPE_DESCRAMBLER = 2;
+    public static final int TUNER_RESOURCE_TYPE_LNB = 3;
+    public static final int TUNER_RESOURCE_TYPE_CAS_SESSION = 4;
 
     private final ITunerResourceManager mService;
     private final int mUserId;
@@ -260,6 +277,71 @@ public class TunerResourceManager {
     }
 
     /**
+     * Requests a Tuner Demux resource.
+     *
+     * <p>There are three possible scenarios:
+     * <ul>
+     * <li>If there is Demux available, the API would send the handle back.
+     *
+     * <li>If no Demux is available but the current request has a higher priority than other uses of
+     * demuxes, the API will send {@link IResourcesReclaimListener#onReclaimResources()} to the
+     * {@link Tuner}. Tuner would handle the resource reclaim on the holder of lower priority and
+     * notify the holder of its resource loss.
+     *
+     * <li>If no Demux system can be granted, the API would return false.
+     * <ul>
+     *
+     * @param request {@link TunerDemuxRequest} information of the current request.
+     * @param demuxHandle a one-element array to return the granted Demux handle.
+     *                    If no Demux granted, this will return {@link #INVALID_RESOURCE_HANDLE}.
+     *
+     * @return true if there is Demux granted.
+     */
+    public boolean requestDemux(@NonNull TunerDemuxRequest request, @NonNull int[] demuxHandle) {
+        boolean result = false;
+        try {
+            result = mService.requestDemux(request, demuxHandle);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+        return result;
+    }
+
+    /**
+     * Requests a Tuner Descrambler resource.
+     *
+     * <p>There are three possible scenarios:
+     * <ul>
+     * <li>If there is Descrambler available, the API would send the handle back.
+     *
+     * <li>If no Descrambler is available but the current request has a higher priority than other
+     * uses of descramblers, the API will send
+     * {@link IResourcesReclaimListener#onReclaimResources()} to the {@link Tuner}. Tuner would
+     * handle the resource reclaim on the holder of lower priority and notify the holder of its
+     * resource loss.
+     *
+     * <li>If no Descrambler system can be granted, the API would return false.
+     * <ul>
+     *
+     * @param request {@link TunerDescramblerRequest} information of the current request.
+     * @param descramblerHandle a one-element array to return the granted Descrambler handle.
+     *                          If no Descrambler granted, this will return
+     *                          {@link #INVALID_RESOURCE_HANDLE}.
+     *
+     * @return true if there is Descrambler granted.
+     */
+    public boolean requestDescrambler(@NonNull TunerDescramblerRequest request,
+                @NonNull int[] descramblerHandle) {
+        boolean result = false;
+        try {
+            result = mService.requestDescrambler(request, descramblerHandle);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+        return result;
+    }
+
+    /**
      * Requests a CAS session resource.
      *
      * <p>There are three possible scenarios:
@@ -339,6 +421,36 @@ public class TunerResourceManager {
     public void releaseFrontend(int frontendId) {
         try {
             mService.releaseFrontend(frontendId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Notifies the TRM that the Demux with the given handle has been released.
+     *
+     * <p>Client must call this whenever it releases an Demux.
+     *
+     * @param demuxHandle the handle of the released Tuner Demux.
+     */
+    public void releaseDemux(int demuxHandle) {
+        try {
+            mService.releaseDemux(demuxHandle);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Notifies the TRM that the Descrambler with the given handle has been released.
+     *
+     * <p>Client must call this whenever it releases an Descrambler.
+     *
+     * @param descramblerHandle the handle of the released Tuner Descrambler.
+     */
+    public void releaseDescrambler(int descramblerHandle) {
+        try {
+            mService.releaseDescrambler(descramblerHandle);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

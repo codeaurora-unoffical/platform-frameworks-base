@@ -75,7 +75,6 @@ import android.app.ActivityManager;
 import android.app.ApplicationExitInfo;
 import android.app.usage.UsageEvents;
 import android.compat.annotation.ChangeId;
-import android.compat.annotation.Disabled;
 import android.compat.annotation.EnabledAfter;
 import android.content.Context;
 import android.content.pm.ServiceInfo;
@@ -149,12 +148,13 @@ public final class OomAdjuster {
      * capabilities.
      */
     @ChangeId
-    //TODO: change to @EnabledAfter when enforcing the feature.
-    @Disabled
+    @EnabledAfter(targetSdkVersion=android.os.Build.VERSION_CODES.Q)
     static final long CAMERA_MICROPHONE_CAPABILITY_CHANGE_ID = 136219221L;
 
     //TODO: remove this when development is done.
     private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_LOCATION = 1 << 31;
+    private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_CAMERA = 1 << 30;
+    private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE = 1 << 29;
 
     /**
      * For some direct access we need to power manager.
@@ -1513,10 +1513,12 @@ public final class OomAdjuster {
                     if (enabled) {
                         capabilityFromFGS |=
                                 (fgsType & FOREGROUND_SERVICE_TYPE_CAMERA)
-                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_CAMERA : 0;
+                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_CAMERA
+                                        : TEMP_PROCESS_CAPABILITY_FOREGROUND_CAMERA;
                         capabilityFromFGS |=
                                 (fgsType & FOREGROUND_SERVICE_TYPE_MICROPHONE)
-                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_MICROPHONE : 0;
+                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
+                                        : TEMP_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
                     } else {
                         capabilityFromFGS |= PROCESS_CAPABILITY_FOREGROUND_CAMERA
                                 | PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
@@ -1707,11 +1709,6 @@ public final class OomAdjuster {
                                 } else {
                                     // TOP process passes all capabilities to the service.
                                     capability |= PROCESS_CAPABILITY_ALL;
-                                }
-                            } else if (clientProcState
-                                    <= PROCESS_STATE_FOREGROUND_SERVICE) {
-                                if (cr.notHasFlag(Context.BIND_INCLUDE_CAPABILITIES)) {
-                                    clientProcState = PROCESS_STATE_FOREGROUND_SERVICE;
                                 }
                             }
                         } else if ((cr.flags & Context.BIND_IMPORTANT_BACKGROUND) == 0) {
@@ -2036,7 +2033,7 @@ public final class OomAdjuster {
             case PROCESS_STATE_TOP:
                 return PROCESS_CAPABILITY_ALL;
             case PROCESS_STATE_BOUND_TOP:
-                return PROCESS_CAPABILITY_ALL_IMPLICIT;
+                return PROCESS_CAPABILITY_NONE;
             case PROCESS_STATE_FOREGROUND_SERVICE:
                 if (app.hasForegroundServices()) {
                     // Capability from FGS are conditional depending on foreground service type in
@@ -2044,10 +2041,12 @@ public final class OomAdjuster {
                     return PROCESS_CAPABILITY_NONE;
                 } else {
                     // process has no FGS, the PROCESS_STATE_FOREGROUND_SERVICE is from client.
+                    // the implicit capability could be removed in the future, client should use
+                    // BIND_INCLUDE_CAPABILITY flag.
                     return PROCESS_CAPABILITY_ALL_IMPLICIT;
                 }
             case PROCESS_STATE_BOUND_FOREGROUND_SERVICE:
-                return PROCESS_CAPABILITY_ALL_IMPLICIT;
+                return PROCESS_CAPABILITY_NONE;
             default:
                 return PROCESS_CAPABILITY_NONE;
         }
@@ -2588,8 +2587,13 @@ public final class OomAdjuster {
             return;
         }
 
+        // if an app is already frozen and shouldNotFreeze becomes true, immediately unfreeze
+        if (app.frozen && app.shouldNotFreeze) {
+            mCachedAppOptimizer.unfreezeAppLocked(app);
+        }
+
         // Use current adjustment when freezing, set adjustment when unfreezing.
-        if (app.curAdj >= ProcessList.CACHED_APP_MIN_ADJ && !app.frozen) {
+        if (app.curAdj >= ProcessList.CACHED_APP_MIN_ADJ && !app.frozen && !app.shouldNotFreeze) {
             mCachedAppOptimizer.freezeAppAsync(app);
         } else if (app.setAdj < ProcessList.CACHED_APP_MIN_ADJ && app.frozen) {
             mCachedAppOptimizer.unfreezeAppLocked(app);

@@ -78,6 +78,7 @@ public abstract class NetworkAgent {
     /**
      * The ID of the {@link NetworkProvider} that created this object, or
      * {@link NetworkProvider#ID_NONE} if unknown.
+     * @hide
      */
     public final int providerId;
 
@@ -126,7 +127,7 @@ public abstract class NetworkAgent {
     /**
      * Sent by the NetworkAgent to ConnectivityService to pass the current
      * network score.
-     * obj = network score Integer
+     * arg1 = network score int
      * @hide
      */
     public static final int EVENT_NETWORK_SCORE_CHANGED = BASE + 4;
@@ -584,6 +585,7 @@ public abstract class NetworkAgent {
      *
      * @deprecated this is for backward compatibility only.
      * @param legacySubtype the legacy subtype.
+     * @hide
      */
     @Deprecated
     public void setLegacySubtype(final int legacySubtype, @NonNull final String legacySubtypeName) {
@@ -608,6 +610,7 @@ public abstract class NetworkAgent {
      *
      * @deprecated this is for backward compatibility only.
      * @param extraInfo the ExtraInfo.
+     * @hide
      */
     @Deprecated
     public void setLegacyExtraInfo(@Nullable final String extraInfo) {
@@ -650,18 +653,7 @@ public abstract class NetworkAgent {
         if (score < 0) {
             throw new IllegalArgumentException("Score must be >= 0");
         }
-        final NetworkScore ns = new NetworkScore();
-        ns.putIntExtension(NetworkScore.LEGACY_SCORE, score);
-        updateScore(ns);
-    }
-
-    /**
-     * Must be called by the agent when it has a new {@link NetworkScore} for this network.
-     * @param ns the new score.
-     * @hide TODO: unhide the NetworkScore class, and rename to sendNetworkScore.
-     */
-    public void updateScore(@NonNull NetworkScore ns) {
-        queueOrSendMessage(EVENT_NETWORK_SCORE_CHANGED, new NetworkScore(ns));
+        queueOrSendMessage(EVENT_NETWORK_SCORE_CHANGED, score, 0);
     }
 
     /**
@@ -722,6 +714,7 @@ public abstract class NetworkAgent {
     /**
      * Called when ConnectivityService request a bandwidth update. The parent factory
      * shall try to overwrite this method and produce a bandwidth update if capable.
+     * @hide
      */
     public void onBandwidthUpdateRequested() {
         pollLceData();

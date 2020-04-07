@@ -284,12 +284,12 @@ public class CameraBinderTest extends AndroidTestCase {
             ICameraDeviceCallbacks dummyCallbacks = new DummyCameraDeviceCallbacks();
 
             String clientPackageName = getContext().getPackageName();
-            String clientFeatureId = getContext().getFeatureId();
+            String clientAttributionTag = getContext().getAttributionTag();
 
             ICameraDeviceUser cameraUser =
                     mUtils.getCameraService().connectDevice(
                         dummyCallbacks, String.valueOf(cameraId),
-                        clientPackageName, clientFeatureId,
+                        clientPackageName, clientAttributionTag,
                         ICameraService.USE_CALLING_UID);
             assertNotNull(String.format("Camera %s was null", cameraId), cameraUser);
 
@@ -319,6 +319,15 @@ public class CameraBinderTest extends AndroidTestCase {
         @Override
         public void onCameraAccessPrioritiesChanged() {
             Log.v(TAG, "Camera access permission change");
+        }
+        @Override
+        public void onCameraOpened(String cameraId, String clientPackageName) {
+            Log.v(TAG, String.format("Camera %s is opened by client package %s",
+                    cameraId, clientPackageName));
+        }
+        @Override
+        public void onCameraClosed(String cameraId) {
+            Log.v(TAG, String.format("Camera %s is closed", cameraId));
         }
     }
 

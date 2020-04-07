@@ -53,9 +53,12 @@ import java.util.Objects;
  * Container of data passed to the {@link android.app.job.JobScheduler} fully encapsulating the
  * parameters required to schedule work against the calling application. These are constructed
  * using the {@link JobInfo.Builder}.
- * You must specify at least one sort of constraint on the JobInfo object that you are creating.
  * The goal here is to provide the scheduler with high-level semantics about the work you want to
- * accomplish. Doing otherwise with throw an exception in your app.
+ * accomplish.
+ * <p> Prior to Android version {@link Build.VERSION_CODES#Q}, you had to specify at least one
+ * constraint on the JobInfo object that you are creating. Otherwise, the builder would throw an
+ * exception when building. From Android version {@link Build.VERSION_CODES#Q} and onwards, it is
+ * valid to schedule jobs with no constraints.
  */
 public class JobInfo implements Parcelable {
     private static String TAG = "JobInfo";
@@ -147,7 +150,7 @@ public class JobInfo implements Parcelable {
 
     /**
      * Query the minimum interval allowed for periodic scheduled jobs.  Attempting
-     * to declare a smaller period that this when scheduling a job will result in a
+     * to declare a smaller period than this when scheduling a job will result in a
      * job that is still periodic, but will run with this effective period.
      *
      * @return The minimum available interval for scheduling periodic jobs, in milliseconds.

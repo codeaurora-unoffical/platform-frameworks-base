@@ -40,6 +40,7 @@ import android.app.ActivityManagerInternal;
 import android.app.AppOpsManager;
 import android.app.usage.UsageStatsManagerInternal;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.IntentFilter;
@@ -213,6 +214,9 @@ public class SystemServicesTestRule implements TestRule {
                 anyString(), anyInt());
         doReturn(null).when(packageManagerInternal).getDefaultHomeActivity(anyInt());
 
+        ComponentName systemServiceComponent = new ComponentName("android.test.system.service", "");
+        doReturn(systemServiceComponent).when(packageManagerInternal).getSystemUiServiceComponent();
+
         // PowerManagerInternal
         final PowerManagerInternal pmi = mock(PowerManagerInternal.class);
         final PowerSaveState state = new PowerSaveState.Builder().build();
@@ -318,6 +322,8 @@ public class SystemServicesTestRule implements TestRule {
     }
 
     private void tearDown() {
+        mWmService.mRoot.forAllDisplayPolicies(DisplayPolicy::release);
+
         // Unregister display listener from root to avoid issues with subsequent tests.
         mContext.getSystemService(DisplayManager.class)
                 .unregisterDisplayListener(mAtmService.mRootWindowContainer);

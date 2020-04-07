@@ -24,6 +24,9 @@ import static android.Manifest.permission.READ_EXTERNAL_STORAGE;
 import static android.Manifest.permission.REQUEST_DELETE_PACKAGES;
 import static android.Manifest.permission.SET_HARMFUL_APP_WARNINGS;
 import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
+import static android.app.AppOpsManager.MODE_ALLOWED;
+import static android.app.AppOpsManager.MODE_DEFAULT;
+import static android.app.AppOpsManager.MODE_IGNORED;
 import static android.content.Intent.ACTION_MAIN;
 import static android.content.Intent.CATEGORY_DEFAULT;
 import static android.content.Intent.CATEGORY_HOME;
@@ -1545,7 +1548,6 @@ public class PackageManagerService extends IPackageManager.Stub
     final @Nullable String mConfiguratorPackage;
     final @Nullable String mAppPredictionServicePackage;
     final @Nullable String mIncidentReportApproverPackage;
-    final @Nullable String[] mTelephonyPackages;
     final @Nullable String mServicesExtensionPackageName;
     final @Nullable String mSharedSystemSharedLibraryPackageName;
     final @Nullable String mRetailDemoPackage;
@@ -1654,12 +1656,13 @@ public class PackageManagerService extends IPackageManager.Stub
                                     && parentRes.pkg != null)
                                 ? parentRes.pkg.getRequestedPermissions()
                                 : args.whitelistedRestrictedPermissions;
+                        int autoRevokePermissionsMode = args.autoRevokePermissionsMode;
 
                         // Handle the parent package
                         handlePackagePostInstall(parentRes, grantPermissions,
                                 killApp, virtualPreload, grantedPermissions,
-                                whitelistedRestrictedPermissions, didRestore,
-                                args.installSource.installerPackageName, args.observer,
+                                whitelistedRestrictedPermissions, autoRevokePermissionsMode,
+                                didRestore, args.installSource.installerPackageName, args.observer,
                                 args.mDataLoaderType);
 
                         // Handle the child packages
@@ -1669,7 +1672,8 @@ public class PackageManagerService extends IPackageManager.Stub
                             PackageInstalledInfo childRes = parentRes.addedChildPackages.valueAt(i);
                             handlePackagePostInstall(childRes, grantPermissions,
                                     killApp, virtualPreload, grantedPermissions,
-                                    whitelistedRestrictedPermissions, false /*didRestore*/,
+                                    whitelistedRestrictedPermissions, autoRevokePermissionsMode,
+                                    false /*didRestore*/,
                                     args.installSource.installerPackageName, args.observer,
                                     args.mDataLoaderType);
                         }
@@ -1998,6 +2002,7 @@ public class PackageManagerService extends IPackageManager.Stub
     private void handlePackagePostInstall(PackageInstalledInfo res, boolean grantPermissions,
             boolean killApp, boolean virtualPreload,
             String[] grantedPermissions, List<String> whitelistedRestrictedPermissions,
+            int autoRevokePermissionsMode,
             boolean launchedForRestore, String installerPackage,
             IPackageInstallObserver2 installObserver, int dataLoaderType) {
         final boolean succeeded = res.returnCode == PackageManager.INSTALL_SUCCEEDED;
@@ -2016,6 +2021,11 @@ public class PackageManagerService extends IPackageManager.Stub
                 mPermissionManager.setWhitelistedRestrictedPermissions(
                         res.pkg, res.newUsers, whitelistedRestrictedPermissions,
                         Process.myUid(), FLAG_PERMISSION_WHITELIST_INSTALLER);
+            }
+
+            if (autoRevokePermissionsMode == MODE_ALLOWED || autoRevokePermissionsMode == MODE_IGNORED) {
+                mPermissionManager.setAutoRevokeWhitelisted(res.pkg.getPackageName(),
+                        autoRevokePermissionsMode == MODE_IGNORED, UserHandle.myUserId());
             }
 
             // Now that we successfully installed the package, grant runtime
@@ -3170,7 +3180,6 @@ public class PackageManagerService extends IPackageManager.Stub
             mConfiguratorPackage = getDeviceConfiguratorPackageName();
             mAppPredictionServicePackage = getAppPredictionServicePackageName();
             mIncidentReportApproverPackage = getIncidentReportApproverPackageName();
-            mTelephonyPackages = getTelephonyPackageNames();
             mRetailDemoPackage = getRetailDemoPackageName();
 
             // Now that we know all of the shared libraries, update all clients to have
@@ -7229,8 +7238,8 @@ public class PackageManagerService extends IPackageManager.Stub
                 resolveInfos.set(i, installerInfo);
                 continue;
             }
-            // caller is a full app
             if (ephemeralPkgName == null) {
+                // caller is a full app
                 SettingBase callingSetting =
                         mSettings.getSettingLPr(UserHandle.getAppId(filterCallingUid));
                 PackageSetting resolvedSetting =
@@ -7250,11 +7259,9 @@ public class PackageManagerService extends IPackageManager.Stub
                     && intent.getComponent() == null) {
                 // ephemeral apps can launch other ephemeral apps indirectly
                 continue;
-            }
-            // allow activities that have been explicitly exposed to ephemeral apps
-            final boolean isEphemeralApp = info.activityInfo.applicationInfo.isInstantApp();
-            if (!isEphemeralApp
-                    && ((info.activityInfo.flags & ActivityInfo.FLAG_VISIBLE_TO_INSTANT_APP) != 0)) {
+            } else if (((info.activityInfo.flags & ActivityInfo.FLAG_VISIBLE_TO_INSTANT_APP) != 0)
+                    && !info.activityInfo.applicationInfo.isInstantApp()) {
+                // allow activities that have been explicitly exposed to ephemeral apps
                 continue;
             }
             resolveInfos.remove(i);
@@ -11514,8 +11521,8 @@ public class PackageManagerService extends IPackageManager.Stub
                             "Static shared libs cannot declare permission groups");
                 }
 
-                // Static shared libs cannot declare features
-                if (!pkg.getFeatures().isEmpty()) {
+                // Static shared libs cannot declare attributions
+                if (!pkg.getAttributions().isEmpty()) {
                     throw new PackageManagerException(
                             "Static shared libs cannot declare features");
                 }
@@ -14295,6 +14302,7 @@ public class PackageManagerService extends IPackageManager.Stub
         final String packageAbiOverride;
         final String[] grantedRuntimePermissions;
         final List<String> whitelistedRestrictedPermissions;
+        final int autoRevokePermissionsMode;
         final VerificationInfo verificationInfo;
         final PackageParser.SigningDetails signingDetails;
         final int installReason;
@@ -14309,6 +14317,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 int installFlags, InstallSource installSource, String volumeUuid,
                 VerificationInfo verificationInfo, UserHandle user, String packageAbiOverride,
                 String[] grantedPermissions, List<String> whitelistedRestrictedPermissions,
+                int autoRevokePermissionsMode,
                 SigningDetails signingDetails, int installReason,
                 long requiredInstalledVersionCode, int dataLoaderType) {
             super(user);
@@ -14322,6 +14331,7 @@ public class PackageManagerService extends IPackageManager.Stub
             this.packageAbiOverride = packageAbiOverride;
             this.grantedRuntimePermissions = grantedPermissions;
             this.whitelistedRestrictedPermissions = whitelistedRestrictedPermissions;
+            this.autoRevokePermissionsMode = autoRevokePermissionsMode;
             this.signingDetails = signingDetails;
             this.installReason = installReason;
             this.requiredInstalledVersionCode = requiredInstalledVersionCode;
@@ -14358,6 +14368,7 @@ public class PackageManagerService extends IPackageManager.Stub
             packageAbiOverride = sessionParams.abiOverride;
             grantedRuntimePermissions = sessionParams.grantedRuntimePermissions;
             whitelistedRestrictedPermissions = sessionParams.whitelistedRestrictedPermissions;
+            autoRevokePermissionsMode = sessionParams.autoRevokePermissionsMode;
             signingDetails = activeInstallSession.getSigningDetails();
             requiredInstalledVersionCode = sessionParams.requiredInstalledVersionCode;
             forceQueryableOverride = sessionParams.forceQueryableOverride;
@@ -14726,9 +14737,8 @@ public class PackageManagerService extends IPackageManager.Stub
             verificationState.setRequiredVerifierUid(requiredUid);
             final int installerUid =
                     verificationInfo == null ? -1 : verificationInfo.installerUid;
-            if (!origin.existing && requiredUid != -1
-                    && isVerificationEnabled(
-                            pkgLite, verifierUser.getIdentifier(), installFlags, installerUid)) {
+            if (!origin.existing && isVerificationEnabled(pkgLite, verifierUser.getIdentifier(),
+                      installFlags, installerUid)) {
                 final Intent verification = new Intent(
                         Intent.ACTION_PACKAGE_NEEDS_VERIFICATION);
                 verification.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
@@ -14794,9 +14804,9 @@ public class PackageManagerService extends IPackageManager.Stub
                     }
                 }
 
-                final ComponentName requiredVerifierComponent = matchComponentForVerifier(
-                        mRequiredVerifierPackage, receivers);
                 if (mRequiredVerifierPackage != null) {
+                    final ComponentName requiredVerifierComponent = matchComponentForVerifier(
+                            mRequiredVerifierPackage, receivers);
                     /*
                      * Send the intent to the required verification agent,
                      * but only start the verification timeout after the
@@ -14954,6 +14964,7 @@ public class PackageManagerService extends IPackageManager.Stub
         final String abiOverride;
         final String[] installGrantPermissions;
         final List<String> whitelistedRestrictedPermissions;
+        final int autoRevokePermissionsMode;
         /** If non-null, drop an async trace when the install completes */
         final String traceMethod;
         final int traceCookie;
@@ -14973,6 +14984,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 UserHandle user, String[] instructionSets,
                 String abiOverride, String[] installGrantPermissions,
                 List<String> whitelistedRestrictedPermissions,
+                int autoRevokePermissionsMode,
                 String traceMethod, int traceCookie, SigningDetails signingDetails,
                 int installReason, boolean forceQueryableOverride,
                 MultiPackageInstallParams multiPackageInstallParams, int dataLoaderType) {
@@ -14987,6 +14999,7 @@ public class PackageManagerService extends IPackageManager.Stub
             this.abiOverride = abiOverride;
             this.installGrantPermissions = installGrantPermissions;
             this.whitelistedRestrictedPermissions = whitelistedRestrictedPermissions;
+            this.autoRevokePermissionsMode = autoRevokePermissionsMode;
             this.traceMethod = traceMethod;
             this.traceCookie = traceCookie;
             this.signingDetails = signingDetails;
@@ -15002,6 +15015,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     params.installSource, params.volumeUuid,
                     params.getUser(), null /*instructionSets*/, params.packageAbiOverride,
                     params.grantedRuntimePermissions, params.whitelistedRestrictedPermissions,
+                    params.autoRevokePermissionsMode,
                     params.traceMethod, params.traceCookie, params.signingDetails,
                     params.installReason, params.forceQueryableOverride,
                     params.mParentInstallParams, params.mDataLoaderType);
@@ -15093,7 +15107,7 @@ public class PackageManagerService extends IPackageManager.Stub
         /** Existing install */
         FileInstallArgs(String codePath, String resourcePath, String[] instructionSets) {
             super(OriginInfo.fromNothing(), null, null, 0, InstallSource.EMPTY,
-                    null, null, instructionSets, null, null, null, null, 0,
+                    null, null, instructionSets, null, null, null, MODE_DEFAULT, null, 0,
                     PackageParser.SigningDetails.UNKNOWN,
                     PackageManager.INSTALL_REASON_UNKNOWN, false, null /* parent */,
                     DataLoaderType.NONE);
@@ -19921,16 +19935,6 @@ public class PackageManagerService extends IPackageManager.Stub
     }
 
     @Override
-    public String[] getTelephonyPackageNames() {
-        String names = mContext.getString(R.string.config_telephonyPackages);
-        String[] telephonyPackageNames = null;
-        if (!TextUtils.isEmpty(names)) {
-            telephonyPackageNames = names.trim().split(",");
-        }
-        return ensureSystemPackageNames(telephonyPackageNames);
-    }
-
-    @Override
     public String getContentCaptureServicePackageName() {
         final String flattenedContentCaptureService =
                 mContext.getString(R.string.config_defaultContentCaptureService);
@@ -22469,7 +22473,8 @@ public class PackageManagerService extends IPackageManager.Stub
         final InstallParams params = new InstallParams(origin, move, installObserver, installFlags,
                 installSource, volumeUuid, null /*verificationInfo*/, user,
                 packageAbiOverride, null /*grantedPermissions*/,
-                null /*whitelistedRestrictedPermissions*/, PackageParser.SigningDetails.UNKNOWN,
+                null /*whitelistedRestrictedPermissions*/, MODE_DEFAULT /* autoRevokePermissions */,
+                PackageParser.SigningDetails.UNKNOWN,
                 PackageManager.INSTALL_REASON_UNKNOWN, PackageManager.VERSION_CODE_HIGHEST,
                 DataLoaderType.NONE);
         params.setTraceMethod("movePackage").setTraceCookie(System.identityHashCode(params));
@@ -23316,8 +23321,6 @@ public class PackageManagerService extends IPackageManager.Stub
                     return filterOnlySystemPackages(mIncidentReportApproverPackage);
                 case PackageManagerInternal.PACKAGE_APP_PREDICTOR:
                     return filterOnlySystemPackages(mAppPredictionServicePackage);
-                case PackageManagerInternal.PACKAGE_TELEPHONY:
-                    return filterOnlySystemPackages(mTelephonyPackages);
                 case PackageManagerInternal.PACKAGE_COMPANION:
                     return filterOnlySystemPackages("com.android.companiondevicemanager");
                 case PackageManagerInternal.PACKAGE_RETAIL_DEMO:
@@ -24173,6 +24176,12 @@ public class PackageManagerService extends IPackageManager.Stub
             }
             mAppsFilter.getFeatureConfig().enableLogging(pkg.appId, enable);
         }
+
+        @Override
+        public boolean isSystemPackage(@NonNull String packageName) {
+            return packageName.equals(
+                    PackageManagerService.this.ensureSystemPackageName(packageName));
+        }
     }
 
     @GuardedBy("mLock")
@@ -24358,6 +24367,24 @@ public class PackageManagerService extends IPackageManager.Stub
 
     public void deleteCompilerPackageStats(String pkgName) {
         mCompilerStats.deletePackageStats(pkgName);
+    }
+
+    @Override
+    public boolean isAutoRevokeWhitelisted(String packageName) {
+        int mode = mInjector.getAppOpsManager().checkOpNoThrow(
+                AppOpsManager.OP_AUTO_REVOKE_PERMISSIONS_IF_UNUSED,
+                Binder.getCallingUid(), packageName);
+        if (mode == MODE_ALLOWED) {
+            return false;
+        } else if (mode == MODE_IGNORED) {
+            return true;
+        } else {
+            synchronized (mLock) {
+                boolean manifestWhitelisted =
+                        mPackages.get(packageName).isAllowDontAutoRevokePermmissions();
+                return manifestWhitelisted;
+            }
+        }
     }
 
     @Override

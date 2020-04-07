@@ -118,6 +118,7 @@ import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_STARTING_WINDOW;
 import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_WINDOW_ANIMATION;
 import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
+import static com.android.server.wm.WindowContainerChildProto.WINDOW;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_ANIM;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_CONFIGURATION;
@@ -130,6 +131,7 @@ import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_VISIBILITY;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_WALLPAPER_LIGHT;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
+import static com.android.server.wm.WindowManagerService.H.WINDOW_STATE_BLAST_SYNC_TIMEOUT;
 import static com.android.server.wm.WindowManagerService.MAX_ANIMATION_DURATION;
 import static com.android.server.wm.WindowManagerService.TYPE_LAYER_MULTIPLIER;
 import static com.android.server.wm.WindowManagerService.TYPE_LAYER_OFFSET;
@@ -145,7 +147,6 @@ import static com.android.server.wm.WindowStateAnimator.READY_TO_SHOW;
 import static com.android.server.wm.WindowStateProto.ANIMATING_EXIT;
 import static com.android.server.wm.WindowStateProto.ANIMATOR;
 import static com.android.server.wm.WindowStateProto.ATTRIBUTES;
-import static com.android.server.wm.WindowStateProto.CHILD_WINDOWS;
 import static com.android.server.wm.WindowStateProto.DESTROYING;
 import static com.android.server.wm.WindowStateProto.DISPLAY_ID;
 import static com.android.server.wm.WindowStateProto.FINISHED_SEAMLESS_ROTATION_FRAME;
@@ -414,6 +415,7 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
     float mHScale=1, mVScale=1;
     float mLastHScale=1, mLastVScale=1;
     final Matrix mTmpMatrix = new Matrix();
+    final float[] mTmpMatrixArray = new float[9];
 
     private final WindowFrames mWindowFrames = new WindowFrames();
 
@@ -444,6 +446,14 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
     // wallpaper; if a wallpaper window: the currently applied offset.
     float mWallpaperX = -1;
     float mWallpaperY = -1;
+
+    // If a window showing a wallpaper: the requested zoom out for the
+    // wallpaper; if a wallpaper window: the currently applied zoom.
+    float mWallpaperZoomOut = -1;
+
+    // If a wallpaper window: whether the wallpaper should be scaled when zoomed, if set
+    // to false, mWallpaperZoom will be ignored here and just passed to the WallpaperService.
+    boolean mShouldScaleWallpaper;
 
     // If a window showing a wallpaper: what fraction of the offset
     // range corresponds to a full virtual screen.
@@ -668,6 +678,17 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
      * default. The variable is cached, so we do not send too many updates to SF.
      */
     int mFrameRateSelectionPriority = RefreshRatePolicy.LAYER_PRIORITY_UNSET;
+
+    /**
+     * BLASTSyncEngine ID corresponding to a sync-set for all
+     * our children. We add our children to this set in Sync,
+     * but we save it and don't mark it as ready until finishDrawing
+     * this way we have a two way latch between all our children finishing
+     * and drawing ourselves.
+     */
+    private int mLocalSyncId = -1;
+
+    static final int BLAST_TIMEOUT_DURATION = 5000; /* milliseconds */
 
     /**
      * @return The insets state as requested by the client, i.e. the dispatched insets state
@@ -2249,9 +2270,9 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
             return false;
         }
 
-        if (PixelFormat.formatHasAlpha(mAttrs.format) && mAttrs.alpha == 0) {
-            // Support legacy use cases where completely transparent windows can still be ime target
-            // with FLAG_NOT_FOCUSABLE and ALT_FOCUSABLE_IM set.
+        if (PixelFormat.formatHasAlpha(mAttrs.format)) {
+            // Support legacy use cases where transparent windows can still be ime target with
+            // FLAG_NOT_FOCUSABLE and ALT_FOCUSABLE_IM set.
             // Certain apps listen for IME insets using transparent windows and ADJUST_NOTHING to
             // manually synchronize app content to IME animation b/144619551.
             // TODO(b/145812508): remove this once new focus management is complete b/141738570
@@ -2917,8 +2938,9 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         // and add the window only if the permission was granted. Therefore, if
         // the mode is MODE_DEFAULT we want the op to succeed as the window is
         // shown.
-        final int mode = mWmService.mAppOps.startOpNoThrow(mAppOp,
-                getOwningUid(), getOwningPackage(), true);
+        final int mode = mWmService.mAppOps.startOpNoThrow(mAppOp, getOwningUid(),
+                getOwningPackage(), true /* startIfModeDefault */, null /* featureId */,
+                "init-default-visibility");
         if (mode != MODE_ALLOWED && mode != MODE_DEFAULT) {
             setAppOpVisibilityLw(false);
         }
@@ -2926,7 +2948,8 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
 
     void resetAppOpsState() {
         if (mAppOp != OP_NONE && mAppOpVisibility) {
-            mWmService.mAppOps.finishOp(mAppOp, getOwningUid(), getOwningPackage());
+            mWmService.mAppOps.finishOp(mAppOp, getOwningUid(), getOwningPackage(),
+                    null /* featureId */);
         }
     }
 
@@ -2941,11 +2964,12 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
             // as this would mean we will get another change callback and will reconcile.
             int mode = mWmService.mAppOps.checkOpNoThrow(mAppOp, uid, packageName);
             if (mode != MODE_ALLOWED && mode != MODE_DEFAULT) {
-                mWmService.mAppOps.finishOp(mAppOp, uid, packageName);
+                mWmService.mAppOps.finishOp(mAppOp, uid, packageName, null /* featureId */);
                 setAppOpVisibilityLw(false);
             }
         } else {
-            final int mode = mWmService.mAppOps.startOpNoThrow(mAppOp, uid, packageName, true);
+            final int mode = mWmService.mAppOps.startOpNoThrow(mAppOp, uid, packageName,
+                    true /* startIfModeDefault */, null /* featureId */, "attempt-to-be-visible");
             if (mode == MODE_ALLOWED || mode == MODE_DEFAULT) {
                 setAppOpVisibilityLw(true);
             }
@@ -3758,9 +3782,6 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         mSurfacePosition.dumpDebug(proto, SURFACE_POSITION);
         mWinAnimator.dumpDebug(proto, ANIMATOR);
         proto.write(ANIMATING_EXIT, mAnimatingExit);
-        for (int i = 0; i < mChildren.size(); i++) {
-            mChildren.get(i).dumpDebug(proto, CHILD_WINDOWS, logLevel);
-        }
         proto.write(REQUESTED_WIDTH, mRequestedWidth);
         proto.write(REQUESTED_HEIGHT, mRequestedHeight);
         proto.write(VIEW_VISIBILITY, mViewVisibility);
@@ -3776,6 +3797,11 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         proto.write(FINISHED_SEAMLESS_ROTATION_FRAME, mFinishSeamlessRotateFrameNumber);
         proto.write(FORCE_SEAMLESS_ROTATION, mForceSeamlesslyRotate);
         proto.end(token);
+    }
+
+    @Override
+    long getProtoFieldId() {
+        return WINDOW;
     }
 
     @Override
@@ -3917,6 +3943,9 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         if (mWallpaperXStep != -1 || mWallpaperYStep != -1) {
             pw.println(prefix + "mWallpaperXStep=" + mWallpaperXStep
                     + " mWallpaperYStep=" + mWallpaperYStep);
+        }
+        if (mWallpaperZoomOut != -1) {
+            pw.println(prefix + "mWallpaperZoomOut=" + mWallpaperZoomOut);
         }
         if (mWallpaperDisplayOffsetX != Integer.MIN_VALUE
                 || mWallpaperDisplayOffsetY != Integer.MIN_VALUE) {
@@ -5660,17 +5689,27 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         return mSession.mPid == pid && isNonToastOrStarting() && isVisibleNow();
     }
 
-    SurfaceControl getDeferTransactionBarrier() {
-        return mWinAnimator.getDeferTransactionBarrier();
+    SurfaceControl getClientViewRootSurface() {
+        return mWinAnimator.getClientViewRootSurface();
     }
 
     @Override
     boolean prepareForSync(BLASTSyncEngine.TransactionReadyListener waitingListener,
             int waitingId) {
-        // TODO(b/148871522): Support child window
+        if (!isVisible()) {
+            return false;
+        }
         mWaitingListener = waitingListener;
         mWaitingSyncId = waitingId;
         mUsingBLASTSyncTransaction = true;
+
+        mLocalSyncId = mBLASTSyncEngine.startSyncSet(this);
+        addChildrenToSyncSet(mLocalSyncId);
+
+        mWmService.mH.removeMessages(WINDOW_STATE_BLAST_SYNC_TIMEOUT, this);
+        mWmService.mH.sendNewMessageDelayed(WINDOW_STATE_BLAST_SYNC_TIMEOUT, this,
+            BLAST_TIMEOUT_DURATION);
+
         return true;
     }
 
@@ -5678,11 +5717,23 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         if (!mUsingBLASTSyncTransaction) {
             return mWinAnimator.finishDrawingLocked(postDrawTransaction);
         }
-        if (postDrawTransaction == null) {
-            postDrawTransaction = new SurfaceControl.Transaction();
+
+        mWmService.mH.removeMessages(WINDOW_STATE_BLAST_SYNC_TIMEOUT, this);
+        if (postDrawTransaction != null) {
+            mBLASTSyncTransaction.merge(postDrawTransaction);
         }
-        postDrawTransaction.merge(mBLASTSyncTransaction);
-        mWaitingListener.transactionReady(mWaitingSyncId, postDrawTransaction);
+
+        // If localSyncId is >0 then we are syncing with children and will
+        // invoke transaction ready from our own #transactionReady callback
+        // we just need to signal our side of the sync (setReady). But if we
+        // have no sync operation at this level transactionReady will never
+        // be invoked and we need to invoke it ourself.
+        if (mLocalSyncId >= 0) {
+            mBLASTSyncEngine.setReady(mLocalSyncId);
+        } else {
+            mWaitingListener.transactionReady(mWaitingSyncId, mBLASTSyncTransaction);
+        }
+
         mUsingBLASTSyncTransaction = false;
 
         mWaitingSyncId = 0;

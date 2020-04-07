@@ -61,6 +61,7 @@ import android.app.ApplicationExitInfo.SubReason;
 import android.app.IApplicationThread;
 import android.app.IUidObserver;
 import android.compat.annotation.ChangeId;
+import android.compat.annotation.Disabled;
 import android.compat.annotation.EnabledAfter;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
@@ -134,6 +135,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -152,7 +154,8 @@ public final class ProcessList {
             "persist.sys.vold_app_data_isolation_enabled";
 
     // A device config to control the minimum target SDK to enable app data isolation
-    static final String ANDROID_APP_DATA_ISOLATION_MIN_SDK = "android_app_data_isolation_min_sdk";
+    static final String ANDROID_APP_DATA_ISOLATION_MIN_SDK =
+            "android_app_data_isolation_min_sdk";
 
     // The minimum time we allow between crashes, for us to consider this
     // application to be bad and stop and its services and reject broadcasts.
@@ -345,6 +348,14 @@ public final class ProcessList {
     private static final long NATIVE_HEAP_POINTER_TAGGING = 135754954; // This is a bug id.
 
     /**
+     * Enable sampled memory bug detection in the app.
+     * @see <a href="https://source.android.com/devices/tech/debug/gwp-asan">GWP-ASan</a>.
+     */
+    @ChangeId
+    @Disabled
+    private static final long GWP_ASAN = 135634846; // This is a bug id.
+
+    /**
      * Apps have no access to the private data directories of any other app, even if the other
      * app has made them world-readable.
      */
@@ -496,13 +507,6 @@ public final class ProcessList {
      * The buffer to be used to receive the SIGCHLD data, it includes pid/uid/status.
      */
     private final int[] mZygoteSigChldMessage = new int[3];
-
-    interface LmkdKillListener {
-        /**
-         * Called when there is a process kill by lmkd.
-         */
-        void onLmkdKillOccurred(int pid, int uid);
-    }
 
     final class IsolatedUidRange {
         @VisibleForTesting
@@ -786,6 +790,31 @@ public final class ProcessList {
                 updateOomLevels(p.x, p.y, true);
                 mHaveDisplaySize = true;
             }
+        }
+    }
+
+    /**
+     * Get a map of pid and package name that process of that pid Android/data and Android/obb
+     * directory is not mounted to lowerfs to speed up access.
+     */
+    Map<Integer, String> getProcessesWithPendingBindMounts(int userId) {
+        final Map<Integer, String> pidPackageMap = new HashMap<>();
+        synchronized (mService) {
+            for (int i = mLruProcesses.size() - 1; i >= 0; i--) {
+                final ProcessRecord record = mLruProcesses.get(i);
+                if (record.userId != userId || !record.bindMountPending) {
+                    continue;
+                }
+                final int pid = record.pid;
+                // It can happen when app process is starting, but zygote work is not done yet so
+                // system does not this pid record yet.
+                if (pid == 0) {
+                    throw new IllegalStateException("Pending process is not started yet,"
+                            + "retry later");
+                }
+                pidPackageMap.put(pid, record.info.packageName);
+            }
+            return pidPackageMap;
         }
     }
 
@@ -1634,6 +1663,31 @@ public final class ProcessList {
         return gidArray;
     }
 
+    private int decideGwpAsanLevel(ProcessRecord app) {
+        // Look at the process attribute first.
+       if (app.processInfo != null
+                && app.processInfo.gwpAsanMode != ApplicationInfo.GWP_ASAN_DEFAULT) {
+            return app.processInfo.gwpAsanMode == ApplicationInfo.GWP_ASAN_ALWAYS
+                    ? Zygote.GWP_ASAN_LEVEL_ALWAYS
+                    : Zygote.GWP_ASAN_LEVEL_NEVER;
+        }
+        // Then at the applicaton attribute.
+        if (app.info.getGwpAsanMode() != ApplicationInfo.GWP_ASAN_DEFAULT) {
+            return app.info.getGwpAsanMode() == ApplicationInfo.GWP_ASAN_ALWAYS
+                    ? Zygote.GWP_ASAN_LEVEL_ALWAYS
+                    : Zygote.GWP_ASAN_LEVEL_NEVER;
+        }
+        // If the app does not specify gwpAsanMode, the default behavior is lottery among the
+        // system apps, and disabled for user apps, unless overwritten by the compat feature.
+        if (mPlatformCompat.isChangeEnabled(GWP_ASAN, app.info)) {
+            return Zygote.GWP_ASAN_LEVEL_ALWAYS;
+        }
+        if ((app.info.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
+            return Zygote.GWP_ASAN_LEVEL_LOTTERY;
+        }
+        return Zygote.GWP_ASAN_LEVEL_NEVER;
+    }
+
     /**
      * @return {@code true} if process start is successful, false otherwise.
      */
@@ -1648,6 +1702,7 @@ public final class ProcessList {
         if (app.pid > 0 && app.pid != ActivityManagerService.MY_PID) {
             checkSlow(startTime, "startProcess: removing from pids map");
             mService.removePidLocked(app);
+            app.bindMountPending = false;
             mService.mHandler.removeMessages(PROC_START_TIMEOUT_MSG, app);
             checkSlow(startTime, "startProcess: done removing from pids map");
             app.setPid(0);
@@ -1802,6 +1857,8 @@ public final class ProcessList {
                     && mPlatformCompat.isChangeEnabled(NATIVE_HEAP_POINTER_TAGGING, app.info)) {
                 runtimeFlags |= Zygote.MEMORY_TAG_LEVEL_TBI;
             }
+
+            runtimeFlags |= decideGwpAsanLevel(app);
 
             String invokeWith = null;
             if ((app.info.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -2127,7 +2184,10 @@ public final class ProcessList {
                 app.setHasForegroundActivities(true);
             }
 
+            StorageManagerInternal storageManagerInternal = LocalServices.getService(
+                    StorageManagerInternal.class);
             final Map<String, Pair<String, Long>> pkgDataInfoMap;
+            boolean bindMountAppStorageDirs = false;
 
             if (shouldIsolateAppData(app)) {
                 // Get all packages belongs to the same shared uid. sharedPackages is empty array
@@ -2138,11 +2198,17 @@ public final class ProcessList {
                 pkgDataInfoMap = getPackageAppDataInfoMap(pmInt, sharedPackages.length == 0
                         ? new String[]{app.info.packageName} : sharedPackages, uid);
 
-                if (mVoldAppDataIsolationEnabled) {
-                    StorageManagerInternal storageManagerInternal = LocalServices.getService(
-                                StorageManagerInternal.class);
-                    storageManagerInternal.prepareObbDirs(UserHandle.getUserId(uid),
-                            pkgDataInfoMap.keySet(), app.processName);
+                int userId = UserHandle.getUserId(uid);
+                if (mVoldAppDataIsolationEnabled && UserHandle.isApp(app.uid) &&
+                        !storageManagerInternal.isExternalStorageService(uid)) {
+                    bindMountAppStorageDirs = true;
+                    if (!storageManagerInternal.prepareStorageDirs(userId, pkgDataInfoMap.keySet(),
+                            app.processName)) {
+                        // Cannot prepare Android/app and Android/obb directory,
+                        // so we won't mount it in zygote.
+                        app.bindMountPending = true;
+                        bindMountAppStorageDirs = false;
+                    }
                 }
             } else {
                 pkgDataInfoMap = null;
@@ -2163,7 +2229,7 @@ public final class ProcessList {
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
                         app.info.dataDir, null, app.info.packageName,
                         /*zygotePolicyFlags=*/ ZYGOTE_POLICY_FLAG_EMPTY, isTopApp,
-                        app.mDisabledCompatChanges, pkgDataInfoMap,
+                        app.mDisabledCompatChanges, pkgDataInfoMap, bindMountAppStorageDirs,
                         new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             } else {
                 startResult = Process.start(entryPoint,
@@ -2171,6 +2237,7 @@ public final class ProcessList {
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
                         app.info.dataDir, invokeWith, app.info.packageName, zygotePolicyFlags,
                         isTopApp, app.mDisabledCompatChanges, pkgDataInfoMap,
+                        bindMountAppStorageDirs,
                         new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             }
             checkSlow(startTime, "startProcess: returned from zygote!");
@@ -2629,6 +2696,7 @@ public final class ProcessList {
             int pid = app.pid;
             if (pid > 0) {
                 mService.removePidLocked(app);
+                app.bindMountPending = false;
                 mService.mHandler.removeMessages(PROC_START_TIMEOUT_MSG, app);
                 mService.mBatteryStatsService.noteProcessFinish(app.processName, app.info.uid);
                 if (app.isolated) {
@@ -3773,7 +3841,7 @@ public final class ProcessList {
         }
 
         Watchdog.getInstance().processDied(app.processName, app.pid);
-        mAppExitInfoTracker.scheduleNoteProcessDiedLocked(app);
+        mAppExitInfoTracker.scheduleNoteProcessDied(app);
     }
 
     /**

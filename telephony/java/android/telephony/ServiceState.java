@@ -580,7 +580,6 @@ public class ServiceState implements Parcelable {
      *
      * @hide
      */
-    @SystemApi
     public @RegState int getDataRegistrationState() {
         return getDataRegState();
     }
@@ -689,8 +688,9 @@ public class ServiceState implements Parcelable {
      * @return true if registration indicates roaming, false otherwise
      * @hide
      */
-    @SystemApi
     public boolean getDataRoamingFromRegistration() {
+        // TODO: all callers should refactor to get roaming state directly from modem
+        // this should not be exposed as a public API
         return mIsDataRoamingFromRegistration;
     }
 
@@ -1422,7 +1422,6 @@ public class ServiceState implements Parcelable {
      * @return the frequency range of 5G NR.
      * @hide
      */
-    @SystemApi
     public @FrequencyRange int getNrFrequencyRange() {
         return mNrFrequencyRange;
     }
@@ -1651,7 +1650,6 @@ public class ServiceState implements Parcelable {
      * @return Current data network type
      * @hide
      */
-    @SystemApi
     @TestApi
     public @NetworkType int getDataNetworkType() {
         final NetworkRegistrationInfo iwlanRegInfo = getNetworkRegistrationInfo(
@@ -2026,6 +2024,7 @@ public class ServiceState implements Parcelable {
      * The long format can be up to 16 characters long.
      *
      * @return long raw name of operator, null if unregistered or unknown
+     * @hide
      */
     @Nullable
     public String getOperatorAlphaLongRaw() {
@@ -2045,6 +2044,7 @@ public class ServiceState implements Parcelable {
      * The short format can be up to 8 characters long.
      *
      * @return short raw name of operator, null if unregistered or unknown
+     * @hide
      */
     @Nullable
     public String getOperatorAlphaShortRaw() {

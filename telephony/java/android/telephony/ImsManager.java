@@ -19,9 +19,7 @@ package android.telephony.ims;
 import android.annotation.NonNull;
 import android.annotation.SdkConstant;
 import android.annotation.SuppressLint;
-import android.annotation.SystemApi;
 import android.annotation.SystemService;
-import android.annotation.TestApi;
 import android.content.Context;
 import android.telephony.SubscriptionManager;
 
@@ -34,8 +32,9 @@ public class ImsManager {
     private Context mContext;
 
     /**
-     * <p>Broadcast Action: Indicates that an IMS operation was rejected by the network due to it
-     * not being authorized on the network.
+     * <p>Broadcast Action: Indicates that a previously allowed IMS operation was rejected by the
+     * network due to the network returning a "forbidden" response. This may be due to a
+     * provisioning change from the network.
      * May include the {@link SubscriptionManager#EXTRA_SUBSCRIPTION_INDEX} extra to also specify
      * which subscription the operation was rejected for.
      * <p class="note">
@@ -43,8 +42,6 @@ public class ImsManager {
      * issues.
      * @hide
      */
-    @SystemApi
-    @TestApi
     // Moved from TelephonyIntents, need to keep backwards compatibility with OEM apps that have
     // this value hard-coded in BroadcastReceiver.
     @SuppressLint("ActionValue")

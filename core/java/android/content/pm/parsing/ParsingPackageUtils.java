@@ -48,8 +48,8 @@ import android.content.pm.Signature;
 import android.content.pm.parsing.component.ComponentParseUtils;
 import android.content.pm.parsing.component.ParsedActivity;
 import android.content.pm.parsing.component.ParsedActivityUtils;
-import android.content.pm.parsing.component.ParsedFeature;
-import android.content.pm.parsing.component.ParsedFeatureUtils;
+import android.content.pm.parsing.component.ParsedAttribution;
+import android.content.pm.parsing.component.ParsedAttributionUtils;
 import android.content.pm.parsing.component.ParsedInstrumentation;
 import android.content.pm.parsing.component.ParsedInstrumentationUtils;
 import android.content.pm.parsing.component.ParsedIntentInfo;
@@ -672,7 +672,7 @@ public class ParsingPackageUtils {
             );
         }
 
-        if (!ParsedFeature.isCombinationValid(pkg.getFeatures())) {
+        if (!ParsedAttribution.isCombinationValid(pkg.getAttributions())) {
             return input.error(
                     INSTALL_PARSE_FAILED_BAD_MANIFEST,
                     "Combination <feature> tags are not valid"
@@ -707,8 +707,9 @@ public class ParsingPackageUtils {
                 return parseOverlay(input, pkg, res, parser);
             case PackageParser.TAG_KEY_SETS:
                 return parseKeySets(input, pkg, res, parser);
-            case PackageParser.TAG_FEATURE:
-                return parseFeature(input, pkg, res, parser);
+            case "feature": // TODO moltmann: Remove
+            case PackageParser.TAG_ATTRIBUTION:
+                return parseAttribution(input, pkg, res, parser);
             case PackageParser.TAG_PERMISSION_GROUP:
                 return parsePermissionGroup(input, pkg, res, parser);
             case PackageParser.TAG_PERMISSION:
@@ -917,13 +918,15 @@ public class ParsingPackageUtils {
         return input.success(pkg);
     }
 
-    private static ParseResult<ParsingPackage> parseFeature(ParseInput input, ParsingPackage pkg,
-            Resources res, XmlResourceParser parser) throws IOException, XmlPullParserException {
-        ParseResult<ParsedFeature> result = ParsedFeatureUtils.parseFeature(res, parser, input);
+    private static ParseResult<ParsingPackage> parseAttribution(ParseInput input,
+            ParsingPackage pkg, Resources res, XmlResourceParser parser)
+            throws IOException, XmlPullParserException {
+        ParseResult<ParsedAttribution> result = ParsedAttributionUtils.parseAttribution(res,
+                parser, input);
         if (result.isError()) {
             return input.error(result);
         }
-        return input.success(pkg.addFeature(result.getResult()));
+        return input.success(pkg.addAttribution(result.getResult()));
     }
 
     private static ParseResult<ParsingPackage> parsePermissionGroup(ParseInput input,
@@ -1386,7 +1389,7 @@ public class ParsingPackageUtils {
 
                 Uri data = null;
                 String dataType = null;
-                String host = "";
+                String host = IntentFilter.WILDCARD;
                 final int numActions = intentInfo.countActions();
                 final int numSchemes = intentInfo.countDataSchemes();
                 final int numTypes = intentInfo.countDataTypes();
@@ -1417,10 +1420,23 @@ public class ParsingPackageUtils {
                     data = new Uri.Builder()
                             .scheme(intentInfo.getDataScheme(0))
                             .authority(host)
+                            .path(IntentFilter.WILDCARD_PATH)
                             .build();
                 }
                 if (numTypes == 1) {
                     dataType = intentInfo.getDataType(0);
+                    // The dataType may have had the '/' removed for the dynamic mimeType feature.
+                    // If we detect that case, we add the * back.
+                    if (!dataType.contains("/")) {
+                        dataType = dataType + "/*";
+                    }
+                    if (data == null) {
+                        data = new Uri.Builder()
+                                .scheme("content")
+                                .authority(IntentFilter.WILDCARD)
+                                .path(IntentFilter.WILDCARD_PATH)
+                                .build();
+                    }
                 }
                 intent.setDataAndType(data, dataType);
                 if (numActions == 1) {
@@ -1660,6 +1676,8 @@ public class ParsingPackageUtils {
                     && !ClassLoaderFactory.isValidClassLoaderName(classLoaderName)) {
                 return input.error("Invalid class loader name: " + classLoaderName);
             }
+
+            pkg.setGwpAsanMode(sa.getInt(R.styleable.AndroidManifestApplication_gwpAsanMode, -1));
         } finally {
             sa.recycle();
         }
@@ -1811,6 +1829,8 @@ public class ParsingPackageUtils {
                 .setUseEmbeddedDex(bool(false, R.styleable.AndroidManifestApplication_useEmbeddedDex, sa))
                 .setUsesNonSdkApi(bool(false, R.styleable.AndroidManifestApplication_usesNonSdkApi, sa))
                 .setVmSafeMode(bool(false, R.styleable.AndroidManifestApplication_vmSafeMode, sa))
+                .setDontAutoRevokePermissions(bool(false, R.styleable.AndroidManifestApplication_requestAutoRevokePermissionsExemption, sa))
+                .setAllowDontAutoRevokePermissions(bool(false, R.styleable.AndroidManifestApplication_allowAutoRevokePermissionsExemption, sa))
                 // targetSdkVersion gated
                 .setAllowAudioPlaybackCapture(bool(targetSdk >= Build.VERSION_CODES.Q, R.styleable.AndroidManifestApplication_allowAudioPlaybackCapture, sa))
                 .setBaseHardwareAccelerated(bool(targetSdk >= Build.VERSION_CODES.ICE_CREAM_SANDWICH, R.styleable.AndroidManifestApplication_hardwareAccelerated, sa))

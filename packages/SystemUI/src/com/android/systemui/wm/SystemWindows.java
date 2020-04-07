@@ -196,7 +196,7 @@ public class SystemWindows {
             final Display display = mDisplayController.getDisplay(mDisplayId);
             SurfaceControlViewHost viewRoot = new SurfaceControlViewHost(mContext, display, wwm);
             attrs.flags |= FLAG_HARDWARE_ACCELERATED;
-            viewRoot.addView(view, attrs);
+            viewRoot.setView(view, attrs);
             mViewRoots.put(view, viewRoot);
         }
 
@@ -324,7 +324,7 @@ public class SystemWindows {
 
         @Override
         public void dispatchWallpaperOffsets(float x, float y, float xStep, float yStep,
-                boolean sync) {}
+                float zoom, boolean sync) {}
 
         @Override
         public void dispatchWallpaperCommand(String action, int x, int y,

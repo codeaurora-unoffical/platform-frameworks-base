@@ -557,7 +557,6 @@ public abstract class PackageManager {
      * Internal {@link PackageInfo} flag used to indicate that a package is a hidden system app.
      * @hide
      */
-    @SystemApi
     public static final int MATCH_HIDDEN_UNTIL_INSTALLED_COMPONENTS =  0x20000000;
 
     /**
@@ -1978,7 +1977,7 @@ public abstract class PackageManager {
      * Feature for {@link #getSystemAvailableFeatures} and
      * {@link #hasSystemFeature}: The device's main front and back cameras can stream
      * concurrently as described in  {@link
-     * android.hardware.camera2.CameraManager#getConcurrentStreamingCameraIds()}
+     * android.hardware.camera2.CameraManager#getConcurrentCameraIds()}
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_CAMERA_CONCURRENT = "android.hardware.camera.concurrent";
@@ -2227,6 +2226,9 @@ public abstract class PackageManager {
      * <li>{@code VkPhysicalDeviceSamplerYcbcrConversionFeatures::samplerYcbcrConversion} is
      *     supported.</li>
      * </ul>
+     * A subset of devices that support Vulkan 1.1 do so via software emulation. For more
+     * information, see
+     * <a href="{@docRoot}ndk/guides/graphics/design-notes">Vulkan Design Guidelines</a>.
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_VULKAN_HARDWARE_VERSION = "android.hardware.vulkan.version";
@@ -3400,37 +3402,21 @@ public abstract class PackageManager {
     public static final int FLAG_PERMISSION_ONE_TIME = 1 << 16;
 
     /**
-     * Permission flag: The permission is whitelisted to not be auto-revoked when app goes unused.
-     *
-     * @hide
-     */
-    @SystemApi
-    public static final int FLAG_PERMISSION_AUTO_REVOKE_IF_UNUSED = 1 << 17;
-
-    /**
-     * Permission flag: Whether {@link #FLAG_PERMISSION_AUTO_REVOKE_IF_UNUSED} state was set by
-     * user.
-     *
-     * @hide
-     */
-    @SystemApi
-    public static final int FLAG_PERMISSION_AUTO_REVOKE_USER_SET = 1 << 18;
-
-    /**
      * Permission flag: Whether permission was revoked by auto-revoke.
      *
      * @hide
      */
     @SystemApi
-    public static final int FLAG_PERMISSION_AUTO_REVOKED = 1 << 20;
+    public static final int FLAG_PERMISSION_AUTO_REVOKED = 1 << 17;
 
     /**
-     * Permission flags: Reserved for use by the permission controller.
-     *
+     * Permission flags: Reserved for use by the permission controller. The platform and any
+     * packages besides the permission controller should not assume any definition about these
+     * flags.
      * @hide
      */
     @SystemApi
-    public static final int FLAGS_PERMISSION_RESERVED_PERMISSIONCONTROLLER = 1 << 28 | 1 << 29
+    public static final int FLAGS_PERMISSION_RESERVED_PERMISSION_CONTROLLER = 1 << 28 | 1 << 29
             | 1 << 30 | 1 << 31;
 
     /**
@@ -3476,8 +3462,6 @@ public abstract class PackageManager {
             | FLAG_PERMISSION_GRANTED_BY_ROLE
             | FLAG_PERMISSION_REVOKED_COMPAT
             | FLAG_PERMISSION_ONE_TIME
-            | FLAG_PERMISSION_AUTO_REVOKE_IF_UNUSED
-            | FLAG_PERMISSION_AUTO_REVOKE_USER_SET
             | FLAG_PERMISSION_AUTO_REVOKED;
 
     /**
@@ -3639,28 +3623,24 @@ public abstract class PackageManager {
      * Constant for noting system app state as hidden before installation
      * @hide
      */
-    @SystemApi
     public static final int SYSTEM_APP_STATE_HIDDEN_UNTIL_INSTALLED_HIDDEN = 0;
 
     /**
      * Constant for noting system app state as visible before installation
      * @hide
      */
-    @SystemApi
     public static final int SYSTEM_APP_STATE_HIDDEN_UNTIL_INSTALLED_VISIBLE = 1;
 
     /**
      * Constant for noting system app state as installed
      * @hide
      */
-    @SystemApi
     public static final int SYSTEM_APP_STATE_INSTALLED = 2;
 
     /**
      * Constant for noting system app state as not installed
      * @hide
      */
-    @SystemApi
     public static final int SYSTEM_APP_STATE_UNINSTALLED = 3;
 
     /** {@hide} */
@@ -4302,8 +4282,6 @@ public abstract class PackageManager {
             FLAG_PERMISSION_GRANTED_BY_ROLE,
             FLAG_PERMISSION_REVOKED_COMPAT,
             FLAG_PERMISSION_ONE_TIME,
-            FLAG_PERMISSION_AUTO_REVOKE_IF_UNUSED,
-            FLAG_PERMISSION_AUTO_REVOKE_USER_SET,
             FLAG_PERMISSION_AUTO_REVOKED
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -4591,6 +4569,53 @@ public abstract class PackageManager {
             @NonNull String permName, @PermissionWhitelistFlags int whitelistFlags) {
         return false;
     }
+
+    /**
+     * Marks an application exempt from having its permissions be automatically revoked when
+     * the app is unused for an extended period of time.
+     *
+     * Only the installer on record that installed the given package, or a holder of
+     * {@code WHITELIST_AUTO_REVOKE_PERMISSIONS} is allowed to call this.
+     *
+     * Packages start in whitelisted state, and it is the installer's responsibility to
+     * un-whitelist the packages it installs, unless auto-revoking permissions from that package
+     * would cause breakages beyond having to re-request the permission(s).
+     *
+     * @param packageName The app for which to set exemption.
+     * @param whitelisted Whether the app should be whitelisted.
+     *
+     * @return whether any change took effect.
+     *
+     * @see #isAutoRevokeWhitelisted
+     *
+     * @throws SecurityException if you you have no access to modify this.
+     */
+    @RequiresPermission(value = Manifest.permission.WHITELIST_AUTO_REVOKE_PERMISSIONS,
+            conditional = true)
+    public boolean setAutoRevokeWhitelisted(@NonNull String packageName, boolean whitelisted) {
+        return false;
+    }
+
+    /**
+     * Checks whether an application is exempt from having its permissions be automatically revoked
+     * when the app is unused for an extended period of time.
+     *
+     * Only the installer on record that installed the given package, or a holder of
+     * {@code WHITELIST_AUTO_REVOKE_PERMISSIONS} is allowed to call this.
+     * @param packageName The app for which to set exemption.
+     *
+     * @return Whether the app is whitelisted.
+     *
+     * @see #setAutoRevokeWhitelisted
+     *
+     * @throws SecurityException if you you have no access to this.
+     */
+    @RequiresPermission(value = Manifest.permission.WHITELIST_AUTO_REVOKE_PERMISSIONS,
+            conditional = true)
+    public boolean isAutoRevokeWhitelisted(@NonNull String packageName) {
+        return false;
+    }
+
 
     /**
      * Gets whether you should show UI with rationale for requesting a permission.
@@ -6805,7 +6830,6 @@ public abstract class PackageManager {
      * @param state State of the app.
      * @hide
      */
-    @SystemApi
     public void setSystemAppState(@NonNull String packageName, @SystemAppState int state) {
         throw new RuntimeException("Not implemented. Must override in a subclass");
     }
@@ -7471,8 +7495,6 @@ public abstract class PackageManager {
             case FLAG_PERMISSION_GRANTED_BY_ROLE: return "GRANTED_BY_ROLE";
             case FLAG_PERMISSION_REVOKED_COMPAT: return "REVOKED_COMPAT";
             case FLAG_PERMISSION_ONE_TIME: return "ONE_TIME";
-            case FLAG_PERMISSION_AUTO_REVOKE_IF_UNUSED: return "AUTO_REVOKE_IF_UNUSED";
-            case FLAG_PERMISSION_AUTO_REVOKE_USER_SET: return "AUTO_REVOKE_USER_SET";
             case FLAG_PERMISSION_AUTO_REVOKED: return "AUTO_REVOKED";
             default: return Integer.toString(flag);
         }
@@ -7769,18 +7791,6 @@ public abstract class PackageManager {
     }
 
     /**
-     * @return the system defined telephony package names, or null if there's none.
-     *
-     * @hide
-     */
-    @Nullable
-    @TestApi
-    public String[] getTelephonyPackageNames() {
-        throw new UnsupportedOperationException(
-                "getTelephonyPackageNames not implemented in subclass");
-    }
-
-    /**
      * @return the system defined content capture service package name, or null if there's none.
      *
      * @hide
@@ -7851,6 +7861,15 @@ public abstract class PackageManager {
     public void sendDeviceCustomizationReadyBroadcast() {
         throw new UnsupportedOperationException(
             "sendDeviceCustomizationReadyBroadcast not implemented in subclass");
+    }
+
+    /**
+     * @return whether this package is whitelisted from having its runtime permission be
+     *         auto-revoked if unused for an extended period of time.
+     */
+    public boolean isAutoRevokeWhitelisted() {
+        throw new UnsupportedOperationException(
+                "isAutoRevokeWhitelisted not implemented in subclass");
     }
 
     /**

@@ -23,6 +23,7 @@ import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMAR
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECONDARY;
 
 import static com.android.server.wm.ActivityStackSupervisor.PRESERVE_WINDOWS;
+import static com.android.server.wm.Task.FLAG_FORCE_HIDDEN_FOR_TASK_ORG;
 import static com.android.server.wm.WindowContainer.POSITION_BOTTOM;
 import static com.android.server.wm.WindowContainer.POSITION_TOP;
 
@@ -105,7 +106,7 @@ class TaskOrganizerController extends ITaskOrganizerController.Stub
 
 
         TaskOrganizerState(ITaskOrganizer organizer, int windowingMode,
-                TaskOrganizerState replacing) {
+                @Nullable TaskOrganizerState replacing) {
             mOrganizer = organizer;
             mDeathRecipient = new DeathRecipient(organizer, windowingMode);
             try {
@@ -128,7 +129,7 @@ class TaskOrganizerController extends ITaskOrganizerController.Stub
 
         void removeTask(Task t) {
             try {
-                mOrganizer.taskVanished(t.getRemoteToken());
+                mOrganizer.taskVanished(t.getTaskInfo());
             } catch (Exception e) {
                 Slog.e(TAG, "Exception sending taskVanished callback" + e);
             }
@@ -203,17 +204,35 @@ class TaskOrganizerController extends ITaskOrganizerController.Stub
         final long origId = Binder.clearCallingIdentity();
         try {
             synchronized (mGlobalLock) {
+                if (getTaskOrganizer(windowingMode) != null) {
+                    Slog.w(TAG, "Task organizer already exists for windowing mode: "
+                            + windowingMode);
+                }
+                final TaskOrganizerState previousState =
+                        mTaskOrganizersForWindowingMode.get(windowingMode);
                 final TaskOrganizerState state = new TaskOrganizerState(organizer, windowingMode,
-                        mTaskOrganizersForWindowingMode.get(windowingMode));
+                        previousState);
                 mTaskOrganizersForWindowingMode.put(windowingMode, state);
                 mTaskOrganizerStates.put(organizer.asBinder(), state);
+
+                if (previousState == null) {
+                    // Only in the case where this is the root task organizer for the given
+                    // windowing mode, we add report all existing tasks in that mode to the new
+                    // task organizer.
+                    mService.mRootWindowContainer.forAllTasks((task) -> {
+                        if (task.getWindowingMode() == windowingMode) {
+                            task.updateTaskOrganizerState(true /* forceUpdate */);
+                        }
+                    });
+                }
             }
         } finally {
             Binder.restoreCallingIdentity(origId);
         }
     }
 
-    void unregisterTaskOrganizer(ITaskOrganizer organizer) {
+    @Override
+    public void unregisterTaskOrganizer(ITaskOrganizer organizer) {
         final TaskOrganizerState state = mTaskOrganizerStates.get(organizer.asBinder());
         state.unlinkDeath();
         if (mTaskOrganizersForWindowingMode.get(state.mWindowingMode) == state) {
@@ -458,6 +477,7 @@ class TaskOrganizerController extends ITaskOrganizerController.Stub
         if (!(container instanceof Task)) {
             throw new RuntimeException("Invalid token in task transaction");
         }
+        final Task task = (Task) container;
         // The "client"-facing API should prevent bad changes; however, just in case, sanitize
         // masks here.
         int configMask = change.getConfigSetMask();
@@ -478,6 +498,11 @@ class TaskOrganizerController extends ITaskOrganizerController.Stub
         }
         if ((change.getChangeMask() & WindowContainerTransaction.Change.CHANGE_FOCUSABLE) != 0) {
             if (container.setFocusable(change.getFocusable())) {
+                effects |= TRANSACT_EFFECTS_LIFECYCLE;
+            }
+        }
+        if ((change.getChangeMask() & WindowContainerTransaction.Change.CHANGE_HIDDEN) != 0) {
+            if (task.setForceHidden(FLAG_FORCE_HIDDEN_FOR_TASK_ORG, change.getHidden())) {
                 effects |= TRANSACT_EFFECTS_LIFECYCLE;
             }
         }
@@ -553,18 +578,28 @@ class TaskOrganizerController extends ITaskOrganizerController.Stub
             WindowContainerTransaction.Change c) {
         int effects = sanitizeAndApplyChange(wc, c);
 
+        final Task tr = wc.asTask();
+
         final SurfaceControl.Transaction t = c.getBoundsChangeTransaction();
         if (t != null) {
-            Task tr = (Task) wc;
             tr.setMainWindowSizeChangeTransaction(t);
         }
 
         Rect enterPipBounds = c.getEnterPipBounds();
         if (enterPipBounds != null) {
-            Task tr = (Task) wc;
             mService.mStackSupervisor.updatePictureInPictureMode(tr,
                     enterPipBounds, true);
         }
+
+        final int windowingMode = c.getWindowingMode();
+        if (windowingMode > -1) {
+            tr.setWindowingMode(windowingMode);
+        }
+        final int childWindowingMode = c.getActivityWindowingMode();
+        if (childWindowingMode > -1) {
+            tr.setActivityWindowingMode(childWindowingMode);
+        }
+
         return effects;
     }
 

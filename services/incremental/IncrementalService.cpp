@@ -28,6 +28,7 @@
 #include <androidfw/ZipFileRO.h>
 #include <androidfw/ZipUtils.h>
 #include <binder/BinderService.h>
+#include <binder/Nullable.h>
 #include <binder/ParcelFileDescriptor.h>
 #include <binder/Status.h>
 #include <sys/stat.h>
@@ -917,26 +918,30 @@ std::vector<std::string> IncrementalService::listFiles(StorageId storage) const 
 }
 
 bool IncrementalService::startLoading(StorageId storage) const {
-    const auto ifs = getIfs(storage);
-    if (!ifs) {
-        return false;
-    }
-    std::unique_lock l(ifs->lock);
-    if (ifs->dataLoaderStatus != IDataLoaderStatusListener::DATA_LOADER_CREATED) {
-        if (ifs->dataLoaderReady.wait_for(l, Seconds(5)) == std::cv_status::timeout) {
-            LOG(ERROR) << "Timeout waiting for data loader to be ready";
+    {
+        std::unique_lock l(mLock);
+        const auto& ifs = getIfsLocked(storage);
+        if (!ifs) {
             return false;
         }
+        if (ifs->dataLoaderStatus != IDataLoaderStatusListener::DATA_LOADER_CREATED) {
+            ifs->dataLoaderStartRequested = true;
+            return true;
+        }
     }
+    return startDataLoader(storage);
+}
+
+bool IncrementalService::startDataLoader(MountId mountId) const {
     sp<IDataLoader> dataloader;
-    auto status = mDataLoaderManager->getDataLoader(ifs->mountId, &dataloader);
+    auto status = mDataLoaderManager->getDataLoader(mountId, &dataloader);
     if (!status.isOk()) {
         return false;
     }
     if (!dataloader) {
         return false;
     }
-    status = dataloader->start();
+    status = dataloader->start(mountId);
     if (!status.isOk()) {
         return false;
     }
@@ -1065,15 +1070,9 @@ bool IncrementalService::prepareDataLoader(IncrementalService::IncFsMount& ifs,
         }
         return true; // eventually...
     }
-    if (base::GetBoolProperty("incremental.skip_loader", false)) {
-        LOG(INFO) << "Skipped data loader because of incremental.skip_loader property";
-        std::unique_lock l(ifs.lock);
-        ifs.savedDataLoaderParams.reset();
-        return true;
-    }
 
     std::unique_lock l(ifs.lock);
-    if (ifs.dataLoaderStatus == IDataLoaderStatusListener::DATA_LOADER_CREATED) {
+    if (ifs.dataLoaderStatus != -1) {
         LOG(INFO) << "Skipped data loader preparation because it already exists";
         return true;
     }
@@ -1085,13 +1084,15 @@ bool IncrementalService::prepareDataLoader(IncrementalService::IncFsMount& ifs,
         return false;
     }
     FileSystemControlParcel fsControlParcel;
-    fsControlParcel.incremental = std::make_unique<IncrementalFileSystemControlParcel>();
+    fsControlParcel.incremental = aidl::make_nullable<IncrementalFileSystemControlParcel>();
     fsControlParcel.incremental->cmd.reset(base::unique_fd(::dup(ifs.control.cmd)));
     fsControlParcel.incremental->pendingReads.reset(
             base::unique_fd(::dup(ifs.control.pendingReads)));
     fsControlParcel.incremental->log.reset(base::unique_fd(::dup(ifs.control.logs)));
     sp<IncrementalDataLoaderListener> listener =
-            new IncrementalDataLoaderListener(*this, *externalListener);
+            new IncrementalDataLoaderListener(*this,
+                                              externalListener ? *externalListener
+                                                               : DataLoaderStatusListener());
     bool created = false;
     auto status = mDataLoaderManager->initializeDataLoader(ifs.mountId, *dlp, fsControlParcel,
                                                            listener, &created);
@@ -1156,7 +1157,7 @@ bool IncrementalService::configureNativeBinaries(StorageId storage, std::string_
         // Create new lib file without signature info
         incfs::NewFileParams libFileParams{};
         libFileParams.size = uncompressedLen;
-        libFileParams.verification.hashAlgorithm = INCFS_HASH_NONE;
+        libFileParams.signature = {};
         // Metadata of the new lib file is its relative path
         IncFsSpan libFileMetadata;
         libFileMetadata.data = targetLibPath.c_str();
@@ -1168,6 +1169,10 @@ bool IncrementalService::configureNativeBinaries(StorageId storage, std::string_
             success = false;
             // If one lib file fails to be created, abort others as well
             break;
+        }
+        // If it is a zero-byte file, skip data writing
+        if (uncompressedLen == 0) {
+            continue;
         }
 
         // Write extracted data to new file
@@ -1226,30 +1231,34 @@ binder::Status IncrementalService::IncrementalDataLoaderListener::onStatusChange
         externalListener->onStatusChanged(mountId, newStatus);
     }
 
-    std::unique_lock l(incrementalService.mLock);
-    const auto& ifs = incrementalService.getIfsLocked(mountId);
-    if (!ifs) {
-        LOG(WARNING) << "Received data loader status " << int(newStatus) << " for unknown mount "
-                     << mountId;
-        return binder::Status::ok();
+    bool startRequested = false;
+    {
+        std::unique_lock l(incrementalService.mLock);
+        const auto& ifs = incrementalService.getIfsLocked(mountId);
+        if (!ifs) {
+            LOG(WARNING) << "Received data loader status " << int(newStatus)
+                         << " for unknown mount " << mountId;
+            return binder::Status::ok();
+        }
+        ifs->dataLoaderStatus = newStatus;
+
+        if (newStatus == IDataLoaderStatusListener::DATA_LOADER_DESTROYED) {
+            ifs->dataLoaderStatus = IDataLoaderStatusListener::DATA_LOADER_STOPPED;
+            incrementalService.deleteStorageLocked(*ifs, std::move(l));
+            return binder::Status::ok();
+        }
+
+        startRequested = ifs->dataLoaderStartRequested;
     }
-    ifs->dataLoaderStatus = newStatus;
+
     switch (newStatus) {
-        case IDataLoaderStatusListener::DATA_LOADER_NO_CONNECTION: {
-            // TODO(b/150411019): handle data loader connection loss
-            break;
-        }
-        case IDataLoaderStatusListener::DATA_LOADER_CONNECTION_OK: {
-            ifs->dataLoaderStatus = IDataLoaderStatusListener::DATA_LOADER_STARTED;
-            break;
-        }
         case IDataLoaderStatusListener::DATA_LOADER_CREATED: {
-            ifs->dataLoaderReady.notify_one();
+            if (startRequested) {
+                incrementalService.startDataLoader(mountId);
+            }
             break;
         }
         case IDataLoaderStatusListener::DATA_LOADER_DESTROYED: {
-            ifs->dataLoaderStatus = IDataLoaderStatusListener::DATA_LOADER_STOPPED;
-            incrementalService.deleteStorageLocked(*ifs, std::move(l));
             break;
         }
         case IDataLoaderStatusListener::DATA_LOADER_STARTED: {
@@ -1262,6 +1271,10 @@ binder::Status IncrementalService::IncrementalDataLoaderListener::onStatusChange
             break;
         }
         case IDataLoaderStatusListener::DATA_LOADER_IMAGE_NOT_READY: {
+            break;
+        }
+        case IDataLoaderStatusListener::DATA_LOADER_UNRECOVERABLE: {
+            // Nothing for now. Rely on externalListener to handle this.
             break;
         }
         default: {

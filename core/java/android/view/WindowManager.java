@@ -89,6 +89,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -805,6 +806,7 @@ public interface WindowManager extends ViewManager {
                 @ViewDebug.IntToString(from = TYPE_APPLICATION_OVERLAY,
                         to = "APPLICATION_OVERLAY")
         })
+        @WindowType
         public int type;
 
         /**
@@ -1244,13 +1246,47 @@ public interface WindowManager extends ViewManager {
         public static final int INVALID_WINDOW_TYPE = -1;
 
         /**
+         * @hide
+         */
+        @IntDef(prefix = "TYPE_", value = {
+                TYPE_ACCESSIBILITY_OVERLAY,
+                TYPE_APPLICATION,
+                TYPE_APPLICATION_ATTACHED_DIALOG,
+                TYPE_APPLICATION_MEDIA,
+                TYPE_APPLICATION_OVERLAY,
+                TYPE_APPLICATION_PANEL,
+                TYPE_APPLICATION_STARTING,
+                TYPE_APPLICATION_SUB_PANEL,
+                TYPE_BASE_APPLICATION,
+                TYPE_DRAWN_APPLICATION,
+                TYPE_INPUT_METHOD,
+                TYPE_INPUT_METHOD_DIALOG,
+                TYPE_KEYGUARD,
+                TYPE_KEYGUARD_DIALOG,
+                TYPE_PHONE,
+                TYPE_PRIORITY_PHONE,
+                TYPE_PRIVATE_PRESENTATION,
+                TYPE_SEARCH_BAR,
+                TYPE_STATUS_BAR,
+                TYPE_STATUS_BAR_PANEL,
+                TYPE_SYSTEM_ALERT,
+                TYPE_SYSTEM_DIALOG,
+                TYPE_SYSTEM_ERROR,
+                TYPE_SYSTEM_OVERLAY,
+                TYPE_TOAST,
+                TYPE_WALLPAPER,
+        })
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface WindowType {}
+
+        /**
          * Return true if the window type is an alert window.
          *
          * @param type The window type.
          * @return If the window type is an alert window.
          * @hide
          */
-        public static boolean isSystemAlertWindowType(int type) {
+        public static boolean isSystemAlertWindowType(@WindowType int type) {
             switch (type) {
                 case TYPE_PHONE:
                 case TYPE_PRIORITY_PHONE:
@@ -2861,6 +2897,18 @@ public interface WindowManager extends ViewManager {
         private boolean mFitInsetsIgnoringVisibility = false;
 
         /**
+         * {@link InsetsState.InternalInsetsType}s to be applied to the window
+         * If {@link #type} has the predefined insets (like {@link #TYPE_STATUS_BAR} or
+         * {@link #TYPE_NAVIGATION_BAR}), this field will be ignored.
+         *
+         * <p>Note: provide only one inset corresponding to the window type (like
+         * {@link InsetsState.InternalInsetsType#ITYPE_STATUS_BAR} or
+         * {@link InsetsState.InternalInsetsType#ITYPE_NAVIGATION_BAR})</p>
+         * @hide
+         */
+        public @InsetsState.InternalInsetsType int[] providesInsetsTypes;
+
+        /**
          * Specifies types of insets that this window should avoid overlapping during layout.
          *
          * @param types which types of insets that this window should avoid. The initial value of
@@ -3081,6 +3129,12 @@ public interface WindowManager extends ViewManager {
             out.writeInt(mFitInsetsSides);
             out.writeBoolean(mFitInsetsIgnoringVisibility);
             out.writeBoolean(preferMinimalPostProcessing);
+            if (providesInsetsTypes != null) {
+                out.writeInt(providesInsetsTypes.length);
+                out.writeIntArray(providesInsetsTypes);
+            } else {
+                out.writeInt(0);
+            }
         }
 
         public static final @android.annotation.NonNull Parcelable.Creator<LayoutParams> CREATOR
@@ -3142,6 +3196,11 @@ public interface WindowManager extends ViewManager {
             mFitInsetsSides = in.readInt();
             mFitInsetsIgnoringVisibility = in.readBoolean();
             preferMinimalPostProcessing = in.readBoolean();
+            int insetsTypesLength = in.readInt();
+            if (insetsTypesLength > 0) {
+                providesInsetsTypes = new int[insetsTypesLength];
+                in.readIntArray(providesInsetsTypes);
+            }
         }
 
         @SuppressWarnings({"PointlessBitwiseExpression"})
@@ -3402,6 +3461,11 @@ public interface WindowManager extends ViewManager {
                 changes |= LAYOUT_CHANGED;
             }
 
+            if (!Arrays.equals(providesInsetsTypes, o.providesInsetsTypes)) {
+                providesInsetsTypes = o.providesInsetsTypes;
+                changes |= LAYOUT_CHANGED;
+            }
+
             return changes;
         }
 
@@ -3573,6 +3637,14 @@ public interface WindowManager extends ViewManager {
             if (mFitInsetsIgnoringVisibility) {
                 sb.append(System.lineSeparator());
                 sb.append(prefix).append("  fitIgnoreVis");
+            }
+            if (providesInsetsTypes != null) {
+                sb.append(System.lineSeparator());
+                sb.append(prefix).append("  insetsTypes=");
+                for (int i = 0; i < providesInsetsTypes.length; ++i) {
+                    if (i > 0) sb.append(' ');
+                    sb.append(InsetsState.typeToString(providesInsetsTypes[i]));
+                }
             }
 
             sb.append('}');

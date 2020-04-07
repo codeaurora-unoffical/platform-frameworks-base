@@ -27,9 +27,11 @@ import com.android.systemui.car.CarDeviceProvisionedControllerImpl;
 import com.android.systemui.dagger.SystemUIRootComponent;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.dock.DockManagerImpl;
+import com.android.systemui.plugins.qs.QSFactory;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.power.EnhancedEstimates;
 import com.android.systemui.power.EnhancedEstimatesImpl;
+import com.android.systemui.qs.tileimpl.QSFactoryImpl;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.recents.RecentsImplementation;
 import com.android.systemui.stackdivider.DividerModule;
@@ -47,6 +49,8 @@ import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.StatusBar;
 import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
+import com.android.systemui.statusbar.policy.BatteryController;
+import com.android.systemui.statusbar.policy.BatteryControllerImpl;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
@@ -98,6 +102,15 @@ abstract class CarSystemUIModule {
     @Binds
     abstract NotificationLockscreenUserManager bindNotificationLockscreenUserManager(
             NotificationLockscreenUserManagerImpl notificationLockscreenUserManager);
+
+    @Binds
+    @Singleton
+    public abstract BatteryController provideBatteryController(
+            BatteryControllerImpl controllerImpl);
+
+    @Binds
+    @Singleton
+    public abstract QSFactory provideQSFactory(QSFactoryImpl qsFactoryImpl);
 
     @Binds
     abstract DockManager bindDockManager(DockManagerImpl dockManager);

@@ -15,7 +15,6 @@
  */
 package com.android.server.blob;
 
-import static android.app.blob.BlobStoreManager.DESC_RES_TYPE_STRING;
 import static android.app.blob.XmlTags.ATTR_DESCRIPTION;
 import static android.app.blob.XmlTags.ATTR_DESCRIPTION_RES_NAME;
 import static android.app.blob.XmlTags.ATTR_EXPIRY_TIME;
@@ -30,16 +29,18 @@ import static android.app.blob.XmlTags.TAG_LEASEE;
 import static android.os.Process.INVALID_UID;
 import static android.system.OsConstants.O_RDONLY;
 
-import static com.android.server.blob.BlobStoreConfig.LOGV;
 import static com.android.server.blob.BlobStoreConfig.TAG;
 import static com.android.server.blob.BlobStoreConfig.XML_VERSION_ADD_DESC_RES_NAME;
 import static com.android.server.blob.BlobStoreConfig.XML_VERSION_ADD_STRING_DESC;
+import static com.android.server.blob.BlobStoreConfig.hasLeaseWaitTimeElapsed;
+import static com.android.server.blob.BlobStoreUtils.getDescriptionResourceId;
+import static com.android.server.blob.BlobStoreUtils.getPackageResources;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.blob.BlobHandle;
+import android.app.blob.LeaseInfo;
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.content.res.ResourceId;
 import android.content.res.Resources;
 import android.os.ParcelFileDescriptor;
@@ -65,6 +66,7 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 class BlobMetadata {
     private final Object mMetadataLock = new Object();
@@ -226,6 +228,35 @@ class BlobMetadata {
         return false;
     }
 
+    boolean isACommitter(@NonNull String packageName, int uid) {
+        synchronized (mMetadataLock) {
+            return isAnAccessor(mCommitters, packageName, uid);
+        }
+    }
+
+    boolean isALeasee(@Nullable String packageName, int uid) {
+        synchronized (mMetadataLock) {
+            return isAnAccessor(mLeasees, packageName, uid);
+        }
+    }
+
+    private static <T extends Accessor> boolean isAnAccessor(@NonNull ArraySet<T> accessors,
+            @Nullable String packageName, int uid) {
+        // Check if the package is an accessor of the data blob.
+        for (int i = 0, size = accessors.size(); i < size; ++i) {
+            final Accessor accessor = accessors.valueAt(i);
+            if (packageName != null && uid != INVALID_UID
+                    && accessor.equals(packageName, uid)) {
+                return true;
+            } else if (packageName != null && accessor.packageName.equals(packageName)) {
+                return true;
+            } else if (uid != INVALID_UID && accessor.uid == uid) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     boolean isALeasee(@NonNull String packageName) {
         return isALeasee(packageName, INVALID_UID);
     }
@@ -240,24 +271,6 @@ class BlobMetadata {
 
     boolean hasOtherLeasees(int uid) {
         return hasOtherLeasees(null, uid);
-    }
-
-    boolean isALeasee(@Nullable String packageName, int uid) {
-        synchronized (mMetadataLock) {
-            // Check if the package is a leasee of the data blob.
-            for (int i = 0, size = mLeasees.size(); i < size; ++i) {
-                final Leasee leasee = mLeasees.valueAt(i);
-                if (packageName != null && uid != INVALID_UID
-                        && leasee.equals(packageName, uid)) {
-                    return true;
-                } else if (packageName != null && leasee.packageName.equals(packageName)) {
-                    return true;
-                } else if (uid != INVALID_UID && leasee.uid == uid) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private boolean hasOtherLeasees(@Nullable String packageName, int uid) {
@@ -279,6 +292,29 @@ class BlobMetadata {
             }
         }
         return false;
+    }
+
+    @Nullable
+    LeaseInfo getLeaseInfo(@NonNull String packageName, int uid) {
+        synchronized (mMetadataLock) {
+            for (int i = 0, size = mLeasees.size(); i < size; ++i) {
+                final Leasee leasee = mLeasees.valueAt(i);
+                if (leasee.uid == uid && leasee.packageName.equals(packageName)) {
+                    final int descriptionResId = leasee.descriptionResEntryName == null
+                            ? Resources.ID_NULL
+                            : BlobStoreUtils.getDescriptionResourceId(
+                                    mContext, leasee.descriptionResEntryName, leasee.packageName,
+                                    UserHandle.getUserId(leasee.uid));
+                    return new LeaseInfo(packageName, leasee.expiryTimeMillis,
+                            descriptionResId, leasee.description);
+                }
+            }
+        }
+        return null;
+    }
+
+    void forEachLeasee(Consumer<Leasee> consumer) {
+        mLeasees.forEach(consumer);
     }
 
     File getBlobFile() {
@@ -322,10 +358,29 @@ class BlobMetadata {
                         mRevocableFds.get(callingPackage);
                 if (revocableFdsForPkg != null) {
                     revocableFdsForPkg.remove(revocableFd);
+                    if (revocableFdsForPkg.isEmpty()) {
+                        mRevocableFds.remove(callingPackage);
+                    }
                 }
             }
         });
         return revocableFd.getRevocableFileDescriptor();
+    }
+
+    boolean shouldBeDeleted(boolean respectLeaseWaitTime) {
+        // Expired data blobs
+        if (getBlobHandle().isExpired()) {
+            return true;
+        }
+
+        // Blobs with no active leases
+        // TODO: Track commit time instead of using last modified time.
+        if ((!respectLeaseWaitTime || hasLeaseWaitTimeElapsed(getBlobFile().lastModified()))
+                && !hasLeases()) {
+            return true;
+        }
+
+        return false;
     }
 
     void dump(IndentingPrintWriter fout, DumpArgs dumpArgs) {
@@ -336,27 +391,47 @@ class BlobMetadata {
 
         fout.println("Committers:");
         fout.increaseIndent();
-        for (int i = 0, count = mCommitters.size(); i < count; ++i) {
-            final Committer committer = mCommitters.valueAt(i);
-            fout.println("committer " + committer.toString());
-            fout.increaseIndent();
-            committer.dump(fout);
-            fout.decreaseIndent();
+        if (mCommitters.isEmpty()) {
+            fout.println("<empty>");
+        } else {
+            for (int i = 0, count = mCommitters.size(); i < count; ++i) {
+                final Committer committer = mCommitters.valueAt(i);
+                fout.println("committer " + committer.toString());
+                fout.increaseIndent();
+                committer.dump(fout);
+                fout.decreaseIndent();
+            }
         }
         fout.decreaseIndent();
 
         fout.println("Leasees:");
         fout.increaseIndent();
-        for (int i = 0, count = mLeasees.size(); i < count; ++i) {
-            final Leasee leasee = mLeasees.valueAt(i);
-            fout.println("leasee " + leasee.toString());
-            fout.increaseIndent();
-            leasee.dump(mContext, fout);
-            fout.decreaseIndent();
+        if (mLeasees.isEmpty()) {
+            fout.println("<empty>");
+        } else {
+            for (int i = 0, count = mLeasees.size(); i < count; ++i) {
+                final Leasee leasee = mLeasees.valueAt(i);
+                fout.println("leasee " + leasee.toString());
+                fout.increaseIndent();
+                leasee.dump(mContext, fout);
+                fout.decreaseIndent();
+            }
         }
         fout.decreaseIndent();
 
-        fout.println("Open fds: #" + mRevocableFds.size());
+        fout.println("Open fds:");
+        fout.increaseIndent();
+        if (mRevocableFds.isEmpty()) {
+            fout.println("<empty>");
+        } else {
+            for (int i = 0, count = mRevocableFds.size(); i < count; ++i) {
+                final String packageName = mRevocableFds.keyAt(i);
+                final ArraySet<RevocableFileDescriptor> packageFds =
+                        mRevocableFds.valueAt(i);
+                fout.println(packageName + "#" + packageFds.size());
+            }
+        }
+        fout.decreaseIndent();
     }
 
     void writeToXml(XmlSerializer out) throws IOException {
@@ -506,16 +581,9 @@ class BlobMetadata {
             if (resources == null) {
                 return null;
             }
-            try {
-                final int resId = resources.getIdentifier(descriptionResEntryName,
-                        DESC_RES_TYPE_STRING, packageName);
-                return resId <= 0 ? null : resources.getString(resId);
-            } catch (Resources.NotFoundException e) {
-                if (LOGV) {
-                    Slog.w(TAG, "Description resource not found", e);
-                }
-                return null;
-            }
+            final int resId = getDescriptionResourceId(resources, descriptionResEntryName,
+                    packageName);
+            return resId == Resources.ID_NULL ? null : resources.getString(resId);
         }
 
         @Nullable
@@ -544,19 +612,6 @@ class BlobMetadata {
                 desc = description.toString();
             }
             return desc == null ? "<none>" : desc;
-        }
-
-        @Nullable
-        private static Resources getPackageResources(@NonNull Context context,
-                @NonNull String packageName, int userId) {
-            try {
-                return context.getPackageManager()
-                        .getResourcesForApplicationAsUser(packageName, userId);
-            } catch (PackageManager.NameNotFoundException e) {
-                Slog.d(TAG, "Unknown package in user " + userId + ": "
-                        + packageName, e);
-                return null;
-            }
         }
 
         void writeToXml(@NonNull XmlSerializer out) throws IOException {

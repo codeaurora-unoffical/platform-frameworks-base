@@ -17,6 +17,7 @@
 package android.media.tv.tuner.frontend;
 
 import android.annotation.IntDef;
+import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
@@ -125,9 +126,9 @@ public class DvbtFrontendSettings extends FrontendSettings {
     /** @hide */
     @IntDef(flag = true,
             prefix = "CONSTELLATION_",
-            value = {CONSTELLATION_UNDEFINED, CONSTELLATION_AUTO, CONSTELLATION_CONSTELLATION_QPSK,
-                    CONSTELLATION_CONSTELLATION_16QAM, CONSTELLATION_CONSTELLATION_64QAM,
-                    CONSTELLATION_CONSTELLATION_256QAM})
+            value = {CONSTELLATION_UNDEFINED, CONSTELLATION_AUTO, CONSTELLATION_QPSK,
+                    CONSTELLATION_16QAM, CONSTELLATION_64QAM,
+                    CONSTELLATION_256QAM})
     @Retention(RetentionPolicy.SOURCE)
     public @interface Constellation {}
 
@@ -142,22 +143,22 @@ public class DvbtFrontendSettings extends FrontendSettings {
     /**
      * QPSK Constellation.
      */
-    public static final int CONSTELLATION_CONSTELLATION_QPSK =
+    public static final int CONSTELLATION_QPSK =
             Constants.FrontendDvbtConstellation.CONSTELLATION_QPSK;
     /**
      * 16QAM Constellation.
      */
-    public static final int CONSTELLATION_CONSTELLATION_16QAM =
+    public static final int CONSTELLATION_16QAM =
             Constants.FrontendDvbtConstellation.CONSTELLATION_16QAM;
     /**
      * 64QAM Constellation.
      */
-    public static final int CONSTELLATION_CONSTELLATION_64QAM =
+    public static final int CONSTELLATION_64QAM =
             Constants.FrontendDvbtConstellation.CONSTELLATION_64QAM;
     /**
      * 256QAM Constellation.
      */
-    public static final int CONSTELLATION_CONSTELLATION_256QAM =
+    public static final int CONSTELLATION_256QAM =
             Constants.FrontendDvbtConstellation.CONSTELLATION_256QAM;
 
 
@@ -275,11 +276,11 @@ public class DvbtFrontendSettings extends FrontendSettings {
     @IntDef(flag = true,
             prefix = "GUARD_INTERVAL_",
             value = {GUARD_INTERVAL_UNDEFINED, GUARD_INTERVAL_AUTO,
-            GUARD_INTERVAL_INTERVAL_1_32, GUARD_INTERVAL_INTERVAL_1_16,
-            GUARD_INTERVAL_INTERVAL_1_8, GUARD_INTERVAL_INTERVAL_1_4,
-            GUARD_INTERVAL_INTERVAL_1_128,
-            GUARD_INTERVAL_INTERVAL_19_128,
-            GUARD_INTERVAL_INTERVAL_19_256})
+            GUARD_INTERVAL_1_32, GUARD_INTERVAL_1_16,
+            GUARD_INTERVAL_1_8, GUARD_INTERVAL_1_4,
+            GUARD_INTERVAL_1_128,
+            GUARD_INTERVAL_19_128,
+            GUARD_INTERVAL_19_256})
     @Retention(RetentionPolicy.SOURCE)
     public @interface GuardInterval {}
 
@@ -295,37 +296,37 @@ public class DvbtFrontendSettings extends FrontendSettings {
     /**
      * 1/32 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_1_32 =
+    public static final int GUARD_INTERVAL_1_32 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_1_32;
     /**
      * 1/16 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_1_16 =
+    public static final int GUARD_INTERVAL_1_16 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_1_16;
     /**
      * 1/8 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_1_8 =
+    public static final int GUARD_INTERVAL_1_8 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_1_8;
     /**
      * 1/4 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_1_4 =
+    public static final int GUARD_INTERVAL_1_4 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_1_4;
     /**
      * 1/128 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_1_128 =
+    public static final int GUARD_INTERVAL_1_128 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_1_128;
     /**
      * 19/128 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_19_128 =
+    public static final int GUARD_INTERVAL_19_128 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_19_128;
     /**
      * 19/256 Guard Interval.
      */
-    public static final int GUARD_INTERVAL_INTERVAL_19_256 =
+    public static final int GUARD_INTERVAL_19_256 =
             Constants.FrontendDvbtGuardInterval.INTERVAL_19_256;
 
     /** @hide */
@@ -435,14 +436,14 @@ public class DvbtFrontendSettings extends FrontendSettings {
      * Gets Code Rate for High Priority level.
      */
     @CodeRate
-    public int getHpCodeRate() {
+    public int getHighPriorityCodeRate() {
         return mHpCodeRate;
     }
     /**
      * Gets Code Rate for Low Priority level.
      */
     @CodeRate
-    public int getLpCodeRate() {
+    public int getLowPriorityCodeRate() {
         return mLpCodeRate;
     }
     /**
@@ -506,26 +507,41 @@ public class DvbtFrontendSettings extends FrontendSettings {
     /**
      * Builder for {@link DvbtFrontendSettings}.
      */
-    public static class Builder extends FrontendSettings.Builder<Builder> {
-        private int mTransmissionMode;
-        private int mBandwidth;
-        private int mConstellation;
-        private int mHierarchy;
-        private int mHpCodeRate;
-        private int mLpCodeRate;
-        private int mGuardInterval;
-        private boolean mIsHighPriority;
-        private int mStandard;
-        private boolean mIsMiso;
-        private int mPlpMode;
-        private int mPlpId;
-        private int mPlpGroupId;
+    public static class Builder {
+        private int mFrequency = 0;
+        private int mTransmissionMode = TRANSMISSION_MODE_UNDEFINED;
+        private int mBandwidth = BANDWIDTH_UNDEFINED;
+        private int mConstellation = CONSTELLATION_UNDEFINED;
+        private int mHierarchy = HIERARCHY_UNDEFINED;
+        private int mHpCodeRate = CODERATE_UNDEFINED;
+        private int mLpCodeRate = CODERATE_UNDEFINED;
+        private int mGuardInterval = GUARD_INTERVAL_UNDEFINED;
+        private boolean mIsHighPriority = false;
+        private int mStandard = STANDARD_AUTO;
+        private boolean mIsMiso = false;
+        private int mPlpMode = PLP_MODE_UNDEFINED;
+        private int mPlpId = 0;
+        private int mPlpGroupId = 0;
 
         private Builder() {
         }
 
         /**
+         * Sets frequency in Hz.
+         *
+         * <p>Default value is 0.
+         */
+        @NonNull
+        @IntRange(from = 1)
+        public Builder setFrequency(int frequency) {
+            mFrequency = frequency;
+            return this;
+        }
+
+        /**
          * Sets Transmission Mode.
+         *
+         * <p>Default value is {@link #TRANSMISSION_MODE_UNDEFINED}.
          */
         @NonNull
         public Builder setTransmissionMode(@TransmissionMode int transmissionMode) {
@@ -534,6 +550,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Bandwidth.
+         *
+         * <p>Default value is {@link #BANDWIDTH_UNDEFINED}.
          */
         @NonNull
         public Builder setBandwidth(@Bandwidth int bandwidth) {
@@ -542,6 +560,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Constellation.
+         *
+         * <p>Default value is {@link #CONSTELLATION_UNDEFINED}.
          */
         @NonNull
         public Builder setConstellation(@Constellation int constellation) {
@@ -550,6 +570,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Hierarchy.
+         *
+         * <p>Default value is {@link #HIERARCHY_UNDEFINED}.
          */
         @NonNull
         public Builder setHierarchy(@Hierarchy int hierarchy) {
@@ -558,22 +580,28 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Code Rate for High Priority level.
+         *
+         * <p>Default value is {@link #CODERATE_UNDEFINED}.
          */
         @NonNull
-        public Builder setHpCodeRate(@CodeRate int hpCodeRate) {
+        public Builder setHighPriorityCodeRate(@CodeRate int hpCodeRate) {
             mHpCodeRate = hpCodeRate;
             return this;
         }
         /**
          * Sets Code Rate for Low Priority level.
+         *
+         * <p>Default value is {@link #CODERATE_UNDEFINED}.
          */
         @NonNull
-        public Builder setLpCodeRate(@CodeRate int lpCodeRate) {
+        public Builder setLowPriorityCodeRate(@CodeRate int lpCodeRate) {
             mLpCodeRate = lpCodeRate;
             return this;
         }
         /**
          * Sets Guard Interval.
+         *
+         * <p>Default value is {@link #GUARD_INTERVAL_UNDEFINED}.
          */
         @NonNull
         public Builder setGuardInterval(@GuardInterval int guardInterval) {
@@ -582,6 +610,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets whether it's high priority.
+         *
+         * <p>Default value is {@code false}.
          */
         @NonNull
         public Builder setHighPriority(boolean isHighPriority) {
@@ -590,6 +620,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Standard.
+         *
+         * <p>Default value is {@link #STANDARD_AUTO}.
          */
         @NonNull
         public Builder setStandard(@Standard int standard) {
@@ -598,6 +630,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets whether it's MISO.
+         *
+         * <p>Default value is {@code false}.
          */
         @NonNull
         public Builder setMiso(boolean isMiso) {
@@ -606,6 +640,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Physical Layer Pipe (PLP) Mode.
+         *
+         * <p>Default value is {@link #PLP_MODE_UNDEFINED}.
          */
         @NonNull
         public Builder setPlpMode(@PlpMode int plpMode) {
@@ -614,6 +650,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Physical Layer Pipe (PLP) ID.
+         *
+         * <p>Default value is 0.
          */
         @NonNull
         public Builder setPlpId(int plpId) {
@@ -622,6 +660,8 @@ public class DvbtFrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Physical Layer Pipe (PLP) group ID.
+         *
+         * <p>Default value is 0.
          */
         @NonNull
         public Builder setPlpGroupId(int plpGroupId) {
@@ -637,11 +677,6 @@ public class DvbtFrontendSettings extends FrontendSettings {
             return new DvbtFrontendSettings(mFrequency, mTransmissionMode, mBandwidth,
                     mConstellation, mHierarchy, mHpCodeRate, mLpCodeRate, mGuardInterval,
                     mIsHighPriority, mStandard, mIsMiso, mPlpMode, mPlpId, mPlpGroupId);
-        }
-
-        @Override
-        Builder self() {
-            return this;
         }
     }
 

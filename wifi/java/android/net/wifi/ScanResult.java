@@ -16,16 +16,15 @@
 
 package android.net.wifi;
 
-import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.compat.annotation.UnsupportedAppUsage;
+import android.net.wifi.WifiAnnotations.ChannelWidth;
+import android.net.wifi.WifiAnnotations.WifiStandard;
 import android.os.Parcel;
 import android.os.Parcelable;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -313,17 +312,6 @@ public class ScanResult implements Parcelable {
      */
     public static final int WIFI_STANDARD_11AX = 6;
 
-    /** @hide */
-    @IntDef(prefix = { "WIFI_STANDARD_" }, value = {
-            WIFI_STANDARD_UNKNOWN,
-            WIFI_STANDARD_LEGACY,
-            WIFI_STANDARD_11N,
-            WIFI_STANDARD_11AC,
-            WIFI_STANDARD_11AX
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface WifiStandard{}
-
     /**
      * AP wifi standard.
      */
@@ -368,7 +356,7 @@ public class ScanResult implements Parcelable {
      * {@link #CHANNEL_WIDTH_80MHZ}, {@link #CHANNEL_WIDTH_160MHZ}
      * or {@link #CHANNEL_WIDTH_80MHZ_PLUS_MHZ}.
      */
-    public int channelWidth;
+    public @ChannelWidth int channelWidth;
 
     /**
      * Not used if the AP bandwidth is 20 MHz
@@ -707,31 +695,6 @@ public class ScanResult implements Parcelable {
      */
     public AnqpInformationElement[] anqpElements;
 
-    /**
-     * Flag indicating if this AP is a carrier AP. The determination is based
-     * on the AP's SSID and if AP is using EAP security.
-     *
-     * @hide
-     */
-    // TODO(b/144431927): remove once migrated to Suggestions
-    public boolean isCarrierAp;
-
-    /**
-     * The EAP type {@link WifiEnterpriseConfig.Eap} associated with this AP if it is a carrier AP.
-     *
-     * @hide
-     */
-    // TODO(b/144431927): remove once migrated to Suggestions
-    public int carrierApEapType;
-
-    /**
-     * The name of the carrier that's associated with this AP if it is a carrier AP.
-     *
-     * @hide
-     */
-    // TODO(b/144431927): remove once migrated to Suggestions
-    public String carrierName;
-
     /** {@hide} */
     public ScanResult(WifiSsid wifiSsid, String BSSID, long hessid, int anqpDomainId,
             byte[] osuProviders, String caps, int level, int frequency, long tsf) {
@@ -756,9 +719,6 @@ public class ScanResult implements Parcelable {
         this.centerFreq0 = UNSPECIFIED;
         this.centerFreq1 = UNSPECIFIED;
         this.flags = 0;
-        this.isCarrierAp = false;
-        this.carrierApEapType = UNSPECIFIED;
-        this.carrierName = null;
         this.radioChainInfos = null;
         this.mWifiStandard = WIFI_STANDARD_UNKNOWN;
     }
@@ -779,9 +739,6 @@ public class ScanResult implements Parcelable {
         this.centerFreq0 = UNSPECIFIED;
         this.centerFreq1 = UNSPECIFIED;
         this.flags = 0;
-        this.isCarrierAp = false;
-        this.carrierApEapType = UNSPECIFIED;
-        this.carrierName = null;
         this.radioChainInfos = null;
         this.mWifiStandard = WIFI_STANDARD_UNKNOWN;
     }
@@ -809,9 +766,6 @@ public class ScanResult implements Parcelable {
         } else {
             this.flags = 0;
         }
-        this.isCarrierAp = false;
-        this.carrierApEapType = UNSPECIFIED;
-        this.carrierName = null;
         this.radioChainInfos = null;
         this.mWifiStandard = WIFI_STANDARD_UNKNOWN;
     }
@@ -851,9 +805,6 @@ public class ScanResult implements Parcelable {
             venueName = source.venueName;
             operatorFriendlyName = source.operatorFriendlyName;
             flags = source.flags;
-            isCarrierAp = source.isCarrierAp;
-            carrierApEapType = source.carrierApEapType;
-            carrierName = source.carrierName;
             radioChainInfos = source.radioChainInfos;
             this.mWifiStandard = source.mWifiStandard;
         }
@@ -893,9 +844,6 @@ public class ScanResult implements Parcelable {
         sb.append(", standard: ").append(wifiStandardToString(mWifiStandard));
         sb.append(", 80211mcResponder: ");
         sb.append(((flags & FLAG_80211mc_RESPONDER) != 0) ? "is supported" : "is not supported");
-        sb.append(", Carrier AP: ").append(isCarrierAp ? "yes" : "no");
-        sb.append(", Carrier AP EAP Type: ").append(carrierApEapType);
-        sb.append(", Carrier name: ").append(carrierName);
         sb.append(", Radio Chain Infos: ").append(Arrays.toString(radioChainInfos));
         return sb.toString();
     }
@@ -966,9 +914,6 @@ public class ScanResult implements Parcelable {
         } else {
             dest.writeInt(0);
         }
-        dest.writeInt(isCarrierAp ? 1 : 0);
-        dest.writeInt(carrierApEapType);
-        dest.writeString(carrierName);
 
         if (radioChainInfos != null) {
             dest.writeInt(radioChainInfos.length);
@@ -1048,9 +993,6 @@ public class ScanResult implements Parcelable {
                                 new AnqpInformationElement(vendorId, elementId, payload);
                     }
                 }
-                sr.isCarrierAp = in.readInt() != 0;
-                sr.carrierApEapType = in.readInt();
-                sr.carrierName = in.readString();
                 n = in.readInt();
                 if (n != 0) {
                     sr.radioChainInfos = new RadioChainInfo[n];

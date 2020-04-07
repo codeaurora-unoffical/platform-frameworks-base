@@ -42,6 +42,7 @@ import android.os.Looper;
 import android.os.UserHandle;
 import android.view.Display;
 import android.view.DisplayAdjustments;
+import android.view.WindowManager.LayoutParams.WindowType;
 import android.view.autofill.AutofillManager.AutofillClient;
 
 import java.io.File;
@@ -163,8 +164,8 @@ public class ContextWrapper extends Context {
 
     /** @hide */
     @Override
-    public @Nullable String getFeatureId() {
-        return mBase.getFeatureId();
+    public @Nullable String getAttributionTag() {
+        return mBase.getAttributionTag();
     }
 
     @Override
@@ -978,13 +979,13 @@ public class ContextWrapper extends Context {
 
     @Override
     @NonNull
-    public Context createWindowContext(int type, @Nullable Bundle options) {
+    public Context createWindowContext(@WindowType int type, @Nullable Bundle options) {
         return mBase.createWindowContext(type, options);
     }
 
     @Override
-    public @NonNull Context createFeatureContext(@Nullable String featureId) {
-        return mBase.createFeatureContext(featureId);
+    public @NonNull Context createAttributionContext(@Nullable String attributionTag) {
+        return mBase.createAttributionContext(attributionTag);
     }
 
     @Override

@@ -17,6 +17,7 @@
 package android.media.tv.tuner.frontend;
 
 import android.annotation.IntDef;
+import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
@@ -325,16 +326,31 @@ public class Atsc3FrontendSettings extends FrontendSettings {
     /**
      * Builder for {@link Atsc3FrontendSettings}.
      */
-    public static class Builder extends FrontendSettings.Builder<Builder> {
-        private int mBandwidth;
-        private int mDemodOutputFormat;
-        private Atsc3PlpSettings[] mPlpSettings;
+    public static class Builder {
+        private int mFrequency = 0;
+        private int mBandwidth = BANDWIDTH_UNDEFINED;
+        private int mDemodOutputFormat = DEMOD_OUTPUT_FORMAT_UNDEFINED;
+        private Atsc3PlpSettings[] mPlpSettings = {};
 
         private Builder() {
         }
 
         /**
+         * Sets frequency in Hz.
+         *
+         * <p>Default value is 0.
+         */
+        @NonNull
+        @IntRange(from = 1)
+        public Builder setFrequency(int frequency) {
+            mFrequency = frequency;
+            return this;
+        }
+
+        /**
          * Sets bandwidth.
+         *
+         * <p>Default value is {@link #BANDWIDTH_UNDEFINED}.
          */
         @NonNull
         public Builder setBandwidth(int bandwidth) {
@@ -343,6 +359,8 @@ public class Atsc3FrontendSettings extends FrontendSettings {
         }
         /**
          * Sets Demod Output Format.
+         *
+         * <p>Default value is {@link #DEMOD_OUTPUT_FORMAT_UNDEFINED}.
          */
         @NonNull
         public Builder setDemodOutputFormat(@DemodOutputFormat int demodOutputFormat) {
@@ -351,6 +369,8 @@ public class Atsc3FrontendSettings extends FrontendSettings {
         }
         /**
          * Sets PLP Settings.
+         *
+         * <p>Default value an empty array.
          */
         @NonNull
         public Builder setPlpSettings(@NonNull Atsc3PlpSettings[] plpSettings) {
@@ -365,11 +385,6 @@ public class Atsc3FrontendSettings extends FrontendSettings {
         public Atsc3FrontendSettings build() {
             return new Atsc3FrontendSettings(
                 mFrequency, mBandwidth, mDemodOutputFormat, mPlpSettings);
-        }
-
-        @Override
-        Builder self() {
-            return this;
         }
     }
 

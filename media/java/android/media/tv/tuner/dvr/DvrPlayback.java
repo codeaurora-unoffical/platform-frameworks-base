@@ -21,7 +21,7 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.SystemApi;
 import android.hardware.tv.tuner.V1_0.Constants;
-import android.media.tv.tuner.TunerConstants.Result;
+import android.media.tv.tuner.Tuner.Result;
 import android.media.tv.tuner.filter.Filter;
 import android.os.ParcelFileDescriptor;
 
@@ -69,7 +69,7 @@ public class DvrPlayback implements AutoCloseable {
      */
     public static final int PLAYBACK_STATUS_FULL = Constants.PlaybackStatus.SPACE_FULL;
 
-    long mNativeContext;
+    private long mNativeContext;
 
     private native int nativeAttachFilter(Filter filter);
     private native int nativeDetachFilter(Filter filter);

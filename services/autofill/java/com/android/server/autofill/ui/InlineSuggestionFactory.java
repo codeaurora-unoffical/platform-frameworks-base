@@ -21,7 +21,6 @@ import static com.android.server.autofill.Helper.sVerbose;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.content.Context;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.service.autofill.Dataset;
@@ -39,7 +38,6 @@ import android.view.inputmethod.InlineSuggestion;
 import android.view.inputmethod.InlineSuggestionInfo;
 import android.view.inputmethod.InlineSuggestionsRequest;
 import android.view.inputmethod.InlineSuggestionsResponse;
-import android.widget.Toast;
 
 import com.android.internal.view.inline.IInlineContentCallback;
 import com.android.internal.view.inline.IInlineContentProvider;
@@ -73,8 +71,7 @@ public final class InlineSuggestionFactory {
     @Nullable
     public static InlineSuggestionsResponse createInlineSuggestionsResponse(
             @NonNull InlineSuggestionsRequest request, @NonNull FillResponse response,
-            @Nullable String filterText, @Nullable List<InlinePresentation> inlineActions,
-            @NonNull AutofillId autofillId, @NonNull Context context,
+            @Nullable String filterText, @NonNull AutofillId autofillId,
             @NonNull AutoFillUI.AutoFillUiCallback client, @NonNull Runnable onErrorCallback,
             @Nullable RemoteInlineSuggestionRenderService remoteRenderService) {
         if (sDebug) Slog.d(TAG, "createInlineSuggestionsResponse called");
@@ -96,8 +93,8 @@ public final class InlineSuggestionFactory {
         final InlinePresentation inlineAuthentication =
                 response.getAuthentication() == null ? null : response.getInlinePresentation();
         return createInlineSuggestionsResponseInternal(/* isAugmented= */ false, request,
-                response.getDatasets(), filterText, inlineAuthentication, inlineActions, autofillId,
-                context, onErrorCallback, onClickFactory, remoteRenderService);
+                response.getDatasets(), filterText, inlineAuthentication, autofillId,
+                onErrorCallback, onClickFactory, remoteRenderService);
     }
 
     /**
@@ -107,16 +104,14 @@ public final class InlineSuggestionFactory {
     @Nullable
     public static InlineSuggestionsResponse createAugmentedInlineSuggestionsResponse(
             @NonNull InlineSuggestionsRequest request, @NonNull List<Dataset> datasets,
-            @Nullable List<InlinePresentation> inlineActions,
-            @NonNull AutofillId autofillId, @NonNull Context context,
+            @NonNull AutofillId autofillId,
             @NonNull InlineSuggestionUiCallback inlineSuggestionUiCallback,
             @NonNull Runnable onErrorCallback,
             @Nullable RemoteInlineSuggestionRenderService remoteRenderService) {
         if (sDebug) Slog.d(TAG, "createAugmentedInlineSuggestionsResponse called");
         return createInlineSuggestionsResponseInternal(/* isAugmented= */ true, request,
                 datasets, /* filterText= */ null, /* inlineAuthentication= */ null,
-                inlineActions, autofillId, context, onErrorCallback,
-                (dataset, datasetIndex) ->
+                autofillId, onErrorCallback, (dataset, datasetIndex) ->
                         inlineSuggestionUiCallback.autofill(dataset), remoteRenderService);
     }
 
@@ -124,10 +119,8 @@ public final class InlineSuggestionFactory {
     private static InlineSuggestionsResponse createInlineSuggestionsResponseInternal(
             boolean isAugmented, @NonNull InlineSuggestionsRequest request,
             @Nullable List<Dataset> datasets, @Nullable String filterText,
-            @Nullable InlinePresentation inlineAuthentication,
-            @Nullable List<InlinePresentation> inlineActions, @NonNull AutofillId autofillId,
-            @NonNull Context context, @NonNull Runnable onErrorCallback,
-            @NonNull BiConsumer<Dataset, Integer> onClickFactory,
+            @Nullable InlinePresentation inlineAuthentication, @NonNull AutofillId autofillId,
+            @NonNull Runnable onErrorCallback, @NonNull BiConsumer<Dataset, Integer> onClickFactory,
             @Nullable RemoteInlineSuggestionRenderService remoteRenderService) {
 
         final ArrayList<InlineSuggestion> inlineSuggestions = new ArrayList<>();
@@ -169,16 +162,6 @@ public final class InlineSuggestionFactory {
 
             inlineSuggestions.add(inlineSuggestion);
         }
-        // We should only add inline actions if there is at least one suggestion.
-        if (!inlineSuggestions.isEmpty() && inlineActions != null) {
-            for (InlinePresentation inlinePresentation : inlineActions) {
-                final InlineSuggestion inlineAction = createInlineAction(isAugmented, context,
-                        mergedInlinePresentation(request, 0, inlinePresentation),
-                        remoteRenderService, onErrorCallback, request.getHostInputToken(),
-                        request.getHostDisplayId());
-                inlineSuggestions.add(inlineAction);
-            }
-        }
         return new InlineSuggestionsResponse(inlineSuggestions);
     }
 
@@ -213,27 +196,6 @@ public final class InlineSuggestionFactory {
         return valueText.toLowerCase().startsWith(constraintLowerCase);
     }
 
-
-    private static InlineSuggestion createInlineAction(boolean isAugmented,
-            @NonNull Context context,
-            @NonNull InlinePresentation inlinePresentation,
-            @Nullable RemoteInlineSuggestionRenderService remoteRenderService,
-            @NonNull Runnable onErrorCallback, @Nullable IBinder hostInputToken,
-            int displayId) {
-        final InlineSuggestionInfo inlineSuggestionInfo = new InlineSuggestionInfo(
-                inlinePresentation.getInlinePresentationSpec(),
-                isAugmented ? InlineSuggestionInfo.SOURCE_PLATFORM
-                        : InlineSuggestionInfo.SOURCE_AUTOFILL,
-                inlinePresentation.getAutofillHints(),
-                InlineSuggestionInfo.TYPE_ACTION, inlinePresentation.isPinned());
-        final Runnable onClickAction = () -> {
-            Toast.makeText(context, "icon clicked", Toast.LENGTH_SHORT).show();
-        };
-        return new InlineSuggestion(inlineSuggestionInfo,
-                createInlineContentProvider(inlinePresentation, onClickAction, onErrorCallback,
-                        remoteRenderService, hostInputToken, displayId));
-    }
-
     private static InlineSuggestion createInlineSuggestion(boolean isAugmented,
             @NonNull Dataset dataset, int datasetIndex,
             @NonNull InlinePresentation inlinePresentation,
@@ -241,12 +203,15 @@ public final class InlineSuggestionFactory {
             @NonNull RemoteInlineSuggestionRenderService remoteRenderService,
             @NonNull Runnable onErrorCallback, @Nullable IBinder hostInputToken,
             int displayId) {
+        final String suggestionSource = isAugmented ? InlineSuggestionInfo.SOURCE_PLATFORM
+                : InlineSuggestionInfo.SOURCE_AUTOFILL;
+        final String suggestionType =
+                dataset.getAuthentication() == null ? InlineSuggestionInfo.TYPE_SUGGESTION
+                        : InlineSuggestionInfo.TYPE_ACTION;
         final InlineSuggestionInfo inlineSuggestionInfo = new InlineSuggestionInfo(
-                inlinePresentation.getInlinePresentationSpec(),
-                isAugmented ? InlineSuggestionInfo.SOURCE_PLATFORM
-                        : InlineSuggestionInfo.SOURCE_AUTOFILL,
-                inlinePresentation.getAutofillHints(),
-                InlineSuggestionInfo.TYPE_SUGGESTION, inlinePresentation.isPinned());
+                inlinePresentation.getInlinePresentationSpec(), suggestionSource,
+                inlinePresentation.getAutofillHints(), suggestionType,
+                inlinePresentation.isPinned());
 
         final InlineSuggestion inlineSuggestion = new InlineSuggestion(inlineSuggestionInfo,
                 createInlineContentProvider(inlinePresentation,
@@ -264,7 +229,7 @@ public final class InlineSuggestionFactory {
         final InlineSuggestionInfo inlineSuggestionInfo = new InlineSuggestionInfo(
                 inlinePresentation.getInlinePresentationSpec(),
                 InlineSuggestionInfo.SOURCE_AUTOFILL, inlinePresentation.getAutofillHints(),
-                InlineSuggestionInfo.TYPE_SUGGESTION, inlinePresentation.isPinned());
+                InlineSuggestionInfo.TYPE_ACTION, inlinePresentation.isPinned());
 
         return new InlineSuggestion(inlineSuggestionInfo,
                 createInlineContentProvider(inlinePresentation,
@@ -323,8 +288,14 @@ public final class InlineSuggestionFactory {
             @NonNull Runnable onErrorCallback) {
         return new IInlineSuggestionUiCallback.Stub() {
             @Override
-            public void onAutofill() throws RemoteException {
+            public void onClick() throws RemoteException {
                 onAutofillCallback.run();
+                callback.onClick();
+            }
+
+            @Override
+            public void onLongClick() throws RemoteException {
+                callback.onLongClick();
             }
 
             @Override

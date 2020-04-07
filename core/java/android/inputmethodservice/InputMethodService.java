@@ -20,6 +20,7 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_NONE;
 import static android.view.WindowInsets.Type.navigationBars;
+import static android.view.WindowInsets.Type.statusBars;
 import static android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS;
 
 import static java.lang.annotation.RetentionPolicy.SOURCE;
@@ -71,6 +72,7 @@ import android.view.ViewRootImpl;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.view.WindowInsets.Side;
 import android.view.WindowManager;
 import android.view.animation.AnimationUtils;
 import android.view.autofill.AutofillId;
@@ -876,8 +878,7 @@ public class InputMethodService extends AbstractInputMethodService {
     }
 
     private void notifyImeHidden() {
-        setImeWindowStatus(IME_ACTIVE | IME_INVISIBLE, mBackDisposition);
-        onPreRenderedWindowVisibilityChanged(false /* setVisible */);
+        doHideWindow();
     }
 
     private void removeImeSurface() {
@@ -1246,7 +1247,8 @@ public class InputMethodService extends AbstractInputMethodService {
                 Context.LAYOUT_INFLATER_SERVICE);
         mWindow = new SoftInputWindow(this, "InputMethod", mTheme, null, null, mDispatcherState,
                 WindowManager.LayoutParams.TYPE_INPUT_METHOD, Gravity.BOTTOM, false);
-        mWindow.getWindow().getAttributes().setFitInsetsTypes(WindowInsets.Type.statusBars());
+        mWindow.getWindow().getAttributes().setFitInsetsTypes(statusBars() | navigationBars());
+        mWindow.getWindow().getAttributes().setFitInsetsSides(Side.all() & ~Side.BOTTOM);
 
         // IME layout should always be inset by navigation bar, no matter its current visibility,
         // unless automotive requests it, since automotive may hide the navigation bar.
@@ -2281,7 +2283,9 @@ public class InputMethodService extends AbstractInputMethodService {
         if (mDecorViewVisible) {
             // When insets API is enabled, it is responsible for client and server side
             // visibility of IME window.
-            if (!isVisibilityAppliedUsingInsetsConsumer()) {
+            if (isVisibilityAppliedUsingInsetsConsumer()) {
+                mInputView.dispatchWindowVisibilityChanged(View.GONE);
+            } else {
                 mWindow.hide();
             }
             mDecorViewVisible = false;

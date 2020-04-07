@@ -16,6 +16,7 @@
 
 package com.android.server.pm;
 
+import static android.app.AppOpsManager.MODE_DEFAULT;
 import static android.content.pm.DataLoaderType.INCREMENTAL;
 import static android.content.pm.DataLoaderType.STREAMING;
 import static android.content.pm.PackageInstaller.LOCATION_DATA_APP;
@@ -50,6 +51,8 @@ import static com.android.server.pm.PackageInstallerService.prepareStageDir;
 import android.Manifest;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.Notification;
+import android.app.NotificationManager;
 import android.app.admin.DevicePolicyEventLogger;
 import android.app.admin.DevicePolicyManagerInternal;
 import android.content.ComponentName;
@@ -118,9 +121,11 @@ import android.util.Slog;
 import android.util.SparseIntArray;
 import android.util.apk.ApkSignatureVerifier;
 
+import com.android.internal.R;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.content.NativeLibraryHelper;
 import com.android.internal.content.PackageHelper;
+import com.android.internal.messages.nano.SystemMessageProto;
 import com.android.internal.os.SomeArgs;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.IndentingPrintWriter;
@@ -166,6 +171,8 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
     private static final String TAG_GRANTED_RUNTIME_PERMISSION = "granted-runtime-permission";
     private static final String TAG_WHITELISTED_RESTRICTED_PERMISSION =
             "whitelisted-restricted-permission";
+    private static final String TAG_AUTO_REVOKE_PERMISSIONS_MODE =
+            "auto-revoke-permissions-mode";
     private static final String ATTR_SESSION_ID = "sessionId";
     private static final String ATTR_USER_ID = "userId";
     private static final String ATTR_INSTALLER_PACKAGE_NAME = "installerPackageName";
@@ -311,8 +318,41 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
     @GuardedBy("mLock")
     private int mParentSessionId;
 
+    static class FileEntry {
+        private final int mIndex;
+        private final InstallationFile mFile;
+
+        FileEntry(int index, InstallationFile file) {
+            this.mIndex = index;
+            this.mFile = file;
+        }
+
+        int getIndex() {
+            return this.mIndex;
+        }
+
+        InstallationFile getFile() {
+            return this.mFile;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof FileEntry)) {
+                return false;
+            }
+            final FileEntry rhs = (FileEntry) obj;
+            return (mFile.getLocation() == rhs.mFile.getLocation()) && TextUtils.equals(
+                    mFile.getName(), rhs.mFile.getName());
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mFile.getLocation(), mFile.getName());
+        }
+    }
+
     @GuardedBy("mLock")
-    private ArrayList<InstallationFile> mFiles = new ArrayList<>();
+    private ArraySet<FileEntry> mFiles = new ArraySet<>();
 
     @GuardedBy("mLock")
     private boolean mStagedSessionApplied;
@@ -404,8 +444,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                     final int returnCode = args.argi1;
                     args.recycle();
 
-                    PackageInstallerService.sendOnPackageInstalled(mContext,
-                            statusReceiver, sessionId,
+                    sendOnPackageInstalled(mContext, statusReceiver, sessionId,
                             isInstallerDeviceOwnerOrAffiliatedProfileOwnerLocked(), userId,
                             packageName, returnCode, message, extras);
 
@@ -516,8 +555,12 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         this.mParentSessionId = parentSessionId;
 
         if (files != null) {
-            for (InstallationFile file : files) {
-                mFiles.add(file);
+            for (int i = 0, size = files.length; i < size; ++i) {
+                InstallationFile file = files[i];
+                if (!mFiles.add(new FileEntry(i, file))) {
+                    throw new IllegalArgumentException(
+                            "Trying to add a duplicate installation file");
+                }
             }
         }
 
@@ -557,11 +600,41 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         }
     }
 
-    public SessionInfo generateInfo() {
-        return generateInfo(true);
+    /**
+     * Returns {@code true} if the {@link SessionInfo} object should be produced with potentially
+     * sensitive data scrubbed from its fields.
+     *
+     * @param callingUid the uid of the caller; the recipient of the {@link SessionInfo} that may
+     *                   need to be scrubbed
+     */
+    private boolean shouldScrubData(int callingUid) {
+        return !(callingUid < Process.FIRST_APPLICATION_UID || getInstallerUid() == callingUid);
     }
 
-    public SessionInfo generateInfo(boolean includeIcon) {
+    /**
+     * Generates a {@link SessionInfo} object for the provided uid. This may result in some fields
+     * that may contain sensitive info being filtered.
+     *
+     * @param includeIcon true if the icon should be included in the object
+     * @param callingUid the uid of the caller; the recipient of the {@link SessionInfo} that may
+     *                   need to be scrubbed
+     * @see #shouldScrubData(int)
+     */
+    public SessionInfo generateInfoForCaller(boolean includeIcon, int callingUid) {
+        return generateInfoInternal(includeIcon, shouldScrubData(callingUid));
+    }
+
+    /**
+     * Generates a {@link SessionInfo} object to ensure proper hiding of sensitive fields.
+     *
+     * @param includeIcon true if the icon should be included in the object
+     * @see #generateInfoForCaller(boolean, int)
+     */
+    public SessionInfo generateInfoScrubbed(boolean includeIcon) {
+        return generateInfoInternal(includeIcon, true /*scrubData*/);
+    }
+
+    private SessionInfo generateInfoInternal(boolean includeIcon, boolean scrubData) {
         final SessionInfo info = new SessionInfo();
         synchronized (mLock) {
             info.sessionId = sessionId;
@@ -584,11 +657,16 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
             info.appLabel = params.appLabel;
 
             info.installLocation = params.installLocation;
-            info.originatingUri = params.originatingUri;
+            if (!scrubData) {
+                info.originatingUri = params.originatingUri;
+            }
             info.originatingUid = params.originatingUid;
-            info.referrerUri = params.referrerUri;
+            if (!scrubData) {
+                info.referrerUri = params.referrerUri;
+            }
             info.grantedRuntimePermissions = params.grantedRuntimePermissions;
             info.whitelistedRestrictedPermissions = params.whitelistedRestrictedPermissions;
+            info.autoRevokePermissionsMode = params.autoRevokePermissionsMode;
             info.installFlags = params.installFlags;
             info.isMultiPackage = params.isMultiPackage;
             info.isStaged = params.isStaged;
@@ -716,9 +794,19 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
             return result;
         }
 
-        String[] result = new String[mFiles.size()];
-        for (int i = 0, size = mFiles.size(); i < size; ++i) {
-            result[i] = mFiles.get(i).getName();
+        InstallationFile[] files = getInstallationFilesLocked();
+        String[] result = new String[files.length];
+        for (int i = 0, size = files.length; i < size; ++i) {
+            result[i] = files[i].getName();
+        }
+        return result;
+    }
+
+    @GuardedBy("mLock")
+    private InstallationFile[] getInstallationFilesLocked() {
+        final InstallationFile[] result = new InstallationFile[mFiles.size()];
+        for (FileEntry fileEntry : mFiles) {
+            result[fileEntry.getIndex()] = fileEntry.getFile();
         }
         return result;
     }
@@ -1399,6 +1487,18 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         return e;
     }
 
+    private void onDataLoaderUnrecoverable() {
+        final PackageManagerService packageManagerService = mPm;
+        final String packageName = mPackageName;
+        mHandler.post(() -> {
+            if (packageManagerService.deletePackageX(packageName,
+                    PackageManager.VERSION_CODE_HIGHEST, UserHandle.USER_SYSTEM,
+                    PackageManager.DELETE_ALL_USERS) != PackageManager.DELETE_SUCCEEDED) {
+                Slog.e(TAG, "Failed to uninstall package with failed dataloader: " + packageName);
+            }
+        });
+    }
+
     /**
      * If session should be sealed, then it's sealed to prevent further modification.
      * If the session can't be sealed then it's destroyed.
@@ -1551,8 +1651,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                 }
             }
             if (!success) {
-                PackageInstallerService.sendOnPackageInstalled(mContext,
-                        mRemoteStatusReceiver, sessionId,
+                sendOnPackageInstalled(mContext, mRemoteStatusReceiver, sessionId,
                         isInstallerDeviceOwnerOrAffiliatedProfileOwnerLocked(), userId, null,
                         failure.error, failure.getLocalizedMessage(), null);
                 return;
@@ -1599,8 +1698,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                     intent.setPackage(mPm.getPackageInstallerPackageName());
                     intent.putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId);
 
-                    PackageInstallerService.sendOnUserActionRequired(mContext,
-                            mRemoteStatusReceiver, sessionId, intent);
+                    sendOnUserActionRequired(mContext, mRemoteStatusReceiver, sessionId, intent);
 
                     // Commit was keeping session marked as active until now; release
                     // that extra refcount so session appears idle.
@@ -2410,7 +2508,10 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
             assertCallerIsOwnerOrRootLocked();
             assertPreparedAndNotSealedLocked("addFile");
 
-            mFiles.add(new InstallationFile(location, name, lengthBytes, metadata, signature));
+            if (!mFiles.add(new FileEntry(mFiles.size(),
+                    new InstallationFile(location, name, lengthBytes, metadata, signature)))) {
+                throw new IllegalArgumentException("File already added: " + name);
+            }
         }
     }
 
@@ -2428,7 +2529,10 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
             assertCallerIsOwnerOrRootLocked();
             assertPreparedAndNotSealedLocked("removeFile");
 
-            mFiles.add(new InstallationFile(location, getRemoveMarkerName(name), -1, null, null));
+            if (!mFiles.add(new FileEntry(mFiles.size(),
+                    new InstallationFile(location, getRemoveMarkerName(name), -1, null, null)))) {
+                throw new IllegalArgumentException("File already removed: " + name);
+            }
         }
     }
 
@@ -2448,7 +2552,8 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         final List<InstallationFileParcel> addedFiles = new ArrayList<>();
         final List<String> removedFiles = new ArrayList<>();
 
-        for (InstallationFile file : mFiles) {
+        final InstallationFile[] files = getInstallationFilesLocked();
+        for (InstallationFile file : files) {
             if (sAddedFilter.accept(new File(this.stageDir, file.getName()))) {
                 addedFiles.add(file.getData());
                 continue;
@@ -2471,11 +2576,20 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         IDataLoaderStatusListener listener = new IDataLoaderStatusListener.Stub() {
             @Override
             public void onStatusChanged(int dataLoaderId, int status) {
-                try {
-                    if (status == IDataLoaderStatusListener.DATA_LOADER_DESTROYED) {
+                switch (status) {
+                    case IDataLoaderStatusListener.DATA_LOADER_STOPPED:
+                    case IDataLoaderStatusListener.DATA_LOADER_DESTROYED:
                         return;
-                    }
+                    case IDataLoaderStatusListener.DATA_LOADER_UNRECOVERABLE:
+                        onDataLoaderUnrecoverable();
+                        return;
+                }
 
+                if (mDestroyed || mDataLoaderFinished) {
+                    return;
+                }
+
+                try {
                     IDataLoader dataLoader = dataLoaderManager.getDataLoader(dataLoaderId);
                     if (dataLoader == null) {
                         mDataLoaderFinished = true;
@@ -2490,12 +2604,13 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                             if (manualStartAndDestroy) {
                                 // IncrementalFileStorages will call start after all files are
                                 // created in IncFS.
-                                dataLoader.start();
+                                dataLoader.start(dataLoaderId);
                             }
                             break;
                         }
                         case IDataLoaderStatusListener.DATA_LOADER_STARTED: {
                             dataLoader.prepareImage(
+                                    dataLoaderId,
                                     addedFiles.toArray(
                                             new InstallationFileParcel[addedFiles.size()]),
                                     removedFiles.toArray(new String[removedFiles.size()]));
@@ -2510,7 +2625,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                                 dispatchStreamValidateAndCommit();
                             }
                             if (manualStartAndDestroy) {
-                                dataLoader.destroy();
+                                dataLoader.destroy(dataLoaderId);
                             }
                             break;
                         }
@@ -2520,7 +2635,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                                     new PackageManagerException(INSTALL_FAILED_MEDIA_UNAVAILABLE,
                                             "Failed to prepare image."));
                             if (manualStartAndDestroy) {
-                                dataLoader.destroy();
+                                dataLoader.destroy(dataLoaderId);
                             }
                             break;
                         }
@@ -2528,9 +2643,8 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                 } catch (RemoteException e) {
                     // In case of streaming failure we don't want to fail or commit the session.
                     // Just return from this method and allow caller to commit again.
-                    PackageInstallerService.sendPendingStreaming(mContext,
-                            mRemoteStatusReceiver,
-                            sessionId, new StreamingException(e));
+                    sendPendingStreaming(mContext, mRemoteStatusReceiver, sessionId,
+                            new StreamingException(e));
                 }
             }
         };
@@ -2664,7 +2778,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         final boolean isNewInstall = extras == null || !extras.getBoolean(Intent.EXTRA_REPLACING);
         if (success && isNewInstall && mPm.mInstallerService.okToSendBroadcasts()
                 && (params.installFlags & PackageManager.INSTALL_DRY_RUN) == 0) {
-            mPm.sendSessionCommitBroadcast(generateInfo(), userId);
+            mPm.sendSessionCommitBroadcast(generateInfoScrubbed(true /*icon*/), userId);
         }
 
         mCallback.onSessionFinished(this, success);
@@ -2832,6 +2946,75 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         pw.decreaseIndent();
     }
 
+    private static void sendOnUserActionRequired(Context context, IntentSender target,
+            int sessionId, Intent intent) {
+        final Intent fillIn = new Intent();
+        fillIn.putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId);
+        fillIn.putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_USER_ACTION);
+        fillIn.putExtra(Intent.EXTRA_INTENT, intent);
+        try {
+            target.sendIntent(context, 0, fillIn, null, null);
+        } catch (IntentSender.SendIntentException ignored) {
+        }
+    }
+
+    private static void sendOnPackageInstalled(Context context, IntentSender target, int sessionId,
+            boolean showNotification, int userId, String basePackageName, int returnCode,
+            String msg, Bundle extras) {
+        if (PackageManager.INSTALL_SUCCEEDED == returnCode && showNotification) {
+            boolean update = (extras != null) && extras.getBoolean(Intent.EXTRA_REPLACING);
+            Notification notification = PackageInstallerService.buildSuccessNotification(context,
+                    context.getResources()
+                            .getString(update ? R.string.package_updated_device_owner :
+                                    R.string.package_installed_device_owner),
+                    basePackageName,
+                    userId);
+            if (notification != null) {
+                NotificationManager notificationManager = (NotificationManager)
+                        context.getSystemService(Context.NOTIFICATION_SERVICE);
+                notificationManager.notify(basePackageName,
+                        SystemMessageProto.SystemMessage.NOTE_PACKAGE_STATE,
+                        notification);
+            }
+        }
+        final Intent fillIn = new Intent();
+        fillIn.putExtra(PackageInstaller.EXTRA_PACKAGE_NAME, basePackageName);
+        fillIn.putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId);
+        fillIn.putExtra(PackageInstaller.EXTRA_STATUS,
+                PackageManager.installStatusToPublicStatus(returnCode));
+        fillIn.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE,
+                PackageManager.installStatusToString(returnCode, msg));
+        fillIn.putExtra(PackageInstaller.EXTRA_LEGACY_STATUS, returnCode);
+        if (extras != null) {
+            final String existing = extras.getString(
+                    PackageManager.EXTRA_FAILURE_EXISTING_PACKAGE);
+            if (!TextUtils.isEmpty(existing)) {
+                fillIn.putExtra(PackageInstaller.EXTRA_OTHER_PACKAGE_NAME, existing);
+            }
+        }
+        try {
+            target.sendIntent(context, 0, fillIn, null, null);
+        } catch (IntentSender.SendIntentException ignored) {
+        }
+    }
+
+    private static void sendPendingStreaming(Context context, IntentSender target, int sessionId,
+            Throwable cause) {
+        final Intent intent = new Intent();
+        intent.putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId);
+        intent.putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_STREAMING);
+        if (cause != null && !TextUtils.isEmpty(cause.getMessage())) {
+            intent.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE,
+                    "Staging Image Not Ready [" + cause.getMessage() + "]");
+        } else {
+            intent.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE, "Staging Image Not Ready");
+        }
+        try {
+            target.sendIntent(context, 0, intent, null, null);
+        } catch (IntentSender.SendIntentException ignored) {
+        }
+    }
+
     private static void writeGrantedRuntimePermissionsLocked(XmlSerializer out,
             String[] grantedRuntimePermissions) throws IOException {
         if (grantedRuntimePermissions != null) {
@@ -2853,6 +3036,13 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                 out.endTag(null, TAG_WHITELISTED_RESTRICTED_PERMISSION);
             }
         }
+    }
+
+    private static void writeAutoRevokePermissionsMode(@NonNull XmlSerializer out, int mode)
+            throws IOException {
+        out.startTag(null, TAG_AUTO_REVOKE_PERMISSIONS_MODE);
+        writeIntAttribute(out, ATTR_MODE, mode);
+        out.endTag(null, TAG_AUTO_REVOKE_PERMISSIONS_MODE);
     }
 
 
@@ -2935,6 +3125,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
             writeGrantedRuntimePermissionsLocked(out, params.grantedRuntimePermissions);
             writeWhitelistedRestrictedPermissionsLocked(out,
                     params.whitelistedRestrictedPermissions);
+            writeAutoRevokePermissionsMode(out, params.autoRevokePermissionsMode);
 
             // Persist app icon if changed since last written
             File appIconFile = buildAppIconFile(sessionId, sessionsDir);
@@ -2961,7 +3152,9 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
                 writeIntAttribute(out, ATTR_SESSION_ID, childSessionId);
                 out.endTag(null, TAG_CHILD_SESSION);
             }
-            for (InstallationFile file : mFiles) {
+
+            final InstallationFile[] files = getInstallationFilesLocked();
+            for (InstallationFile file : getInstallationFilesLocked()) {
                 out.startTag(null, TAG_SESSION_FILE);
                 writeIntAttribute(out, ATTR_LOCATION, file.getLocation());
                 writeStringAttribute(out, ATTR_NAME, file.getName());
@@ -3078,6 +3271,7 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         // depth.
         List<String> grantedRuntimePermissions = new ArrayList<>();
         List<String> whitelistedRestrictedPermissions = new ArrayList<>();
+        int autoRevokePermissionsMode = MODE_DEFAULT;
         List<Integer> childSessionIds = new ArrayList<>();
         List<InstallationFile> files = new ArrayList<>();
         int outerDepth = in.getDepth();
@@ -3093,6 +3287,9 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
             if (TAG_WHITELISTED_RESTRICTED_PERMISSION.equals(in.getName())) {
                 whitelistedRestrictedPermissions.add(readStringAttribute(in, ATTR_NAME));
 
+            }
+            if (TAG_AUTO_REVOKE_PERMISSIONS_MODE.equals(in.getName())) {
+                autoRevokePermissionsMode = readIntAttribute(in, ATTR_MODE);
             }
             if (TAG_CHILD_SESSION.equals(in.getName())) {
                 childSessionIds.add(readIntAttribute(in, ATTR_SESSION_ID, SessionInfo.INVALID_ID));
@@ -3115,6 +3312,8 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         if (whitelistedRestrictedPermissions.size() > 0) {
             params.whitelistedRestrictedPermissions = whitelistedRestrictedPermissions;
         }
+
+        params.autoRevokePermissionsMode = autoRevokePermissionsMode;
 
         int[] childSessionIdsArray;
         if (childSessionIds.size() > 0) {

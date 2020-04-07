@@ -81,6 +81,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.FrameInfo;
 import android.graphics.HardwareRenderer.FrameDrawingCallback;
+import android.graphics.Insets;
 import android.graphics.Matrix;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
@@ -1735,7 +1736,7 @@ public final class ViewRootImpl implements ViewParent,
             mBoundsLayer = new SurfaceControl.Builder(mSurfaceSession)
                     .setContainerLayer()
                     .setName("Bounds for - " + getTitle().toString())
-                    .setParent(mSurfaceControl)
+                    .setParent(getRenderSurfaceControl())
                     .build();
             setBoundsLayerCrop();
             mTransaction.show(mBoundsLayer).apply();
@@ -2254,6 +2255,7 @@ public final class ViewRootImpl implements ViewParent,
             insets = insets.consumeDisplayCutout();
         }
         host.dispatchApplyWindowInsets(insets);
+        mAttachInfo.delayNotifyContentCaptureInsetsEvent(insets.getInsets(Type.all()));
         Trace.traceEnd(Trace.TRACE_TAG_VIEW);
     }
 
@@ -3118,6 +3120,8 @@ public final class ViewRootImpl implements ViewParent,
                         ViewStructure structure = session.newViewStructure(view);
                         view.onProvideContentCaptureStructure(structure, /* flags= */ 0);
                         session.notifyViewAppeared(structure);
+                    } else if (event instanceof Insets) {
+                        mainSession.notifyViewInsetsChanged(sessionId, (Insets) event);
                     } else {
                         Log.w(mTag, "invalid content capture event: " + event);
                     }
@@ -5699,9 +5703,9 @@ public final class ViewRootImpl implements ViewParent,
                 mTranslator.translateEventInScreenToAppWindow(event);
             }
 
-            // Enter touch mode if event is coming from a touch screen device.
+            // Enter touch mode on down or scroll from any type of a device.
             final int action = event.getAction();
-            if (event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_SCROLL) {
                 ensureTouchMode(true);
             }
 
@@ -9054,7 +9058,7 @@ public final class ViewRootImpl implements ViewParent,
 
         @Override
         public void dispatchWallpaperOffsets(float x, float y, float xStep, float yStep,
-                boolean sync) {
+                float zoom, boolean sync) {
             if (sync) {
                 try {
                     mWindowSession.wallpaperOffsetsComplete(asBinder());

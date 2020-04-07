@@ -98,7 +98,8 @@ import java.util.Set;
  * The Settings provider contains global system-level device preferences.
  */
 public final class Settings {
-    private static final boolean DEFAULT_OVERRIDEABLE_BY_RESTORE = false;
+    /** @hide */
+    public static final boolean DEFAULT_OVERRIDEABLE_BY_RESTORE = false;
 
     // Intent actions for Settings
 
@@ -709,10 +710,7 @@ public final class Settings {
      * If not specified, the default behavior is
      * {@link android.hardware.biometrics.BiometricManager.Authenticators#BIOMETRIC_WEAK}.
      * <p>
-     * Output: Returns {@link android.app.Activity#RESULT_CANCELED} if the user already has an
-     * authenticator that meets the requirements, or if the device cannot fulfill the request
-     * (e.g. does not have biometric hardware). Returns {@link android.app.Activity#RESULT_OK}
-     * otherwise. Note that callers should still check
+     * Output: Nothing. Note that callers should still check
      * {@link android.hardware.biometrics.BiometricManager#canAuthenticate(int)}
      * afterwards to ensure that the user actually completed enrollment.
      */
@@ -2626,7 +2624,7 @@ public final class Settings {
                     arg.putBoolean(CALL_METHOD_OVERRIDEABLE_BY_RESTORE_KEY, true);
                 }
                 IContentProvider cp = mProviderHolder.getProvider(cr);
-                cp.call(cr.getPackageName(), cr.getFeatureId(),
+                cp.call(cr.getPackageName(), cr.getAttributionTag(),
                         mProviderHolder.mUri.getAuthority(), mCallSetCommand, name, arg);
             } catch (RemoteException e) {
                 Log.w(TAG, "Can't set key " + name + " in " + mUri, e);
@@ -2646,7 +2644,7 @@ public final class Settings {
                 args.putString(CALL_METHOD_PREFIX_KEY, prefix);
                 args.putSerializable(CALL_METHOD_FLAGS_KEY, keyValues);
                 IContentProvider cp = mProviderHolder.getProvider(cr);
-                Bundle bundle = cp.call(cr.getPackageName(), cr.getFeatureId(),
+                Bundle bundle = cp.call(cr.getPackageName(), cr.getAttributionTag(),
                         mProviderHolder.mUri.getAuthority(),
                         mCallSetAllCommand, null, args);
                 return bundle.getBoolean(KEY_CONFIG_SET_RETURN);
@@ -2721,14 +2719,14 @@ public final class Settings {
                     if (Settings.isInSystemServer() && Binder.getCallingUid() != Process.myUid()) {
                         final long token = Binder.clearCallingIdentity();
                         try {
-                            b = cp.call(cr.getPackageName(), cr.getFeatureId(),
+                            b = cp.call(cr.getPackageName(), cr.getAttributionTag(),
                                     mProviderHolder.mUri.getAuthority(), mCallGetCommand, name,
                                     args);
                         } finally {
                             Binder.restoreCallingIdentity(token);
                         }
                     } else {
-                        b = cp.call(cr.getPackageName(), cr.getFeatureId(),
+                        b = cp.call(cr.getPackageName(), cr.getAttributionTag(),
                                 mProviderHolder.mUri.getAuthority(), mCallGetCommand, name, args);
                     }
                     if (b != null) {
@@ -2798,13 +2796,13 @@ public final class Settings {
                 if (Settings.isInSystemServer() && Binder.getCallingUid() != Process.myUid()) {
                     final long token = Binder.clearCallingIdentity();
                     try {
-                        c = cp.query(cr.getPackageName(), cr.getFeatureId(), mUri,
+                        c = cp.query(cr.getPackageName(), cr.getAttributionTag(), mUri,
                                 SELECT_VALUE_PROJECTION, queryArgs, null);
                     } finally {
                         Binder.restoreCallingIdentity(token);
                     }
                 } else {
-                    c = cp.query(cr.getPackageName(), cr.getFeatureId(), mUri,
+                    c = cp.query(cr.getPackageName(), cr.getAttributionTag(), mUri,
                             SELECT_VALUE_PROJECTION, queryArgs, null);
                 }
                 if (c == null) {
@@ -2897,7 +2895,7 @@ public final class Settings {
                 }
 
                 // Fetch all flags for the namespace at once for caching purposes
-                Bundle b = cp.call(cr.getPackageName(), cr.getFeatureId(),
+                Bundle b = cp.call(cr.getPackageName(), cr.getAttributionTag(),
                         mProviderHolder.mUri.getAuthority(), mCallListCommand, null, args);
                 if (b == null) {
                     // Invalid response, return an empty map
@@ -5542,7 +5540,7 @@ public final class Settings {
                 }
                 arg.putInt(CALL_METHOD_RESET_MODE_KEY, mode);
                 IContentProvider cp = sProviderHolder.getProvider(resolver);
-                cp.call(resolver.getPackageName(), resolver.getFeatureId(),
+                cp.call(resolver.getPackageName(), resolver.getAttributionTag(),
                         sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_SECURE, null, arg);
             } catch (RemoteException e) {
                 Log.w(TAG, "Can't reset do defaults for " + CONTENT_URI, e);
@@ -6092,10 +6090,7 @@ public final class Settings {
          * device is removed from this mode.
          * <p>
          * Type: int (0 for false, 1 for true)
-         *
-         * @hide
          */
-        @SystemApi
         public static final String SECURE_FRP_MODE = "secure_frp_mode";
 
         /**
@@ -8502,7 +8497,6 @@ public final class Settings {
          *
          * @hide
          */
-        @SystemApi
         public static final String CARRIER_APPS_HANDLED = "carrier_apps_handled";
 
         /**
@@ -9724,6 +9718,8 @@ public final class Settings {
        public static final String NETSTATS_SAMPLE_ENABLED = "netstats_sample_enabled";
        /** {@hide} */
        public static final String NETSTATS_AUGMENT_ENABLED = "netstats_augment_enabled";
+       /** {@hide} */
+       public static final String NETSTATS_COMBINE_SUBTYPE_ENABLED = "netstats_combine_subtype_enabled";
 
        /** {@hide} */
        public static final String NETSTATS_DEV_BUCKET_DURATION = "netstats_dev_bucket_duration";
@@ -12761,12 +12757,12 @@ public final class Settings {
          * <p>
          * Type: int (0 for false, 1 for true)
          * @hide
-         * @deprecated Use {@link android.provider.Telephony.SimInfo#ENHANCED_4G_MODE_ENABLED}
-         * instead.
+         * @deprecated Use
+         * {@link android.provider.Telephony.SimInfo#COLUMN_ENHANCED_4G_MODE_ENABLED} instead.
          */
         @Deprecated
         public static final String ENHANCED_4G_MODE_ENABLED =
-                Telephony.SimInfo.ENHANCED_4G_MODE_ENABLED;
+                Telephony.SimInfo.COLUMN_ENHANCED_4G_MODE_ENABLED;
 
         /**
          * Whether VT (Video Telephony over IMS) is enabled
@@ -12774,10 +12770,10 @@ public final class Settings {
          * Type: int (0 for false, 1 for true)
          *
          * @hide
-         * @deprecated Use {@link android.provider.Telephony.SimInfo#VT_IMS_ENABLED} instead.
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#COLUMN_VT_IMS_ENABLED} instead.
          */
         @Deprecated
-        public static final String VT_IMS_ENABLED = Telephony.SimInfo.VT_IMS_ENABLED;
+        public static final String VT_IMS_ENABLED = Telephony.SimInfo.COLUMN_VT_IMS_ENABLED;
 
         /**
          * Whether WFC is enabled
@@ -12785,10 +12781,11 @@ public final class Settings {
          * Type: int (0 for false, 1 for true)
          *
          * @hide
-         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_ENABLED} instead.
+         * @deprecated Use
+         * {@link android.provider.Telephony.SimInfo#COLUMN_WFC_IMS_ENABLED} instead.
          */
         @Deprecated
-        public static final String WFC_IMS_ENABLED = Telephony.SimInfo.WFC_IMS_ENABLED;
+        public static final String WFC_IMS_ENABLED = Telephony.SimInfo.COLUMN_WFC_IMS_ENABLED;
 
         /**
          * WFC mode on home/non-roaming network.
@@ -12796,10 +12793,10 @@ public final class Settings {
          * Type: int - 2=Wi-Fi preferred, 1=Cellular preferred, 0=Wi-Fi only
          *
          * @hide
-         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_MODE} instead.
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#COLUMN_WFC_IMS_MODE} instead.
          */
         @Deprecated
-        public static final String WFC_IMS_MODE = Telephony.SimInfo.WFC_IMS_MODE;
+        public static final String WFC_IMS_MODE = Telephony.SimInfo.COLUMN_WFC_IMS_MODE;
 
         /**
          * WFC mode on roaming network.
@@ -12807,11 +12804,12 @@ public final class Settings {
          * Type: int - see {@link #WFC_IMS_MODE} for values
          *
          * @hide
-         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_ROAMING_MODE}
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#COLUMN_WFC_IMS_ROAMING_MODE}
          * instead.
          */
         @Deprecated
-        public static final String WFC_IMS_ROAMING_MODE = Telephony.SimInfo.WFC_IMS_ROAMING_MODE;
+        public static final String WFC_IMS_ROAMING_MODE =
+                Telephony.SimInfo.COLUMN_WFC_IMS_ROAMING_MODE;
 
         /**
          * Whether WFC roaming is enabled
@@ -12819,12 +12817,12 @@ public final class Settings {
          * Type: int (0 for false, 1 for true)
          *
          * @hide
-         * @deprecated Use {@link android.provider.Telephony.SimInfo#WFC_IMS_ROAMING_ENABLED}
+         * @deprecated Use {@link android.provider.Telephony.SimInfo#COLUMN_WFC_IMS_ROAMING_ENABLED}
          * instead
          */
         @Deprecated
         public static final String WFC_IMS_ROAMING_ENABLED =
-                Telephony.SimInfo.WFC_IMS_ROAMING_ENABLED;
+                Telephony.SimInfo.COLUMN_WFC_IMS_ROAMING_ENABLED;
 
         /**
          * Whether user can enable/disable LTE as a preferred network. A carrier might control
@@ -13388,7 +13386,7 @@ public final class Settings {
                 }
                 arg.putInt(CALL_METHOD_RESET_MODE_KEY, mode);
                 IContentProvider cp = sProviderHolder.getProvider(resolver);
-                cp.call(resolver.getPackageName(), resolver.getFeatureId(),
+                cp.call(resolver.getPackageName(), resolver.getAttributionTag(),
                         sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_GLOBAL, null, arg);
             } catch (RemoteException e) {
                 Log.w(TAG, "Can't reset do defaults for " + CONTENT_URI, e);
@@ -14198,19 +14196,6 @@ public final class Settings {
                 "power_button_suppression_delay_after_gesture_wake";
 
         /**
-         * An integer indicating whether the device is in Common Criteria mode. When enabled,
-         * certain device functionalities are tuned to meet the higher security level required
-         * by Common Criteria certification. Examples include:
-         *   Bluetooth long term key material is additionally integrity-protected with AES-GCM.
-         *   WiFi configuration store is additionally integrity-protected with AES-GCM.
-         * A value of 0 means Common Criteria mode is not enabled (default), a value of non-zero
-         * means Common Criteria mode is enabled.
-         * @hide
-         */
-        @SystemApi
-        public static final String COMMON_CRITERIA_MODE = "common_criteria_mode";
-
-        /**
          * The usage amount of advanced battery. The value is 0~100.
          *
          * @hide
@@ -14363,7 +14348,7 @@ public final class Settings {
                     arg.putString(Settings.CALL_METHOD_PREFIX_KEY, createPrefix(namespace));
                 }
                 IContentProvider cp = sProviderHolder.getProvider(resolver);
-                cp.call(resolver.getPackageName(), resolver.getFeatureId(),
+                cp.call(resolver.getPackageName(), resolver.getAttributionTag(),
                         sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_CONFIG, null, arg);
             } catch (RemoteException e) {
                 Log.w(TAG, "Can't reset to defaults for " + DeviceConfig.CONTENT_URI, e);
@@ -14392,7 +14377,7 @@ public final class Settings {
                 arg.putInt(CALL_METHOD_USER_KEY, userHandle);
                 arg.putParcelable(CALL_METHOD_MONITOR_CALLBACK_KEY, callback);
                 IContentProvider cp = sProviderHolder.getProvider(resolver);
-                cp.call(resolver.getPackageName(), resolver.getFeatureId(),
+                cp.call(resolver.getPackageName(), resolver.getAttributionTag(),
                         sProviderHolder.mUri.getAuthority(),
                         CALL_METHOD_REGISTER_MONITOR_CALLBACK_CONFIG, null, arg);
             } catch (RemoteException e) {

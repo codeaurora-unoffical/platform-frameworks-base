@@ -23,11 +23,8 @@ import static android.content.pm.PackageManager.GET_PERMISSIONS;
 import static android.content.pm.PackageManager.MATCH_ANY_USER;
 import static android.content.pm.PackageManager.PERMISSION_DENIED;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
-import static android.net.ConnectivityDiagnosticsManager.ConnectivityReport;
-import static android.net.ConnectivityDiagnosticsManager.DataStallReport;
 import static android.net.ConnectivityManager.ACTION_CAPTIVE_PORTAL_SIGN_IN;
 import static android.net.ConnectivityManager.CONNECTIVITY_ACTION;
-import static android.net.ConnectivityManager.CONNECTIVITY_ACTION_SUPL;
 import static android.net.ConnectivityManager.EXTRA_NETWORK_INFO;
 import static android.net.ConnectivityManager.EXTRA_NETWORK_TYPE;
 import static android.net.ConnectivityManager.NETID_UNSET;
@@ -100,6 +97,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Matchers.anyInt;
@@ -176,6 +174,7 @@ import android.net.NetworkUtils;
 import android.net.ProxyInfo;
 import android.net.ResolverParamsParcel;
 import android.net.RouteInfo;
+import android.net.RouteInfoParcel;
 import android.net.SocketKeepalive;
 import android.net.UidRange;
 import android.net.Uri;
@@ -428,7 +427,6 @@ public class ConnectivityServiceTest {
         public Object getSystemService(String name) {
             if (Context.CONNECTIVITY_SERVICE.equals(name)) return mCm;
             if (Context.NOTIFICATION_SERVICE.equals(name)) return mNotificationManager;
-            if (Context.NETWORK_STACK_SERVICE.equals(name)) return mNetworkStack;
             if (Context.USER_SERVICE.equals(name)) return mUserManager;
             if (Context.ALARM_SERVICE.equals(name)) return mAlarmManager;
             if (Context.LOCATION_SERVICE.equals(name)) return mLocationManager;
@@ -1375,7 +1373,6 @@ public class ConnectivityServiceTest {
             @NonNull final Predicate<Intent> filter) {
         final ConditionVariable cv = new ConditionVariable();
         final IntentFilter intentFilter = new IntentFilter(CONNECTIVITY_ACTION);
-        intentFilter.addAction(CONNECTIVITY_ACTION_SUPL);
         final BroadcastReceiver receiver = new BroadcastReceiver() {
                     private int remaining = count;
                     public void onReceive(Context context, Intent intent) {
@@ -1423,56 +1420,28 @@ public class ConnectivityServiceTest {
         final NetworkRequest legacyRequest = new NetworkRequest(legacyCaps, TYPE_MOBILE_SUPL,
                 ConnectivityManager.REQUEST_ID_UNSET, NetworkRequest.Type.REQUEST);
 
-        // Send request and check that the legacy broadcast for SUPL is sent correctly.
+        // File request, withdraw it and make sure no broadcast is sent
+        final ConditionVariable cv2 = registerConnectivityBroadcast(1);
         final TestNetworkCallback callback = new TestNetworkCallback();
-        final ConditionVariable cv2 = registerConnectivityBroadcastThat(1,
-                intent -> intent.getIntExtra(EXTRA_NETWORK_TYPE, -1) == TYPE_MOBILE_SUPL);
         mCm.requestNetwork(legacyRequest, callback);
         callback.expectCallback(CallbackEntry.AVAILABLE, mCellNetworkAgent);
-        waitFor(cv2);
-
-        // File another request, withdraw it and make sure no broadcast is sent
-        final ConditionVariable cv3 = registerConnectivityBroadcast(1);
-        final TestNetworkCallback callback2 = new TestNetworkCallback();
-        mCm.requestNetwork(legacyRequest, callback2);
-        callback2.expectCallback(CallbackEntry.AVAILABLE, mCellNetworkAgent);
-        mCm.unregisterNetworkCallback(callback2);
-        assertFalse(cv3.block(800)); // 800ms long enough to at least flake if this is sent
+        mCm.unregisterNetworkCallback(callback);
+        assertFalse(cv2.block(800)); // 800ms long enough to at least flake if this is sent
         // As the broadcast did not fire, the receiver was not unregistered. Do this now.
         mServiceContext.clearRegisteredReceivers();
 
-        // Withdraw the request and check that the broadcast for disconnection is sent.
-        final ConditionVariable cv4 = registerConnectivityBroadcastThat(1, intent ->
-                !((NetworkInfo) intent.getExtra(EXTRA_NETWORK_INFO, -1)).isConnected()
-                        && intent.getIntExtra(EXTRA_NETWORK_TYPE, -1) == TYPE_MOBILE_SUPL);
-        mCm.unregisterNetworkCallback(callback);
-        waitFor(cv4);
-
-        // Re-file the request and expect the connected broadcast again
-        final ConditionVariable cv5 = registerConnectivityBroadcastThat(1,
-                intent -> intent.getIntExtra(EXTRA_NETWORK_TYPE, -1) == TYPE_MOBILE_SUPL);
-        final TestNetworkCallback callback3 = new TestNetworkCallback();
-        mCm.requestNetwork(legacyRequest, callback3);
-        callback3.expectCallback(CallbackEntry.AVAILABLE, mCellNetworkAgent);
-        waitFor(cv5);
-
-        // Disconnect the network and expect two disconnected broadcasts, one for SUPL and one
-        // for mobile. Use a small hack to check that both have been sent, but the order is
-        // not contractual.
+        // Disconnect the network and expect mobile disconnected broadcast. Use a small hack to
+        // check that has been sent.
         final AtomicBoolean vanillaAction = new AtomicBoolean(false);
-        final AtomicBoolean suplAction = new AtomicBoolean(false);
-        final ConditionVariable cv6 = registerConnectivityBroadcastThat(2, intent -> {
+        final ConditionVariable cv3 = registerConnectivityBroadcastThat(1, intent -> {
             if (intent.getAction().equals(CONNECTIVITY_ACTION)) {
                 vanillaAction.set(true);
-            } else if (intent.getAction().equals(CONNECTIVITY_ACTION_SUPL)) {
-                suplAction.set(true);
             }
             return !((NetworkInfo) intent.getExtra(EXTRA_NETWORK_INFO, -1)).isConnected();
         });
         mCellNetworkAgent.disconnect();
-        waitFor(cv6);
+        waitFor(cv3);
         assertTrue(vanillaAction.get());
-        assertTrue(suplAction.get());
     }
 
     @Test
@@ -2426,7 +2395,7 @@ public class ConnectivityServiceTest {
         assertEquals(expectedRequestCount, testFactory.getMyRequestCount());
         assertTrue(testFactory.getMyStartRequested());
 
-        testFactory.unregister();
+        testFactory.terminate();
         if (networkCallback != null) mCm.unregisterNetworkCallback(networkCallback);
         handlerThread.quit();
     }
@@ -2449,6 +2418,38 @@ public class ConnectivityServiceTest {
         tryNetworkFactoryRequests(NET_CAPABILITY_TRUSTED);
         tryNetworkFactoryRequests(NET_CAPABILITY_NOT_VPN);
         // Skipping VALIDATED and CAPTIVE_PORTAL as they're disallowed.
+    }
+
+    @Test
+    public void testNetworkFactoryUnregister() throws Exception {
+        final NetworkCapabilities filter = new NetworkCapabilities();
+        filter.clearAll();
+
+        final HandlerThread handlerThread = new HandlerThread("testNetworkFactoryRequests");
+        handlerThread.start();
+
+        // Checks that calling setScoreFilter on a NetworkFactory immediately before closing it
+        // does not crash.
+        for (int i = 0; i < 100; i++) {
+            final MockNetworkFactory testFactory = new MockNetworkFactory(handlerThread.getLooper(),
+                    mServiceContext, "testFactory", filter);
+            // Register the factory and don't be surprised when the default request arrives.
+            testFactory.expectAddRequestsWithScores(0);
+            testFactory.register();
+            testFactory.waitForNetworkRequests(1);
+
+            testFactory.setScoreFilter(42);
+            testFactory.terminate();
+
+            if (i % 2 == 0) {
+                try {
+                    testFactory.register();
+                    fail("Re-registering terminated NetworkFactory should throw");
+                } catch (IllegalStateException expected) {
+                }
+            }
+        }
+        handlerThread.quit();
     }
 
     @Test
@@ -2751,9 +2752,6 @@ public class ConnectivityServiceTest {
 
         // Expect NET_CAPABILITY_VALIDATED onAvailable callback.
         validatedCallback.expectAvailableDoubleValidatedCallbacks(mWiFiNetworkAgent);
-        // Expect no notification to be shown when captive portal disappears by itself
-        verify(mNotificationManager, never()).notifyAsUser(
-                anyString(), eq(NotificationType.LOGGED_IN.eventId), any(), any());
 
         // Break network connectivity.
         // Expect NET_CAPABILITY_VALIDATED onLost callback.
@@ -2815,8 +2813,6 @@ public class ConnectivityServiceTest {
         mWiFiNetworkAgent.mNetworkMonitor.forceReevaluation(Process.myUid());
         validatedCallback.expectAvailableCallbacksValidated(mWiFiNetworkAgent);
         captivePortalCallback.expectCallback(CallbackEntry.LOST, mWiFiNetworkAgent);
-        verify(mNotificationManager, times(1)).notifyAsUser(anyString(),
-                eq(NotificationType.LOGGED_IN.eventId), any(), eq(UserHandle.ALL));
 
         mCm.unregisterNetworkCallback(validatedCallback);
         mCm.unregisterNetworkCallback(captivePortalCallback);
@@ -3488,7 +3484,7 @@ public class ConnectivityServiceTest {
         cellNetworkCallback.expectCallback(CallbackEntry.LOST, mCellNetworkAgent);
         assertLength(1, mCm.getAllNetworks());
 
-        testFactory.unregister();
+        testFactory.terminate();
         mCm.unregisterNetworkCallback(cellNetworkCallback);
         handlerThread.quit();
     }
@@ -3729,7 +3725,7 @@ public class ConnectivityServiceTest {
         mCm.requestNetwork(nr, networkCallback, timeoutMs);
 
         // pass timeout and validate that UNAVAILABLE is called
-        networkCallback.expectCallback(CallbackEntry.UNAVAILABLE, null);
+        networkCallback.expectCallback(CallbackEntry.UNAVAILABLE, (Network) null);
 
         // create a network satisfying request - validate that request not triggered
         mWiFiNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_WIFI);
@@ -3820,7 +3816,7 @@ public class ConnectivityServiceTest {
             // Simulate the factory releasing the request as unfulfillable and expect onUnavailable!
             testFactory.triggerUnfulfillable(requests.get(newRequestId));
 
-            networkCallback.expectCallback(CallbackEntry.UNAVAILABLE, null);
+            networkCallback.expectCallback(CallbackEntry.UNAVAILABLE, (Network) null);
             testFactory.waitForRequests();
 
             // unregister network callback - a no-op (since already freed by the
@@ -3828,7 +3824,7 @@ public class ConnectivityServiceTest {
             mCm.unregisterNetworkCallback(networkCallback);
         }
 
-        testFactory.unregister();
+        testFactory.terminate();
         handlerThread.quit();
     }
 
@@ -5927,6 +5923,12 @@ public class ConnectivityServiceTest {
         final LinkAddress myIpv6 = new LinkAddress("2001:db8:1::1/64");
         final String kNat64PrefixString = "2001:db8:64:64:64:64::";
         final IpPrefix kNat64Prefix = new IpPrefix(InetAddress.getByName(kNat64PrefixString), 96);
+        final RouteInfo defaultRoute = new RouteInfo((IpPrefix) null, myIpv6.getAddress(),
+                                                     MOBILE_IFNAME);
+        final RouteInfo ipv6Subnet = new RouteInfo(myIpv6, null, MOBILE_IFNAME);
+        final RouteInfo ipv4Subnet = new RouteInfo(myIpv4, null, MOBILE_IFNAME);
+        final RouteInfo stackedDefault = new RouteInfo((IpPrefix) null, myIpv4.getAddress(),
+                                                       CLAT_PREFIX + MOBILE_IFNAME);
 
         final NetworkRequest networkRequest = new NetworkRequest.Builder()
                 .addTransportType(TRANSPORT_CELLULAR)
@@ -5939,15 +5941,13 @@ public class ConnectivityServiceTest {
         final LinkProperties cellLp = new LinkProperties();
         cellLp.setInterfaceName(MOBILE_IFNAME);
         cellLp.addLinkAddress(myIpv6);
-        cellLp.addRoute(new RouteInfo((IpPrefix) null, myIpv6.getAddress(), MOBILE_IFNAME));
-        cellLp.addRoute(new RouteInfo(myIpv6, null, MOBILE_IFNAME));
+        cellLp.addRoute(defaultRoute);
+        cellLp.addRoute(ipv6Subnet);
         mCellNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_CELLULAR, cellLp);
         reset(mNetworkManagementService);
         reset(mMockDnsResolver);
         reset(mMockNetd);
         reset(mBatteryStatsService);
-        when(mNetworkManagementService.getInterfaceConfig(CLAT_PREFIX + MOBILE_IFNAME))
-                .thenReturn(getClatInterfaceConfig(myIpv4));
 
         // Connect with ipv6 link properties. Expect prefix discovery to be started.
         mCellNetworkAgent.connect(true);
@@ -5955,6 +5955,7 @@ public class ConnectivityServiceTest {
         waitForIdle();
 
         verify(mMockNetd, times(1)).networkCreatePhysical(eq(cellNetId), anyInt());
+        assertRoutesAdded(cellNetId, ipv6Subnet, defaultRoute);
         verify(mMockDnsResolver, times(1)).createNetworkCache(eq(cellNetId));
         verify(mBatteryStatsService).noteNetworkInterfaceType(cellLp.getInterfaceName(),
                 TYPE_MOBILE);
@@ -5970,6 +5971,7 @@ public class ConnectivityServiceTest {
         cellLp.addLinkAddress(myIpv4);
         mCellNetworkAgent.sendLinkProperties(cellLp);
         networkCallback.expectCallback(CallbackEntry.LINK_PROPERTIES_CHANGED, mCellNetworkAgent);
+        assertRoutesAdded(cellNetId, ipv4Subnet);
         verify(mMockDnsResolver, times(1)).stopPrefix64Discovery(cellNetId);
         verify(mMockDnsResolver, atLeastOnce()).setResolverConfiguration(any());
 
@@ -5980,15 +5982,18 @@ public class ConnectivityServiceTest {
 
         verifyNoMoreInteractions(mMockNetd);
         verifyNoMoreInteractions(mMockDnsResolver);
+        reset(mNetworkManagementService);
         reset(mMockNetd);
         reset(mMockDnsResolver);
+        when(mNetworkManagementService.getInterfaceConfig(CLAT_PREFIX + MOBILE_IFNAME))
+                .thenReturn(getClatInterfaceConfig(myIpv4));
 
         // Remove IPv4 address. Expect prefix discovery to be started again.
         cellLp.removeLinkAddress(myIpv4);
-        cellLp.removeRoute(new RouteInfo(myIpv4, null, MOBILE_IFNAME));
         mCellNetworkAgent.sendLinkProperties(cellLp);
         networkCallback.expectCallback(CallbackEntry.LINK_PROPERTIES_CHANGED, mCellNetworkAgent);
         verify(mMockDnsResolver, times(1)).startPrefix64Discovery(cellNetId);
+        assertRoutesRemoved(cellNetId, ipv4Subnet);
 
         // When NAT64 prefix discovery succeeds, LinkProperties are updated and clatd is started.
         Nat464Xlat clat = getNat464Xlat(mCellNetworkAgent);
@@ -6007,6 +6012,7 @@ public class ConnectivityServiceTest {
         List<LinkProperties> stackedLps = mCm.getLinkProperties(mCellNetworkAgent.getNetwork())
                 .getStackedLinks();
         assertEquals(makeClatLinkProperties(myIpv4), stackedLps.get(0));
+        assertRoutesAdded(cellNetId, stackedDefault);
 
         // Change trivial linkproperties and see if stacked link is preserved.
         cellLp.addDnsServer(InetAddress.getByName("8.8.8.8"));
@@ -6028,13 +6034,15 @@ public class ConnectivityServiceTest {
             verify(mBatteryStatsService).noteNetworkInterfaceType(stackedLp.getInterfaceName(),
                     TYPE_MOBILE);
         }
+        reset(mMockNetd);
 
         // Add ipv4 address, expect that clatd and prefix discovery are stopped and stacked
         // linkproperties are cleaned up.
         cellLp.addLinkAddress(myIpv4);
-        cellLp.addRoute(new RouteInfo(myIpv4, null, MOBILE_IFNAME));
+        cellLp.addRoute(ipv4Subnet);
         mCellNetworkAgent.sendLinkProperties(cellLp);
         networkCallback.expectCallback(CallbackEntry.LINK_PROPERTIES_CHANGED, mCellNetworkAgent);
+        assertRoutesAdded(cellNetId, ipv4Subnet);
         verify(mMockNetd, times(1)).clatdStop(MOBILE_IFNAME);
         verify(mMockDnsResolver, times(1)).stopPrefix64Discovery(cellNetId);
 
@@ -6045,6 +6053,7 @@ public class ConnectivityServiceTest {
         expected.setNat64Prefix(kNat64Prefix);
         assertEquals(expected, actualLpAfterIpv4);
         assertEquals(0, actualLpAfterIpv4.getStackedLinks().size());
+        assertRoutesRemoved(cellNetId, stackedDefault);
 
         // The interface removed callback happens but has no effect after stop is called.
         clat.interfaceRemoved(CLAT_PREFIX + MOBILE_IFNAME);
@@ -6052,8 +6061,11 @@ public class ConnectivityServiceTest {
 
         verifyNoMoreInteractions(mMockNetd);
         verifyNoMoreInteractions(mMockDnsResolver);
+        reset(mNetworkManagementService);
         reset(mMockNetd);
         reset(mMockDnsResolver);
+        when(mNetworkManagementService.getInterfaceConfig(CLAT_PREFIX + MOBILE_IFNAME))
+                .thenReturn(getClatInterfaceConfig(myIpv4));
 
         // Stopping prefix discovery causes netd to tell us that the NAT64 prefix is gone.
         mService.mNetdEventCallback.onNat64PrefixEvent(cellNetId, false /* added */,
@@ -6067,26 +6079,31 @@ public class ConnectivityServiceTest {
         cellLp.removeDnsServer(InetAddress.getByName("8.8.8.8"));
         mCellNetworkAgent.sendLinkProperties(cellLp);
         networkCallback.expectCallback(CallbackEntry.LINK_PROPERTIES_CHANGED, mCellNetworkAgent);
+        assertRoutesRemoved(cellNetId, ipv4Subnet);  // Directly-connected routes auto-added.
         verify(mMockDnsResolver, times(1)).startPrefix64Discovery(cellNetId);
         mService.mNetdEventCallback.onNat64PrefixEvent(cellNetId, true /* added */,
                 kNat64PrefixString, 96);
         networkCallback.expectCallback(CallbackEntry.LINK_PROPERTIES_CHANGED, mCellNetworkAgent);
         verify(mMockNetd, times(1)).clatdStart(MOBILE_IFNAME, kNat64Prefix.toString());
 
-
         // Clat iface comes up. Expect stacked link to be added.
         clat.interfaceLinkStateChanged(CLAT_PREFIX + MOBILE_IFNAME, true);
         networkCallback.expectLinkPropertiesThat(mCellNetworkAgent,
                 (lp) -> lp.getStackedLinks().size() == 1 && lp.getNat64Prefix() != null);
+        assertRoutesAdded(cellNetId, stackedDefault);
 
         // NAT64 prefix is removed. Expect that clat is stopped.
         mService.mNetdEventCallback.onNat64PrefixEvent(cellNetId, false /* added */,
                 kNat64PrefixString, 96);
         networkCallback.expectLinkPropertiesThat(mCellNetworkAgent,
                 (lp) -> lp.getStackedLinks().size() == 0 && lp.getNat64Prefix() == null);
+        assertRoutesRemoved(cellNetId, ipv4Subnet, stackedDefault);
+
+        // Stop has no effect because clat is already stopped.
         verify(mMockNetd, times(1)).clatdStop(MOBILE_IFNAME);
         networkCallback.expectLinkPropertiesThat(mCellNetworkAgent,
                 (lp) -> lp.getStackedLinks().size() == 0);
+        verifyNoMoreInteractions(mMockNetd);
 
         // Clean up.
         mCellNetworkAgent.disconnect();
@@ -6654,6 +6671,48 @@ public class ConnectivityServiceTest {
         }
     }
 
+    private void assertRouteInfoParcelMatches(RouteInfo route, RouteInfoParcel parcel) {
+        assertEquals(route.getDestination().toString(), parcel.destination);
+        assertEquals(route.getInterface(), parcel.ifName);
+        assertEquals(route.getMtu(), parcel.mtu);
+
+        switch (route.getType()) {
+            case RouteInfo.RTN_UNICAST:
+                if (route.hasGateway()) {
+                    assertEquals(route.getGateway().getHostAddress(), parcel.nextHop);
+                } else {
+                    assertEquals(INetd.NEXTHOP_NONE, parcel.nextHop);
+                }
+                break;
+            case RouteInfo.RTN_UNREACHABLE:
+                assertEquals(INetd.NEXTHOP_UNREACHABLE, parcel.nextHop);
+                break;
+            case RouteInfo.RTN_THROW:
+                assertEquals(INetd.NEXTHOP_THROW, parcel.nextHop);
+                break;
+            default:
+                assertEquals(INetd.NEXTHOP_NONE, parcel.nextHop);
+                break;
+        }
+    }
+
+    private void assertRoutesAdded(int netId, RouteInfo... routes) throws Exception {
+        ArgumentCaptor<RouteInfoParcel> captor = ArgumentCaptor.forClass(RouteInfoParcel.class);
+        verify(mMockNetd, times(routes.length)).networkAddRouteParcel(eq(netId), captor.capture());
+        for (int i = 0; i < routes.length; i++) {
+            assertRouteInfoParcelMatches(routes[i], captor.getAllValues().get(i));
+        }
+    }
+
+    private void assertRoutesRemoved(int netId, RouteInfo... routes) throws Exception {
+        ArgumentCaptor<RouteInfoParcel> captor = ArgumentCaptor.forClass(RouteInfoParcel.class);
+        verify(mMockNetd, times(routes.length)).networkRemoveRouteParcel(eq(netId),
+                captor.capture());
+        for (int i = 0; i < routes.length; i++) {
+            assertRouteInfoParcelMatches(routes[i], captor.getAllValues().get(i));
+        }
+    }
+
     @Test
     public void testRegisterUnregisterConnectivityDiagnosticsCallback() throws Exception {
         final NetworkRequest wifiRequest =
@@ -6715,7 +6774,7 @@ public class ConnectivityServiceTest {
     public void testCheckConnectivityDiagnosticsPermissionsNetworkStack() throws Exception {
         final NetworkAgentInfo naiWithoutUid =
                 new NetworkAgentInfo(
-                        null, null, null, null, null, new NetworkCapabilities(), null,
+                        null, null, null, null, null, new NetworkCapabilities(), 0,
                         mServiceContext, null, null, mService, null, null, null, 0);
 
         mServiceContext.setPermission(
@@ -6728,10 +6787,30 @@ public class ConnectivityServiceTest {
     }
 
     @Test
+    public void testCheckConnectivityDiagnosticsPermissionsWrongUidPackageName() throws Exception {
+        final NetworkAgentInfo naiWithoutUid =
+                new NetworkAgentInfo(
+                        null, null, null, null, null, new NetworkCapabilities(), 0,
+                        mServiceContext, null, null, mService, null, null, null, 0);
+
+        mServiceContext.setPermission(android.Manifest.permission.NETWORK_STACK, PERMISSION_DENIED);
+
+        try {
+            assertFalse(
+                    "Mismatched uid/package name should not pass the location permission check",
+                    mService.checkConnectivityDiagnosticsPermissions(
+                            Process.myPid() + 1, Process.myUid() + 1, naiWithoutUid,
+                            mContext.getOpPackageName()));
+        } catch (SecurityException e) {
+            fail("checkConnectivityDiagnosticsPermissions shouldn't surface a SecurityException");
+        }
+    }
+
+    @Test
     public void testCheckConnectivityDiagnosticsPermissionsNoLocationPermission() throws Exception {
         final NetworkAgentInfo naiWithoutUid =
                 new NetworkAgentInfo(
-                        null, null, null, null, null, new NetworkCapabilities(), null,
+                        null, null, null, null, null, new NetworkCapabilities(), 0,
                         mServiceContext, null, null, mService, null, null, null, 0);
 
         mServiceContext.setPermission(android.Manifest.permission.NETWORK_STACK, PERMISSION_DENIED);
@@ -6747,7 +6826,7 @@ public class ConnectivityServiceTest {
     public void testCheckConnectivityDiagnosticsPermissionsActiveVpn() throws Exception {
         final NetworkAgentInfo naiWithoutUid =
                 new NetworkAgentInfo(
-                        null, null, null, null, null, new NetworkCapabilities(), null,
+                        null, null, null, null, null, new NetworkCapabilities(), 0,
                         mServiceContext, null, null, mService, null, null, null, 0);
 
         setupLocationPermissions(Build.VERSION_CODES.Q, true, AppOpsManager.OPSTR_FINE_LOCATION,
@@ -6770,10 +6849,10 @@ public class ConnectivityServiceTest {
     @Test
     public void testCheckConnectivityDiagnosticsPermissionsNetworkAdministrator() throws Exception {
         final NetworkCapabilities nc = new NetworkCapabilities();
-        nc.setAdministratorUids(Arrays.asList(Process.myUid()));
+        nc.setAdministratorUids(new int[] {Process.myUid()});
         final NetworkAgentInfo naiWithUid =
                 new NetworkAgentInfo(
-                        null, null, null, null, null, nc, null, mServiceContext, null, null,
+                        null, null, null, null, null, nc, 0, mServiceContext, null, null,
                         mService, null, null, null, 0);
 
         setupLocationPermissions(Build.VERSION_CODES.Q, true, AppOpsManager.OPSTR_FINE_LOCATION,
@@ -6792,10 +6871,10 @@ public class ConnectivityServiceTest {
     public void testCheckConnectivityDiagnosticsPermissionsFails() throws Exception {
         final NetworkCapabilities nc = new NetworkCapabilities();
         nc.setOwnerUid(Process.myUid());
-        nc.setAdministratorUids(Arrays.asList(Process.myUid()));
+        nc.setAdministratorUids(new int[] {Process.myUid()});
         final NetworkAgentInfo naiWithUid =
                 new NetworkAgentInfo(
-                        null, null, null, null, null, nc, null, mServiceContext, null, null,
+                        null, null, null, null, null, nc, 0, mServiceContext, null, null,
                         mService, null, null, null, 0);
 
         setupLocationPermissions(Build.VERSION_CODES.Q, true, AppOpsManager.OPSTR_FINE_LOCATION,
@@ -6833,15 +6912,21 @@ public class ConnectivityServiceTest {
     }
 
     @Test
-    public void testConnectivityDiagnosticsCallbackOnConnectivityReport() throws Exception {
+    public void testConnectivityDiagnosticsCallbackOnConnectivityReportAvailable()
+            throws Exception {
         setUpConnectivityDiagnosticsCallback();
 
         // Block until all other events are done processing.
         HandlerUtilsKt.waitForIdle(mCsHandlerThread, TIMEOUT_MS);
 
         // Verify onConnectivityReport fired
-        verify(mConnectivityDiagnosticsCallback)
-                .onConnectivityReport(any(ConnectivityReport.class));
+        verify(mConnectivityDiagnosticsCallback).onConnectivityReportAvailable(
+                argThat(report -> {
+                    final NetworkCapabilities nc = report.getNetworkCapabilities();
+                    return nc.getUids() == null
+                            && nc.getAdministratorUids().length == 0
+                            && nc.getOwnerUid() == Process.INVALID_UID;
+                }));
     }
 
     @Test
@@ -6856,7 +6941,13 @@ public class ConnectivityServiceTest {
         HandlerUtilsKt.waitForIdle(mCsHandlerThread, TIMEOUT_MS);
 
         // Verify onDataStallSuspected fired
-        verify(mConnectivityDiagnosticsCallback).onDataStallSuspected(any(DataStallReport.class));
+        verify(mConnectivityDiagnosticsCallback).onDataStallSuspected(
+                argThat(report -> {
+                    final NetworkCapabilities nc = report.getNetworkCapabilities();
+                    return nc.getUids() == null
+                            && nc.getAdministratorUids().length == 0
+                            && nc.getOwnerUid() == Process.INVALID_UID;
+                }));
     }
 
     @Test
@@ -6883,5 +6974,61 @@ public class ConnectivityServiceTest {
         // Wait for onNetworkConnectivityReported to fire
         verify(mConnectivityDiagnosticsCallback)
                 .onNetworkConnectivityReported(eq(n), eq(noConnectivity));
+    }
+
+    @Test
+    public void testRouteAddDeleteUpdate() throws Exception {
+        final NetworkRequest request = new NetworkRequest.Builder().build();
+        final TestNetworkCallback networkCallback = new TestNetworkCallback();
+        mCm.registerNetworkCallback(request, networkCallback);
+        mCellNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_CELLULAR);
+        reset(mMockNetd);
+        mCellNetworkAgent.connect(false);
+        networkCallback.expectAvailableCallbacksUnvalidated(mCellNetworkAgent);
+        final int netId = mCellNetworkAgent.getNetwork().netId;
+
+        final String iface = "rmnet_data0";
+        final InetAddress gateway = InetAddress.getByName("fe80::5678");
+        RouteInfo direct = RouteInfo.makeHostRoute(gateway, iface);
+        RouteInfo rio1 = new RouteInfo(new IpPrefix("2001:db8:1::/48"), gateway, iface);
+        RouteInfo rio2 = new RouteInfo(new IpPrefix("2001:db8:2::/48"), gateway, iface);
+        RouteInfo defaultRoute = new RouteInfo((IpPrefix) null, gateway, iface);
+        RouteInfo defaultWithMtu = new RouteInfo(null, gateway, iface, RouteInfo.RTN_UNICAST,
+                                                 1280 /* mtu */);
+
+        // Send LinkProperties and check that we ask netd to add routes.
+        LinkProperties lp = new LinkProperties();
+        lp.setInterfaceName(iface);
+        lp.addRoute(direct);
+        lp.addRoute(rio1);
+        lp.addRoute(defaultRoute);
+        mCellNetworkAgent.sendLinkProperties(lp);
+        networkCallback.expectLinkPropertiesThat(mCellNetworkAgent, x -> x.getRoutes().size() == 3);
+
+        assertRoutesAdded(netId, direct, rio1, defaultRoute);
+        reset(mMockNetd);
+
+        // Send updated LinkProperties and check that we ask netd to add, remove, update routes.
+        assertTrue(lp.getRoutes().contains(defaultRoute));
+        lp.removeRoute(rio1);
+        lp.addRoute(rio2);
+        lp.addRoute(defaultWithMtu);
+        // Ensure adding the same route with a different MTU replaces the previous route.
+        assertFalse(lp.getRoutes().contains(defaultRoute));
+        assertTrue(lp.getRoutes().contains(defaultWithMtu));
+
+        mCellNetworkAgent.sendLinkProperties(lp);
+        networkCallback.expectLinkPropertiesThat(mCellNetworkAgent,
+                x -> x.getRoutes().contains(rio2));
+
+        assertRoutesRemoved(netId, rio1);
+        assertRoutesAdded(netId, rio2);
+
+        ArgumentCaptor<RouteInfoParcel> captor = ArgumentCaptor.forClass(RouteInfoParcel.class);
+        verify(mMockNetd).networkUpdateRouteParcel(eq(netId), captor.capture());
+        assertRouteInfoParcelMatches(defaultWithMtu, captor.getValue());
+
+
+        mCm.unregisterNetworkCallback(networkCallback);
     }
 }

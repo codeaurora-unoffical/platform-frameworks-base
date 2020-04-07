@@ -25,7 +25,7 @@
 #include "src/hash.h"
 #include "src/logd/LogEvent.h"
 #include "src/stats_log_util.h"
-#include "statslog.h"
+#include "statslog_statsdtest.h"
 
 namespace android {
 namespace os {
@@ -38,8 +38,8 @@ using android::util::ProtoReader;
 using google::protobuf::RepeatedPtrField;
 using Status = ::ndk::ScopedAStatus;
 
-const int SCREEN_STATE_ATOM_ID = android::util::SCREEN_STATE_CHANGED;
-const int UID_PROCESS_STATE_ATOM_ID = android::util::UID_PROCESS_STATE_CHANGED;
+const int SCREEN_STATE_ATOM_ID = util::SCREEN_STATE_CHANGED;
+const int UID_PROCESS_STATE_ATOM_ID = util::UID_PROCESS_STATE_CHANGED;
 
 // Converts a ProtoOutputStream to a StatsLogReport proto.
 StatsLogReport outputStreamToProto(ProtoOutputStream* proto);
@@ -164,13 +164,35 @@ FieldMatcher CreateAttributionUidAndTagDimensions(const int atomId,
 FieldMatcher CreateAttributionUidDimensions(const int atomId,
                                             const std::vector<Position>& positions);
 
+shared_ptr<LogEvent> CreateTwoValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value1,
+                                            int32_t value2);
+
+void CreateTwoValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeNs, int32_t value1,
+                            int32_t value2);
+
+shared_ptr<LogEvent> CreateThreeValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value1,
+                                              int32_t value2, int32_t value3);
+
+void CreateThreeValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeNs, int32_t value1,
+                              int32_t value2, int32_t value3);
+
+// The repeated value log event helpers create a log event with two int fields, both
+// set to the same value. This is useful for testing metrics that are only interested
+// in the value of the second field but still need the first field to be populated.
+std::shared_ptr<LogEvent> CreateRepeatedValueLogEvent(int atomId, int64_t eventTimeNs,
+                                                      int32_t value);
+
+void CreateRepeatedValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeNs,
+                                 int32_t value);
+
+std::shared_ptr<LogEvent> CreateNoValuesLogEvent(int atomId, int64_t eventTimeNs);
+
 // Create log event for screen state changed.
 std::unique_ptr<LogEvent> CreateScreenStateChangedEvent(
-    const android::view::DisplayStateEnum state, uint64_t timestampNs);
+        uint64_t timestampNs, const android::view::DisplayStateEnum state);
 
 // Create log event for screen brightness state changed.
-std::unique_ptr<LogEvent> CreateScreenBrightnessChangedEvent(
-   int level, uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateScreenBrightnessChangedEvent(uint64_t timestampNs, int level);
 
 // Create log event when scheduled job starts.
 std::unique_ptr<LogEvent> CreateStartScheduledJobEvent(
@@ -188,45 +210,42 @@ std::unique_ptr<LogEvent> CreateBatterySaverOnEvent(uint64_t timestampNs);
 std::unique_ptr<LogEvent> CreateBatterySaverOffEvent(uint64_t timestampNs);
 
 // Create log event for app moving to background.
-std::unique_ptr<LogEvent> CreateMoveToBackgroundEvent(const int uid, uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateMoveToBackgroundEvent(uint64_t timestampNs, const int uid);
 
 // Create log event for app moving to foreground.
-std::unique_ptr<LogEvent> CreateMoveToForegroundEvent(const int uid, uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateMoveToForegroundEvent(uint64_t timestampNs, const int uid);
 
 // Create log event when the app sync starts.
-std::unique_ptr<LogEvent> CreateSyncStartEvent(
-        const std::vector<AttributionNodeInternal>& attributions, const string& name,
-        uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateSyncStartEvent(uint64_t timestampNs, const vector<int>& uids,
+                                               const vector<string>& tags, const string& name);
 
 // Create log event when the app sync ends.
-std::unique_ptr<LogEvent> CreateSyncEndEvent(
-        const std::vector<AttributionNodeInternal>& attributions, const string& name,
-        uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateSyncEndEvent(uint64_t timestampNs, const vector<int>& uids,
+                                             const vector<string>& tags, const string& name);
 
 // Create log event when the app sync ends.
-std::unique_ptr<LogEvent> CreateAppCrashEvent(
-    const int uid, uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateAppCrashEvent(uint64_t timestampNs, const int uid);
 
 // Create log event for an app crash.
-std::unique_ptr<LogEvent> CreateAppCrashOccurredEvent(const int uid, uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateAppCrashOccurredEvent(uint64_t timestampNs, const int uid);
 
 // Create log event for acquiring wakelock.
-std::unique_ptr<LogEvent> CreateAcquireWakelockEvent(
-        const std::vector<AttributionNodeInternal>& attributions, const string& wakelockName,
-        uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateAcquireWakelockEvent(uint64_t timestampNs, const vector<int>& uids,
+                                                     const vector<string>& tags,
+                                                     const string& wakelockName);
 
 // Create log event for releasing wakelock.
-std::unique_ptr<LogEvent> CreateReleaseWakelockEvent(
-        const std::vector<AttributionNodeInternal>& attributions, const string& wakelockName,
-        uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateReleaseWakelockEvent(uint64_t timestampNs, const vector<int>& uids,
+                                                     const vector<string>& tags,
+                                                     const string& wakelockName);
 
 // Create log event for releasing wakelock.
-std::unique_ptr<LogEvent> CreateIsolatedUidChangedEvent(
-    int isolatedUid, int hostUid, bool is_create, uint64_t timestampNs);
+std::unique_ptr<LogEvent> CreateIsolatedUidChangedEvent(uint64_t timestampNs, int hostUid,
+                                                        int isolatedUid, bool is_create);
 
 // Create log event for uid process state change.
 std::unique_ptr<LogEvent> CreateUidProcessStateChangedEvent(
-        int uid, const android::app::ProcessStateEnum state, uint64_t timestampNs);
+        uint64_t timestampNs, int uid, const android::app::ProcessStateEnum state);
 
 // Helper function to create an AttributionNodeInternal proto.
 AttributionNodeInternal CreateAttribution(const int& uid, const string& tag);

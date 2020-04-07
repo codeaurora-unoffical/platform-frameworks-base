@@ -2139,8 +2139,10 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
 
         // check if user has enabled this operation. SecurityException will be thrown if this app
-        // has not been allowed by the user
-        final int mode = mAppOpsManager.noteOpNoThrow(outAppOp[0], callingUid, packageName);
+        // has not been allowed by the user. The reason to use "noteOp" (instead of checkOp) is to
+        // make sure the usage is logged.
+        final int mode = mAppOpsManager.noteOpNoThrow(outAppOp[0], callingUid, packageName,
+                null /* featureId */, "check-add");
         switch (mode) {
             case AppOpsManager.MODE_ALLOWED:
             case AppOpsManager.MODE_IGNORED:
@@ -5202,7 +5204,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                     if (dock != null) {
                         int result = ActivityTaskManager.getService()
                                 .startActivityAsUser(null, mContext.getBasePackageName(),
-                                        mContext.getFeatureId(), dock,
+                                        mContext.getAttributionTag(), dock,
                                         dock.resolveTypeIfNeeded(mContext.getContentResolver()),
                                         null, null, 0,
                                         ActivityManager.START_FLAG_ONLY_IF_NEEDED,
@@ -5214,7 +5216,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 }
                 int result = ActivityTaskManager.getService()
                         .startActivityAsUser(null, mContext.getBasePackageName(),
-                                mContext.getFeatureId(), mHomeIntent,
+                                mContext.getAttributionTag(), mHomeIntent,
                                 mHomeIntent.resolveTypeIfNeeded(mContext.getContentResolver()),
                                 null, null, 0,
                                 ActivityManager.START_FLAG_ONLY_IF_NEEDED,

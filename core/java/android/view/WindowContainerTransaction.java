@@ -131,6 +131,31 @@ public class WindowContainerTransaction implements Parcelable {
     }
 
     /**
+     * Set the windowing mode of children of a given root task, without changing
+     * the windowing mode of the Task itself. This can be used during transitions
+     * for example to make the activity render it's fullscreen configuration
+     * while the Task is still in PIP, so you can complete the animation.
+     *
+     * TODO(b/134365562): Can be removed once TaskOrg drives full-screen
+     */
+    public WindowContainerTransaction setActivityWindowingMode(IWindowContainer container,
+            int windowingMode) {
+        Change chg = getOrCreateChange(container.asBinder());
+        chg.mActivityWindowingMode = windowingMode;
+        return this;
+    }
+
+    /**
+     * Sets the windowing mode of the given container.
+     */
+    public WindowContainerTransaction setWindowingMode(IWindowContainer container,
+            int windowingMode) {
+        Change chg = getOrCreateChange(container.asBinder());
+        chg.mWindowingMode = windowingMode;
+        return this;
+    }
+
+    /**
      * Sets whether a container or any of its children can be focusable. When {@code false}, no
      * child can be focused; however, when {@code true}, it is still possible for children to be
      * non-focusable due to WM policy.
@@ -139,6 +164,18 @@ public class WindowContainerTransaction implements Parcelable {
         Change chg = getOrCreateChange(container.asBinder());
         chg.mFocusable = focusable;
         chg.mChangeMask |= Change.CHANGE_FOCUSABLE;
+        return this;
+    }
+
+    /**
+     * Sets whether a container or its children should be hidden. When {@code false}, the existing
+     * visibility of the container applies, but when {@code true} the container will be forced
+     * to be hidden.
+     */
+    public WindowContainerTransaction setHidden(IWindowContainer container, boolean hidden) {
+        Change chg = getOrCreateChange(container.asBinder());
+        chg.mHidden = hidden;
+        chg.mChangeMask |= Change.CHANGE_HIDDEN;
         return this;
     }
 
@@ -225,9 +262,11 @@ public class WindowContainerTransaction implements Parcelable {
         public static final int CHANGE_FOCUSABLE = 1;
         public static final int CHANGE_BOUNDS_TRANSACTION = 1 << 1;
         public static final int CHANGE_PIP_CALLBACK = 1 << 2;
+        public static final int CHANGE_HIDDEN = 1 << 3;
 
         private final Configuration mConfiguration = new Configuration();
         private boolean mFocusable = true;
+        private boolean mHidden = false;
         private int mChangeMask = 0;
         private @ActivityInfo.Config int mConfigSetMask = 0;
         private @WindowConfiguration.WindowConfig int mWindowSetMask = 0;
@@ -235,11 +274,15 @@ public class WindowContainerTransaction implements Parcelable {
         private Rect mPinnedBounds = null;
         private SurfaceControl.Transaction mBoundsChangeTransaction = null;
 
+        private int mActivityWindowingMode = -1;
+        private int mWindowingMode = -1;
+
         public Change() {}
 
         protected Change(Parcel in) {
             mConfiguration.readFromParcel(in);
             mFocusable = in.readBoolean();
+            mHidden = in.readBoolean();
             mChangeMask = in.readInt();
             mConfigSetMask = in.readInt();
             mWindowSetMask = in.readInt();
@@ -251,18 +294,37 @@ public class WindowContainerTransaction implements Parcelable {
                 mBoundsChangeTransaction =
                     SurfaceControl.Transaction.CREATOR.createFromParcel(in);
             }
+
+            mWindowingMode = in.readInt();
+            mActivityWindowingMode = in.readInt();
+        }
+
+        public int getWindowingMode() {
+            return mWindowingMode;
+        }
+
+        public int getActivityWindowingMode() {
+            return mActivityWindowingMode;
         }
 
         public Configuration getConfiguration() {
             return mConfiguration;
         }
 
-        /** Gets the requested focusable value */
+        /** Gets the requested focusable state */
         public boolean getFocusable() {
             if ((mChangeMask & CHANGE_FOCUSABLE) == 0) {
                 throw new RuntimeException("Focusable not set. check CHANGE_FOCUSABLE first");
             }
             return mFocusable;
+        }
+
+        /** Gets the requested hidden state */
+        public boolean getHidden() {
+            if ((mChangeMask & CHANGE_HIDDEN) == 0) {
+                throw new RuntimeException("Hidden not set. check CHANGE_HIDDEN first");
+            }
+            return mHidden;
         }
 
         public int getChangeMask() {
@@ -330,6 +392,7 @@ public class WindowContainerTransaction implements Parcelable {
         public void writeToParcel(Parcel dest, int flags) {
             mConfiguration.writeToParcel(dest, flags);
             dest.writeBoolean(mFocusable);
+            dest.writeBoolean(mHidden);
             dest.writeInt(mChangeMask);
             dest.writeInt(mConfigSetMask);
             dest.writeInt(mWindowSetMask);
@@ -340,6 +403,9 @@ public class WindowContainerTransaction implements Parcelable {
             if (mBoundsChangeTransaction != null) {
                 mBoundsChangeTransaction.writeToParcel(dest, flags);
             }
+
+            dest.writeInt(mWindowingMode);
+            dest.writeInt(mActivityWindowingMode);
         }
 
         @Override

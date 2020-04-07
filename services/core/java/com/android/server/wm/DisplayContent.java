@@ -94,6 +94,7 @@ import static com.android.server.wm.DisplayContentProto.APP_TRANSITION;
 import static com.android.server.wm.DisplayContentProto.CLOSING_APPS;
 import static com.android.server.wm.DisplayContentProto.DISPLAY_FRAMES;
 import static com.android.server.wm.DisplayContentProto.DISPLAY_INFO;
+import static com.android.server.wm.DisplayContentProto.DISPLAY_READY;
 import static com.android.server.wm.DisplayContentProto.DPI;
 import static com.android.server.wm.DisplayContentProto.FOCUSED_APP;
 import static com.android.server.wm.DisplayContentProto.FOCUSED_ROOT_TASK_ID;
@@ -105,7 +106,6 @@ import static com.android.server.wm.DisplayContentProto.ROOT_DISPLAY_AREA;
 import static com.android.server.wm.DisplayContentProto.ROTATION;
 import static com.android.server.wm.DisplayContentProto.SCREEN_ROTATION_ANIMATION;
 import static com.android.server.wm.DisplayContentProto.SINGLE_TASK_INSTANCE;
-import static com.android.server.wm.DisplayContentProto.TASKS;
 import static com.android.server.wm.DisplayContentProto.WINDOW_CONTAINER;
 import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_ADD_REMOVE;
 import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_APP_TRANSITIONS;
@@ -117,6 +117,7 @@ import static com.android.server.wm.ProtoLogGroup.WM_SHOW_TRANSACTIONS;
 import static com.android.server.wm.RootWindowContainer.TAG_STATES;
 import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
+import static com.android.server.wm.WindowContainerChildProto.DISPLAY_CONTENT;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_DISPLAY;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_INPUT_METHOD;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_LAYOUT;
@@ -374,7 +375,7 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
      */
     final DisplayMetrics mRealDisplayMetrics = new DisplayMetrics();
 
-    /** @see #computeCompatSmallestWidth(boolean, int, int, int, DisplayCutout) */
+    /** @see #computeCompatSmallestWidth(boolean, int, int, int) */
     private final DisplayMetrics mTmpDisplayMetrics = new DisplayMetrics();
 
     /**
@@ -1813,7 +1814,7 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
 
         final boolean rotated = (rotation == ROTATION_90 || rotation == ROTATION_270);
         outConfig.compatSmallestScreenWidthDp = computeCompatSmallestWidth(rotated, uiMode, dw,
-                dh, displayCutout);
+                dh);
     }
 
     /**
@@ -1921,8 +1922,7 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
         mWmService.mPolicy.adjustConfigurationLw(config, keyboardPresence, navigationPresence);
     }
 
-    private int computeCompatSmallestWidth(boolean rotated, int uiMode, int dw, int dh,
-            DisplayCutout displayCutout) {
+    private int computeCompatSmallestWidth(boolean rotated, int uiMode, int dw, int dh) {
         mTmpDisplayMetrics.setTo(mDisplayMetrics);
         final DisplayMetrics tmpDm = mTmpDisplayMetrics;
         final int unrotDw, unrotDh;
@@ -1933,19 +1933,21 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
             unrotDw = dw;
             unrotDh = dh;
         }
-        int sw = reduceCompatConfigWidthSize(0, Surface.ROTATION_0, uiMode, tmpDm, unrotDw, unrotDh,
-                displayCutout);
-        sw = reduceCompatConfigWidthSize(sw, Surface.ROTATION_90, uiMode, tmpDm, unrotDh, unrotDw,
-                displayCutout);
-        sw = reduceCompatConfigWidthSize(sw, Surface.ROTATION_180, uiMode, tmpDm, unrotDw, unrotDh,
-                displayCutout);
-        sw = reduceCompatConfigWidthSize(sw, Surface.ROTATION_270, uiMode, tmpDm, unrotDh, unrotDw,
-                displayCutout);
+        int sw = reduceCompatConfigWidthSize(0, Surface.ROTATION_0, uiMode, tmpDm, unrotDw,
+                unrotDh);
+        sw = reduceCompatConfigWidthSize(sw, Surface.ROTATION_90, uiMode, tmpDm, unrotDh,
+                unrotDw);
+        sw = reduceCompatConfigWidthSize(sw, Surface.ROTATION_180, uiMode, tmpDm, unrotDw,
+                unrotDh);
+        sw = reduceCompatConfigWidthSize(sw, Surface.ROTATION_270, uiMode, tmpDm, unrotDh,
+                unrotDw);
         return sw;
     }
 
     private int reduceCompatConfigWidthSize(int curSize, int rotation, int uiMode,
-            DisplayMetrics dm, int dw, int dh, DisplayCutout displayCutout) {
+            DisplayMetrics dm, int dw, int dh) {
+        final DisplayCutout displayCutout = calculateDisplayCutoutForRotation(
+                rotation).getDisplayCutout();
         dm.noncompatWidthPixels = mDisplayPolicy.getNonDecorDisplayWidth(dw, dh, rotation, uiMode,
                 displayCutout);
         dm.noncompatHeightPixels = mDisplayPolicy.getNonDecorDisplayHeight(dw, dh, rotation, uiMode,
@@ -1986,20 +1988,20 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
             return;
         }
         int sl = Configuration.resetScreenLayout(outConfig.screenLayout);
-        sl = reduceConfigLayout(sl, Surface.ROTATION_0, density, unrotDw, unrotDh, uiMode,
-                displayInfo.displayCutout);
-        sl = reduceConfigLayout(sl, Surface.ROTATION_90, density, unrotDh, unrotDw, uiMode,
-                displayInfo.displayCutout);
-        sl = reduceConfigLayout(sl, Surface.ROTATION_180, density, unrotDw, unrotDh, uiMode,
-                displayInfo.displayCutout);
-        sl = reduceConfigLayout(sl, Surface.ROTATION_270, density, unrotDh, unrotDw, uiMode,
-                displayInfo.displayCutout);
+        sl = reduceConfigLayout(sl, Surface.ROTATION_0, density, unrotDw, unrotDh, uiMode);
+        sl = reduceConfigLayout(sl, Surface.ROTATION_90, density, unrotDh, unrotDw, uiMode);
+        sl = reduceConfigLayout(sl, Surface.ROTATION_180, density, unrotDw, unrotDh, uiMode);
+        sl = reduceConfigLayout(sl, Surface.ROTATION_270, density, unrotDh, unrotDw, uiMode);
         outConfig.smallestScreenWidthDp = (int)(displayInfo.smallestNominalAppWidth / density);
         outConfig.screenLayout = sl;
     }
 
     private int reduceConfigLayout(int curLayout, int rotation, float density, int dw, int dh,
-            int uiMode, DisplayCutout displayCutout) {
+            int uiMode) {
+        // Get the display cutout at this rotation.
+        final DisplayCutout displayCutout = calculateDisplayCutoutForRotation(
+                rotation).getDisplayCutout();
+
         // Get the app screen size at this rotation.
         int w = mDisplayPolicy.getNonDecorDisplayWidth(dw, dh, rotation, uiMode, displayCutout);
         int h = mDisplayPolicy.getNonDecorDisplayHeight(dw, dh, rotation, uiMode, displayCutout);
@@ -2223,9 +2225,7 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
                             .addTaggedData(MetricsEvent.FIELD_DISPLAY_ID, getDisplayId()));
         }
 
-        // If there was no pinned stack, we still need to notify the controller of the display info
-        // update as a result of the config change.
-        if (mPinnedStackControllerLocked != null && !hasPinnedTask()) {
+        if (mPinnedStackControllerLocked != null) {
             mPinnedStackControllerLocked.onDisplayInfoChanged(getDisplayInfo());
         }
     }
@@ -2837,10 +2837,6 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
 
         proto.write(ID, mDisplayId);
         mRootDisplayArea.dumpDebug(proto, ROOT_DISPLAY_AREA, logLevel);
-        for (int i = mTaskContainers.getChildCount() - 1; i >= 0; --i) {
-            final ActivityStack stack = mTaskContainers.getChildAt(i);
-            stack.dumpDebug(proto, TASKS, logLevel);
-        }
         for (int i = mOverlayContainers.getChildCount() - 1; i >= 0; --i) {
             final WindowToken windowToken = mOverlayContainers.getChildAt(i);
             windowToken.dumpDebug(proto, OVERLAY_WINDOWS, logLevel);
@@ -2875,8 +2871,14 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
         } else {
             proto.write(FOCUSED_ROOT_TASK_ID, INVALID_TASK_ID);
         }
+        proto.write(DISPLAY_READY, isReady());
 
         proto.end(token);
+    }
+
+    @Override
+    long getProtoFieldId() {
+        return DISPLAY_CONTENT;
     }
 
     @Override
@@ -4931,6 +4933,12 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
                 scheduleAnimation();
             }
         }
+
+        @Override
+        boolean shouldMagnify() {
+            // Omitted from Screen-Magnification
+            return false;
+        }
     }
 
     /**
@@ -6516,6 +6524,7 @@ class DisplayContent extends WindowContainer<DisplayContent.DisplayChildWindowCo
             lastReparentedStack.postReparent();
         }
         releaseSelfIfNeeded();
+        mDisplayPolicy.release();
 
         if (!mAllSleepTokens.isEmpty()) {
             mRootWindowContainer.mSleepTokens.removeAll(mAllSleepTokens);

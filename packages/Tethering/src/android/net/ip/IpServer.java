@@ -24,6 +24,7 @@ import static android.net.util.NetworkConstants.FF;
 import static android.net.util.NetworkConstants.RFC7421_PREFIX_LENGTH;
 import static android.net.util.NetworkConstants.asByte;
 import static android.net.util.TetheringMessageBase.BASE_IPSERVER;
+import static android.system.OsConstants.RT_SCOPE_UNIVERSE;
 
 import android.net.INetd;
 import android.net.INetworkStackStatusCallback;
@@ -34,6 +35,7 @@ import android.net.MacAddress;
 import android.net.RouteInfo;
 import android.net.TetheredClient;
 import android.net.TetheringManager;
+import android.net.TetheringRequestParcel;
 import android.net.dhcp.DhcpLeaseParcelable;
 import android.net.dhcp.DhcpServerCallbacks;
 import android.net.dhcp.DhcpServingParamsParcel;
@@ -242,6 +244,10 @@ public class IpServer extends StateMachine {
     private IDhcpServer mDhcpServer;
     private RaParams mLastRaParams;
     private LinkAddress mIpv4Address;
+
+    private LinkAddress mStaticIpv4ServerAddr;
+    private LinkAddress mStaticIpv4ClientAddr;
+
     @NonNull
     private List<TetheredClient> mDhcpLeases = Collections.emptyList();
 
@@ -448,7 +454,9 @@ public class IpServer extends StateMachine {
             final ArrayList<TetheredClient> leases = new ArrayList<>();
             for (DhcpLeaseParcelable lease : leaseParcelables) {
                 final LinkAddress address = new LinkAddress(
-                        intToInet4AddressHTH(lease.netAddr), lease.prefixLength);
+                        intToInet4AddressHTH(lease.netAddr), lease.prefixLength,
+                        0 /* flags */, RT_SCOPE_UNIVERSE /* as per RFC6724#3.2 */,
+                        lease.expTime /* deprecationTime */, lease.expTime /* expirationTime */);
 
                 final MacAddress macAddress;
                 try {
@@ -460,7 +468,7 @@ public class IpServer extends StateMachine {
                 }
 
                 final TetheredClient.AddressInfo addressInfo = new TetheredClient.AddressInfo(
-                        address, lease.hostname, lease.expTime);
+                        address, lease.hostname);
                 leases.add(new TetheredClient(
                         macAddress,
                         Collections.singletonList(addressInfo),
@@ -544,6 +552,8 @@ public class IpServer extends StateMachine {
         // into calls to InterfaceController, shared with startIPv4().
         mInterfaceCtrl.clearIPv4Address();
         mIpv4Address = null;
+        mStaticIpv4ServerAddr = null;
+        mStaticIpv4ClientAddr = null;
     }
 
     private boolean configureIPv4(boolean enabled) {
@@ -554,7 +564,10 @@ public class IpServer extends StateMachine {
         final Inet4Address srvAddr;
         int prefixLen = 0;
         try {
-            if (mInterfaceType == TetheringManager.TETHERING_USB
+            if (mStaticIpv4ServerAddr != null) {
+                srvAddr = (Inet4Address) mStaticIpv4ServerAddr.getAddress();
+                prefixLen = mStaticIpv4ServerAddr.getPrefixLength();
+            } else if (mInterfaceType == TetheringManager.TETHERING_USB
                     || mInterfaceType == TetheringManager.TETHERING_NCM) {
                 srvAddr = (Inet4Address) parseNumericAddress(USB_NEAR_IFACE_ADDR);
                 prefixLen = USB_PREFIX_LENGTH;
@@ -599,10 +612,6 @@ public class IpServer extends StateMachine {
             return false;
         }
 
-        if (!configureDhcp(enabled, srvAddr, prefixLen)) {
-            return false;
-        }
-
         // Directly-connected route.
         final IpPrefix ipv4Prefix = new IpPrefix(mIpv4Address.getAddress(),
                 mIpv4Address.getPrefixLength());
@@ -614,7 +623,8 @@ public class IpServer extends StateMachine {
             mLinkProperties.removeLinkAddress(mIpv4Address);
             mLinkProperties.removeRoute(route);
         }
-        return true;
+
+        return configureDhcp(enabled, srvAddr, prefixLen);
     }
 
     private String getRandomWifiIPv4Address() {
@@ -810,7 +820,7 @@ public class IpServer extends StateMachine {
                     rule.dstMac.toByteArray());
             mIpv6ForwardingRules.put(rule.address, rule);
         } catch (RemoteException | ServiceSpecificException e) {
-            Log.e(TAG, "Could not add IPv6 downstream rule: " + e);
+            mLog.e("Could not add IPv6 downstream rule: ", e);
         }
     }
 
@@ -821,8 +831,15 @@ public class IpServer extends StateMachine {
                 mIpv6ForwardingRules.remove(rule.address);
             }
         } catch (RemoteException | ServiceSpecificException e) {
-            Log.e(TAG, "Could not remove IPv6 downstream rule: " + e);
+            mLog.e("Could not remove IPv6 downstream rule: ", e);
         }
+    }
+
+    private void clearIpv6ForwardingRules() {
+        for (Ipv6ForwardingRule rule : mIpv6ForwardingRules.values()) {
+            removeIpv6ForwardingRule(rule, false /*removeFromMap*/);
+        }
+        mIpv6ForwardingRules.clear();
     }
 
     // Convenience method to replace a rule with the same rule on a new upstream interface.
@@ -837,6 +854,12 @@ public class IpServer extends StateMachine {
     // changes or if a neighbor event is received.
     private void updateIpv6ForwardingRules(int prevUpstreamIfindex, int upstreamIfindex,
             NeighborEvent e) {
+        // If we no longer have an upstream, clear forwarding rules and do nothing else.
+        if (upstreamIfindex == 0) {
+            clearIpv6ForwardingRules();
+            return;
+        }
+
         // If the upstream interface has changed, remove all rules and re-add them with the new
         // upstream interface.
         if (prevUpstreamIfindex != upstreamIfindex) {
@@ -846,13 +869,14 @@ public class IpServer extends StateMachine {
         }
 
         // If we're here to process a NeighborEvent, do so now.
+        // mInterfaceParams must be non-null or the event would not have arrived.
         if (e == null) return;
         if (!(e.ip instanceof Inet6Address) || e.ip.isMulticastAddress()
                 || e.ip.isLoopbackAddress() || e.ip.isLinkLocalAddress()) {
             return;
         }
 
-        Ipv6ForwardingRule rule = new Ipv6ForwardingRule(mLastIPv6UpstreamIfindex,
+        Ipv6ForwardingRule rule = new Ipv6ForwardingRule(upstreamIfindex,
                 mInterfaceParams.index, (Inet6Address) e.ip, mInterfaceParams.macAddr,
                 e.macAddr);
         if (e.isValid()) {
@@ -920,6 +944,13 @@ public class IpServer extends StateMachine {
         mLinkProperties.setInterfaceName(mIfaceName);
     }
 
+    private void maybeConfigureStaticIp(final TetheringRequestParcel request) {
+        if (request == null) return;
+
+        mStaticIpv4ServerAddr = request.localIPv4Address;
+        mStaticIpv4ClientAddr = request.staticClientAddress;
+    }
+
     class InitialState extends State {
         @Override
         public void enter() {
@@ -934,9 +965,11 @@ public class IpServer extends StateMachine {
                     mLastError = TetheringManager.TETHER_ERROR_NO_ERROR;
                     switch (message.arg1) {
                         case STATE_LOCAL_ONLY:
+                            maybeConfigureStaticIp((TetheringRequestParcel) message.obj);
                             transitionTo(mLocalHotspotState);
                             break;
                         case STATE_TETHERED:
+                            maybeConfigureStaticIp((TetheringRequestParcel) message.obj);
                             transitionTo(mTetheredState);
                             break;
                         default:
@@ -1021,7 +1054,7 @@ public class IpServer extends StateMachine {
                 case CMD_START_TETHERING_ERROR:
                 case CMD_STOP_TETHERING_ERROR:
                 case CMD_SET_DNS_FORWARDERS_ERROR:
-                    mLastError = TetheringManager.TETHER_ERROR_MASTER_ERROR;
+                    mLastError = TetheringManager.TETHER_ERROR_INTERNAL_ERROR;
                     transitionTo(mInitialState);
                     break;
                 default:
@@ -1095,6 +1128,7 @@ public class IpServer extends StateMachine {
 
             for (String ifname : mUpstreamIfaceSet.ifnames) cleanupUpstreamInterface(ifname);
             mUpstreamIfaceSet = null;
+            clearIpv6ForwardingRules();
         }
 
         private void cleanupUpstreamInterface(String upstreamIface) {
@@ -1151,7 +1185,7 @@ public class IpServer extends StateMachine {
                         } catch (RemoteException | ServiceSpecificException e) {
                             mLog.e("Exception enabling NAT: " + e.toString());
                             cleanupUpstream();
-                            mLastError = TetheringManager.TETHER_ERROR_ENABLE_NAT_ERROR;
+                            mLastError = TetheringManager.TETHER_ERROR_ENABLE_FORWARDING_ERROR;
                             transitionTo(mInitialState);
                             return true;
                         }

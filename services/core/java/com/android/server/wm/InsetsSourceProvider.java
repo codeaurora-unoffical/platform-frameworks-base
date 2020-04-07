@@ -215,7 +215,11 @@ class InsetsSourceProvider {
             final Rect frame = mWin.getWindowFrames().mFrame;
             if (mControl.setSurfacePosition(frame.left, frame.top) && mControlTarget != null) {
                 // The leash has been stale, we need to create a new one for the client.
-                updateControlForTarget(mControlTarget, true /* force */);
+                if (mControlTarget != mDisplayContent.mRemoteInsetsControlTarget) {
+                    // Hacky: recreating leash for RemoteInsetsControlTarget might cause IME
+                    // flicker, so we just report the new surface position to it.
+                    updateControlForTarget(mControlTarget, true /* force */);
+                }
                 mStateController.notifyControlChanged(mControlTarget);
             }
         }
@@ -274,7 +278,7 @@ class InsetsSourceProvider {
             // window crop of the surface controls (including the leash) until the client finishes
             // drawing the new frame of the new orientation. Although we cannot defer the reparent
             // operation, it is fine, because reparent won't cause any visual effect.
-            final SurfaceControl barrier = mWin.getDeferTransactionBarrier();
+            final SurfaceControl barrier = mWin.getClientViewRootSurface();
             t.deferTransactionUntil(mWin.getSurfaceControl(), barrier, frameNumber);
             t.deferTransactionUntil(leash, barrier, frameNumber);
         }

@@ -88,8 +88,6 @@ public final class FillResponse implements Parcelable {
     private final @Nullable UserData mUserData;
     private final @Nullable int[] mCancelIds;
     private final boolean mSupportsInlineSuggestions;
-    // TODO(b/149240554): revert back to use ParceledListSlice after the bug is resolved.
-    private final @Nullable ArrayList<InlinePresentation> mInlineActions;
 
     private FillResponse(@NonNull Builder builder) {
         mDatasets = (builder.mDatasets != null) ? new ParceledListSlice<>(builder.mDatasets) : null;
@@ -109,7 +107,6 @@ public final class FillResponse implements Parcelable {
         mUserData = builder.mUserData;
         mCancelIds = builder.mCancelIds;
         mSupportsInlineSuggestions = builder.mSupportsInlineSuggestions;
-        mInlineActions = builder.mInlineActions;
     }
 
     /** @hide */
@@ -212,11 +209,6 @@ public final class FillResponse implements Parcelable {
         return mSupportsInlineSuggestions;
     }
 
-    /** @hide */
-    public @Nullable List<InlinePresentation> getInlineActions() {
-        return mInlineActions;
-    }
-
     /**
      * Builder for {@link FillResponse} objects. You must to provide at least
      * one dataset or set an authentication intent with a presentation view.
@@ -239,7 +231,6 @@ public final class FillResponse implements Parcelable {
         private UserData mUserData;
         private int[] mCancelIds;
         private boolean mSupportsInlineSuggestions;
-        private ArrayList<InlinePresentation> mInlineActions;
 
         /**
          * Triggers a custom UI before before autofilling the screen with any data set in this
@@ -656,25 +647,6 @@ public final class FillResponse implements Parcelable {
         }
 
         /**
-         * Adds a new {@link InlinePresentation} to this response representing an action UI.
-         *
-         * <p> For example, the UI can be associated with an intent which can open an activity for
-         * the user to manage the Autofill provider settings.
-         *
-         * @return This builder.
-         */
-        @NonNull
-        public Builder addInlineAction(@NonNull InlinePresentation inlineAction) {
-            throwIfDestroyed();
-            throwIfAuthenticationCalled();
-            if (mInlineActions == null) {
-                mInlineActions = new ArrayList<>();
-            }
-            mInlineActions.add(inlineAction);
-            return this;
-        }
-
-        /**
          * Builds a new {@link FillResponse} instance.
          *
          * @throws IllegalStateException if any of the following conditions occur:
@@ -791,9 +763,6 @@ public final class FillResponse implements Parcelable {
             builder.append(", mCancelIds=").append(mCancelIds.length);
         }
         builder.append(", mSupportInlinePresentations=").append(mSupportsInlineSuggestions);
-        if (mInlineActions != null) {
-            builder.append(", mInlineActions=" + mInlineActions);
-        }
         return builder.append("]").toString();
     }
 
@@ -823,7 +792,6 @@ public final class FillResponse implements Parcelable {
         parcel.writeParcelableArray(mFieldClassificationIds, flags);
         parcel.writeInt(mFlags);
         parcel.writeIntArray(mCancelIds);
-        parcel.writeTypedList(mInlineActions, flags);
         parcel.writeInt(mRequestId);
     }
 
@@ -880,14 +848,6 @@ public final class FillResponse implements Parcelable {
             builder.setFlags(parcel.readInt());
             final int[] cancelIds = parcel.createIntArray();
             builder.setPresentationCancelIds(cancelIds);
-
-            final List<InlinePresentation> inlineActions = parcel.createTypedArrayList(
-                    InlinePresentation.CREATOR);
-            if (inlineActions != null) {
-                for (InlinePresentation inlineAction : inlineActions) {
-                    builder.addInlineAction(inlineAction);
-                }
-            }
 
             final FillResponse response = builder.build();
             response.setRequestId(parcel.readInt());

@@ -25,6 +25,7 @@ import android.util.SparseArray;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
+import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.extractor.DefaultExtractorInput;
 import com.google.android.exoplayer2.extractor.Extractor;
 import com.google.android.exoplayer2.extractor.ExtractorInput;
@@ -103,12 +104,12 @@ import java.util.Map;
  *     private int bytesWrittenCount = 0;
  *
  *     &#64;Override
- *     public void onSeekMap(int i, &#64;NonNull MediaFormat mediaFormat) {
+ *     public void onSeekMapFound(int i, &#64;NonNull MediaFormat mediaFormat) {
  *       // Do nothing.
  *     }
  *
  *     &#64;Override
- *     public void onTrackData(int i, &#64;NonNull TrackData trackData) {
+ *     public void onTrackDataFound(int i, &#64;NonNull TrackData trackData) {
  *       MediaFormat mediaFormat = trackData.mediaFormat;
  *       if (videoTrackIndex == -1 &&
  *           mediaFormat
@@ -119,7 +120,7 @@ import java.util.Map;
  *     }
  *
  *     &#64;Override
- *     public void onSampleData(int trackIndex, &#64;NonNull InputReader inputReader)
+ *     public void onSampleDataFound(int trackIndex, &#64;NonNull InputReader inputReader)
  *         throws IOException {
  *       int numberOfBytesToRead = (int) inputReader.getLength();
  *       if (videoTrackIndex != trackIndex) {
@@ -139,7 +140,7 @@ import java.util.Map;
  *     &#64;Override
  *     public void onSampleCompleted(
  *         int trackIndex,
- *         long timeUs,
+ *         long timeMicros,
  *         int flags,
  *         int size,
  *         int offset,
@@ -163,7 +164,7 @@ import java.util.Map;
  *           &#47;* destPos= *&#47; 0,
  *           &#47;* size= *&#47; offset);
  *       bytesWrittenCount = bytesWrittenCount - offset;
- *       publishSample(sampleData, timeUs, flags);
+ *       publishSample(sampleData, timeMicros, flags);
  *     }
  *
  *    private void ensureSpaceInBuffer(int numberOfBytesToRead) {
@@ -187,7 +188,7 @@ public final class MediaParser {
      */
     public static final class SeekMap {
 
-        /** Returned by {@link #getDurationUs()} when the duration is unknown. */
+        /** Returned by {@link #getDurationMicros()} when the duration is unknown. */
         public static final int UNKNOWN_DURATION = Integer.MIN_VALUE;
 
         private final com.google.android.exoplayer2.extractor.SeekMap mExoPlayerSeekMap;
@@ -205,26 +206,26 @@ public final class MediaParser {
          * Returns the duration of the stream in microseconds or {@link #UNKNOWN_DURATION} if the
          * duration is unknown.
          */
-        public long getDurationUs() {
+        public long getDurationMicros() {
             return mExoPlayerSeekMap.getDurationUs();
         }
 
         /**
          * Obtains {@link SeekPoint SeekPoints} for the specified seek time in microseconds.
          *
-         * <p>{@code getSeekPoints(timeUs).first} contains the latest seek point for samples with
-         * timestamp equal to or smaller than {@code timeUs}.
+         * <p>{@code getSeekPoints(timeMicros).first} contains the latest seek point for samples
+         * with timestamp equal to or smaller than {@code timeMicros}.
          *
-         * <p>{@code getSeekPoints(timeUs).second} contains the earliest seek point for samples with
-         * timestamp equal to or greater than {@code timeUs}. If a seek point exists for {@code
-         * timeUs}, the returned pair will contain the same {@link SeekPoint} twice.
+         * <p>{@code getSeekPoints(timeMicros).second} contains the earliest seek point for samples
+         * with timestamp equal to or greater than {@code timeMicros}. If a seek point exists for
+         * {@code timeMicros}, the returned pair will contain the same {@link SeekPoint} twice.
          *
-         * @param timeUs A seek time in microseconds.
+         * @param timeMicros A seek time in microseconds.
          * @return The corresponding {@link SeekPoint SeekPoints}.
          */
         @NonNull
-        public Pair<SeekPoint, SeekPoint> getSeekPoints(long timeUs) {
-            SeekPoints seekPoints = mExoPlayerSeekMap.getSeekPoints(timeUs);
+        public Pair<SeekPoint, SeekPoint> getSeekPoints(long timeMicros) {
+            SeekPoints seekPoints = mExoPlayerSeekMap.getSeekPoints(timeMicros);
             return new Pair<>(toSeekPoint(seekPoints.first), toSeekPoint(seekPoints.second));
         }
     }
@@ -254,24 +255,24 @@ public final class MediaParser {
         @NonNull public static final SeekPoint START = new SeekPoint(0, 0);
 
         /** The time of the seek point, in microseconds. */
-        public final long timeUs;
+        public final long timeMicros;
 
         /** The byte offset of the seek point. */
         public final long position;
 
         /**
-         * @param timeUs The time of the seek point, in microseconds.
+         * @param timeMicros The time of the seek point, in microseconds.
          * @param position The byte offset of the seek point.
          */
-        private SeekPoint(long timeUs, long position) {
-            this.timeUs = timeUs;
+        private SeekPoint(long timeMicros, long position) {
+            this.timeMicros = timeMicros;
             this.position = position;
         }
 
         @Override
         @NonNull
         public String toString() {
-            return "[timeUs=" + timeUs + ", position=" + position + "]";
+            return "[timeMicros=" + timeMicros + ", position=" + position + "]";
         }
 
         @Override
@@ -283,12 +284,12 @@ public final class MediaParser {
                 return false;
             }
             SeekPoint other = (SeekPoint) obj;
-            return timeUs == other.timeUs && position == other.position;
+            return timeMicros == other.timeMicros && position == other.position;
         }
 
         @Override
         public int hashCode() {
-            int result = (int) timeUs;
+            int result = (int) timeMicros;
             result = 31 * result + (int) position;
             return result;
         }
@@ -345,25 +346,25 @@ public final class MediaParser {
          *
          * @param seekMap The extracted {@link SeekMap}.
          */
-        void onSeekMap(@NonNull SeekMap seekMap);
+        void onSeekMapFound(@NonNull SeekMap seekMap);
 
         /**
          * Called when the number of tracks is found.
          *
          * @param numberOfTracks The number of tracks in the stream.
          */
-        void onTracksFound(int numberOfTracks);
+        void onTrackCountFound(int numberOfTracks);
 
         /**
-         * Called when new {@link TrackData} is extracted from the stream.
+         * Called when new {@link TrackData} is found in the stream.
          *
          * @param trackIndex The index of the track for which the {@link TrackData} was extracted.
          * @param trackData The extracted {@link TrackData}.
          */
-        void onTrackData(int trackIndex, @NonNull TrackData trackData);
+        void onTrackDataFound(int trackIndex, @NonNull TrackData trackData);
 
         /**
-         * Called to write sample data to the output.
+         * Called when sample data is found in the stream.
          *
          * <p>If the invocation of this method returns before the entire {@code inputReader} {@link
          * InputReader#getLength() length} is consumed, the method will be called again for the
@@ -374,27 +375,27 @@ public final class MediaParser {
          * @param inputReader The {@link InputReader} from which to read the data.
          * @throws IOException If an exception occurs while reading from {@code inputReader}.
          */
-        void onSampleData(int trackIndex, @NonNull InputReader inputReader) throws IOException;
+        void onSampleDataFound(int trackIndex, @NonNull InputReader inputReader) throws IOException;
 
         /**
-         * Called once all the data of a sample has been passed to {@link #onSampleData}.
+         * Called once all the data of a sample has been passed to {@link #onSampleDataFound}.
          *
          * <p>Also includes sample metadata, like presentation timestamp and flags.
          *
          * @param trackIndex The index of the track to which the sample corresponds.
-         * @param timeUs The media timestamp associated with the sample, in microseconds.
+         * @param timeMicros The media timestamp associated with the sample, in microseconds.
          * @param flags Flags associated with the sample. See {@link MediaCodec
          *     MediaCodec.BUFFER_FLAG_*}.
          * @param size The size of the sample data, in bytes.
-         * @param offset The number of bytes that have been consumed by {@code onSampleData(int,
-         *     MediaParser.InputReader)} for the specified track, since the last byte belonging to
-         *     the sample whose metadata is being passed.
+         * @param offset The number of bytes that have been consumed by {@code
+         *     onSampleDataFound(int, MediaParser.InputReader)} for the specified track, since the
+         *     last byte belonging to the sample whose metadata is being passed.
          * @param cryptoData Encryption data required to decrypt the sample. May be null for
          *     unencrypted samples.
          */
         void onSampleCompleted(
                 int trackIndex,
-                long timeUs,
+                long timeMicros,
                 int flags,
                 int size,
                 int offset,
@@ -431,63 +432,75 @@ public final class MediaParser {
         }
     }
 
+    /** Thrown when an error occurs while parsing a media stream. */
+    public static final class ParsingException extends IOException {
+
+        private ParsingException(ParserException cause) {
+            super(cause);
+        }
+    }
+
     // Public constants.
 
     /**
-     * Sets whether constant bitrate seeking should be enabled for exo.AdtsParser. {@code boolean}
+     * Sets whether constant bitrate seeking should be enabled for ADTS parsing. {@code boolean}
      * expected. Default value is {@code false}.
      */
     public static final String PARAMETER_ADTS_ENABLE_CBR_SEEKING =
-            "exo.AdtsParser.enableCbrSeeking";
+            "android.media.mediaparser.adts.enableCbrSeeking";
     /**
-     * Sets whether constant bitrate seeking should be enabled for exo.AmrParser. {@code boolean}
+     * Sets whether constant bitrate seeking should be enabled for AMR. {@code boolean} expected.
+     * Default value is {@code false}.
+     */
+    public static final String PARAMETER_AMR_ENABLE_CBR_SEEKING =
+            "android.media.mediaparser.amr.enableCbrSeeking";
+    /**
+     * Sets whether the ID3 track should be disabled for FLAC. {@code boolean} expected. Default
+     * value is {@code false}.
+     */
+    public static final String PARAMETER_FLAC_DISABLE_ID3 =
+            "android.media.mediaparser.flac.disableId3";
+    /**
+     * Sets whether MP4 parsing should ignore edit lists. {@code boolean} expected. Default value is
+     * {@code false}.
+     */
+    public static final String PARAMETER_MP4_IGNORE_EDIT_LISTS =
+            "android.media.mediaparser.mp4.ignoreEditLists";
+    /**
+     * Sets whether MP4 parsing should ignore the tfdt box. {@code boolean} expected. Default value
+     * is {@code false}.
+     */
+    public static final String PARAMETER_MP4_IGNORE_TFDT_BOX =
+            "android.media.mediaparser.mp4.ignoreTfdtBox";
+    /**
+     * Sets whether MP4 parsing should treat all video frames as key frames. {@code boolean}
      * expected. Default value is {@code false}.
      */
-    public static final String PARAMETER_AMR_ENABLE_CBR_SEEKING = "exo.AmrParser.enableCbrSeeking";
+    public static final String PARAMETER_MP4_TREAT_VIDEO_FRAMES_AS_KEYFRAMES =
+            "android.media.mediaparser.mp4.treatVideoFramesAsKeyframes";
     /**
-     * Sets whether the ID3 track should be disabled for exo.FlacParser. {@code boolean} expected.
-     * Default value is {@code false}.
-     */
-    public static final String PARAMETER_FLAC_DISABLE_ID3 = "exo.FlacParser.disableId3";
-    /**
-     * Sets whether exo.FragmentedMp4Parser should ignore edit lists. {@code boolean} expected.
-     * Default value is {@code false}.
-     */
-    public static final String PARAMETER_FMP4_IGNORE_EDIT_LISTS =
-            "exo.FragmentedMp4Parser.ignoreEditLists";
-    /**
-     * Sets whether exo.FragmentedMp4Parser should ignore the tfdt box. {@code boolean} expected.
-     * Default value is {@code false}.
-     */
-    public static final String PARAMETER_FMP4_IGNORE_TFDT_BOX =
-            "exo.FragmentedMp4Parser.ignoreTfdtBox";
-    /**
-     * Sets whether exo.FragmentedMp4Parser should treat all video frames as key frames. {@code
-     * boolean} expected. Default value is {@code false}.
-     */
-    public static final String PARAMETER_FMP4_TREAT_VIDEO_FRAMES_AS_KEYFRAMES =
-            "exo.FragmentedMp4Parser.treatVideoFramesAsKeyframes";
-    /**
-     * Sets whether exo.MatroskaParser should avoid seeking to the cues element. {@code boolean}
+     * Sets whether Matroska parsing should avoid seeking to the cues element. {@code boolean}
      * expected. Default value is {@code false}.
      *
      * <p>If this flag is enabled and the cues element occurs after the first cluster, then the
      * media is treated as unseekable.
      */
     public static final String PARAMETER_MATROSKA_DISABLE_CUES_SEEKING =
-            "exo.MatroskaParser.disableCuesSeeking";
+            "android.media.mediaparser.matroska.disableCuesSeeking";
     /**
-     * Sets whether the ID3 track should be disabled for exo.Mp3Parser. {@code boolean} expected.
+     * Sets whether the ID3 track should be disabled for MP3. {@code boolean} expected. Default
+     * value is {@code false}.
+     */
+    public static final String PARAMETER_MP3_DISABLE_ID3 =
+            "android.media.mediaparser.mp3.disableId3";
+    /**
+     * Sets whether constant bitrate seeking should be enabled for MP3. {@code boolean} expected.
      * Default value is {@code false}.
      */
-    public static final String PARAMETER_MP3_DISABLE_ID3 = "exo.Mp3Parser.disableId3";
+    public static final String PARAMETER_MP3_ENABLE_CBR_SEEKING =
+            "android.media.mediaparser.mp3.enableCbrSeeking";
     /**
-     * Sets whether constant bitrate seeking should be enabled for exo.Mp3Parser. {@code boolean}
-     * expected. Default value is {@code false}.
-     */
-    public static final String PARAMETER_MP3_ENABLE_CBR_SEEKING = "exo.Mp3Parser.enableCbrSeeking";
-    /**
-     * Sets whether exo.Mp3Parser should generate a time-to-byte mapping. {@code boolean} expected.
+     * Sets whether MP3 parsing should generate a time-to-byte mapping. {@code boolean} expected.
      * Default value is {@code false}.
      *
      * <p>Enabling this flag may require to scan a significant portion of the file to compute a seek
@@ -500,18 +513,13 @@ public final class MediaParser {
      * </ul>
      */
     public static final String PARAMETER_MP3_ENABLE_INDEX_SEEKING =
-            "exo.Mp3Parser.enableIndexSeeking";
+            "android.media.mediaparser.mp3.enableIndexSeeking";
     /**
-     * Sets whether exo.Mp4Parser should ignore edit lists. {@code boolean} expected. Default value
-     * is {@code false}.
-     */
-    public static final String PARAMETER_MP4_IGNORE_EDIT_LISTS = "exo.Mp4Parser.ignoreEditLists";
-    /**
-     * Sets the operation mode for exo.TsParser. {@code String} expected. Valid values are {@code
+     * Sets the operation mode for TS parsing. {@code String} expected. Valid values are {@code
      * "single_pmt"}, {@code "multi_pmt"}, and {@code "hls"}. Default value is {@code "single_pmt"}.
      *
-     * <p>The operation modes alter the way exo.TsParser behaves so that it can handle certain kinds
-     * of commonly-occurring malformed media.
+     * <p>The operation modes alter the way TS behaves so that it can handle certain kinds of
+     * commonly-occurring malformed media.
      *
      * <ul>
      *   <li>{@code "single_pmt"}: Only the first found PMT is parsed. Others are ignored, even if
@@ -520,47 +528,48 @@ public final class MediaParser {
      *   <li>{@code "hls"}: Enable {@code "single_pmt"} mode, and ignore continuity counters.
      * </ul>
      */
-    public static final String PARAMETER_TS_MODE = "exo.TsParser.mode";
+    public static final String PARAMETER_TS_MODE = "android.media.mediaparser.ts.mode";
     /**
-     * Sets whether exo.TsParser should treat samples consisting of non-IDR I slices as
-     * synchronization samples (key-frames). {@code boolean} expected. Default value is {@code
-     * false}.
+     * Sets whether TS should treat samples consisting of non-IDR I slices as synchronization
+     * samples (key-frames). {@code boolean} expected. Default value is {@code false}.
      */
     public static final String PARAMETER_TS_ALLOW_NON_IDR_AVC_KEYFRAMES =
-            "exo.TsParser.allowNonIdrAvcKeyframes";
+            "android.media.mediaparser.ts.allowNonIdrAvcKeyframes";
     /**
-     * Sets whether exo.TsParser should ignore AAC elementary streams. {@code boolean} expected.
+     * Sets whether TS parsing should ignore AAC elementary streams. {@code boolean} expected.
      * Default value is {@code false}.
      */
-    public static final String PARAMETER_TS_IGNORE_AAC_STREAM = "exo.TsParser.ignoreAacStream";
+    public static final String PARAMETER_TS_IGNORE_AAC_STREAM =
+            "android.media.mediaparser.ts.ignoreAacStream";
     /**
-     * Sets whether exo.TsParser should ignore AVC elementary streams. {@code boolean} expected.
+     * Sets whether TS parsing should ignore AVC elementary streams. {@code boolean} expected.
      * Default value is {@code false}.
      */
-    public static final String PARAMETER_TS_IGNORE_AVC_STREAM = "exo.TsParser.ignoreAvcStream";
+    public static final String PARAMETER_TS_IGNORE_AVC_STREAM =
+            "android.media.mediaparser.ts.ignoreAvcStream";
     /**
-     * Sets whether exo.TsParser should ignore splice information streams. {@code boolean} expected.
+     * Sets whether TS parsing should ignore splice information streams. {@code boolean} expected.
      * Default value is {@code false}.
      */
     public static final String PARAMETER_TS_IGNORE_SPLICE_INFO_STREAM =
-            "exo.TsParser.ignoreSpliceInfoStream";
+            "android.media.mediaparser.ts.ignoreSpliceInfoStream";
     /**
-     * Sets whether exo.TsParser should split AVC stream into access units based on slice headers.
+     * Sets whether TS parsing should split AVC stream into access units based on slice headers.
      * {@code boolean} expected. Default value is {@code false}.
      *
      * <p>This flag should be left disabled if the stream contains access units delimiters in order
      * to avoid unnecessary computational costs.
      */
     public static final String PARAMETER_TS_DETECT_ACCESS_UNITS =
-            "exo.TsParser.ignoreDetectAccessUnits";
+            "android.media.mediaparser.ts.ignoreDetectAccessUnits";
     /**
-     * Sets whether exo.TsParser should handle HDMV DTS audio streams. {@code boolean} expected.
+     * Sets whether TS parsing should handle HDMV DTS audio streams. {@code boolean} expected.
      * Default value is {@code false}.
      *
      * <p>Enabling this flag will disable the detection of SCTE subtitles.
      */
     public static final String PARAMETER_TS_ENABLE_HDMV_DTS_AUDIO_STREAMS =
-            "exo.TsParser.enableHdmvDtsAudioStreams";
+            "android.media.mediaparser.ts.enableHdmvDtsAudioStreams";
 
     // Private constants.
 
@@ -632,7 +641,7 @@ public final class MediaParser {
     private Extractor mExtractor;
     private ExtractorInput mExtractorInput;
     private long mPendingSeekPosition;
-    private long mPendingSeekTimeUs;
+    private long mPendingSeekTimeMicros;
 
     // Public methods.
 
@@ -760,7 +769,7 @@ public final class MediaParser {
         }
 
         if (isPendingSeek()) {
-            mExtractor.seek(mPendingSeekPosition, mPendingSeekTimeUs);
+            mExtractor.seek(mPendingSeekPosition, mPendingSeekTimeMicros);
             removePendingSeek();
         }
 
@@ -768,6 +777,8 @@ public final class MediaParser {
         int result = 0;
         try {
             result = mExtractor.read(mExtractorInput, mPositionHolder);
+        } catch (ParserException e) {
+            throw new ParsingException(e);
         } catch (InterruptedException e) {
             // TODO: Remove this exception replacement once we update the ExoPlayer version.
             throw new InterruptedIOException();
@@ -786,7 +797,7 @@ public final class MediaParser {
      * Seeks within the media container being extracted.
      *
      * <p>{@link SeekPoint SeekPoints} can be obtained from the {@link SeekMap} passed to {@link
-     * OutputConsumer#onSeekMap(SeekMap)}.
+     * OutputConsumer#onSeekMapFound(SeekMap)}.
      *
      * <p>Following a call to this method, the {@link InputReader} passed to the next invocation of
      * {@link #advance} must provide data starting from {@link SeekPoint#position} in the stream.
@@ -796,9 +807,9 @@ public final class MediaParser {
     public void seek(@NonNull SeekPoint seekPoint) {
         if (mExtractor == null) {
             mPendingSeekPosition = seekPoint.position;
-            mPendingSeekTimeUs = seekPoint.timeUs;
+            mPendingSeekTimeMicros = seekPoint.timeMicros;
         } else {
-            mExtractor.seek(seekPoint.position, seekPoint.timeUs);
+            mExtractor.seek(seekPoint.position, seekPoint.timeMicros);
         }
     }
 
@@ -836,7 +847,7 @@ public final class MediaParser {
 
     private void removePendingSeek() {
         mPendingSeekPosition = -1;
-        mPendingSeekTimeUs = -1;
+        mPendingSeekTimeMicros = -1;
     }
 
     // Private classes.
@@ -897,12 +908,12 @@ public final class MediaParser {
 
         @Override
         public void endTracks() {
-            mOutputConsumer.onTracksFound(mTrackOutputAdapters.size());
+            mOutputConsumer.onTrackCountFound(mTrackOutputAdapters.size());
         }
 
         @Override
         public void seekMap(com.google.android.exoplayer2.extractor.SeekMap exoplayerSeekMap) {
-            mOutputConsumer.onSeekMap(new SeekMap(exoplayerSeekMap));
+            mOutputConsumer.onSeekMapFound(new SeekMap(exoplayerSeekMap));
         }
     }
 
@@ -916,7 +927,7 @@ public final class MediaParser {
 
         @Override
         public void format(Format format) {
-            mOutputConsumer.onTrackData(
+            mOutputConsumer.onTrackDataFound(
                     mTrackIndex,
                     new TrackData(
                             toMediaFormat(format), toFrameworkDrmInitData(format.drmInitData)));
@@ -927,7 +938,7 @@ public final class MediaParser {
                 throws IOException {
             mScratchExtractorInputAdapter.setExtractorInput(input, length);
             long positionBeforeReading = mScratchExtractorInputAdapter.getPosition();
-            mOutputConsumer.onSampleData(mTrackIndex, mScratchExtractorInputAdapter);
+            mOutputConsumer.onSampleDataFound(mTrackIndex, mScratchExtractorInputAdapter);
             return (int) (mScratchExtractorInputAdapter.getPosition() - positionBeforeReading);
         }
 
@@ -935,7 +946,7 @@ public final class MediaParser {
         public void sampleData(ParsableByteArray data, int length) {
             mScratchParsableByteArrayAdapter.resetWithByteArray(data, length);
             try {
-                mOutputConsumer.onSampleData(mTrackIndex, mScratchParsableByteArrayAdapter);
+                mOutputConsumer.onSampleDataFound(mTrackIndex, mScratchParsableByteArrayAdapter);
             } catch (IOException e) {
                 // Unexpected.
                 throw new RuntimeException(e);
@@ -1174,15 +1185,14 @@ public final class MediaParser {
         expectedTypeByParameterName.put(PARAMETER_ADTS_ENABLE_CBR_SEEKING, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_AMR_ENABLE_CBR_SEEKING, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_FLAC_DISABLE_ID3, Boolean.class);
-        expectedTypeByParameterName.put(PARAMETER_FMP4_IGNORE_EDIT_LISTS, Boolean.class);
-        expectedTypeByParameterName.put(PARAMETER_FMP4_IGNORE_TFDT_BOX, Boolean.class);
+        expectedTypeByParameterName.put(PARAMETER_MP4_IGNORE_EDIT_LISTS, Boolean.class);
+        expectedTypeByParameterName.put(PARAMETER_MP4_IGNORE_TFDT_BOX, Boolean.class);
         expectedTypeByParameterName.put(
-                PARAMETER_FMP4_TREAT_VIDEO_FRAMES_AS_KEYFRAMES, Boolean.class);
+                PARAMETER_MP4_TREAT_VIDEO_FRAMES_AS_KEYFRAMES, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_MATROSKA_DISABLE_CUES_SEEKING, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_MP3_DISABLE_ID3, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_MP3_ENABLE_CBR_SEEKING, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_MP3_ENABLE_INDEX_SEEKING, Boolean.class);
-        expectedTypeByParameterName.put(PARAMETER_MP4_IGNORE_EDIT_LISTS, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_TS_MODE, String.class);
         expectedTypeByParameterName.put(PARAMETER_TS_ALLOW_NON_IDR_AVC_KEYFRAMES, Boolean.class);
         expectedTypeByParameterName.put(PARAMETER_TS_IGNORE_AAC_STREAM, Boolean.class);

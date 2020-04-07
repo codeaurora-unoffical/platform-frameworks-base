@@ -43,6 +43,7 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Set;
+import java.util.function.IntSupplier;
 
 /**
  * Animation controller for bubbles when they're in their stacked state. Stacked bubbles sit atop
@@ -68,9 +69,10 @@ public class StackAnimationController extends
     /**
      * Values to use for the default {@link SpringForce} provided to the physics animation layout.
      */
-    private static final int DEFAULT_STIFFNESS = 12000;
+    public static final int DEFAULT_STIFFNESS = 12000;
+    public static final float IME_ANIMATION_STIFFNESS = SpringForce.STIFFNESS_LOW;
     private static final int FLING_FOLLOW_STIFFNESS = 20000;
-    private static final float DEFAULT_BOUNCINESS = 0.9f;
+    public static final float DEFAULT_BOUNCINESS = 0.9f;
 
     /**
      * Friction applied to fling animations. Since the stack must land on one of the sides of the
@@ -86,6 +88,9 @@ public class StackAnimationController extends
      */
     private static final int SPRING_AFTER_FLING_STIFFNESS = 750;
     private static final float SPRING_AFTER_FLING_DAMPING_RATIO = 0.85f;
+
+    /** Sentinel value for unset position value. */
+    private static final float UNSET = -Float.MIN_VALUE;
 
     /**
      * Minimum fling velocity required to trigger moving the stack from one side of the screen to
@@ -118,8 +123,11 @@ public class StackAnimationController extends
     /** Whether or not the stack's start position has been set. */
     private boolean mStackMovedToStartPosition = false;
 
-    /** The most recent position in which the stack was resting on the edge of the screen. */
-    @Nullable private PointF mRestingStackPosition;
+    /**
+     * The stack's most recent position along the edge of the screen. This is saved when the last
+     * bubble is removed, so that the stack can be restored in its previous position.
+     */
+    private PointF mRestingStackPosition;
 
     /** The height of the most recently visible IME. */
     private float mImeHeight = 0f;
@@ -128,7 +136,7 @@ public class StackAnimationController extends
      * The Y position of the stack before the IME became visible, or {@link Float#MIN_VALUE} if the
      * IME is not visible or the user moved the stack since the IME became visible.
      */
-    private float mPreImeY = Float.MIN_VALUE;
+    private float mPreImeY = UNSET;
 
     /**
      * Animations on the stack position itself, which would have been started in
@@ -237,9 +245,15 @@ public class StackAnimationController extends
         }
     };
 
+    /** Returns the number of 'real' bubbles (excluding the overflow bubble). */
+    private IntSupplier mBubbleCountSupplier;
+
     public StackAnimationController(
-            FloatingContentCoordinator floatingContentCoordinator) {
+            FloatingContentCoordinator floatingContentCoordinator,
+            IntSupplier bubbleCountSupplier) {
         mFloatingContentCoordinator = floatingContentCoordinator;
+        mBubbleCountSupplier = bubbleCountSupplier;
+
     }
 
     /**
@@ -252,7 +266,7 @@ public class StackAnimationController extends
 
         // If we manually move the bubbles with the IME open, clear the return point since we don't
         // want the stack to snap away from the new position.
-        mPreImeY = Float.MIN_VALUE;
+        mPreImeY = UNSET;
 
         moveFirstBubbleWithStackFollowing(DynamicAnimation.TRANSLATION_X, x);
         moveFirstBubbleWithStackFollowing(DynamicAnimation.TRANSLATION_Y, y);
@@ -465,7 +479,6 @@ public class StackAnimationController extends
 
                 .addEndListener((animation, canceled, endValue, endVelocity) -> {
                     if (!canceled) {
-                        mRestingStackPosition = new PointF();
                         mRestingStackPosition.set(mStackPosition);
 
                         springFirstBubbleWithStackFollowing(property, spring, endVelocity,
@@ -501,34 +514,39 @@ public class StackAnimationController extends
     /**
      * Animates the stack either away from the newly visible IME, or back to its original position
      * due to the IME going away.
+     *
+     * @return The destination Y value of the stack due to the IME movement (or the current position
+     * of the stack if it's not moving).
      */
-    public void animateForImeVisibility(boolean imeVisible) {
+    public float animateForImeVisibility(boolean imeVisible) {
         final float maxBubbleY = getAllowableStackPositionRegion().bottom;
-        float destinationY = Float.MIN_VALUE;
+        float destinationY = UNSET;
 
         if (imeVisible) {
             // Stack is lower than it should be and overlaps the now-visible IME.
-            if (mStackPosition.y > maxBubbleY && mPreImeY == Float.MIN_VALUE) {
+            if (mStackPosition.y > maxBubbleY && mPreImeY == UNSET) {
                 mPreImeY = mStackPosition.y;
                 destinationY = maxBubbleY;
             }
         } else {
-            if (mPreImeY > Float.MIN_VALUE) {
+            if (mPreImeY != UNSET) {
                 destinationY = mPreImeY;
-                mPreImeY = Float.MIN_VALUE;
+                mPreImeY = UNSET;
             }
         }
 
-        if (destinationY > Float.MIN_VALUE) {
+        if (destinationY != UNSET) {
             springFirstBubbleWithStackFollowing(
                     DynamicAnimation.TRANSLATION_Y,
                     getSpringForce(DynamicAnimation.TRANSLATION_Y, /* view */ null)
-                            .setStiffness(SpringForce.STIFFNESS_LOW),
+                            .setStiffness(IME_ANIMATION_STIFFNESS),
                     /* startVel */ 0f,
                     destinationY);
 
             notifyFloatingCoordinatorStackAnimatingTo(mStackPosition.x, destinationY);
         }
+
+        return destinationY != UNSET ? destinationY : mStackPosition.y;
     }
 
     /**
@@ -581,9 +599,9 @@ public class StackAnimationController extends
                     mLayout.getHeight()
                             - mBubbleSize
                             - mBubblePaddingTop
-                            - (mImeHeight > Float.MIN_VALUE ? mImeHeight + mBubblePaddingTop : 0f)
+                            - (mImeHeight != UNSET ? mImeHeight + mBubblePaddingTop : 0f)
                             - Math.max(
-                            insets.getSystemWindowInsetBottom(),
+                            insets.getStableInsetBottom(),
                             insets.getDisplayCutout() != null
                                     ? insets.getDisplayCutout().getSafeInsetBottom()
                                     : 0);
@@ -662,6 +680,8 @@ public class StackAnimationController extends
                 new SpringAnimation(this, firstBubbleProperty)
                         .setSpring(spring)
                         .addEndListener((dynamicAnimation, b, v, v1) -> {
+                            mRestingStackPosition.set(mStackPosition);
+
                             if (after != null) {
                                 for (Runnable callback : after) {
                                     callback.run();
@@ -729,7 +749,7 @@ public class StackAnimationController extends
             return;
         }
 
-        if (mLayout.getChildCount() == 1) {
+        if (getBubbleCount() == 1) {
             // If this is the first child added, position the stack in its starting position.
             moveStackToStartPosition();
         } else if (isStackPositionSet() && mLayout.indexOfChild(child) == 0) {
@@ -751,7 +771,7 @@ public class StackAnimationController extends
                 .start();
 
         // If there are other bubbles, pull them into the correct position.
-        if (mLayout.getChildCount() > 0) {
+        if (getBubbleCount() > 0) {
             animationForChildAtIndex(0).translationX(mStackPosition.x).start();
         } else {
             // When all children are removed ensure stack position is sane
@@ -853,7 +873,12 @@ public class StackAnimationController extends
     public void setStackPosition(PointF pos) {
         Log.d(TAG, String.format("Setting position to (%f, %f).", pos.x, pos.y));
         mStackPosition.set(pos.x, pos.y);
-        mRestingStackPosition = mStackPosition;
+
+        if (mRestingStackPosition == null) {
+            mRestingStackPosition = new PointF();
+        }
+
+        mRestingStackPosition.set(mStackPosition);
 
         // If we're not the active controller, we don't want to physically move the bubble views.
         if (isActiveController()) {
@@ -965,6 +990,11 @@ public class StackAnimationController extends
         }
 
         return mMagnetizedStack;
+    }
+
+    /** Returns the number of 'real' bubbles (excluding overflow). */
+    private int getBubbleCount() {
+        return mBubbleCountSupplier.getAsInt();
     }
 
     /**

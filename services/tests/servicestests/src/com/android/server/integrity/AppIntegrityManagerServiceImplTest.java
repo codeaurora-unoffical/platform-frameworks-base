@@ -28,6 +28,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -62,7 +63,6 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.Message;
 import android.provider.Settings;
-import android.security.FileIntegrityManager;
 
 import androidx.test.InstrumentationRegistry;
 
@@ -136,7 +136,6 @@ public class AppIntegrityManagerServiceImplTest {
     @Mock RuleEvaluationEngine mRuleEvaluationEngine;
     @Mock IntegrityFileManager mIntegrityFileManager;
     @Mock Handler mHandler;
-    FileIntegrityManager mFileIntegrityManager;
 
     private final Context mRealContext = InstrumentationRegistry.getTargetContext();
 
@@ -165,16 +164,12 @@ public class AppIntegrityManagerServiceImplTest {
             Files.copy(inputStream, mTestApkSourceStamp.toPath(), REPLACE_EXISTING);
         }
 
-        mFileIntegrityManager =
-                (FileIntegrityManager)
-                        mRealContext.getSystemService(Context.FILE_INTEGRITY_SERVICE);
         mService =
                 new AppIntegrityManagerServiceImpl(
                         mMockContext,
                         mPackageManagerInternal,
                         mRuleEvaluationEngine,
                         mIntegrityFileManager,
-                        mFileIntegrityManager,
                         mHandler);
 
         mSpyPackageManager = spy(mRealContext.getPackageManager());
@@ -327,6 +322,11 @@ public class AppIntegrityManagerServiceImplTest {
         // we cannot check installer cert because it seems to be device specific.
         assertEquals(VERSION_CODE, appInstallMetadata.getVersionCode());
         assertFalse(appInstallMetadata.isPreInstalled());
+        // Asserting source stamp not present.
+        assertFalse(appInstallMetadata.isStampPresent());
+        assertFalse(appInstallMetadata.isStampVerified());
+        assertFalse(appInstallMetadata.isStampTrusted());
+        assertNull(appInstallMetadata.getStampCertificateHash());
         // These are hardcoded in the test apk android manifest
         Map<String, String> allowedInstallers =
                 appInstallMetadata.getAllowedInstallersAndCertificates();
@@ -379,7 +379,7 @@ public class AppIntegrityManagerServiceImplTest {
         AppInstallMetadata appInstallMetadata = metadataCaptor.getValue();
         assertTrue(appInstallMetadata.isStampPresent());
         assertTrue(appInstallMetadata.isStampVerified());
-        assertFalse(appInstallMetadata.isStampTrusted());
+        assertTrue(appInstallMetadata.isStampTrusted());
         assertEquals(SOURCE_STAMP_CERTIFICATE_HASH, appInstallMetadata.getStampCertificateHash());
     }
 
@@ -478,6 +478,13 @@ public class AppIntegrityManagerServiceImplTest {
         when(mIntegrityFileManager.readRules(any())).thenReturn(Arrays.asList(rule));
 
         assertThat(mService.getCurrentRules().getList()).containsExactly(rule);
+    }
+
+    @Test
+    public void getWhitelistedRuleProviders() throws Exception {
+        whitelistUsAsRuleProvider();
+
+        assertThat(mService.getWhitelistedRuleProviders()).containsExactly(TEST_FRAMEWORK_PACKAGE);
     }
 
     private void whitelistUsAsRuleProvider() {

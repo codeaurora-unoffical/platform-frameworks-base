@@ -21,7 +21,7 @@ import static android.net.TetheringManager.TETHERING_BLUETOOTH;
 import static android.net.TetheringManager.TETHERING_USB;
 import static android.net.TetheringManager.TETHERING_WIFI;
 import static android.net.TetheringManager.TETHERING_WIFI_P2P;
-import static android.net.TetheringManager.TETHER_ERROR_ENABLE_NAT_ERROR;
+import static android.net.TetheringManager.TETHER_ERROR_ENABLE_FORWARDING_ERROR;
 import static android.net.TetheringManager.TETHER_ERROR_NO_ERROR;
 import static android.net.TetheringManager.TETHER_ERROR_TETHER_IFACE_ERROR;
 import static android.net.dhcp.IDhcpServer.STATUS_SUCCESS;
@@ -43,6 +43,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -447,7 +448,7 @@ public class IpServerTest {
         usbTeardownOrder.verify(mNetd, times(2)).interfaceSetCfg(
                 argThat(cfg -> IFACE_NAME.equals(cfg.ifName)));
         usbTeardownOrder.verify(mCallback).updateInterfaceState(
-                mIpServer, STATE_AVAILABLE, TETHER_ERROR_ENABLE_NAT_ERROR);
+                mIpServer, STATE_AVAILABLE, TETHER_ERROR_ENABLE_FORWARDING_ERROR);
         usbTeardownOrder.verify(mCallback).updateLinkProperties(
                 eq(mIpServer), mLinkPropertiesCaptor.capture());
         assertNoAddressesNorRoutes(mLinkPropertiesCaptor.getValue());
@@ -546,9 +547,9 @@ public class IpServerTest {
         reset(mNetd);
 
         // Link-local and multicast neighbors are ignored.
-        recvNewNeigh(notMyIfindex, neighLL, NUD_REACHABLE, macA);
+        recvNewNeigh(myIfindex, neighLL, NUD_REACHABLE, macA);
         verifyNoMoreInteractions(mNetd);
-        recvNewNeigh(notMyIfindex, neighMC, NUD_REACHABLE, macA);
+        recvNewNeigh(myIfindex, neighMC, NUD_REACHABLE, macA);
         verifyNoMoreInteractions(mNetd);
 
         // A neighbor that is no longer valid causes the rule to be removed.
@@ -578,6 +579,52 @@ public class IpServerTest {
                 eq(neighB.getAddress()), eq(myMac.toByteArray()), eq(macB.toByteArray()));
         inOrder.verify(mNetd).tetherRuleRemoveDownstreamIpv6(eq(UPSTREAM_IFINDEX),
                 eq(neighB.getAddress()));
+        reset(mNetd);
+
+        // When the upstream is lost, rules are removed.
+        dispatchTetherConnectionChanged(null, null);
+        verify(mNetd).tetherRuleRemoveDownstreamIpv6(eq(UPSTREAM_IFINDEX2),
+                eq(neighA.getAddress()));
+        verify(mNetd).tetherRuleRemoveDownstreamIpv6(eq(UPSTREAM_IFINDEX2),
+                eq(neighB.getAddress()));
+        reset(mNetd);
+
+        // If the upstream is IPv4-only, no rules are added.
+        dispatchTetherConnectionChanged(UPSTREAM_IFACE);
+        reset(mNetd);
+        recvNewNeigh(myIfindex, neighA, NUD_REACHABLE, macA);
+        verifyNoMoreInteractions(mNetd);
+
+        // Rules can be added again once upstream IPv6 connectivity is available.
+        lp.setInterfaceName(UPSTREAM_IFACE);
+        dispatchTetherConnectionChanged(UPSTREAM_IFACE, lp);
+        recvNewNeigh(myIfindex, neighB, NUD_REACHABLE, macB);
+        verify(mNetd).tetherRuleAddDownstreamIpv6(eq(myIfindex), eq(UPSTREAM_IFINDEX),
+                eq(neighB.getAddress()), eq(myMac.toByteArray()), eq(macB.toByteArray()));
+        verify(mNetd, never()).tetherRuleAddDownstreamIpv6(anyInt(), anyInt(),
+                eq(neighA.getAddress()), any(), any());
+
+        // If upstream IPv6 connectivity is lost, rules are removed.
+        reset(mNetd);
+        dispatchTetherConnectionChanged(UPSTREAM_IFACE, null);
+        verify(mNetd).tetherRuleRemoveDownstreamIpv6(eq(UPSTREAM_IFINDEX), eq(neighB.getAddress()));
+
+        // When the interface goes down, rules are removed.
+        lp.setInterfaceName(UPSTREAM_IFACE);
+        dispatchTetherConnectionChanged(UPSTREAM_IFACE, lp);
+        recvNewNeigh(myIfindex, neighA, NUD_REACHABLE, macA);
+        recvNewNeigh(myIfindex, neighB, NUD_REACHABLE, macB);
+        verify(mNetd).tetherRuleAddDownstreamIpv6(eq(myIfindex), eq(UPSTREAM_IFINDEX),
+                eq(neighA.getAddress()), eq(myMac.toByteArray()), eq(macA.toByteArray()));
+        verify(mNetd).tetherRuleAddDownstreamIpv6(eq(myIfindex), eq(UPSTREAM_IFINDEX),
+                eq(neighB.getAddress()), eq(myMac.toByteArray()), eq(macB.toByteArray()));
+        reset(mNetd);
+
+        mIpServer.stop();
+        mLooper.dispatchAll();
+        verify(mNetd).tetherRuleRemoveDownstreamIpv6(eq(UPSTREAM_IFINDEX), eq(neighA.getAddress()));
+        verify(mNetd).tetherRuleRemoveDownstreamIpv6(eq(UPSTREAM_IFINDEX), eq(neighB.getAddress()));
+        reset(mNetd);
     }
 
     private void assertDhcpStarted(IpPrefix expectedPrefix) throws Exception {
@@ -624,16 +671,15 @@ public class IpServerTest {
      * @param v6lp IPv6 LinkProperties of the upstream interface, or null for an IPv4-only upstream.
      */
     private void dispatchTetherConnectionChanged(String upstreamIface, LinkProperties v6lp) {
-        mIpServer.sendMessage(IpServer.CMD_TETHER_CONNECTION_CHANGED,
-                new InterfaceSet(upstreamIface));
-        if (v6lp != null) {
-            mIpServer.sendMessage(IpServer.CMD_IPV6_TETHER_UPDATE, v6lp);
-        }
+        dispatchTetherConnectionChanged(upstreamIface);
+        mIpServer.sendMessage(IpServer.CMD_IPV6_TETHER_UPDATE, v6lp);
         mLooper.dispatchAll();
     }
 
     private void dispatchTetherConnectionChanged(String upstreamIface) {
-        dispatchTetherConnectionChanged(upstreamIface, null);
+        final InterfaceSet ifs = (upstreamIface != null) ? new InterfaceSet(upstreamIface) : null;
+        mIpServer.sendMessage(IpServer.CMD_TETHER_CONNECTION_CHANGED, ifs);
+        mLooper.dispatchAll();
     }
 
     private void assertIPv4AddressAndDirectlyConnectedRoute(LinkProperties lp) {

@@ -987,7 +987,8 @@ public class ChooserActivityTest {
                                 /* resolveInfoPresentationGetter */ null),
                         serviceTargets,
                         TARGET_TYPE_CHOOSER_TARGET,
-                        directShareToShortcutInfos)
+                        directShareToShortcutInfos,
+                        null)
         );
 
         // Thread.sleep shouldn't be a thing in an integration test but it's
@@ -1058,7 +1059,8 @@ public class ChooserActivityTest {
                                 /* resolveInfoPresentationGetter */ null),
                         serviceTargets,
                         TARGET_TYPE_CHOOSER_TARGET,
-                        directShareToShortcutInfos)
+                        directShareToShortcutInfos,
+                        null)
         );
         // Thread.sleep shouldn't be a thing in an integration test but it's
         // necessary here because of the way the code is structured
@@ -1145,7 +1147,8 @@ public class ChooserActivityTest {
                                 /* resolveInfoPresentationGetter */ null),
                         serviceTargets,
                         TARGET_TYPE_CHOOSER_TARGET,
-                        directShareToShortcutInfos)
+                        directShareToShortcutInfos,
+                        null)
         );
         // Thread.sleep shouldn't be a thing in an integration test but it's
         // necessary here because of the way the code is structured
@@ -1340,7 +1343,7 @@ public class ChooserActivityTest {
         onView(withText(R.string.resolver_work_tab)).perform(click());
         waitForIdle();
 
-        onView(withText(R.string.resolver_turn_on_work_apps_share))
+        onView(withText(R.string.resolver_turn_on_work_apps))
                 .check(matches(isDisplayed()));
     }
 
@@ -1365,7 +1368,7 @@ public class ChooserActivityTest {
         onView(withText(R.string.resolver_work_tab)).perform(click());
         waitForIdle();
 
-        onView(withText(R.string.resolver_no_apps_available))
+        onView(withText(R.string.resolver_no_work_apps_available_share))
                 .check(matches(isDisplayed()));
     }
 

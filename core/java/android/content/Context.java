@@ -71,6 +71,7 @@ import android.view.DisplayAdjustments;
 import android.view.View;
 import android.view.ViewDebug;
 import android.view.WindowManager;
+import android.view.WindowManager.LayoutParams.WindowType;
 import android.view.autofill.AutofillManager.AutofillClient;
 import android.view.contentcapture.ContentCaptureManager.ContentCaptureClient;
 import android.view.textclassifier.TextClassificationManager;
@@ -814,14 +815,23 @@ public abstract class Context {
     }
 
     /**
-     * <p>Features are used in complex apps to logically separate parts of the app. E.g. a
-     * blogging app might also have a instant messaging app built in.
+     * <p>Attribution can be used in complex apps to logically separate parts of the app. E.g. a
+     * blogging app might also have a instant messaging app built in. In this case two separate tags
+     * can for used each sub-feature.
      *
-     * @return the feature id this context is for or {@code null} if this is the default
-     * feature.
+     * @return the attribution tag this context is for or {@code null} if this is the default.
      */
-    public @Nullable String getFeatureId() {
+    public @Nullable String getAttributionTag() {
         return null;
+    }
+
+    // TODO moltmann: Remove
+    /**
+     * @removed
+     */
+    @Deprecated
+    public @Nullable String getFeatureId() {
+        return getAttributionTag();
     }
 
     /** Return the full application info for this context's package. */
@@ -3420,7 +3430,7 @@ public abstract class Context {
             TELEPHONY_SUBSCRIPTION_SERVICE,
             CARRIER_CONFIG_SERVICE,
             EUICC_SERVICE,
-            MMS_SERVICE,
+            //@hide: MMS_SERVICE,
             TELECOM_SERVICE,
             CLIPBOARD_SERVICE,
             INPUT_METHOD_SERVICE,
@@ -3974,8 +3984,6 @@ public abstract class Context {
      * @hide
      * @see NetworkStackClient
      */
-    @SystemApi
-    @TestApi
     public static final String NETWORK_STACK_SERVICE = "network_stack";
 
     /**
@@ -4334,6 +4342,7 @@ public abstract class Context {
      *
      * @see #getSystemService(String)
      * @see android.telephony.MmsManager
+     * @hide
      */
     public static final String MMS_SERVICE = "mms";
 
@@ -5128,7 +5137,7 @@ public abstract class Context {
      * {@link android.os.incremental.IncrementalManager}.
      * @hide
      */
-    public static final String INCREMENTAL_SERVICE = "incremental_service";
+    public static final String INCREMENTAL_SERVICE = "incremental";
 
     /**
      * Use with {@link #getSystemService(String)} to retrieve an
@@ -5820,22 +5829,32 @@ public abstract class Context {
      * @see #WALLPAPER_SERVICE
      * @throws IllegalArgumentException if token is invalid
      */
-    public @NonNull Context createWindowContext(int type, @Nullable Bundle options)  {
+    public @NonNull Context createWindowContext(@WindowType int type, @Nullable Bundle options)  {
         throw new RuntimeException("Not implemented. Must override in a subclass.");
     }
 
     /**
-     * Return a new Context object for the current Context but for a different feature in the app.
-     * Features can be used by complex apps to separate logical parts.
+     * Return a new Context object for the current Context but attribute to a different tag.
+     * In complex apps attribution tagging can be used to distinguish between separate logical
+     * parts.
      *
-     * @param featureId The feature id or {@code null} to create a context for the default feature.
+     * @param attributionTag The tag or {@code null} to create a context for the default.
      *
-     * @return A {@link Context} for the feature
+     * @return A {@link Context} that is tagged for the new attribution
      *
-     * @see #getFeatureId()
+     * @see #getAttributionTag()
      */
-    public @NonNull Context createFeatureContext(@Nullable String featureId) {
+    public @NonNull Context createAttributionContext(@Nullable String attributionTag) {
         throw new RuntimeException("Not implemented. Must override in a subclass.");
+    }
+
+    // TODO moltmann: remove
+    /**
+     * @removed
+     */
+    @Deprecated
+    public @NonNull Context createFeatureContext(@Nullable String featureId) {
+        return createAttributionContext(featureId);
     }
 
     /**

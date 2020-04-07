@@ -81,12 +81,16 @@ message Atom {
         BleScanStateChanged ble_scan_state_changed = 2 [(module) = "bluetooth"];
         ProcessStateChanged process_state_changed = 3 [(module) = "framework"];
         BleScanResultReceived ble_scan_result_received = 4 [(module) = "bluetooth"];
-        SensorStateChanged sensor_state_changed = 5 [(module) = "framework"];
+        SensorStateChanged sensor_state_changed =
+                5 [(module) = "framework", (module) = "statsdtest"];
         GpsScanStateChanged gps_scan_state_changed = 6 [(module) = "framework"];
-        SyncStateChanged sync_state_changed = 7 [(module) = "framework"];
-        ScheduledJobStateChanged scheduled_job_state_changed = 8 [(module) = "framework"];
-        ScreenBrightnessChanged screen_brightness_changed = 9 [(module) = "framework"];
-        WakelockStateChanged wakelock_state_changed = 10 [(module) = "framework"];
+        SyncStateChanged sync_state_changed = 7 [(module) = "framework", (module) = "statsdtest"];
+        ScheduledJobStateChanged scheduled_job_state_changed =
+                8 [(module) = "framework", (module) = "statsdtest"];
+        ScreenBrightnessChanged screen_brightness_changed =
+                9 [(module) = "framework", (module) = "statsdtest"];
+        WakelockStateChanged wakelock_state_changed =
+                10 [(module) = "framework", (module) = "statsdtest"];
         LongPartialWakelockStateChanged long_partial_wakelock_state_changed =
                 11 [(module) = "framework"];
         MobileRadioPowerStateChanged mobile_radio_power_state_changed = 12 [(module) = "framework"];
@@ -98,17 +102,22 @@ message Atom {
         CachedKillReported cached_kill_reported = 17 [(module) = "framework"];
         ProcessMemoryStatReported process_memory_stat_reported = 18 [(module) = "framework"];
         LauncherUIChanged launcher_event = 19 [(module) = "sysui"];
-        BatterySaverModeStateChanged battery_saver_mode_state_changed = 20 [(module) = "framework"];
+        BatterySaverModeStateChanged battery_saver_mode_state_changed =
+                20 [(module) = "framework", (module) = "statsdtest"];
         DeviceIdleModeStateChanged device_idle_mode_state_changed = 21 [(module) = "framework"];
         DeviceIdlingModeStateChanged device_idling_mode_state_changed = 22 [(module) = "framework"];
         AudioStateChanged audio_state_changed = 23 [(module) = "framework"];
         MediaCodecStateChanged media_codec_state_changed = 24 [(module) = "framework"];
         CameraStateChanged camera_state_changed = 25 [(module) = "framework"];
         FlashlightStateChanged flashlight_state_changed = 26 [(module) = "framework"];
-        UidProcessStateChanged uid_process_state_changed = 27 [(module) = "framework"];
-        ProcessLifeCycleStateChanged process_life_cycle_state_changed = 28 [(module) = "framework"];
-        ScreenStateChanged screen_state_changed = 29 [(module) = "framework"];
-        BatteryLevelChanged battery_level_changed = 30 [(module) = "framework"];
+        UidProcessStateChanged uid_process_state_changed =
+                27 [(module) = "framework", (module) = "statsdtest"];
+        ProcessLifeCycleStateChanged process_life_cycle_state_changed =
+                28 [(module) = "framework", (module) = "statsdtest"];
+        ScreenStateChanged screen_state_changed =
+                29 [(module) = "framework", (module) = "statsdtest"];
+        BatteryLevelChanged battery_level_changed =
+                30 [(module) = "framework", (module) = "statsdtest"];
         ChargingStateChanged charging_state_changed = 31 [(module) = "framework"];
         PluggedStateChanged plugged_state_changed = 32 [(module) = "framework"];
         InteractiveStateChanged interactive_state_changed = 33 [(module) = "framework"];
@@ -121,14 +130,15 @@ message Atom {
         PhoneSignalStrengthChanged phone_signal_strength_changed = 40 [(module) = "framework"];
         SettingChanged setting_changed = 41 [(module) = "framework"];
         ActivityForegroundStateChanged activity_foreground_state_changed =
-                42 [(module) = "framework"];
-        IsolatedUidChanged isolated_uid_changed = 43 [(module) = "framework"];
+                42 [(module) = "framework", (module) = "statsdtest"];
+        IsolatedUidChanged isolated_uid_changed =
+                43 [(module) = "framework", (module) = "statsd", (module) = "statsdtest"];
         PacketWakeupOccurred packet_wakeup_occurred = 44 [(module) = "framework"];
         WallClockTimeShifted wall_clock_time_shifted = 45 [(module) = "framework"];
-        AnomalyDetected anomaly_detected = 46;
+        AnomalyDetected anomaly_detected = 46 [(module) = "statsd"];
         AppBreadcrumbReported app_breadcrumb_reported =
                 47 [(allow_from_any_uid) = true, (module) = "statsd"];
-        AppStartOccurred app_start_occurred = 48 [(module) = "framework"];
+        AppStartOccurred app_start_occurred = 48 [(module) = "framework", (module) = "statsdtest"];
         AppStartCanceled app_start_canceled = 49 [(module) = "framework"];
         AppStartFullyDrawn app_start_fully_drawn = 50 [(module) = "framework"];
         LmkKillOccurred lmk_kill_occurred = 51 [(module) = "lmkd"];
@@ -138,8 +148,9 @@ message Atom {
         AppStartMemoryStateCaptured app_start_memory_state_captured = 55 [(module) = "framework"];
         ShutdownSequenceReported shutdown_sequence_reported = 56 [(module) = "framework"];
         BootSequenceReported boot_sequence_reported = 57;
-        DaveyOccurred davey_occurred = 58 [(allow_from_any_uid) = true];
-        OverlayStateChanged overlay_state_changed = 59 [(module) = "framework"];
+        DaveyOccurred davey_occurred = 58 [(allow_from_any_uid) = true, (module) = "statsd"];
+        OverlayStateChanged overlay_state_changed =
+                59 [(module) = "framework", (module) = "statsdtest"];
         ForegroundServiceStateChanged foreground_service_state_changed
                 = 60 [(module) = "framework"];
         CallStateChanged call_state_changed = 61 [(module) = "telecom"];
@@ -160,13 +171,13 @@ message Atom {
         MobileConnectionStateChanged mobile_connection_state_changed = 75 [(module) = "telephony"];
         MobileRadioTechnologyChanged mobile_radio_technology_changed = 76 [(module) = "telephony"];
         UsbDeviceAttached usb_device_attached = 77 [(module) = "framework"];
-        AppCrashOccurred app_crash_occurred = 78 [(module) = "framework"];
+        AppCrashOccurred app_crash_occurred = 78 [(module) = "framework", (module) = "statsdtest"];
         ANROccurred anr_occurred = 79 [(module) = "framework"];
         WTFOccurred wtf_occurred = 80 [(module) = "framework"];
         LowMemReported low_mem_reported = 81 [(module) = "framework"];
         GenericAtom generic_atom = 82;
         KeyValuePairsAtom key_value_pairs_atom =
-                83 [(allow_from_any_uid) = true, (module) = "framework"];
+                83 [(allow_from_any_uid) = true, (module) = "framework", (module) = "statsd"];
         VibratorStateChanged vibrator_state_changed = 84 [(module) = "framework"];
         DeferredJobStatsReported deferred_job_stats_reported = 85 [(module) = "framework"];
         ThermalThrottlingStateChanged thermal_throttling = 86 [deprecated=true];
@@ -242,7 +253,8 @@ message Atom {
         AdbConnectionChanged adb_connection_changed = 144 [(module) = "framework"];
         SpeechDspStatReported speech_dsp_stat_reported = 145;
         UsbContaminantReported usb_contaminant_reported = 146 [(module) = "framework"];
-        WatchdogRollbackOccurred watchdog_rollback_occurred = 147 [(module) = "framework"];
+        WatchdogRollbackOccurred watchdog_rollback_occurred =
+                147 [(module) = "framework", (module) = "statsd"];
         BiometricSystemHealthIssueDetected biometric_system_health_issue_detected =
                 148 [(module) = "framework"];
         BubbleUIChanged bubble_ui_changed = 149 [(module) = "sysui"];
@@ -397,11 +409,13 @@ message Atom {
             256  [(module) = "framework"];
         DisplayJankReported display_jank_reported = 257;
         AppStandbyBucketChanged app_standby_bucket_changed = 258 [(module) = "framework"];
+        SharesheetStarted sharesheet_started = 259 [(module) = "framework"];
+        RankingSelected ranking_selected = 260 [(module) = "framework"];
         SdkExtensionStatus sdk_extension_status = 354;
     }
 
     // Pulled events will start at field 10000.
-    // Next: 10076
+    // Next: 10080
     oneof pulled {
         WifiBytesTransfer wifi_bytes_transfer = 10000 [(module) = "framework"];
         WifiBytesTransferByFgBg wifi_bytes_transfer_by_fg_bg = 10001 [(module) = "framework"];
@@ -409,25 +423,26 @@ message Atom {
         MobileBytesTransferByFgBg mobile_bytes_transfer_by_fg_bg = 10003 [(module) = "framework"];
         BluetoothBytesTransfer bluetooth_bytes_transfer = 10006 [(module) = "framework"];
         KernelWakelock kernel_wakelock = 10004 [(module) = "framework"];
-        SubsystemSleepState subsystem_sleep_state = 10005;
+        SubsystemSleepState subsystem_sleep_state = 10005 [(module) = "statsdtest"];
         CpuTimePerFreq cpu_time_per_freq = 10008 [(module) = "framework"];
-        CpuTimePerUid cpu_time_per_uid = 10009 [(module) = "framework"];
-        CpuTimePerUidFreq cpu_time_per_uid_freq = 10010 [(module) = "framework"];
+        CpuTimePerUid cpu_time_per_uid = 10009 [(module) = "framework", (module) = "statsdtest"];
+        CpuTimePerUidFreq cpu_time_per_uid_freq =
+                10010 [(module) = "framework", (module) = "statsd"];
         WifiActivityInfo wifi_activity_info = 10011 [(module) = "framework"];
         ModemActivityInfo modem_activity_info = 10012 [(module) = "framework"];
         BluetoothActivityInfo bluetooth_activity_info = 10007 [(module) = "framework"];
         ProcessMemoryState process_memory_state = 10013 [(module) = "framework"];
         SystemElapsedRealtime system_elapsed_realtime = 10014 [(module) = "framework"];
-        SystemUptime system_uptime = 10015 [(module) = "framework"];
+        SystemUptime system_uptime = 10015 [(module) = "framework", (module) = "statsdtest"];
         CpuActiveTime cpu_active_time = 10016 [(module) = "framework"];
-        CpuClusterTime cpu_cluster_time = 10017 [(module) = "framework"];
-        DiskSpace disk_space = 10018 [deprecated=true];
+        CpuClusterTime cpu_cluster_time = 10017 [(module) = "framework", (module) = "statsdtest"];
+        DiskSpace disk_space = 10018 [deprecated=true, (module) = "statsdtest"];
         RemainingBatteryCapacity remaining_battery_capacity = 10019 [(module) = "framework"];
         FullBatteryCapacity full_battery_capacity = 10020 [(module) = "framework"];
-        Temperature temperature = 10021 [(module) = "framework"];
-        BinderCalls binder_calls = 10022 [(module) = "framework"];
+        Temperature temperature = 10021 [(module) = "framework", (module) = "statsdtest"];
+        BinderCalls binder_calls = 10022 [(module) = "framework", (module) = "statsd"];
         BinderCallsExceptions binder_calls_exceptions = 10023 [(module) = "framework"];
-        LooperStats looper_stats = 10024 [(module) = "framework"];
+        LooperStats looper_stats = 10024 [(module) = "framework", (module) = "statsd"];
         DiskStats disk_stats = 10025 [(module) = "framework"];
         DirectoryUsage directory_usage = 10026 [(module) = "framework"];
         AppSize app_size = 10027 [(module) = "framework"];
@@ -455,7 +470,7 @@ message Atom {
         NumFacesEnrolled num_faces_enrolled = 10048 [(module) = "framework"];
         RoleHolder role_holder = 10049 [(module) = "framework"];
         DangerousPermissionState dangerous_permission_state = 10050 [(module) = "framework"];
-        TrainInfo train_info = 10051;
+        TrainInfo train_info = 10051 [(module) = "statsd"];
         TimeZoneDataInfo time_zone_data_info = 10052 [(module) = "framework"];
         ExternalStorageInfo external_storage_info = 10053 [(module) = "framework"];
         GpuStatsGlobalInfo gpu_stats_global_info = 10054;
@@ -483,7 +498,11 @@ message Atom {
         PackageNotificationChannelGroupPreferences package_notification_channel_group_preferences =
                 10073 [(module) = "framework"];
         GnssStats gnss_stats = 10074 [(module) = "framework"];
-        AppFeaturesOps app_features_ops = 10075 [(module) = "framework"];
+        AttributedAppOps attributed_app_ops = 10075 [(module) = "framework"];
+        VoiceCallSession voice_call_session = 10076 [(module) = "telephony"];
+        VoiceCallRatUsage voice_call_rat_usage = 10077 [(module) = "telephony"];
+        SimSlotState sim_slot_state = 10078 [(module) = "telephony"];
+        SupportedRadioAccessFamily supported_radio_access_family = 10079 [(module) = "telephony"];
     }
 
     // DO NOT USE field numbers above 100,000 in AOSP.
@@ -3326,16 +3345,12 @@ message ForegroundServiceAppOpSessionEnded {
     optional int32 uid = 1 [(is_uid) = true];
 
     // The operation's name.
-    // To the extent possible, preserve the mapping from AppOpsManager.OP_ constants.
-    // Only these named ops are actually logged.
-    enum AppOpName {
-        OP_NONE = -1; // Also represents UNKNOWN.
-        OP_COARSE_LOCATION = 0;
-        OP_FINE_LOCATION = 1;
-        OP_CAMERA = 26;
-        OP_RECORD_AUDIO = 27;
-    }
-    optional AppOpName app_op_name = 2 [default = OP_NONE];
+    // Only following four ops are logged
+    // COARSE_LOCATION = 0
+    // FINE_LOCATION = 1
+    // CAMERA = 26
+    // RECORD_AUDIO = 27
+    optional android.app.AppOpEnum app_op_name = 2 [default = APP_OP_NONE];
 
     // The uid's permission mode for accessing the AppOp during this fgs session.
     enum Mode {
@@ -4475,8 +4490,7 @@ message BootTimeEventErrorCode {
  * after an OTA.
  *
  * Logged from:
- *  - system/core/fs_mgr/libsnapshot/snapshot.cpp
- *  - system/core/fs_mgr/libsnapshot/snapshotctl.cpp
+ *  - system/update_engine/cleanup_previous_update_action.cc
  */
 message SnapshotMergeReported {
     // Keep in sync with
@@ -7566,8 +7580,8 @@ message AppOps {
     // Name of the package performing the op
     optional string package_name = 2;
 
-    // operation id; maps to the OP_* constants in AppOpsManager.java
-    optional int32 op_id = 3;
+    // operation id
+    optional android.app.AppOpEnum op_id = 3 [default = APP_OP_NONE];
 
     // The number of times the op was granted while the app was in the
     // foreground (only for trusted requests)
@@ -7598,21 +7612,22 @@ message AppOps {
 }
 
 /**
- * Historical app ops data per package and features.
+ * Historical app ops data per package and attribution tag.
  */
-message AppFeaturesOps {
+message AttributedAppOps {
     // Uid of the package requesting the op
     optional int32 uid = 1 [(is_uid) = true];
 
     // Name of the package performing the op
     optional string package_name = 2;
 
-    // feature id; provided by developer when accessing related API, limited at 50 chars by API.
-    // Features must be provided through manifest using <feature> tag available in R and above.
-    optional string feature_id = 3;
+    // tag; provided by developer when accessing related API, limited at 50 chars by API.
+    // Attributions must be provided through manifest using <attribution> tag available in R and
+    // above.
+    optional string tag = 3;
 
-    // operation id; maps to the OPSTR_* constants in AppOpsManager.java
-    optional string op = 4;
+    // operation id
+    optional android.app.AppOpEnum op = 4 [default = APP_OP_NONE];
 
     // The number of times the op was granted while the app was in the
     // foreground (only for trusted requests)
@@ -7640,6 +7655,9 @@ message AppFeaturesOps {
 
     // Whether AppOps is guarded by Runtime permission
     optional bool is_runtime_permission = 11;
+
+    // Sampling rate used on device, from 0 to 100
+    optional int32 sampling_rate = 12;
 }
 
 /**
@@ -8468,9 +8486,11 @@ message RuntimeAppOpAccess {
     // operation string id per OPSTR_ constants in AppOpsManager.java
     optional string op = 3;
 
-    // feature id; provided by developer when accessing related API, limited at 50 chars by API.
-    // Features must be provided through manifest using <feature> tag available in R and above.
-    optional string feature_id = 4;
+    // attribution_tag; provided by developer when accessing related API, limited at 50 chars by
+    // API.
+    // Attributions must be provided through manifest using <attribution> tag available in R and
+    // above.
+    optional string attribution_tag = 4;
 
     // message related to app op access, limited to 600 chars by API
     optional string message = 5;
@@ -8479,6 +8499,7 @@ message RuntimeAppOpAccess {
         DEFAULT = 0;
         UNIFORM = 1;
         RARELY_USED = 2;
+        BOOT_TIME_SAMPLING = 3;
     }
 
     // sampling strategy used to collect this message
@@ -8667,6 +8688,154 @@ message AppFreezeChanged {
 }
 
 /**
+ * Pulls information for a single voice call.
+ *
+ * Each pull creates multiple atoms, one for each call. The sequence is randomized when pulled.
+ *
+ * Pulled from:
+ *   frameworks/opt/telephony/src/java/com/android/internal/telephony/metrics/PersistPullers.java
+ */
+message VoiceCallSession {
+    // Bearer (IMS or CS) when the call started.
+    optional android.telephony.CallBearerEnum bearer_at_start = 1;
+
+    // Bearer (IMS or CS) when the call ended.
+    // The bearer may change during the call, e.g. due to SRVCC.
+    optional android.telephony.CallBearerEnum bearer_at_end = 2;
+
+    // Direction of the call (incoming or outgoing).
+    optional android.telephony.CallDirectionEnum direction = 3;
+
+    // Time spent setting up the call.
+    optional android.telephony.CallSetupDurationEnum setup_duration = 4;
+
+    // Whether the call ended before the setup was completed.
+    optional bool setup_failed = 5;
+
+    // IMS reason code or CS disconnect cause.
+    // For IMS, see: frameworks/base/telephony/java/android/telephony/ims/ImsReasonInfo.java
+    // For CS, see: frameworks/base/telephony/java/android/telephony/DisconnectCause.java
+    optional int32 disconnect_reason_code = 6;
+
+    // IMS extra code or CS precise disconnect cause.
+    // For IMS, this code is vendor-specific
+    // For CS, see: frameworks/base/telephony/java/android/telephony/PreciseDisconnectCause.java
+    optional int32 disconnect_extra_code = 7;
+
+    // IMS extra message or CS vendor cause.
+    optional string disconnect_extra_message = 8;
+
+    // Radio access technology (RAT) used when call started.
+    optional android.telephony.NetworkTypeEnum rat_at_start = 9;
+
+    // Radio access technology (RAT) used when call terminated.
+    optional android.telephony.NetworkTypeEnum rat_at_end = 10;
+
+    // Number of times RAT changed during the call.
+    optional int64 rat_switch_count = 11;
+
+    // A bitmask of all codecs used during the call.
+    // See: frameworks/opt/telephony/src/java/com/android/internal/telephony/metrics/VoiceCallSessionStats.java
+    optional int64 codec_bitmask = 12;
+
+    // Number of other calls going on during call setup, for the same SIM slot.
+    optional int32 concurrent_call_count_at_start = 13;
+
+    // Number of other calls going on during call termination, for the same SIM slot.
+    optional int32 concurrent_call_count_at_end = 14;
+
+    // Index of the SIM is used, 0 for single-SIM devices.
+    optional int32 sim_slot_index = 15;
+
+    // Whether the device was in multi-SIM mode (with multiple active SIM profiles).
+    optional bool is_multi_sim = 16;
+
+    // Whether the call was made with an eSIM profile.
+    optional bool is_esim = 17;
+
+    // Carrier ID of the SIM card.
+    // See https://source.android.com/devices/tech/config/carrierid.
+    optional int32 carrier_id = 18;
+
+    // Whether an SRVCC has been completed successfully.
+    // SRVCC (CS fallback) should be recorded in the IMS call since there will be no more SRVCC
+    // events once the call is switched to CS.
+    optional bool srvcc_completed = 19;
+
+    // Number of SRVCC failures.
+    optional int64 srvcc_failure_count = 20;
+
+    // Number of SRVCC cancellations.
+    optional int64 srvcc_cancellation_count = 21;
+
+    // Whether the Real-Time Text (RTT) was ever used in the call.
+    optional bool rtt_enabled = 22;
+
+    // Whether this was an emergency call.
+    optional bool is_emergency = 23;
+
+    // Whether the call was performed while roaming.
+    optional bool is_roaming = 24;
+}
+
+/**
+ * Pulls voice call radio access technology (RAT) usage.
+ *
+ * Each pull creates multiple atoms, one for each carrier/RAT, the order of which is irrelevant to
+ * time. The atom will be skipped if not enough data is available.
+ *
+ * Pulled from:
+ *   frameworks/opt/telephony/src/java/com/android/internal/telephony/metrics/PersistPullers.java
+ */
+message VoiceCallRatUsage {
+    // Carrier ID (https://source.android.com/devices/tech/config/carrierid).
+    optional int32 carrier_id = 1;
+
+    // Radio access technology.
+    optional android.telephony.NetworkTypeEnum rat = 2;
+
+    // Total duration that voice calls spent on this carrier and RAT.
+    optional int64 total_duration_seconds = 3;
+
+    // Total number of calls using this carrier and RAT.
+    // A call is counted once even if it used the RAT multiple times.
+    optional int64 call_count = 4;
+}
+
+/**
+ * Pulls the number of active SIM slots and SIMs/eSIM profiles.
+ *
+ * Pulled from:
+ *   frameworks/opt/telephony/src/java/com/android/internal/telephony/metrics/NonPersistPullers.java
+ */
+message SimSlotState {
+    // Number of active SIM slots (both physical and eSIM profiles) in the device.
+    optional int32 active_slot_count = 1;
+
+    // Number of SIM cards (both physical and active eSIM profiles).
+    // This number is always equal to or less than the number of active SIM slots.
+    optional int32 sim_count = 2;
+
+    // Number of active eSIM profiles.
+    // This number is always equal to or less than the number of SIMs.
+    optional int32 esim_count = 3;
+}
+
+/**
+ * Pulls supported cellular radio access technologies.
+ *
+ * This atom reports the capabilities of the device, rather than the network it has access to.
+ *
+ * Pulled from:
+ *   frameworks/opt/telephony/src/java/com/android/internal/telephony/metrics/NonPersistPullers.java
+ */
+message SupportedRadioAccessFamily {
+    // A bitmask of supported radio technologies.
+    // See android.telephony.TelephonyManager.NetworkTypeBitMask.
+    optional int64 network_type_bitmask = 1;
+}
+
+/**
  * Logs gnss stats from location service provider
  *
  * Pulled from:
@@ -8757,4 +8926,65 @@ message AppStandbyBucketChanged {
     // the main reason. Values are one of the REASON_SUB_XXX constants defined in
     // UsageStatsManager.java.
     optional int32 sub_reason = 5;
+}
+
+/**
+* Reports a started sharesheet transaction.
+*
+* Logged from:
+*   frameworks/base/core/java/com/android/internal/app/ChooserActivity.java
+*/
+message SharesheetStarted {
+    // The event_id (as for UiEventReported).
+    optional int32 event_id = 1;
+    // The calling app's package name.
+    optional string package_name = 2;
+    // An identifier to tie together multiple logs relating to the same share event
+    optional int32 instance_id = 3;
+    // The mime type of the share
+    optional string mime_type = 4;
+    // The number of direct targets the calling app is providing that will be shown.
+    optional int32 num_app_provided_direct_targets = 5;
+    // The number of app targets the calling app is providing that will be shown.
+    optional int32 num_app_provided_app_targets = 6;
+    // True if the share originates from the workprofile
+    optional bool is_workprofile = 7;
+
+    enum SharesheetPreviewType {  // Constants from ChooserActivity.java
+        CONTENT_PREVIEW_IMAGE = 1;  // The preview shown in the sharesheet is an image.
+        CONTENT_PREVIEW_FILE = 2;  // The preview shown in the sharesheet is a file.
+        CONTENT_PREVIEW_TEXT = 3;  // The preview shown in the sharesheet is text.
+    }
+    // How the sharesheet preview is presented.
+    optional SharesheetPreviewType previewType = 8;
+
+    enum ResolverActivityIntent { // Intents handled by ResolverActivity.java
+        INTENT_DEFAULT = 0;
+        INTENT_ACTION_VIEW = 1;
+        INTENT_ACTION_EDIT = 2;
+        INTENT_ACTION_SEND = 3;
+        INTENT_ACTION_SENDTO = 4;
+        INTENT_ACTION_SEND_MULTIPLE = 5;
+        INTENT_ACTION_IMAGE_CAPTURE = 6;
+        INTENT_ACTION_MAIN = 7;
+    }
+    // The intent being processed (only SEND and SEND_MULTIPLE are system sharesheet)
+    optional ResolverActivityIntent intentType = 9;
+}
+
+/**
+ * Reports a ranking selection event.
+ *
+ * Logged from:
+ *   frameworks/base/core/java/com/android/internal/app/ChooserActivity.java (sharesheet)
+ */
+message RankingSelected {
+    // The event_id (as for UiEventReported).
+    optional int32 event_id = 1;
+    // The relevant app's package name (can be source or picked package).
+    optional string package_name = 2;
+    // An identifier to tie together multiple logs relating to the same share event.
+    optional int32 instance_id = 3;
+    // Which of the ranked targets got picked, default starting position 0.
+    optional int32 position_picked = 4;
 }
