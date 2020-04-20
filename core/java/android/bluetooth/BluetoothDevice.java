@@ -1334,6 +1334,26 @@ public final class BluetoothDevice implements Parcelable {
         return false;
     }
 
+    /*
+     * get link key numbers and type of current device.
+     *
+     * <p>Requires {@link android.Manifest.permission#BLUETOOTH_ADMIN}.
+     *
+     * @hide
+     */
+     public void getLinkKey() {
+         final IBluetooth service = sService;
+         if (service == null) {
+             Log.w(TAG, "BT not enabled, getLinkKey failed");
+             return;
+         }
+         try {
+             service.getLinkKey(this);
+         } catch (RemoteException e) {
+             Log.e(TAG, "", e);
+         }
+     }
+
     /**
      * Gets whether bonding was initiated locally
      *
