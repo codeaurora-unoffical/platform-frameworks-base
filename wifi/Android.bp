@@ -81,8 +81,6 @@ java_library {
     libs: [
         "framework-annotations-lib",
         "unsupportedappusage", // for android.compat.annotation.UnsupportedAppUsage
-        "unsupportedappusage-annotation", // for dalvik.annotation.compat.UnsupportedAppUsage
-        "framework-telephony-stubs",
     ],
     srcs: [
         ":framework-wifi-updatable-sources",
@@ -118,6 +116,11 @@ java_library {
         "com.android.wifi",
         "test_com.android.wifi",
     ],
+    permitted_packages: [
+        "android.hardware.wifi",
+        "android.net.wifi",
+        "android.x.net.wifi",
+    ],
 }
 
 stubs_defaults {
@@ -126,7 +129,10 @@ stubs_defaults {
         ":framework-wifi-updatable-sources",
         ":framework-wifi-util-lib-aidls",
     ],
-    libs: [ "framework-annotations-lib" ],
+    libs: [
+        "framework-annotations-lib",
+        "framework-wifi-util-lib",
+    ],
     sdk_version: "module_current",
 }
 
@@ -165,24 +171,21 @@ droidstubs {
 java_library {
     name: "framework-wifi-stubs-publicapi",
     srcs: [":framework-wifi-stubs-srcs-publicapi"],
-    sdk_version: "current",
-    installable: false,
+    defaults: ["framework-module-stubs-lib-defaults-publicapi"],
 }
 
 java_library {
     name: "framework-wifi-stubs-systemapi",
     srcs: [":framework-wifi-stubs-srcs-systemapi"],
-    sdk_version: "system_current",
     libs: ["framework-annotations-lib"],
-    installable: false,
+    defaults: ["framework-module-stubs-lib-defaults-systemapi"],
 }
 
 java_library {
     name: "framework-wifi-stubs-module_libs_api",
     srcs: [":framework-wifi-stubs-srcs-module_libs_api"],
-    sdk_version: "module_current",
     libs: ["framework-annotations-lib"],
-    installable: false,
+    defaults: ["framework-module-stubs-lib-defaults-module_libs_api"],
 }
 
 // defaults for tests that need to build against framework-wifi's @hide APIs

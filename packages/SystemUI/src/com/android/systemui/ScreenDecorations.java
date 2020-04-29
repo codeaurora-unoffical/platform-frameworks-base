@@ -33,6 +33,7 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.annotation.Dimension;
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -122,7 +123,8 @@ public class ScreenDecorations extends SystemUI implements Tunable {
     protected int mRoundedDefaultBottom;
     @VisibleForTesting
     protected View[] mOverlays;
-    private DisplayCutoutView[] mCutoutViews = new DisplayCutoutView[BOUNDS_POSITION_LENGTH];
+    @Nullable
+    private DisplayCutoutView[] mCutoutViews;
     private float mDensity;
     private WindowManager mWindowManager;
     private int mRotation;
@@ -135,18 +137,32 @@ public class ScreenDecorations extends SystemUI implements Tunable {
             new CameraAvailabilityListener.CameraTransitionCallback() {
         @Override
         public void onApplyCameraProtection(@NonNull Path protectionPath, @NonNull Rect bounds) {
+            if (mCutoutViews == null) {
+                Log.w(TAG, "DisplayCutoutView do not initialized");
+                return;
+            }
             // Show the extra protection around the front facing camera if necessary
             for (DisplayCutoutView dcv : mCutoutViews) {
-                dcv.setProtection(protectionPath, bounds);
-                dcv.setShowProtection(true);
+                // Check Null since not all mCutoutViews[pos] be inflated at the meanwhile
+                if (dcv != null) {
+                    dcv.setProtection(protectionPath, bounds);
+                    dcv.setShowProtection(true);
+                }
             }
         }
 
         @Override
         public void onHideCameraProtection() {
+            if (mCutoutViews == null) {
+                Log.w(TAG, "DisplayCutoutView do not initialized");
+                return;
+            }
             // Go back to the regular anti-aliasing
             for (DisplayCutoutView dcv : mCutoutViews) {
-                dcv.setShowProtection(false);
+                // Check Null since not all mCutoutViews[pos] be inflated at the meanwhile
+                if (dcv != null) {
+                    dcv.setShowProtection(false);
+                }
             }
         }
     };
@@ -393,6 +409,7 @@ public class ScreenDecorations extends SystemUI implements Tunable {
         // update rounded corner view rotation
         updateRoundedCornerView(pos, R.id.left);
         updateRoundedCornerView(pos, R.id.right);
+        updateRoundedCornerSize(mRoundedDefault, mRoundedDefaultTop, mRoundedDefaultBottom);
 
         // update cutout view rotation
         if (mCutoutViews != null && mCutoutViews[pos] != null) {
@@ -701,26 +718,46 @@ public class ScreenDecorations extends SystemUI implements Tunable {
                     } catch (Exception e) {
                     }
                 }
-
-                if (sizeTop == 0) {
-                    sizeTop = size;
-                }
-                if (sizeBottom == 0) {
-                    sizeBottom = size;
-                }
-
-                for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
-                    if (mOverlays[i] == null) {
-                        continue;
-                    }
-                    setSize(mOverlays[i].findViewById(R.id.left), sizeTop);
-                    setSize(mOverlays[i].findViewById(R.id.right), sizeBottom);
-                }
+                updateRoundedCornerSize(size, sizeTop, sizeBottom);
             }
         });
     }
 
-    private void setSize(View view, int pixelSize) {
+    private void updateRoundedCornerSize(int sizeDefault, int sizeTop, int sizeBottom) {
+        if (mOverlays == null) {
+            return;
+        }
+        if (sizeTop == 0) {
+            sizeTop = sizeDefault;
+        }
+        if (sizeBottom == 0) {
+            sizeBottom = sizeDefault;
+        }
+
+        for (int i = 0; i < BOUNDS_POSITION_LENGTH; i++) {
+            if (mOverlays[i] == null) {
+                continue;
+            }
+            if (i == BOUNDS_POSITION_LEFT || i == BOUNDS_POSITION_RIGHT) {
+                if (mRotation == ROTATION_270) {
+                    setSize(mOverlays[i].findViewById(R.id.left), sizeBottom);
+                    setSize(mOverlays[i].findViewById(R.id.right), sizeTop);
+                } else {
+                    setSize(mOverlays[i].findViewById(R.id.left), sizeTop);
+                    setSize(mOverlays[i].findViewById(R.id.right), sizeBottom);
+                }
+            } else if (i == BOUNDS_POSITION_TOP) {
+                setSize(mOverlays[i].findViewById(R.id.left), sizeTop);
+                setSize(mOverlays[i].findViewById(R.id.right), sizeTop);
+            } else if (i == BOUNDS_POSITION_BOTTOM) {
+                setSize(mOverlays[i].findViewById(R.id.left), sizeBottom);
+                setSize(mOverlays[i].findViewById(R.id.right), sizeBottom);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    protected void setSize(View view, int pixelSize) {
         LayoutParams params = view.getLayoutParams();
         params.width = pixelSize;
         params.height = pixelSize;

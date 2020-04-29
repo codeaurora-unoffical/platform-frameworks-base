@@ -26,6 +26,7 @@ import android.net.util.NetUtils;
 import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.util.Pair;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -425,6 +426,16 @@ public final class RouteInfo implements Parcelable {
     }
 
     /**
+     * Indicates if this route is an unreachable default route.
+     *
+     * @return {@code true} if it's an unreachable route with prefix length of 0.
+     * @hide
+     */
+    private boolean isUnreachableDefaultRoute() {
+        return mType == RTN_UNREACHABLE && mDestination.getPrefixLength() == 0;
+    }
+
+    /**
      * Indicates if this route is an IPv4 default route.
      * @hide
      */
@@ -433,11 +444,27 @@ public final class RouteInfo implements Parcelable {
     }
 
     /**
+     * Indicates if this route is an IPv4 unreachable default route.
+     * @hide
+     */
+    public boolean isIPv4UnreachableDefault() {
+        return isUnreachableDefaultRoute() && mDestination.getAddress() instanceof Inet4Address;
+    }
+
+    /**
      * Indicates if this route is an IPv6 default route.
      * @hide
      */
     public boolean isIPv6Default() {
         return isDefaultRoute() && mDestination.getAddress() instanceof Inet6Address;
+    }
+
+    /**
+     * Indicates if this route is an IPv6 unreachable default route.
+     * @hide
+     */
+    public boolean isIPv6UnreachableDefault() {
+        return isUnreachableDefaultRoute() && mDestination.getAddress() instanceof Inet6Address;
     }
 
     /**
@@ -527,23 +554,27 @@ public final class RouteInfo implements Parcelable {
     }
 
     /**
-     * Compares this RouteInfo object against the specified object and indicates if the
-     * destinations of both routes are equal.
-     * @return {@code true} if the route destinations are equal, {@code false} otherwise.
+     * A helper class that contains the destination and the gateway in a {@code RouteInfo},
+     * used by {@link ConnectivityService#updateRoutes} or
+     * {@link LinkProperties#addRoute} to calculate the list to be updated.
      *
      * @hide
      */
-    public boolean isSameDestinationAs(@Nullable Object obj) {
-        if (this == obj) return true;
-
-        if (!(obj instanceof RouteInfo)) return false;
-
-        RouteInfo target = (RouteInfo) obj;
-
-        if (Objects.equals(mDestination, target.getDestination())) {
-            return true;
+    public static class RouteKey extends Pair<IpPrefix, InetAddress> {
+        RouteKey(@NonNull IpPrefix destination, @Nullable InetAddress gateway) {
+            super(destination, gateway);
         }
-        return false;
+    }
+
+    /**
+     * Get {@code RouteKey} of this {@code RouteInfo}.
+     * @return a {@code RouteKey} object.
+     *
+     * @hide
+     */
+    @NonNull
+    public RouteKey getRouteKey() {
+        return new RouteKey(mDestination, mGateway);
     }
 
     /**

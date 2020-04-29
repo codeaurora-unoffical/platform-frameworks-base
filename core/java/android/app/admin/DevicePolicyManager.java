@@ -2395,9 +2395,11 @@ public class DevicePolicyManager {
     public static final int MAX_PASSWORD_LENGTH = 16;
 
     /**
-     * Service Action: Service implemented by a device owner or profile owner to provide a
-     * secondary lockscreen.
+     * Service Action: Service implemented by a device owner or profile owner supervision app to
+     * provide a secondary lockscreen.
+     * @hide
      */
+    @SystemApi
     public static final String ACTION_BIND_SECONDARY_LOCKSCREEN_SERVICE =
             "android.app.action.BIND_SECONDARY_LOCKSCREEN_SERVICE";
 
@@ -2429,7 +2431,7 @@ public class DevicePolicyManager {
             PERSONAL_APPS_SUSPENDED_PROFILE_TIMEOUT
     })
     @Retention(RetentionPolicy.SOURCE)
-    public @interface PersonalAppSuspensionReason {}
+    public @interface PersonalAppsSuspensionReason {}
 
     /**
      * Return true if the given administrator component is currently active (enabled) in the system.
@@ -4424,11 +4426,13 @@ public class DevicePolicyManager {
      * the current factory reset protection (FRP) policy set previously by
      * {@link #setFactoryResetProtectionPolicy}.
      * <p>
-     * This method can also be called by the FRP management agent on device, in which case,
-     * it can pass {@code null} as the ComponentName.
+     * This method can also be called by the FRP management agent on device or with the permission
+     * {@link android.Manifest.permission#MASTER_CLEAR}, in which case, it can pass {@code null}
+     * as the ComponentName.
      *
      * @param admin Which {@link DeviceAdminReceiver} this request is associated with or
-     *              {@code null} if called by the FRP management agent on device.
+     *              {@code null} if called by the FRP management agent on device or with the
+     *              permission {@link android.Manifest.permission#MASTER_CLEAR}.
      * @return The current FRP policy object or {@code null} if no policy is set.
      * @throws SecurityException if {@code admin} is not a device owner, a profile owner of
      *                           an organization-owned device or the FRP management agent.
@@ -6999,6 +7003,22 @@ public class DevicePolicyManager {
     }
 
     /**
+     * Returns the configured supervision app if it exists and is the device owner or policy owner.
+     * @hide
+     */
+    public @Nullable ComponentName getProfileOwnerOrDeviceOwnerSupervisionComponent(
+            @NonNull UserHandle user) {
+        if (mService != null) {
+            try {
+                return mService.getProfileOwnerOrDeviceOwnerSupervisionComponent(user);
+            } catch (RemoteException re) {
+                throw re.rethrowFromSystemServer();
+            }
+        }
+        return null;
+    }
+
+    /**
      * @hide
      * @return the human readable name of the organisation associated with this DPM or {@code null}
      *         if one is not set.
@@ -7071,7 +7091,6 @@ public class DevicePolicyManager {
      *
      * @hide
      */
-    @SystemApi
     public boolean hasDeviceIdentifierAccess(@NonNull String packageName, int pid, int uid) {
         throwIfParentInstance("hasDeviceIdentifierAccess");
         if (packageName == null) {
@@ -8636,11 +8655,16 @@ public class DevicePolicyManager {
      * <p>Relevant interactions on the secondary lockscreen should be communicated back to the
      * keyguard via {@link IKeyguardCallback}, such as when the screen is ready to be dismissed.
      *
+     * <p>This API, and associated APIs, can only be called by the default supervision app when it
+     * is set as the device owner or profile owner.
+     *
      * @param admin Which {@link DeviceAdminReceiver} this request is associated with.
      * @param enabled Whether or not the lockscreen needs to be shown.
      * @throws SecurityException if {@code admin} is not a device or profile owner.
      * @see #isSecondaryLockscreenEnabled
+     * @hide
      **/
+    @SystemApi
     public void setSecondaryLockscreenEnabled(@NonNull ComponentName admin, boolean enabled) {
         throwIfParentInstance("setSecondaryLockscreenEnabled");
         if (mService != null) {
@@ -8658,11 +8682,11 @@ public class DevicePolicyManager {
      * @hide
      */
     @SystemApi
-    public boolean isSecondaryLockscreenEnabled(int userId) {
+    public boolean isSecondaryLockscreenEnabled(@NonNull UserHandle userHandle) {
         throwIfParentInstance("isSecondaryLockscreenEnabled");
         if (mService != null) {
             try {
-                return mService.isSecondaryLockscreenEnabled(userId);
+                return mService.isSecondaryLockscreenEnabled(userHandle);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
@@ -9388,9 +9412,9 @@ public class DevicePolicyManager {
     }
 
     /**
-     * Called by device owner or profile owner of secondary users  that is affiliated with the
-     * device to disable the status bar. Disabling the status bar blocks notifications, quick
-     * settings and other screen overlays that allow escaping from a single use device.
+     * Called by device owner or profile owner of secondary users that is affiliated with the
+     * device to disable the status bar. Disabling the status bar blocks notifications and quick
+     * settings.
      * <p>
      * <strong>Note:</strong> This method has no effect for LockTask mode. The behavior of the
      * status bar in LockTask mode can be configured with
@@ -11496,7 +11520,11 @@ public class DevicePolicyManager {
 
     /**
      * Deprecated. Use {@code markProfileOwnerOnOrganizationOwnedDevice} instead.
-     * Throws UnsupportedOperationException when called.
+     * When called by an app targeting SDK level {@link android.os.Build.VERSION_CODES#Q} or
+     * below, will behave the same as {@link #markProfileOwnerOnOrganizationOwnedDevice}.
+     *
+     * When called by an app targeting SDK level {@link android.os.Build.VERSION_CODES#R}
+     * or above, will throw an UnsupportedOperationException when called.
      *
      * @deprecated Use {@link #markProfileOwnerOnOrganizationOwnedDevice} instead.
      *
@@ -11507,9 +11535,14 @@ public class DevicePolicyManager {
     @RequiresPermission(value = android.Manifest.permission.GRANT_PROFILE_OWNER_DEVICE_IDS_ACCESS,
             conditional = true)
     public void setProfileOwnerCanAccessDeviceIds(@NonNull ComponentName who) {
-        throw new UnsupportedOperationException(
-                "This method is deprecated. use markProfileOwnerOnOrganizationOwnedDevice instead"
-                        + ".");
+        ApplicationInfo ai = mContext.getApplicationInfo();
+        if (ai.targetSdkVersion > Build.VERSION_CODES.Q) {
+            throw new UnsupportedOperationException(
+                    "This method is deprecated. use markProfileOwnerOnOrganizationOwnedDevice"
+                    + " instead.");
+        } else {
+            markProfileOwnerOnOrganizationOwnedDevice(who);
+        }
     }
 
     /**
@@ -11953,7 +11986,7 @@ public class DevicePolicyManager {
      *     {@link #PERSONAL_APPS_NOT_SUSPENDED} if apps are not suspended.
      * @see #setPersonalAppsSuspended
      */
-    public @PersonalAppSuspensionReason int getPersonalAppsSuspendedReasons(
+    public @PersonalAppsSuspensionReason int getPersonalAppsSuspendedReasons(
             @NonNull ComponentName admin) {
         throwIfParentInstance("getPersonalAppsSuspendedReasons");
         if (mService != null) {

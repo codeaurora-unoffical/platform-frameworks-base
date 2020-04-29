@@ -385,9 +385,11 @@ void StatsService::print_cmd_help(int out) {
     dprintf(out, "  PKG           Optional package name to print the uids of the package\n");
     dprintf(out, "\n");
     dprintf(out, "\n");
-    dprintf(out, "usage: adb shell cmd stats pull-source [int] \n");
+    dprintf(out, "usage: adb shell cmd stats pull-source ATOM_TAG [PACKAGE] \n");
     dprintf(out, "\n");
-    dprintf(out, "  Prints the output of a pulled metrics source (int indicates source)\n");
+    dprintf(out, "  Prints the output of a pulled atom\n");
+    dprintf(out, "  UID           The atom to pull\n");
+    dprintf(out, "  PACKAGE       The package to pull from. Default is AID_SYSTEM\n");
     dprintf(out, "\n");
     dprintf(out, "\n");
     dprintf(out, "usage: adb shell cmd stats write-to-disk \n");
@@ -806,8 +808,21 @@ status_t StatsService::cmd_log_binary_push(int out, const Vector<String8>& args)
 
 status_t StatsService::cmd_print_pulled_metrics(int out, const Vector<String8>& args) {
     int s = atoi(args[1].c_str());
-    vector<shared_ptr<LogEvent> > stats;
-    if (mPullerManager->Pull(s, &stats)) {
+    vector<int32_t> uids;
+    if (args.size() > 2) {
+        string package = string(args[2].c_str());
+        auto it = UidMap::sAidToUidMapping.find(package);
+        if (it != UidMap::sAidToUidMapping.end()) {
+            uids.push_back(it->second);
+        } else {
+            set<int32_t> uids_set = mUidMap->getAppUid(package);
+            uids.insert(uids.end(), uids_set.begin(), uids_set.end());
+        }
+    } else {
+        uids.push_back(AID_SYSTEM);
+    }
+    vector<shared_ptr<LogEvent>> stats;
+    if (mPullerManager->Pull(s, uids, &stats)) {
         for (const auto& it : stats) {
             dprintf(out, "Pull from %d: %s\n", s, it->ToString().c_str());
         }
@@ -1007,6 +1022,7 @@ Status StatsService::informDeviceShutdown() {
     VLOG("StatsService::informDeviceShutdown");
     mProcessor->WriteDataToDisk(DEVICE_SHUTDOWN, FAST);
     mProcessor->SaveActiveConfigsToDisk(getElapsedRealtimeNs());
+    mProcessor->SaveMetadataToDisk(getWallClockNs(), getElapsedRealtimeNs());
     return Status::ok();
 }
 
@@ -1041,6 +1057,7 @@ Status StatsService::statsCompanionReady() {
 void StatsService::Startup() {
     mConfigManager->Startup();
     mProcessor->LoadActiveConfigsFromDisk();
+    mProcessor->LoadMetadataFromDisk(getWallClockNs(), getElapsedRealtimeNs());
 }
 
 void StatsService::Terminate() {
@@ -1048,6 +1065,7 @@ void StatsService::Terminate() {
     if (mProcessor != nullptr) {
         mProcessor->WriteDataToDisk(TERMINATION_SIGNAL_RECEIVED, FAST);
         mProcessor->SaveActiveConfigsToDisk(getElapsedRealtimeNs());
+        mProcessor->SaveMetadataToDisk(getWallClockNs(), getElapsedRealtimeNs());
     }
 }
 
@@ -1209,9 +1227,10 @@ Status StatsService::registerPullAtomCallback(int32_t uid, int32_t atomTag, int6
     return Status::ok();
 }
 
-Status StatsService::registerNativePullAtomCallback(int32_t atomTag, int64_t coolDownNs,
-                                    int64_t timeoutNs, const std::vector<int32_t>& additiveFields,
-                                    const shared_ptr<IPullAtomCallback>& pullerCallback) {
+Status StatsService::registerNativePullAtomCallback(
+        int32_t atomTag, int64_t coolDownMillis, int64_t timeoutMillis,
+        const std::vector<int32_t>& additiveFields,
+        const shared_ptr<IPullAtomCallback>& pullerCallback) {
     if (!checkPermission(kPermissionRegisterPullAtom)) {
         return exception(
                 EX_SECURITY,
@@ -1220,7 +1239,8 @@ Status StatsService::registerNativePullAtomCallback(int32_t atomTag, int64_t coo
     }
     VLOG("StatsService::registerNativePullAtomCallback called.");
     int32_t uid = AIBinder_getCallingUid();
-    mPullerManager->RegisterPullAtomCallback(uid, atomTag, coolDownNs, timeoutNs, additiveFields,
+    mPullerManager->RegisterPullAtomCallback(uid, atomTag, MillisToNano(coolDownMillis),
+                                             MillisToNano(timeoutMillis), additiveFields,
                                              pullerCallback);
     return Status::ok();
 }
@@ -1278,20 +1298,23 @@ void StatsService::statsCompanionServiceDiedImpl() {
     if (mProcessor != nullptr) {
         ALOGW("Reset statsd upon system server restarts.");
         int64_t systemServerRestartNs = getElapsedRealtimeNs();
-        ProtoOutputStream proto;
+        ProtoOutputStream activeConfigsProto;
         mProcessor->WriteActiveConfigsToProtoOutputStream(systemServerRestartNs,
-                STATSCOMPANION_DIED, &proto);
-
+                STATSCOMPANION_DIED, &activeConfigsProto);
+        metadata::StatsMetadataList metadataList;
+        mProcessor->WriteMetadataToProto(getWallClockNs(),
+                systemServerRestartNs, &metadataList);
         mProcessor->WriteDataToDisk(STATSCOMPANION_DIED, FAST);
         mProcessor->resetConfigs();
 
         std::string serializedActiveConfigs;
-        if (proto.serializeToString(&serializedActiveConfigs)) {
+        if (activeConfigsProto.serializeToString(&serializedActiveConfigs)) {
             ActiveConfigList activeConfigs;
             if (activeConfigs.ParseFromString(serializedActiveConfigs)) {
                 mProcessor->SetConfigsActiveState(activeConfigs, systemServerRestartNs);
             }
         }
+        mProcessor->SetMetadataState(metadataList, getWallClockNs(), systemServerRestartNs);
     }
     mAnomalyAlarmMonitor->setStatsCompanionService(nullptr);
     mPeriodicAlarmMonitor->setStatsCompanionService(nullptr);

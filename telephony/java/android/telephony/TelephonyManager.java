@@ -165,7 +165,6 @@ public class TelephonyManager {
      * into the ResultReceiver Bundle.
      * @hide
      */
-    @SystemApi
     public static final String MODEM_ACTIVITY_RESULT_KEY = "controller_activity";
 
     /**
@@ -1438,7 +1437,6 @@ public class TelephonyManager {
      *
      * @hide
      */
-    @SystemApi
     public static final String EXTRA_DEFAULT_SUBSCRIPTION_SELECT_TYPE =
             "android.telephony.extra.DEFAULT_SUBSCRIPTION_SELECT_TYPE";
 
@@ -1458,7 +1456,6 @@ public class TelephonyManager {
      * to indicate there's no need to re-select any default subscription.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_DEFAULT_SUBSCRIPTION_SELECT_TYPE_NONE = 0;
 
     /**
@@ -1466,7 +1463,6 @@ public class TelephonyManager {
      * to indicate there's a need to select default data subscription.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_DEFAULT_SUBSCRIPTION_SELECT_TYPE_DATA = 1;
 
     /**
@@ -1474,7 +1470,6 @@ public class TelephonyManager {
      * to indicate there's a need to select default voice call subscription.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_DEFAULT_SUBSCRIPTION_SELECT_TYPE_VOICE = 2;
 
     /**
@@ -1482,7 +1477,6 @@ public class TelephonyManager {
      * to indicate there's a need to select default sms subscription.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_DEFAULT_SUBSCRIPTION_SELECT_TYPE_SMS = 3;
 
     /**
@@ -1492,7 +1486,6 @@ public class TelephonyManager {
      * which subscription should be the default subscription.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_DEFAULT_SUBSCRIPTION_SELECT_TYPE_ALL = 4;
 
     /**
@@ -1502,7 +1495,6 @@ public class TelephonyManager {
      *
      * @hide
      */
-    @SystemApi
     public static final String EXTRA_SIM_COMBINATION_WARNING_TYPE =
             "android.telephony.extra.SIM_COMBINATION_WARNING_TYPE";
 
@@ -1519,7 +1511,6 @@ public class TelephonyManager {
      * to indicate there's no SIM combination warning.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_SIM_COMBINATION_WARNING_TYPE_NONE = 0;
 
     /**
@@ -1527,7 +1518,6 @@ public class TelephonyManager {
      * to indicate two active SIMs are both CDMA hence there might be functional limitation.
      * @hide
      */
-    @SystemApi
     public static final int EXTRA_SIM_COMBINATION_WARNING_TYPE_DUAL_CDMA = 1;
 
     /**
@@ -1538,7 +1528,6 @@ public class TelephonyManager {
      *
      * @hide
      */
-    @SystemApi
     public static final String EXTRA_SIM_COMBINATION_NAMES =
             "android.telephony.extra.SIM_COMBINATION_NAMES";
 
@@ -1590,7 +1579,6 @@ public class TelephonyManager {
      * <p class="note">This is a protected intent that can only be sent by the system.</p>
      * @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String ACTION_CARRIER_SIGNAL_REDIRECTED =
             "com.android.internal.telephony.CARRIER_SIGNAL_REDIRECTED";
@@ -1608,7 +1596,6 @@ public class TelephonyManager {
      * <p class="note">This is a protected intent that can only be sent by the system. </p>
      * @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String ACTION_CARRIER_SIGNAL_REQUEST_NETWORK_FAILED =
             "com.android.internal.telephony.CARRIER_SIGNAL_REQUEST_NETWORK_FAILED";
@@ -1631,7 +1618,6 @@ public class TelephonyManager {
      * <p class="note">This is a protected intent that can only be sent by the system. </p>
      * @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String ACTION_CARRIER_SIGNAL_PCO_VALUE =
             "com.android.internal.telephony.CARRIER_SIGNAL_PCO_VALUE";
@@ -1649,7 +1635,6 @@ public class TelephonyManager {
      * <p class="note">This is a protected intent that can only be sent by the system. </p>
      * @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String ACTION_CARRIER_SIGNAL_DEFAULT_NETWORK_AVAILABLE =
             "com.android.internal.telephony.CARRIER_SIGNAL_DEFAULT_NETWORK_AVAILABLE";
@@ -1664,7 +1649,6 @@ public class TelephonyManager {
      * <p class="note">This is a protected intent that can only be sent by the system.</p>
      * @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String ACTION_CARRIER_SIGNAL_RESET =
             "com.android.internal.telephony.CARRIER_SIGNAL_RESET";
@@ -1674,7 +1658,6 @@ public class TelephonyManager {
      *  An string extra of redirected url upon {@link #ACTION_CARRIER_SIGNAL_REDIRECTED}.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_REDIRECTION_URL = "redirectionUrl";
 
@@ -1683,7 +1666,6 @@ public class TelephonyManager {
      *  Check {@link DataFailCause} for all possible values.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_ERROR_CODE = "errorCode";
 
@@ -1697,7 +1679,6 @@ public class TelephonyManager {
      *
      *  @hide
      */
-    @SystemApi
     @Deprecated
     @SuppressLint("ActionValue")
     public static final String EXTRA_APN_TYPE = "apnType";
@@ -1710,7 +1691,6 @@ public class TelephonyManager {
      *  Check {@link ApnSetting} TYPE_* for its values.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_APN_TYPE_INT = "apnTypeInt";
 
@@ -1722,7 +1702,6 @@ public class TelephonyManager {
      *
      *  @hide
      */
-    @SystemApi
     @Deprecated
     @SuppressLint("ActionValue")
     public static final String EXTRA_APN_PROTOCOL = "apnProto";
@@ -1733,7 +1712,6 @@ public class TelephonyManager {
      *  Check {@link ApnSetting} PROTOCOL_* for its values.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_APN_PROTOCOL_INT = "apnProtoInt";
 
@@ -1742,7 +1720,6 @@ public class TelephonyManager {
      *  {@link #ACTION_CARRIER_SIGNAL_PCO_VALUE} broadcasts.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_PCO_ID = "pcoId";
 
@@ -1751,7 +1728,6 @@ public class TelephonyManager {
      *  {@link #ACTION_CARRIER_SIGNAL_PCO_VALUE} broadcasts.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_PCO_VALUE = "pcoValue";
 
@@ -1760,7 +1736,6 @@ public class TelephonyManager {
      *  {@link #ACTION_CARRIER_SIGNAL_DEFAULT_NETWORK_AVAILABLE} broadcasts.
      *  @hide
      */
-    @SystemApi
     @SuppressLint("ActionValue")
     public static final String EXTRA_DEFAULT_NETWORK_AVAILABLE = "defaultNetworkAvailable";
 
@@ -2911,6 +2886,8 @@ public class TelephonyManager {
     /**
      * Return a collection of all network types
      * @return network types
+     *
+     * @hide
      */
     public static @NonNull @NetworkType int[] getAllNetworkTypes() {
         return NETWORK_TYPES;
@@ -4926,7 +4903,8 @@ public class TelephonyManager {
             ITelephony telephony = getITelephony();
             if (telephony != null) {
                 telephony.sendVisualVoicemailSmsForSubscriber(
-                        mContext.getOpPackageName(), subId, number, port, text, sentIntent);
+                        mContext.getOpPackageName(), mContext.getAttributionTag(), subId, number,
+                        port, text, sentIntent);
             }
         } catch (RemoteException ex) {
         }
@@ -5598,6 +5576,10 @@ public class TelephonyManager {
      * Note: if you call this method while in the middle of a binder transaction, you <b>must</b>
      * call {@link android.os.Binder#clearCallingIdentity()} before calling this method. A
      * {@link SecurityException} will be thrown otherwise.
+     *
+     * This API should be used sparingly -- large numbers of listeners will cause system
+     * instability. If a process has registered too many listeners without unregistering them, it
+     * may encounter an {@link IllegalStateException} when trying to register more listeners.
      *
      * @param listener The {@link PhoneStateListener} object to register
      *                 (or unregister)
@@ -8086,7 +8068,6 @@ public class TelephonyManager {
      *
      * @hide
      */
-    @SystemApi
     @RequiresPermission(android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
     public boolean isInEmergencySmsMode() {
         try {
@@ -8702,13 +8683,9 @@ public class TelephonyManager {
         return false;
     }
 
-    /**
-     * @deprecated use {@link #supplyPinReportPinResult(String pin)} instead.
-     *
-     * @hide */
+    /** @hide */
     @SystemApi
     @RequiresPermission(android.Manifest.permission.MODIFY_PHONE_STATE)
-    @Deprecated
     public int[] supplyPinReportResult(String pin) {
         try {
             ITelephony telephony = getITelephony();
@@ -8720,13 +8697,9 @@ public class TelephonyManager {
         return new int[0];
     }
 
-    /**
-     * @deprecated use {@link #supplyPukReportPinResult(String puk, String pin)} instead.
-     *
-     * @hide */
+    /** @hide */
     @SystemApi
     @RequiresPermission(android.Manifest.permission.MODIFY_PHONE_STATE)
-    @Deprecated
     public int[] supplyPukReportResult(String puk, String pin) {
         try {
             ITelephony telephony = getITelephony();
@@ -9862,32 +9835,12 @@ public class TelephonyManager {
     }
 
     /**
-     * Get baseband version for the default phone using the legacy approach.
-     * This change was added in P, to ensure backward compatiblity.
-     *
-     * @return baseband version.
-     * @hide
-     */
-    private String getBasebandVersionLegacy(int phoneId) {
-        if (SubscriptionManager.isValidPhoneId(phoneId)) {
-            String prop = "gsm.version.baseband"
-                    + ((phoneId == 0) ? "" : Integer.toString(phoneId));
-            return SystemProperties.get(prop);
-        }
-        return null;
-    }
-
-    /**
      * Get baseband version by phone id.
      *
      * @return baseband version.
      * @hide
      */
     public String getBasebandVersionForPhone(int phoneId) {
-        String version = getBasebandVersionLegacy(phoneId);
-        if (version != null && !version.isEmpty()) {
-            setBasebandVersionForPhone(phoneId, version);
-        }
         return getTelephonyProperty(phoneId, TelephonyProperties.baseband_version(), "");
     }
 
@@ -10297,7 +10250,6 @@ public class TelephonyManager {
      * {@link #MODEM_ACTIVITY_RESULT_KEY}.
      * @hide
      */
-    @SystemApi
     public void requestModemActivityInfo(@NonNull ResultReceiver result) {
         try {
             ITelephony service = getITelephony();
@@ -11824,6 +11776,7 @@ public class TelephonyManager {
      * subscription, the key is {@link SubscriptionManager#getDefaultSubscriptionId}) and the value
      * as the list of {@link EmergencyNumber}; empty Map if this information is not available;
      * or throw a SecurityException if the caller does not have the permission.
+     * @throws IllegalStateException if the Telephony process is not currently available.
      */
     @RequiresPermission(android.Manifest.permission.READ_PHONE_STATE)
     @NonNull
@@ -11871,6 +11824,7 @@ public class TelephonyManager {
      * @param number - the number to look up
      * @return {@code true} if the given number is an emergency number based on current locale,
      * SIM card(s), Android database, modem, network or defaults; {@code false} otherwise.
+     * @throws IllegalStateException if the Telephony process is not currently available.
      */
     public boolean isEmergencyNumber(@NonNull String number) {
         try {
@@ -11906,7 +11860,7 @@ public class TelephonyManager {
      * the same digits of any current emergency number based on current locale, sim, modem and
      * network; {@code false} if it is not; or throw an SecurityException if the caller does not
      * have the required permission/privileges
-     *
+     * @throws IllegalStateException if the Telephony process is not currently available.
      * @hide
      */
     @SystemApi
@@ -12312,6 +12266,17 @@ public class TelephonyManager {
             "android.telephony.extra.NETWORK_COUNTRY";
 
     /**
+     * The extra used with an {@link #ACTION_NETWORK_COUNTRY_CHANGED} to specify the
+     * last known the country code in ISO-3166-1 alpha-2 format.
+     * <p class="note">
+     * Retrieve with {@link android.content.Intent#getStringExtra(String)}.
+     *
+     * @hide
+     */
+    public static final String EXTRA_LAST_KNOWN_NETWORK_COUNTRY =
+            "android.telephony.extra.LAST_KNOWN_NETWORK_COUNTRY";
+
+    /**
      * Indicate if the user is allowed to use multiple SIM cards at the same time to register
      * on the network (e.g. Dual Standby or Dual Active) when the device supports it, or if the
      * usage is restricted. This API is used to prevent usage of multiple SIM card, based on
@@ -12381,6 +12346,9 @@ public class TelephonyManager {
     @RequiresPermission(android.Manifest.permission.READ_PHONE_STATE)
     @IsMultiSimSupportedResult
     public int isMultiSimSupported() {
+        if (getSupportedModemCount() < 2) {
+            return TelephonyManager.MULTISIM_NOT_SUPPORTED_BY_HARDWARE;
+        }
         try {
             ITelephony service = getITelephony();
             if (service != null) {
@@ -12989,7 +12957,6 @@ public class TelephonyManager {
      *
      * @hide
      */
-    @SystemApi
     @RequiresPermission(android.Manifest.permission.MODIFY_PHONE_STATE)
     public boolean setAlwaysAllowMmsData(boolean alwaysAllow) {
         try {
@@ -13023,6 +12990,7 @@ public class TelephonyManager {
      */
     @WorkerThread
     @RequiresPermission(android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+    @SystemApi
     public boolean isIccLockEnabled() {
         try {
             ITelephony telephony = getITelephony();

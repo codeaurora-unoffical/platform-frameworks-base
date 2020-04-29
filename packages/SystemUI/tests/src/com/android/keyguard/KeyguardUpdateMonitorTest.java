@@ -38,6 +38,7 @@ import android.app.Activity;
 import android.app.admin.DevicePolicyManager;
 import android.app.trust.TrustManager;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -51,6 +52,7 @@ import android.hardware.face.FaceManager;
 import android.hardware.fingerprint.FingerprintManager;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.IRemoteCallback;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.telephony.ServiceState;
@@ -62,6 +64,7 @@ import android.testing.TestableContext;
 import android.testing.TestableLooper;
 
 import com.android.internal.telephony.TelephonyIntents;
+import com.android.keyguard.KeyguardUpdateMonitor.BiometricAuthenticated;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.dump.DumpManager;
@@ -505,6 +508,24 @@ public class KeyguardUpdateMonitorTest extends SysuiTestCase {
     }
 
     @Test
+    public void testBiometricsCleared_whenUserSwitches() throws Exception {
+        final IRemoteCallback reply = new IRemoteCallback.Stub() {
+            @Override
+            public void sendResult(Bundle data) {} // do nothing
+        };
+        final BiometricAuthenticated dummyAuthentication =
+                new BiometricAuthenticated(true /* authenticated */, true /* strong */);
+        mKeyguardUpdateMonitor.mUserFaceAuthenticated.put(0 /* user */, dummyAuthentication);
+        mKeyguardUpdateMonitor.mUserFingerprintAuthenticated.put(0 /* user */, dummyAuthentication);
+        assertThat(mKeyguardUpdateMonitor.mUserFingerprintAuthenticated.size()).isEqualTo(1);
+        assertThat(mKeyguardUpdateMonitor.mUserFaceAuthenticated.size()).isEqualTo(1);
+
+        mKeyguardUpdateMonitor.handleUserSwitching(10 /* user */, reply);
+        assertThat(mKeyguardUpdateMonitor.mUserFingerprintAuthenticated.size()).isEqualTo(0);
+        assertThat(mKeyguardUpdateMonitor.mUserFaceAuthenticated.size()).isEqualTo(0);
+    }
+
+    @Test
     public void testGetUserCanSkipBouncer_whenTrust() {
         int user = KeyguardUpdateMonitor.getCurrentUser();
         mKeyguardUpdateMonitor.onTrustChanged(true /* enabled */, user, 0 /* flags */);
@@ -567,7 +588,11 @@ public class KeyguardUpdateMonitorTest extends SysuiTestCase {
         ResolveInfo resolveInfo = new ResolveInfo();
         resolveInfo.serviceInfo = serviceInfo;
         when(mPackageManager.resolveService(any(Intent.class), eq(0))).thenReturn(resolveInfo);
-        when(mDevicePolicyManager.isSecondaryLockscreenEnabled(eq(user))).thenReturn(true, false);
+        when(mDevicePolicyManager.isSecondaryLockscreenEnabled(eq(UserHandle.of(user))))
+                .thenReturn(true, false);
+        when(mDevicePolicyManager.getProfileOwnerOrDeviceOwnerSupervisionComponent(
+                UserHandle.of(user)))
+                .thenReturn(new ComponentName(packageName, cls));
 
         // Initially null.
         assertThat(mKeyguardUpdateMonitor.getSecondaryLockscreenRequirement(user)).isNull();

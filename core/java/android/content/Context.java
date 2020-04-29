@@ -3987,10 +3987,10 @@ public abstract class Context {
     public static final String NETWORK_STACK_SERVICE = "network_stack";
 
     /**
-     * Use with {@link android.os.ServiceManager.getService()} to retrieve a
-     * {@link ITetheringConnector} IBinder for communicating with the tethering service
+     * Use with {@link #getSystemService(String)} to retrieve a {@link android.net.TetheringManager}
+     * for managing tethering functions.
      * @hide
-     * @see TetheringClient
+     * @see android.net.TetheringManager
      */
     @SystemApi
     public static final String TETHERING_SERVICE = "tethering";
@@ -4065,8 +4065,6 @@ public abstract class Context {
      */
     public static final String NETWORK_STATS_SERVICE = "netstats";
     /** {@hide} */
-    @SystemApi
-    @SuppressLint("ServiceName")
     public static final String NETWORK_POLICY_SERVICE = "netpolicy";
     /** {@hide} */
     public static final String NETWORK_WATCHLIST_SERVICE = "network_watchlist";
@@ -5104,7 +5102,6 @@ public abstract class Context {
      * {@link TelephonyRegistryManager}.
      * @hide
      */
-    @SystemApi
     public static final String TELEPHONY_REGISTRY_SERVICE = "telephony_registry";
 
     /**
@@ -5791,7 +5788,7 @@ public abstract class Context {
      * {@link android.view.LayoutInflater inflating} views, such that they can be inflated with
      * proper {@link Resources}.
      *
-     * Below is a sample code to <b>add an application overlay window on the primary display:<b/>
+     * Below is a sample code to <b>add an application overlay window on the primary display:</b>
      * <pre class="prettyprint">
      * ...
      * final DisplayManager dm = anyContext.getSystemService(DisplayManager.class);
@@ -6105,5 +6102,14 @@ public abstract class Context {
             throw new IllegalArgumentException("Non-UI context used to display UI; "
                     + "get a UI context from ActivityThread#getSystemUiContext()");
         }
+    }
+
+    /**
+     * Indicates if this context is a visual context such as {@link android.app.Activity} or
+     * a context created from {@link #createWindowContext(int, Bundle)}.
+     * @hide
+     */
+    public boolean isUiContext() {
+        throw new RuntimeException("Not implemented. Must override in a subclass.");
     }
 }

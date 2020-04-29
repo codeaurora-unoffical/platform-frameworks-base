@@ -214,11 +214,10 @@ public class ResourcesManager {
             for (int i = mCachedApkAssets.size() - 1; i >= 0; i--) {
                 final ApkKey key = mCachedApkAssets.keyAt(i);
                 if (key.path.equals(path)) {
-                    WeakReference<ApkAssets> apkAssetsRef = mCachedApkAssets.remove(key);
+                    WeakReference<ApkAssets> apkAssetsRef = mCachedApkAssets.removeAt(i);
                     if (apkAssetsRef != null && apkAssetsRef.get() != null) {
                         apkAssetsRef.get().close();
                     }
-                    mCachedApkAssets.remove(key);
                 }
             }
         }
@@ -248,6 +247,28 @@ public class ResourcesManager {
             dm.setToDefaults();
         }
         return dm;
+    }
+
+    private static void applyNonDefaultDisplayMetricsToConfiguration(
+            @NonNull DisplayMetrics dm, @NonNull Configuration config) {
+        config.touchscreen = Configuration.TOUCHSCREEN_NOTOUCH;
+        config.densityDpi = dm.densityDpi;
+        config.screenWidthDp = (int) (dm.widthPixels / dm.density);
+        config.screenHeightDp = (int) (dm.heightPixels / dm.density);
+        int sl = Configuration.resetScreenLayout(config.screenLayout);
+        if (dm.widthPixels > dm.heightPixels) {
+            config.orientation = Configuration.ORIENTATION_LANDSCAPE;
+            config.screenLayout = Configuration.reduceScreenLayout(sl,
+                    config.screenWidthDp, config.screenHeightDp);
+        } else {
+            config.orientation = Configuration.ORIENTATION_PORTRAIT;
+            config.screenLayout = Configuration.reduceScreenLayout(sl,
+                    config.screenHeightDp, config.screenWidthDp);
+        }
+        config.smallestScreenWidthDp = Math.min(config.screenWidthDp, config.screenHeightDp);
+        config.compatScreenWidthDp = config.screenWidthDp;
+        config.compatScreenHeightDp = config.screenHeightDp;
+        config.compatSmallestScreenWidthDp = config.smallestScreenWidthDp;
     }
 
     public boolean applyCompatConfigurationLocked(int displayDensity,
@@ -346,10 +367,9 @@ public class ResourcesManager {
 
         // We must load this from disk.
         if (overlay) {
-            apkAssets = ApkAssets.loadOverlayFromPath(overlayPathToIdmapPath(path),
-                    false /*system*/);
+            apkAssets = ApkAssets.loadOverlayFromPath(overlayPathToIdmapPath(path), 0 /*flags*/);
         } else {
-            apkAssets = ApkAssets.loadFromPath(path, false /*system*/, sharedLib);
+            apkAssets = ApkAssets.loadFromPath(path, sharedLib ? ApkAssets.PROPERTY_DYNAMIC : 0);
         }
 
         if (mLoadedApkAssets != null) {
@@ -497,11 +517,17 @@ public class ResourcesManager {
 
     private Configuration generateConfig(@NonNull ResourcesKey key, @NonNull DisplayMetrics dm) {
         Configuration config;
+        final boolean isDefaultDisplay = (key.mDisplayId == Display.DEFAULT_DISPLAY);
         final boolean hasOverrideConfig = key.hasOverrideConfiguration();
-        if (hasOverrideConfig) {
+        if (!isDefaultDisplay || hasOverrideConfig) {
             config = new Configuration(getConfiguration());
-            config.updateFrom(key.mOverrideConfiguration);
-            if (DEBUG) Slog.v(TAG, "Applied overrideConfig=" + key.mOverrideConfiguration);
+            if (!isDefaultDisplay) {
+                applyNonDefaultDisplayMetricsToConfiguration(dm, config);
+            }
+            if (hasOverrideConfig) {
+                config.updateFrom(key.mOverrideConfiguration);
+                if (DEBUG) Slog.v(TAG, "Applied overrideConfig=" + key.mOverrideConfiguration);
+            }
         } else {
             config = getConfiguration();
         }
@@ -668,26 +694,26 @@ public class ResourcesManager {
     }
 
     /**
-     * Creates base resources for an Activity. Calls to
+     * Creates base resources for a binder token. Calls to
      * {@link #getResources(IBinder, String, String[], String[], String[], int, Configuration,
-     * CompatibilityInfo, ClassLoader, List)} with the same activityToken will have their override
+     * CompatibilityInfo, ClassLoader, List)} with the same binder token will have their override
      * configurations merged with the one specified here.
      *
-     * @param activityToken Represents an Activity.
+     * @param token Represents an {@link Activity} or {@link WindowContext}.
      * @param resDir The base resource path. Can be null (only framework resources will be loaded).
      * @param splitResDirs An array of split resource paths. Can be null.
      * @param overlayDirs An array of overlay paths. Can be null.
      * @param libDirs An array of resource library paths. Can be null.
      * @param displayId The ID of the display for which to create the resources.
      * @param overrideConfig The configuration to apply on top of the base configuration. Can be
-     *                       null. This provides the base override for this Activity.
+     *                       {@code null}. This provides the base override for this token.
      * @param compatInfo The compatibility settings to use. Cannot be null. A default to use is
      *                   {@link CompatibilityInfo#DEFAULT_COMPATIBILITY_INFO}.
      * @param classLoader The class loader to use when inflating Resources. If null, the
      *                    {@link ClassLoader#getSystemClassLoader()} is used.
      * @return a Resources object from which to access resources.
      */
-    public @Nullable Resources createBaseActivityResources(@NonNull IBinder activityToken,
+    public @Nullable Resources createBaseTokenResources(@NonNull IBinder token,
             @Nullable String resDir,
             @Nullable String[] splitResDirs,
             @Nullable String[] overlayDirs,
@@ -712,24 +738,24 @@ public class ResourcesManager {
             classLoader = classLoader != null ? classLoader : ClassLoader.getSystemClassLoader();
 
             if (DEBUG) {
-                Slog.d(TAG, "createBaseActivityResources activity=" + activityToken
+                Slog.d(TAG, "createBaseActivityResources activity=" + token
                         + " with key=" + key);
             }
 
             synchronized (this) {
                 // Force the creation of an ActivityResourcesStruct.
-                getOrCreateActivityResourcesStructLocked(activityToken);
+                getOrCreateActivityResourcesStructLocked(token);
             }
 
             // Update any existing Activity Resources references.
-            updateResourcesForActivity(activityToken, overrideConfig, displayId,
+            updateResourcesForActivity(token, overrideConfig, displayId,
                     false /* movedToDifferentDisplay */);
 
-            cleanupReferences(activityToken);
-            rebaseKeyForActivity(activityToken, key);
+            cleanupReferences(token);
+            rebaseKeyForActivity(token, key);
 
             synchronized (this) {
-                Resources resources = findResourcesForActivityLocked(activityToken, key,
+                Resources resources = findResourcesForActivityLocked(token, key,
                         classLoader);
                 if (resources != null) {
                     return resources;
@@ -737,7 +763,7 @@ public class ResourcesManager {
             }
 
             // Now request an actual Resources object.
-            return createResources(activityToken, key, classLoader);
+            return createResources(token, key, classLoader);
         } finally {
             Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
         }
@@ -747,19 +773,21 @@ public class ResourcesManager {
      * Rebases a key's override config on top of the Activity's base override.
      */
     private void rebaseKeyForActivity(IBinder activityToken, ResourcesKey key) {
-        final ActivityResources activityResources =
-                getOrCreateActivityResourcesStructLocked(activityToken);
+        synchronized (this) {
+            final ActivityResources activityResources =
+                    getOrCreateActivityResourcesStructLocked(activityToken);
 
-        // Clean up any dead references so they don't pile up.
-        ArrayUtils.unstableRemoveIf(activityResources.activityResources,
-                sEmptyReferencePredicate);
+            // Clean up any dead references so they don't pile up.
+            ArrayUtils.unstableRemoveIf(activityResources.activityResources,
+                    sEmptyReferencePredicate);
 
-        // Rebase the key's override config on top of the Activity's base override.
-        if (key.hasOverrideConfiguration()
-                && !activityResources.overrideConfig.equals(Configuration.EMPTY)) {
-            final Configuration temp = new Configuration(activityResources.overrideConfig);
-            temp.updateFrom(key.mOverrideConfiguration);
-            key.mOverrideConfiguration.setTo(temp);
+            // Rebase the key's override config on top of the Activity's base override.
+            if (key.hasOverrideConfiguration()
+                    && !activityResources.overrideConfig.equals(Configuration.EMPTY)) {
+                final Configuration temp = new Configuration(activityResources.overrideConfig);
+                temp.updateFrom(key.mOverrideConfiguration);
+                key.mOverrideConfiguration.setTo(temp);
+            }
         }
     }
 
@@ -1082,6 +1110,8 @@ public class ResourcesManager {
                     + resourcesImpl + " config to: " + config);
         }
         int displayId = key.mDisplayId;
+        final boolean hasOverrideConfiguration = key.hasOverrideConfiguration();
+        tmpConfig.setTo(config);
 
         // Get new DisplayMetrics based on the DisplayAdjustments given to the ResourcesImpl. Update
         // a copy if the CompatibilityInfo changed, because the ResourcesImpl object will handle the
@@ -1091,12 +1121,15 @@ public class ResourcesManager {
             daj = new DisplayAdjustments(daj);
             daj.setCompatibilityInfo(compat);
         }
-        tmpConfig.setTo(config);
-        if (key.hasOverrideConfiguration()) {
+        daj.setConfiguration(config);
+        DisplayMetrics dm = getDisplayMetrics(displayId, daj);
+        if (displayId != Display.DEFAULT_DISPLAY) {
+            applyNonDefaultDisplayMetricsToConfiguration(dm, tmpConfig);
+        }
+
+        if (hasOverrideConfiguration) {
             tmpConfig.updateFrom(key.mOverrideConfiguration);
         }
-        daj.setConfiguration(tmpConfig);
-        DisplayMetrics dm = getDisplayMetrics(displayId, daj);
         resourcesImpl.updateConfiguration(tmpConfig, dm, compat);
     }
 
@@ -1256,7 +1289,8 @@ public class ResourcesManager {
          * instance uses.
          */
         @Override
-        public void onLoadersChanged(Resources resources, List<ResourcesLoader> newLoader) {
+        public void onLoadersChanged(@NonNull Resources resources,
+                @NonNull List<ResourcesLoader> newLoader) {
             synchronized (ResourcesManager.this) {
                 final ResourcesKey oldKey = findKeyForResourceImplLocked(resources.getImpl());
                 if (oldKey == null) {
@@ -1284,7 +1318,7 @@ public class ResourcesManager {
          * {@code loader} to apply any changes of the set of {@link ApkAssets}.
          **/
         @Override
-        public void onLoaderUpdated(ResourcesLoader loader) {
+        public void onLoaderUpdated(@NonNull ResourcesLoader loader) {
             synchronized (ResourcesManager.this) {
                 final ArrayMap<ResourcesImpl, ResourcesKey> updatedResourceImplKeys =
                         new ArrayMap<>();

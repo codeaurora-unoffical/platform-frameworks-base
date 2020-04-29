@@ -57,6 +57,7 @@ import android.hardware.display.DisplayedContentSamplingAttributes;
 import android.hardware.display.IDisplayManager;
 import android.hardware.display.IDisplayManagerCallback;
 import android.hardware.display.IVirtualDisplayCallback;
+import android.hardware.display.VirtualDisplayConfig;
 import android.hardware.display.WifiDisplayStatus;
 import android.hardware.input.InputManagerInternal;
 import android.media.projection.IMediaProjection;
@@ -794,8 +795,8 @@ public final class DisplayManagerService extends SystemService {
     }
 
     private int createVirtualDisplayInternal(IVirtualDisplayCallback callback,
-            IMediaProjection projection, int callingUid, String packageName, String name, int width,
-            int height, int densityDpi, Surface surface, int flags, String uniqueId) {
+            IMediaProjection projection, int callingUid, String packageName, Surface surface,
+            int flags, VirtualDisplayConfig virtualDisplayConfig) {
         synchronized (mSyncRoot) {
             if (mVirtualDisplayAdapter == null) {
                 Slog.w(TAG, "Rejecting request to create private virtual display "
@@ -804,8 +805,8 @@ public final class DisplayManagerService extends SystemService {
             }
 
             DisplayDevice device = mVirtualDisplayAdapter.createVirtualDisplayLocked(
-                    callback, projection, callingUid, packageName, name, width, height, densityDpi,
-                    surface, flags, uniqueId);
+                    callback, projection, callingUid, packageName, surface, flags,
+                    virtualDisplayConfig);
             if (device == null) {
                 return -1;
             }
@@ -1361,7 +1362,8 @@ public final class DisplayManagerService extends SystemService {
         return null;
     }
 
-    private SurfaceControl.ScreenshotGraphicBuffer screenshotInternal(int displayId) {
+    private SurfaceControl.ScreenshotGraphicBuffer screenshotInternal(int displayId,
+            boolean captureSecureLayer) {
         synchronized (mSyncRoot) {
             final IBinder token = getDisplayToken(displayId);
             if (token == null) {
@@ -1373,9 +1375,15 @@ public final class DisplayManagerService extends SystemService {
             }
 
             final DisplayInfo displayInfo = logicalDisplay.getDisplayInfoLocked();
-            return SurfaceControl.screenshotToBufferWithSecureLayersUnsafe(token, new Rect(),
-                    displayInfo.getNaturalWidth(), displayInfo.getNaturalHeight(),
-                    false /* useIdentityTransform */, 0 /* rotation */);
+            if (captureSecureLayer) {
+                return SurfaceControl.screenshotToBufferWithSecureLayersUnsafe(token, new Rect(),
+                        displayInfo.getNaturalWidth(), displayInfo.getNaturalHeight(),
+                        false /* useIdentityTransform */, 0 /* rotation */);
+            } else {
+                return SurfaceControl.screenshotToBuffer(token, new Rect(),
+                        displayInfo.getNaturalWidth(), displayInfo.getNaturalHeight(),
+                        false /* useIdentityTransform */, 0 /* rotation */);
+            }
         }
     }
 
@@ -1480,8 +1488,8 @@ public final class DisplayManagerService extends SystemService {
         if (!ownContent) {
             if (display != null && !display.hasContentLocked()) {
                 // If the display does not have any content of its own, then
-                // automatically mirror the default logical display contents.
-                display = null;
+                // automatically mirror the requested logical display contents if possible.
+                display = mLogicalDisplays.get(device.getDisplayIdToMirrorLocked());
             }
             if (display == null) {
                 display = mLogicalDisplays.get(Display.DEFAULT_DISPLAY);
@@ -1726,6 +1734,28 @@ public final class DisplayManagerService extends SystemService {
                 return displayDevice.getDisplayDeviceInfoLocked();
             }
             return null;
+        }
+    }
+
+    @VisibleForTesting
+    int getDisplayIdToMirrorInternal(int displayId) {
+        synchronized (mSyncRoot) {
+            LogicalDisplay display = mLogicalDisplays.get(displayId);
+            if (display != null) {
+                DisplayDevice displayDevice = display.getPrimaryDisplayDeviceLocked();
+                return displayDevice.getDisplayIdToMirrorLocked();
+            }
+            return Display.INVALID_DISPLAY;
+        }
+    }
+
+    @VisibleForTesting
+    Surface getVirtualDisplaySurfaceInternal(IBinder appToken) {
+        synchronized (mSyncRoot) {
+            if (mVirtualDisplayAdapter == null) {
+                return null;
+            }
+            return mVirtualDisplayAdapter.getVirtualDisplaySurfaceLocked(appToken);
         }
     }
 
@@ -2050,10 +2080,8 @@ public final class DisplayManagerService extends SystemService {
         }
 
         @Override // Binder call
-        public int createVirtualDisplay(IVirtualDisplayCallback callback,
-                IMediaProjection projection, String packageName, String name,
-                int width, int height, int densityDpi, Surface surface, int flags,
-                String uniqueId) {
+        public int createVirtualDisplay(VirtualDisplayConfig virtualDisplayConfig,
+                IVirtualDisplayCallback callback, IMediaProjection projection, String packageName) {
             final int callingUid = Binder.getCallingUid();
             if (!validatePackageName(callingUid, packageName)) {
                 throw new SecurityException("packageName must match the calling uid");
@@ -2061,13 +2089,12 @@ public final class DisplayManagerService extends SystemService {
             if (callback == null) {
                 throw new IllegalArgumentException("appToken must not be null");
             }
-            if (TextUtils.isEmpty(name)) {
-                throw new IllegalArgumentException("name must be non-null and non-empty");
+            if (virtualDisplayConfig == null) {
+                throw new IllegalArgumentException("virtualDisplayConfig must not be null");
             }
-            if (width <= 0 || height <= 0 || densityDpi <= 0) {
-                throw new IllegalArgumentException("width, height, and densityDpi must be "
-                        + "greater than 0");
-            }
+            final Surface surface = virtualDisplayConfig.getSurface();
+            int flags = virtualDisplayConfig.getFlags();
+
             if (surface != null && surface.isSingleBuffered()) {
                 throw new IllegalArgumentException("Surface can't be single-buffered");
             }
@@ -2128,7 +2155,7 @@ public final class DisplayManagerService extends SystemService {
             final long token = Binder.clearCallingIdentity();
             try {
                 return createVirtualDisplayInternal(callback, projection, callingUid, packageName,
-                        name, width, height, densityDpi, surface, flags, uniqueId);
+                        surface, flags, virtualDisplayConfig);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -2449,7 +2476,8 @@ public final class DisplayManagerService extends SystemService {
                     }
                 };
                 mDisplayPowerController = new DisplayPowerController(
-                        mContext, callbacks, handler, sensorManager, blanker);
+                        mContext, callbacks, handler, sensorManager, blanker,
+                        mDisplayDevices.get(Display.DEFAULT_DISPLAY));
                 mSensorManager = sensorManager;
             }
 
@@ -2474,12 +2502,28 @@ public final class DisplayManagerService extends SystemService {
 
         @Override
         public SurfaceControl.ScreenshotGraphicBuffer screenshot(int displayId) {
-            return screenshotInternal(displayId);
+            return screenshotInternal(displayId, true);
+        }
+
+        @Override
+        public SurfaceControl.ScreenshotGraphicBuffer screenshotWithoutSecureLayer(int displayId) {
+            return screenshotInternal(displayId, false);
         }
 
         @Override
         public DisplayInfo getDisplayInfo(int displayId) {
             return getDisplayInfoInternal(displayId, Process.myUid());
+        }
+
+        @Override
+        public Point getDisplayPosition(int displayId) {
+            synchronized (mSyncRoot) {
+                LogicalDisplay display = mLogicalDisplays.get(displayId);
+                if (display != null) {
+                    return display.getDisplayPosition();
+                }
+                return null;
+            }
         }
 
         @Override

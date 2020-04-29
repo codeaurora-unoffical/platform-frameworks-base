@@ -124,8 +124,14 @@ public class SurfaceControlViewHost {
     /** @hide */
     public SurfaceControlViewHost(@NonNull Context c, @NonNull Display d,
             @NonNull WindowlessWindowManager wwm) {
+        this(c, d, wwm, false /* useSfChoreographer */);
+    }
+
+    /** @hide */
+    public SurfaceControlViewHost(@NonNull Context c, @NonNull Display d,
+            @NonNull WindowlessWindowManager wwm, boolean useSfChoreographer) {
         mWm = wwm;
-        mViewRoot = new ViewRootImpl(c, d, mWm);
+        mViewRoot = new ViewRootImpl(c, d, mWm, useSfChoreographer);
         mViewRoot.forceDisableBLAST();
         mAccessibilityEmbeddedConnection = mViewRoot.getAccessibilityEmbeddedConnection();
     }
@@ -192,6 +198,7 @@ public class SurfaceControlViewHost {
         final WindowManager.LayoutParams lp =
                 new WindowManager.LayoutParams(width, height,
                         WindowManager.LayoutParams.TYPE_APPLICATION, 0, PixelFormat.TRANSPARENT);
+        lp.flags |= WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
         setView(view, lp);
     }
 

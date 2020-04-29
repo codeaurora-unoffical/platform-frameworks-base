@@ -696,7 +696,7 @@ static jlong android_os_Process_getTotalMemory(JNIEnv* env, jobject clazz)
         return -1;
     }
 
-    return si.totalram;
+    return static_cast<jlong>(si.totalram) * si.mem_unit;
 }
 
 /*
@@ -1330,7 +1330,7 @@ static inline int sys_pidfd_open(pid_t pid, unsigned int flags) {
     return syscall(__NR_pidfd_open, pid, flags);
 }
 
-static jboolean android_os_Process_nativePidFdOpen(JNIEnv* env, jobject, jint pid, jint flags) {
+static jint android_os_Process_nativePidFdOpen(JNIEnv* env, jobject, jint pid, jint flags) {
     int fd = sys_pidfd_open(pid, flags);
     if (fd < 0) {
         throwErrnoException(env, "nativePidFdOpen", errno);

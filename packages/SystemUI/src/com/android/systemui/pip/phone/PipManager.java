@@ -19,6 +19,8 @@ package com.android.systemui.pip.phone;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 
+import static com.android.systemui.pip.PipAnimationController.TRANSITION_DIRECTION_TO_FULLSCREEN;
+
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
 import android.app.IActivityManager;
@@ -34,7 +36,7 @@ import android.util.Log;
 import android.util.Pair;
 import android.view.DisplayInfo;
 import android.view.IPinnedStackController;
-import android.view.WindowContainerTransaction;
+import android.window.WindowContainerTransaction;
 
 import com.android.systemui.Dependency;
 import com.android.systemui.UiOffloadThread;
@@ -169,24 +171,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
         }
 
         @Override
-        public void onSaveReentryBounds(ComponentName componentName, Rect bounds) {
-            mHandler.post(() -> {
-                // On phones, the expansion animation that happens on pip tap before restoring
-                // to fullscreen makes it so that the bounds received here are the expanded
-                // bounds. We want to restore to the unexpanded bounds when re-entering pip,
-                // so we save the bounds before expansion (normal) instead of the current
-                // bounds.
-                mReentryBounds.set(mTouchHandler.getNormalBounds());
-                // Apply the snap fraction of the current bounds to the normal bounds.
-                float snapFraction = mPipBoundsHandler.getSnapFraction(bounds);
-                mPipBoundsHandler.applySnapFraction(mReentryBounds, snapFraction);
-                // Save reentry bounds (normal non-expand bounds with current position applied).
-                mPipBoundsHandler.onSaveReentryBounds(componentName, mReentryBounds);
-            });
-        }
-
-        @Override
-        public void onResetReentryBounds(ComponentName componentName) {
+        public void onActivityHidden(ComponentName componentName) {
             mHandler.post(() -> mPipBoundsHandler.onResetReentryBounds(componentName));
         }
 
@@ -248,8 +233,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
         mPipBoundsHandler.onDisplayInfoChanged(displayInfo);
 
         try {
-            ActivityTaskManager.getTaskOrganizerController().registerTaskOrganizer(
-                    mPipTaskOrganizer, WINDOWING_MODE_PINNED);
+            mPipTaskOrganizer.registerOrganizer(WINDOWING_MODE_PINNED);
             ActivityManager.StackInfo stackInfo = activityTaskManager.getStackInfo(
                     WINDOWING_MODE_PINNED, ACTIVITY_TYPE_UNDEFINED);
             if (stackInfo != null) {
@@ -257,7 +241,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
                 // register the pip input consumer to ensure touch can send to it.
                 mInputConsumerController.registerInputConsumer();
             }
-        } catch (RemoteException e) {
+        } catch (RemoteException | UnsupportedOperationException e) {
             e.printStackTrace();
         }
     }
@@ -325,7 +309,21 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
     }
 
     @Override
-    public void onPipTransitionStarted() {
+    public void onPipTransitionStarted(ComponentName activity, int direction) {
+        if (direction == TRANSITION_DIRECTION_TO_FULLSCREEN) {
+            // On phones, the expansion animation that happens on pip tap before restoring
+            // to fullscreen makes it so that the bounds received here are the expanded
+            // bounds. We want to restore to the unexpanded bounds when re-entering pip,
+            // so we save the bounds before expansion (normal) instead of the current
+            // bounds.
+            mReentryBounds.set(mTouchHandler.getNormalBounds());
+            // Apply the snap fraction of the current bounds to the normal bounds.
+            final Rect bounds = mPipTaskOrganizer.getLastReportedBounds();
+            float snapFraction = mPipBoundsHandler.getSnapFraction(bounds);
+            mPipBoundsHandler.applySnapFraction(mReentryBounds, snapFraction);
+            // Save reentry bounds (normal non-expand bounds with current position applied).
+            mPipBoundsHandler.onSaveReentryBounds(activity, mReentryBounds);
+        }
         // Disable touches while the animation is running
         mTouchHandler.setTouchEnabled(false);
         if (mPinnedStackAnimationRecentsListener != null) {
@@ -338,12 +336,12 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
     }
 
     @Override
-    public void onPipTransitionFinished() {
+    public void onPipTransitionFinished(ComponentName activity, int direction) {
         onPipTransitionFinishedOrCanceled();
     }
 
     @Override
-    public void onPipTransitionCanceled() {
+    public void onPipTransitionCanceled(ComponentName activity, int direction) {
         onPipTransitionFinishedOrCanceled();
     }
 
@@ -364,6 +362,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
         mTouchHandler.onMovementBoundsChanged(mTmpInsetBounds, mTmpNormalBounds,
                 animatingBounds, fromImeAdjustment, fromShelfAdjustment,
                 mTmpDisplayInfo.rotation);
+        mPipTaskOrganizer.onMovementBoundsChanged(fromImeAdjustment, fromShelfAdjustment);
     }
 
     public void dump(PrintWriter pw) {

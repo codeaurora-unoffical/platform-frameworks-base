@@ -17,6 +17,7 @@
 package com.android.systemui.statusbar.notification.row.wrapper;
 
 import android.annotation.ColorInt;
+import android.annotation.Nullable;
 import android.app.Notification;
 import android.content.Context;
 import android.content.res.Configuration;
@@ -28,6 +29,7 @@ import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
+import android.util.ArraySet;
 import android.view.NotificationHeaderView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -92,6 +94,14 @@ public abstract class NotificationViewWrapper implements TransformableView {
      * @param row the row this wrapper is attached to
      */
     public void onContentUpdated(ExpandableNotificationRow row) {
+    }
+
+    /**
+     * Show a set of app opp icons in the layout.
+     *
+     * @param appOps which app ops to show
+     */
+    public void showAppOpsIcons(ArraySet<Integer> appOps) {
     }
 
     public void onReinflated() {
@@ -230,6 +240,22 @@ public abstract class NotificationViewWrapper implements TransformableView {
         return null;
     }
 
+    public int getOriginalIconColor() {
+        return Notification.COLOR_INVALID;
+    }
+
+    /**
+     * @return get the transformation target of the shelf, which usually is the icon
+     */
+    public @Nullable View getShelfTransformationTarget() {
+        return null;
+    }
+
+    /**
+     * Set the shelf icon to be visible and hide our own icons.
+     */
+    public void setShelfIconVisible(boolean shelfIconVisible) {}
+
     public int getHeaderTranslation(boolean forceNoHeader) {
         return 0;
     }
@@ -344,5 +370,11 @@ public abstract class NotificationViewWrapper implements TransformableView {
      */
     public int getExtraMeasureHeight() {
         return 0;
+    }
+
+    /**
+     * Set the view to have recently visibly alerted.
+     */
+    public void setRecentlyAudiblyAlerted(boolean audiblyAlerted) {
     }
 }

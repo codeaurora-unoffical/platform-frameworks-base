@@ -23,6 +23,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -66,8 +67,6 @@ public class LocalMediaManagerTest {
     private static final String TEST_PACKAGE_NAME = "com.test.playmusic";
 
     @Mock
-    private BluetoothMediaManager mBluetoothMediaManager;
-    @Mock
     private InfoMediaManager mInfoMediaManager;
     @Mock
     private LocalBluetoothManager mLocalBluetoothManager;
@@ -107,8 +106,8 @@ public class LocalMediaManagerTest {
         when(mLocalProfileManager.getA2dpProfile()).thenReturn(mA2dpProfile);
         when(mLocalProfileManager.getHearingAidProfile()).thenReturn(mHapProfile);
 
-        mInfoMediaDevice1 = new InfoMediaDevice(mContext, mMediaRouter2Manager, mRouteInfo1,
-                TEST_PACKAGE_NAME);
+        mInfoMediaDevice1 = spy(new InfoMediaDevice(mContext, mMediaRouter2Manager, mRouteInfo1,
+                TEST_PACKAGE_NAME));
         mInfoMediaDevice2 = new InfoMediaDevice(mContext, mMediaRouter2Manager, mRouteInfo2,
                 TEST_PACKAGE_NAME);
         mLocalMediaManager = new LocalMediaManager(mContext, mLocalBluetoothManager,
@@ -214,6 +213,26 @@ public class LocalMediaManagerTest {
 
         final MediaDevice device = mLocalMediaManager
                 .getMediaDeviceById(mLocalMediaManager.mMediaDevices, TEST_CURRENT_DEVICE_ID);
+
+        assertThat(device).isNull();
+    }
+
+    @Test
+    public void getMediaDeviceById_idIsNull_shouldReturnNull() {
+        final MediaDevice device1 = mock(MediaDevice.class);
+        final MediaDevice device2 = mock(MediaDevice.class);
+        mLocalMediaManager.mMediaDevices.add(device1);
+        mLocalMediaManager.mMediaDevices.add(device2);
+
+        when(device1.getId()).thenReturn(null);
+        when(device2.getId()).thenReturn(null);
+
+        MediaDevice device = mLocalMediaManager
+                .getMediaDeviceById(mLocalMediaManager.mMediaDevices, TEST_CURRENT_DEVICE_ID);
+
+        assertThat(device).isNull();
+
+        device = mLocalMediaManager.getMediaDeviceById(TEST_CURRENT_DEVICE_ID);
 
         assertThat(device).isNull();
     }
@@ -450,12 +469,38 @@ public class LocalMediaManagerTest {
     }
 
     @Test
+    public void onConnectedDeviceChanged_nullConnectedDevice_noException() {
+        mLocalMediaManager.registerCallback(mCallback);
+        mLocalMediaManager.mMediaDeviceCallback.onConnectedDeviceChanged(TEST_DEVICE_ID_2);
+    }
+
+    @Test
     public void onDeviceAttributesChanged_shouldDispatchDeviceListUpdate() {
         mLocalMediaManager.registerCallback(mCallback);
 
         mLocalMediaManager.mMediaDeviceCallback.onDeviceAttributesChanged();
 
         verify(mCallback).onDeviceAttributesChanged();
+    }
+
+    @Test
+    public void onDeviceAttributesChanged_failingTransferring_shouldResetState() {
+        final MediaDevice currentDevice = mock(MediaDevice.class);
+        final MediaDevice device = mock(BluetoothMediaDevice.class);
+        final CachedBluetoothDevice cachedDevice = mock(CachedBluetoothDevice.class);
+        mLocalMediaManager.mMediaDevices.add(device);
+        mLocalMediaManager.mMediaDevices.add(currentDevice);
+        when(device.getId()).thenReturn(TEST_DEVICE_ID_1);
+        when(currentDevice.getId()).thenReturn(TEST_CURRENT_DEVICE_ID);
+        when(((BluetoothMediaDevice) device).getCachedDevice()).thenReturn(cachedDevice);
+        when(cachedDevice.isConnected()).thenReturn(false);
+        when(cachedDevice.isBusy()).thenReturn(false);
+
+        mLocalMediaManager.registerCallback(mCallback);
+        mLocalMediaManager.connectDevice(device);
+
+        mLocalMediaManager.mDeviceAttributeChangeCallback.onDeviceAttributesChanged();
+        verify(device).setState(LocalMediaManager.MediaDeviceState.STATE_DISCONNECTED);
     }
 
     @Test
@@ -559,11 +604,91 @@ public class LocalMediaManagerTest {
     }
 
     @Test
+    public void onDeviceListAdded_transferToDisconnectedBluetooth_verifyConnectDevice() {
+        final List<MediaDevice> devices = new ArrayList<>();
+        final MediaDevice currentDevice = mock(MediaDevice.class);
+        final MediaDevice device = mock(BluetoothMediaDevice.class);
+        final CachedBluetoothDevice cachedDevice = mock(CachedBluetoothDevice.class);
+        mLocalMediaManager.mMediaDevices.add(device);
+        mLocalMediaManager.mMediaDevices.add(currentDevice);
+
+        when(device.getId()).thenReturn(TEST_DEVICE_ID_1);
+        when(currentDevice.getId()).thenReturn(TEST_CURRENT_DEVICE_ID);
+        when(((BluetoothMediaDevice) device).getCachedDevice()).thenReturn(cachedDevice);
+        when(cachedDevice.isConnected()).thenReturn(false);
+        when(cachedDevice.isBusy()).thenReturn(false);
+
+        mLocalMediaManager.registerCallback(mCallback);
+        mLocalMediaManager.connectDevice(device);
+
+        verify(cachedDevice).connect();
+        when(device.isConnected()).thenReturn(true);
+        mLocalMediaManager.mCurrentConnectedDevice = currentDevice;
+        devices.add(mInfoMediaDevice1);
+        devices.add(currentDevice);
+        mLocalMediaManager.mMediaDeviceCallback.onDeviceListAdded(devices);
+
+        verify(mInfoMediaDevice1).connect();
+    }
+
+    @Test
     public void onRequestFailed_shouldDispatchOnRequestFailed() {
         mLocalMediaManager.registerCallback(mCallback);
 
         mLocalMediaManager.mMediaDeviceCallback.onRequestFailed(1);
 
         verify(mCallback).onRequestFailed(1);
+    }
+
+    @Test
+    public void onDeviceListAdded_haveDisconnectedDevice_list5DisconnectedDevice() {
+        final List<MediaDevice> devices = new ArrayList<>();
+        final MediaDevice device1 = mock(MediaDevice.class);
+        final MediaDevice device2 = mock(MediaDevice.class);
+        final MediaDevice device3 = mock(MediaDevice.class);
+        mLocalMediaManager.mPhoneDevice = mock(PhoneMediaDevice.class);
+        devices.add(device1);
+        devices.add(device2);
+        mLocalMediaManager.mMediaDevices.add(device3);
+        mLocalMediaManager.mMediaDevices.add(mLocalMediaManager.mPhoneDevice);
+
+        final List<BluetoothDevice> bluetoothDevices = new ArrayList<>();
+        final BluetoothDevice bluetoothDevice = mock(BluetoothDevice.class);
+        final BluetoothDevice bluetoothDevice2 = mock(BluetoothDevice.class);
+        final BluetoothDevice bluetoothDevice3 = mock(BluetoothDevice.class);
+        final BluetoothDevice bluetoothDevice4 = mock(BluetoothDevice.class);
+        final BluetoothDevice bluetoothDevice5 = mock(BluetoothDevice.class);
+        final BluetoothDevice bluetoothDevice6 = mock(BluetoothDevice.class);
+        final CachedBluetoothDevice cachedDevice = mock(CachedBluetoothDevice.class);
+        final CachedBluetoothDeviceManager cachedManager = mock(CachedBluetoothDeviceManager.class);
+        bluetoothDevices.add(bluetoothDevice);
+        bluetoothDevices.add(bluetoothDevice2);
+        bluetoothDevices.add(bluetoothDevice3);
+        bluetoothDevices.add(bluetoothDevice4);
+        bluetoothDevices.add(bluetoothDevice5);
+        bluetoothDevices.add(bluetoothDevice6);
+        mShadowBluetoothAdapter.setMostRecentlyConnectedDevices(bluetoothDevices);
+
+        when(mLocalBluetoothManager.getCachedDeviceManager()).thenReturn(cachedManager);
+        when(cachedManager.findDevice(bluetoothDevice)).thenReturn(cachedDevice);
+        when(cachedManager.findDevice(bluetoothDevice2)).thenReturn(cachedDevice);
+        when(cachedManager.findDevice(bluetoothDevice3)).thenReturn(cachedDevice);
+        when(cachedManager.findDevice(bluetoothDevice4)).thenReturn(cachedDevice);
+        when(cachedManager.findDevice(bluetoothDevice5)).thenReturn(cachedDevice);
+        when(cachedManager.findDevice(bluetoothDevice6)).thenReturn(cachedDevice);
+        when(cachedDevice.getBondState()).thenReturn(BluetoothDevice.BOND_BONDED);
+        when(cachedDevice.isConnected()).thenReturn(false);
+
+        when(device1.getId()).thenReturn(TEST_DEVICE_ID_1);
+        when(device2.getId()).thenReturn(TEST_DEVICE_ID_2);
+        when(device3.getId()).thenReturn(TEST_DEVICE_ID_3);
+        when(mLocalMediaManager.mPhoneDevice.getId()).thenReturn("test_phone_id");
+
+        assertThat(mLocalMediaManager.mMediaDevices).hasSize(2);
+        mLocalMediaManager.registerCallback(mCallback);
+        mLocalMediaManager.mMediaDeviceCallback.onDeviceListAdded(devices);
+
+        assertThat(mLocalMediaManager.mMediaDevices).hasSize(7);
+        verify(mCallback).onDeviceListUpdate(any());
     }
 }

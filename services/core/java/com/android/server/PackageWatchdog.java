@@ -315,28 +315,31 @@ public class PackageWatchdog {
         // causing any elapsed time to be deducted from all existing packages before we add new
         // packages. This maintains the invariant that the elapsed time for ALL (new and existing)
         // packages is the same.
-        syncState("observing new packages");
+        mLongTaskHandler.post(() -> {
+            syncState("observing new packages");
 
-        synchronized (mLock) {
-            ObserverInternal oldObserver = mAllObservers.get(observer.getName());
-            if (oldObserver == null) {
-                Slog.d(TAG, observer.getName() + " started monitoring health "
-                        + "of packages " + packageNames);
-                mAllObservers.put(observer.getName(),
-                        new ObserverInternal(observer.getName(), packages));
-            } else {
-                Slog.d(TAG, observer.getName() + " added the following "
-                        + "packages to monitor " + packageNames);
-                oldObserver.updatePackagesLocked(packages);
+            synchronized (mLock) {
+                ObserverInternal oldObserver = mAllObservers.get(observer.getName());
+                if (oldObserver == null) {
+                    Slog.d(TAG, observer.getName() + " started monitoring health "
+                            + "of packages " + packageNames);
+                    mAllObservers.put(observer.getName(),
+                            new ObserverInternal(observer.getName(), packages));
+                } else {
+                    Slog.d(TAG, observer.getName() + " added the following "
+                            + "packages to monitor " + packageNames);
+                    oldObserver.updatePackagesLocked(packages);
+                }
             }
-        }
 
-        // Register observer in case not already registered
-        registerHealthObserver(observer);
+            // Register observer in case not already registered
+            registerHealthObserver(observer);
 
-        // Sync after we add the new packages to the observers. We may have received packges
-        // requiring an earlier schedule than we are currently scheduled for.
-        syncState("updated observers");
+            // Sync after we add the new packages to the observers. We may have received packges
+            // requiring an earlier schedule than we are currently scheduled for.
+            syncState("updated observers");
+        });
+
     }
 
     /**
@@ -1062,7 +1065,12 @@ public class PackageWatchdog {
         public void updatePackagesLocked(List<MonitoredPackage> packages) {
             for (int pIndex = 0; pIndex < packages.size(); pIndex++) {
                 MonitoredPackage p = packages.get(pIndex);
-                this.packages.put(p.getName(), p);
+                MonitoredPackage existingPackage = this.packages.get(p.getName());
+                if (existingPackage != null) {
+                    existingPackage.updateHealthCheckDuration(p.mDurationMs);
+                } else {
+                    this.packages.put(p.getName(), p);
+                }
             }
         }
 
@@ -1329,6 +1337,12 @@ public class PackageWatchdog {
                 mHealthCheckDurationMs -= elapsedMs;
             }
             return updateHealthCheckStateLocked();
+        }
+
+        /** Explicitly update the monitoring duration of the package. */
+        @GuardedBy("mLock")
+        public void updateHealthCheckDuration(long newDurationMs) {
+            mDurationMs = newDurationMs;
         }
 
         /**

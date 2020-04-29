@@ -1031,6 +1031,27 @@ public abstract class PackageManager {
      */
     public static final int INSTALL_REASON_ROLLBACK = 5;
 
+    /** @hide */
+    @IntDef(prefix = { "UNINSTALL_REASON_" }, value = {
+            UNINSTALL_REASON_UNKNOWN,
+            UNINSTALL_REASON_USER_TYPE,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface UninstallReason {}
+
+    /**
+     * Code indicating that the reason for uninstalling this package is unknown.
+     * @hide
+     */
+    public static final int UNINSTALL_REASON_UNKNOWN = 0;
+
+    /**
+     * Code indicating that this package was uninstalled due to the type of user.
+     * See UserSystemPackageInstaller
+     * @hide
+     */
+    public static final int UNINSTALL_REASON_USER_TYPE = 1;
+
     /**
      * @hide
      */
@@ -1520,6 +1541,14 @@ public abstract class PackageManager {
      * @hide
      */
     public static final int INSTALL_FAILED_PROCESS_NOT_DEFINED = -122;
+
+    /**
+     * Installation parse return code: system is in a minimal boot state, and the parser only
+     * allows the package with {@code coreApp} manifest attribute to be a valid application.
+     *
+     * @hide
+     */
+    public static final int INSTALL_PARSE_FAILED_ONLY_COREAPP_ALLOWED = -123;
 
     /** @hide */
     @IntDef(flag = true, prefix = { "DELETE_" }, value = {
@@ -3399,6 +3428,7 @@ public abstract class PackageManager {
      * @hide
      */
     @SystemApi
+    @TestApi
     public static final int FLAG_PERMISSION_ONE_TIME = 1 << 16;
 
     /**
@@ -7087,7 +7117,7 @@ public abstract class PackageManager {
      * Returns any packages in a given set of packages that cannot be suspended via a call to {@link
      * #setPackagesSuspended(String[], boolean, PersistableBundle, PersistableBundle,
      * SuspendDialogInfo) setPackagesSuspended}. The platform prevents suspending certain critical
-     * packages to keep the device in a functioning state, e.g. the default dialer.
+     * packages to keep the device in a functioning state, e.g. the default dialer and launcher.
      * Apps need to hold {@link Manifest.permission#SUSPEND_APPS SUSPEND_APPS} to call this API.
      *
      * <p>
@@ -7105,7 +7135,7 @@ public abstract class PackageManager {
     @RequiresPermission(Manifest.permission.SUSPEND_APPS)
     @NonNull
     public String[] getUnsuspendablePackages(@NonNull String[] packageNames) {
-        throw new UnsupportedOperationException("canSuspendPackages not implemented");
+        throw new UnsupportedOperationException("getUnsuspendablePackages not implemented");
     }
 
     /**
@@ -7894,10 +7924,14 @@ public abstract class PackageManager {
     }
 
     /**
-     * Sets MIME group's MIME types
+     * Sets MIME group's MIME types.
      *
-     * @param mimeGroup MIME group to modify
-     * @param mimeTypes new MIME types contained by MIME group
+     * Libraries should use a reverse-DNS prefix followed by a ':' character and library-specific
+     * group name to avoid namespace collisions, e.g. "com.example:myFeature".
+     *
+     * @param mimeGroup MIME group to modify.
+     * @param mimeTypes new MIME types contained by MIME group.
+     * @throws IllegalArgumentException if the MIME group was not declared in the manifest.
      */
     public void setMimeGroup(@NonNull String mimeGroup, @NonNull Set<String> mimeTypes) {
         throw new UnsupportedOperationException(
@@ -7905,22 +7939,16 @@ public abstract class PackageManager {
     }
 
     /**
-     * Clears MIME group by removing all MIME types from it
+     * Gets all MIME types contained by MIME group.
      *
-     * @param mimeGroup MIME group to clear
-     */
-    public void clearMimeGroup(@NonNull String mimeGroup) {
-        throw new UnsupportedOperationException(
-                "clearMimeGroup not implemented in subclass");
-    }
-
-    /**
-     * Gets all MIME types that MIME group contains
+     * Libraries should use a reverse-DNS prefix followed by a ':' character and library-specific
+     * group name to avoid namespace collisions, e.g. "com.example:myFeature".
      *
-     * @return MIME types contained by the MIME group,
-     *         or null if the MIME group was not declared in the manifest.
+     * @param mimeGroup MIME group to retrieve.
+     * @return MIME types contained by the MIME group.
+     * @throws IllegalArgumentException if the MIME group was not declared in the manifest.
      */
-    @Nullable
+    @NonNull
     public Set<String> getMimeGroup(@NonNull String mimeGroup) {
         throw new UnsupportedOperationException(
                 "getMimeGroup not implemented in subclass");

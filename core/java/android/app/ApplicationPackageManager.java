@@ -1610,7 +1610,10 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public Drawable getUserBadgeForDensityNoBackground(UserHandle user, int density) {
-        Drawable badge = getProfileIconForDensity(user,
+        if (!hasUserBadge(user.getIdentifier())) {
+            return null;
+        }
+        Drawable badge = getDrawableForDensity(
                 getUserManager().getUserBadgeNoBackgroundResId(user.getIdentifier()), density);
         if (badge != null) {
             badge.setTint(getUserBadgeColor(user));
@@ -3358,31 +3361,20 @@ public class ApplicationPackageManager extends PackageManager {
         }
     }
 
+    @Override
     public void setMimeGroup(String mimeGroup, Set<String> mimeTypes) {
         try {
-            mPM.setMimeGroup(mContext.getPackageName(), mimeGroup,
-                    new ArrayList<String>(mimeTypes));
+            mPM.setMimeGroup(mContext.getPackageName(), mimeGroup, new ArrayList<>(mimeTypes));
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
         }
     }
 
-    @Override
-    public void clearMimeGroup(String mimeGroup) {
-        try {
-            mPM.clearMimeGroup(mContext.getPackageName(), mimeGroup);
-        } catch (RemoteException e) {
-            throw e.rethrowAsRuntimeException();
-        }
-    }
-
+    @NonNull
     @Override
     public Set<String> getMimeGroup(String group) {
         try {
             List<String> mimeGroup = mPM.getMimeGroup(mContext.getPackageName(), group);
-            if (mimeGroup == null) {
-                return null;
-            }
             return new ArraySet<>(mimeGroup);
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();

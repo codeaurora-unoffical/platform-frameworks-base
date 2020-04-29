@@ -65,6 +65,7 @@ import android.database.ContentObserver;
 import android.graphics.Matrix;
 import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManagerInternal;
+import android.hardware.input.InputManagerInternal;
 import android.inputmethodservice.InputMethodService;
 import android.net.Uri;
 import android.os.Binder;
@@ -307,6 +308,7 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
     final SettingsObserver mSettingsObserver;
     final IWindowManager mIWindowManager;
     final WindowManagerInternal mWindowManagerInternal;
+    final InputManagerInternal mInputManagerInternal;
     private final DisplayManagerInternal mDisplayManagerInternal;
     final HandlerCaller mCaller;
     final boolean mHasFeature;
@@ -618,6 +620,13 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
      * The displayId of current active input method.
      */
     int mCurTokenDisplayId = INVALID_DISPLAY;
+
+    /**
+     * The host input token of the current active input method.
+     */
+    @GuardedBy("mMethodMap")
+    @Nullable
+    private IBinder mCurHostInputToken;
 
     /**
      * The display ID of the input method indicates the fallback display which returned by
@@ -1615,6 +1624,7 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
         mIWindowManager = IWindowManager.Stub.asInterface(
                 ServiceManager.getService(Context.WINDOW_SERVICE));
         mWindowManagerInternal = LocalServices.getService(WindowManagerInternal.class);
+        mInputManagerInternal = LocalServices.getService(InputManagerInternal.class);
         mDisplayManagerInternal = LocalServices.getService(DisplayManagerInternal.class);
         mImeDisplayValidator = displayId -> mWindowManagerInternal.shouldShowIme(displayId);
         mCaller = new HandlerCaller(context, null, new HandlerCaller.Callback() {
@@ -1987,7 +1997,8 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
                 executeOrSendMessage(mCurMethod,
                         mCaller.obtainMessageOOO(MSG_INLINE_SUGGESTIONS_REQUEST, mCurMethod,
                                 requestInfo, new InlineSuggestionsRequestCallbackDecorator(callback,
-                                        imi.getPackageName(), mCurTokenDisplayId)));
+                                        imi.getPackageName(), mCurTokenDisplayId, mCurToken,
+                                        this)));
             } else {
                 callback.onInlineSuggestionsUnsupported();
             }
@@ -2009,12 +2020,19 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
 
         private final int mImeDisplayId;
 
+        @NonNull
+        private final IBinder mImeToken;
+        @NonNull
+        private final InputMethodManagerService mImms;
+
         InlineSuggestionsRequestCallbackDecorator(
-                @NonNull IInlineSuggestionsRequestCallback callback,
-                @NonNull String imePackageName, int displayId) {
+                @NonNull IInlineSuggestionsRequestCallback callback, @NonNull String imePackageName,
+                int displayId, @NonNull IBinder imeToken, @NonNull InputMethodManagerService imms) {
             mCallback = callback;
             mImePackageName = imePackageName;
             mImeDisplayId = displayId;
+            mImeToken = imeToken;
+            mImms = imms;
         }
 
         @Override
@@ -2024,8 +2042,7 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
 
         @Override
         public void onInlineSuggestionsRequest(InlineSuggestionsRequest request,
-                IInlineSuggestionsResponseCallback callback, AutofillId imeFieldId,
-                boolean inputViewStarted)
+                IInlineSuggestionsResponseCallback callback)
                 throws RemoteException {
             if (!mImePackageName.equals(request.getHostPackageName())) {
                 throw new SecurityException(
@@ -2034,17 +2051,48 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
                                 + "].");
             }
             request.setHostDisplayId(mImeDisplayId);
-            mCallback.onInlineSuggestionsRequest(request, callback, imeFieldId, inputViewStarted);
+            mImms.setCurHostInputToken(mImeToken, request.getHostInputToken());
+            mCallback.onInlineSuggestionsRequest(request, callback);
         }
 
         @Override
-        public void onInputMethodStartInputView(AutofillId imeFieldId) throws RemoteException {
-            mCallback.onInputMethodStartInputView(imeFieldId);
+        public void onInputMethodStartInput(AutofillId imeFieldId) throws RemoteException {
+            mCallback.onInputMethodStartInput(imeFieldId);
         }
 
         @Override
-        public void onInputMethodFinishInputView(AutofillId imeFieldId) throws RemoteException {
-            mCallback.onInputMethodFinishInputView(imeFieldId);
+        public void onInputMethodShowInputRequested(boolean requestResult) throws RemoteException {
+            mCallback.onInputMethodShowInputRequested(requestResult);
+        }
+
+        @Override
+        public void onInputMethodStartInputView() throws RemoteException {
+            mCallback.onInputMethodStartInputView();
+        }
+
+        @Override
+        public void onInputMethodFinishInputView() throws RemoteException {
+            mCallback.onInputMethodFinishInputView();
+        }
+
+        @Override
+        public void onInputMethodFinishInput() throws RemoteException {
+            mCallback.onInputMethodFinishInput();
+        }
+    }
+
+    /**
+     * Sets current host input token.
+     *
+     * @param callerImeToken the token has been made for the current active input method
+     * @param hostInputToken the host input token of the current active input method
+     */
+    void setCurHostInputToken(@NonNull IBinder callerImeToken, @Nullable IBinder hostInputToken) {
+        synchronized (mMethodMap) {
+            if (!calledWithValidTokenLocked(callerImeToken)) {
+                return;
+            }
+            mCurHostInputToken = hostInputToken;
         }
     }
 
@@ -2549,6 +2597,7 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
             updateSystemUiLocked(mImeWindowVis, mBackDisposition);
             mCurToken = null;
             mCurTokenDisplayId = INVALID_DISPLAY;
+            mCurHostInputToken = null;
         }
 
         mCurId = null;
@@ -4813,6 +4862,19 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
         }
     }
 
+    private boolean transferTouchFocusToImeWindow(@NonNull IBinder sourceInputToken,
+            int displayId) {
+        //TODO(b/150843766): Check if Input Token is valid.
+        final IBinder curHostInputToken;
+        synchronized (mMethodMap) {
+            if (displayId != mCurTokenDisplayId || mCurHostInputToken == null) {
+                return false;
+            }
+            curHostInputToken = mCurHostInputToken;
+        }
+        return mInputManagerInternal.transferTouchFocus(sourceInputToken, curHostInputToken);
+    }
+
     private static final class LocalServiceImpl extends InputMethodManagerInternal {
         @NonNull
         private final InputMethodManagerService mService;
@@ -4851,6 +4913,12 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
         @Override
         public void registerInputMethodListListener(InputMethodListListener listener) {
             mService.mInputMethodListListeners.addIfAbsent(listener);
+        }
+
+        @Override
+        public boolean transferTouchFocusToImeWindow(@NonNull IBinder sourceInputToken,
+                int displayId) {
+            return mService.transferTouchFocusToImeWindow(sourceInputToken, displayId);
         }
     }
 
@@ -4963,6 +5031,7 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
                     + " mBoundToMethod=" + mBoundToMethod + " mVisibleBound=" + mVisibleBound);
             p.println("  mCurToken=" + mCurToken);
             p.println("  mCurTokenDisplayId=" + mCurTokenDisplayId);
+            p.println("  mCurHostInputToken=" + mCurHostInputToken);
             p.println("  mCurIntent=" + mCurIntent);
             method = mCurMethod;
             p.println("  mCurMethod=" + mCurMethod);

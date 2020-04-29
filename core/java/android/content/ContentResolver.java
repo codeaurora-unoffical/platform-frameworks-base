@@ -56,6 +56,7 @@ import android.os.IBinder;
 import android.os.ICancellationSignal;
 import android.os.OperationCanceledException;
 import android.os.ParcelFileDescriptor;
+import android.os.ParcelableException;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.os.ServiceManager;
@@ -735,6 +736,9 @@ public abstract class ContentResolver implements ContentInterface {
     /** @hide */
     public static final String REMOTE_CALLBACK_RESULT = "result";
 
+    /** @hide */
+    public static final String REMOTE_CALLBACK_ERROR = "error";
+
     /**
      * How long we wait for an attached process to publish its content providers
      * before we decide it must be hung.
@@ -874,6 +878,9 @@ public abstract class ContentResolver implements ContentInterface {
                 final StringResultListener resultListener = new StringResultListener();
                 provider.getTypeAsync(url, new RemoteCallback(resultListener));
                 resultListener.waitForResult(CONTENT_PROVIDER_TIMEOUT_MILLIS);
+                if (resultListener.exception != null) {
+                    throw resultListener.exception;
+                }
                 return resultListener.result;
             } catch (RemoteException e) {
                 // Arbitrary and not worth documenting, as Activity
@@ -898,6 +905,9 @@ public abstract class ContentResolver implements ContentInterface {
                     resolveUserId(url),
                     new RemoteCallback(resultListener));
             resultListener.waitForResult(REMOTE_CONTENT_PROVIDER_TIMEOUT_MILLIS);
+            if (resultListener.exception != null) {
+                throw resultListener.exception;
+            }
             return resultListener.result;
         } catch (RemoteException e) {
             // We just failed to send a oneway request to the System Server. Nothing to do.
@@ -915,10 +925,23 @@ public abstract class ContentResolver implements ContentInterface {
         @GuardedBy("this")
         public T result;
 
+        @GuardedBy("this")
+        public RuntimeException exception;
+
         @Override
         public void onResult(Bundle result) {
             synchronized (this) {
-                this.result = getResultFromBundle(result);
+                ParcelableException e = result.getParcelable(REMOTE_CALLBACK_ERROR);
+                if (e != null) {
+                    Throwable t = e.getCause();
+                    if (t instanceof RuntimeException) {
+                        this.exception = (RuntimeException) t;
+                    } else {
+                        this.exception = new RuntimeException(t);
+                    }
+                } else {
+                    this.result = getResultFromBundle(result);
+                }
                 done = true;
                 notifyAll();
             }
@@ -1250,6 +1273,9 @@ public abstract class ContentResolver implements ContentInterface {
             provider.canonicalizeAsync(mPackageName, mAttributionTag, url,
                     new RemoteCallback(resultListener));
             resultListener.waitForResult(CONTENT_PROVIDER_TIMEOUT_MILLIS);
+            if (resultListener.exception != null) {
+                throw resultListener.exception;
+            }
             return resultListener.result;
         } catch (RemoteException e) {
             // Arbitrary and not worth documenting, as Activity
@@ -1357,8 +1383,28 @@ public abstract class ContentResolver implements ContentInterface {
         }
     }
 
-    /** {@hide} */
+    /**
+     * Perform a detailed internal check on a {@link Uri} to determine if a UID
+     * is able to access it with specific mode flags.
+     * <p>
+     * This method is typically used when the provider implements more dynamic
+     * access controls that cannot be expressed with {@code <path-permission>}
+     * style static rules.
+     * <p>
+     * Because validation of these dynamic access controls has significant
+     * system health impact, this feature is only available to providers that
+     * are built into the system.
+     *
+     * @param uri the {@link Uri} to perform an access check on.
+     * @param uid the UID to check the permission for.
+     * @param modeFlags the access flags to use for the access check, such as
+     *            {@link Intent#FLAG_GRANT_READ_URI_PERMISSION}.
+     * @return {@link PackageManager#PERMISSION_GRANTED} if access is allowed,
+     *         otherwise {@link PackageManager#PERMISSION_DENIED}.
+     * @hide
+     */
     @Override
+    @SystemApi
     public int checkUriPermission(@NonNull Uri uri, int uid, @Intent.AccessUriMode int modeFlags) {
         Objects.requireNonNull(uri, "uri");
 

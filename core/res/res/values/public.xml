@@ -3014,8 +3014,9 @@
       <!-- @hide @SystemApi -->
       <public name="minExtensionVersion" />
       <public name="allowNativeHeapPointerTagging" />
-      <public name="requestAutoRevokePermissionsExemption" />
-      <public name="allowAutoRevokePermissionsExemption" />
+      <!-- @hide no longer used, kept to preserve padding -->
+      <public name="allowAutoRevokePermissionsExemption"/>
+      <public name="autoRevokePermissions" />
       <public name="preserveLegacyExternalStorage" />
       <public name="mimeGroup" />
       <public name="gwpAsanMode" />
@@ -3066,11 +3067,6 @@
       <public name="accessibilitySystemActionLockScreen" />
       <public name="accessibilitySystemActionTakeScreenshot" />
       <public name="accessibilityActionImeEnter" />
-    </public-group>
-
-    <public-group type="array" first-id="0x01070006">
-      <!-- @hide @SystemApi -->
-      <public name="simColors" />
     </public-group>
 
     <public-group type="string" first-id="0x0104002c">

@@ -30,7 +30,6 @@ import static android.app.ActivityManager.START_TASK_TO_FRONT;
 import static android.app.ActivityTaskManager.INVALID_TASK_ID;
 import static android.app.WaitResult.LAUNCH_STATE_COLD;
 import static android.app.WaitResult.LAUNCH_STATE_HOT;
-import static android.app.WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECONDARY;
 import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
@@ -78,6 +77,7 @@ import static com.android.server.wm.ActivityTaskManagerService.ANIMATE;
 import static com.android.server.wm.LaunchParamsController.LaunchParamsModifier.PHASE_BOUNDS;
 import static com.android.server.wm.LaunchParamsController.LaunchParamsModifier.PHASE_DISPLAY;
 import static com.android.server.wm.Task.REPARENT_MOVE_STACK_TO_FRONT;
+import static com.android.server.wm.WindowContainer.POSITION_TOP;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -341,7 +341,6 @@ class ActivityStarter {
         int filterCallingUid;
         PendingIntentRecord originatingPendingIntent;
         boolean allowBackgroundActivityStart;
-        boolean isDream;
 
         /**
          * If set to {@code true}, allows this activity start to look into
@@ -393,7 +392,6 @@ class ActivityStarter {
             filterCallingUid = UserHandle.USER_NULL;
             originatingPendingIntent = null;
             allowBackgroundActivityStart = false;
-            isDream = false;
         }
 
         /**
@@ -434,7 +432,6 @@ class ActivityStarter {
             filterCallingUid = request.filterCallingUid;
             originatingPendingIntent = request.originatingPendingIntent;
             allowBackgroundActivityStart = request.allowBackgroundActivityStart;
-            isDream = request.isDream;
         }
 
         /**
@@ -985,7 +982,7 @@ class ActivityStarter {
                 restrictedBgActivity = shouldAbortBackgroundActivityStart(callingUid,
                         callingPid, callingPackage, realCallingUid, realCallingPid, callerApp,
                         request.originatingPendingIntent, request.allowBackgroundActivityStart,
-                        request.isDream, intent);
+                        intent);
             } finally {
                 Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
             }
@@ -1195,7 +1192,7 @@ class ActivityStarter {
     boolean shouldAbortBackgroundActivityStart(int callingUid, int callingPid,
             final String callingPackage, int realCallingUid, int realCallingPid,
             WindowProcessController callerApp, PendingIntentRecord originatingPendingIntent,
-            boolean allowBackgroundActivityStart, boolean isDream, Intent intent) {
+            boolean allowBackgroundActivityStart, Intent intent) {
         // don't abort for the most important UIDs
         final int callingAppId = UserHandle.getAppId(callingUid);
         if (callingUid == Process.ROOT_UID || callingAppId == Process.SYSTEM_UID
@@ -1203,10 +1200,6 @@ class ActivityStarter {
             return false;
         }
 
-        // don't abort if this is the dream activity
-        if (isDream) {
-            return false;
-        }
         // don't abort if the callingUid has a visible window or is a persistent system process
         final int callingUidProcState = mService.getUidState(callingUid);
         final boolean callingUidHasAnyVisibleWindow =
@@ -1390,7 +1383,7 @@ class ActivityStarter {
             // The activity was already running so it wasn't started, but either brought to the
             // front or the new intent was delivered to it since it was already in front. Notify
             // anyone interested in this piece of information.
-            final ActivityStack homeStack = targetTask.getDisplayContent().getRootHomeTask();
+            final ActivityStack homeStack = targetTask.getDisplayArea().getRootHomeTask();
             final boolean homeTaskVisible = homeStack != null && homeStack.shouldBeVisible(null);
             mService.getTaskChangeNotificationController().notifyActivityRestartAttempt(
                     targetTask.getTaskInfo(), homeTaskVisible, clearedTask);
@@ -1566,7 +1559,7 @@ class ActivityStarter {
         }
 
         if (!mAvoidMoveToFront && mDoResume) {
-            mTargetStack.moveToFront("reuseOrNewTask");
+            mTargetStack.getStack().moveToFront("reuseOrNewTask", targetTask);
             if (mOptions != null) {
                 if (mPreferredWindowingMode != WINDOWING_MODE_UNDEFINED) {
                     mTargetStack.setWindowingMode(mPreferredWindowingMode);
@@ -2364,6 +2357,7 @@ class ActivityStarter {
     private void setTargetStackIfNeeded(ActivityRecord intentActivity) {
         mTargetStack = intentActivity.getRootTask();
         mTargetStack.mLastPausedActivity = null;
+        Task intentTask = intentActivity.getTask();
         // If the target task is not in the front, then we need to bring it to the front...
         // except...  well, with SINGLE_TASK_LAUNCH it's not entirely clear. We'd like to have
         // the same behavior as if a new instance was being started, which means not bringing it
@@ -2374,7 +2368,7 @@ class ActivityStarter {
             final ActivityRecord curTop = (focusStack == null)
                     ? null : focusStack.topRunningNonDelayedActivityLocked(mNotTop);
             final Task topTask = curTop != null ? curTop.getTask() : null;
-            differentTopTask = topTask != intentActivity.getTask()
+            differentTopTask = topTask != intentTask
                     || (focusStack != null && topTask != focusStack.getTopMostTask());
         } else {
             // The existing task should always be different from those in other displays.
@@ -2391,7 +2385,6 @@ class ActivityStarter {
                     intentActivity.setTaskToAffiliateWith(mSourceRecord.getTask());
                 }
 
-                final Task intentTask = intentActivity.getTask();
                 final ActivityStack launchStack =
                         getLaunchStack(mStartActivity, mLaunchFlags, intentTask, mOptions);
                 if (launchStack == null || launchStack == mTargetStack) {
@@ -2400,6 +2393,14 @@ class ActivityStarter {
                     // new intent has delivered.
                     final boolean isSplitScreenTopStack = mTargetStack.isTopSplitScreenStack();
 
+                    // TODO(b/151572268): Figure out a better way to move tasks in above 2-levels
+                    //  tasks hierarchies.
+                    if (mTargetStack != intentTask
+                            && mTargetStack != intentTask.getParent().asTask()) {
+                        intentTask.getParent().positionChildAt(POSITION_TOP, intentTask,
+                                false /* includingParents */);
+                        intentTask = intentTask.getParent().asTask();
+                    }
                     // We only want to move to the front, if we aren't going to launch on a
                     // different stack. If we launch on a different stack, we will put the
                     // task on top there.
@@ -2420,8 +2421,8 @@ class ActivityStarter {
         // Need to update mTargetStack because if task was moved out of it, the original stack may
         // be destroyed.
         mTargetStack = intentActivity.getRootTask();
-        mSupervisor.handleNonResizableTaskIfNeeded(intentActivity.getTask(),
-                WINDOWING_MODE_UNDEFINED, DEFAULT_DISPLAY, mTargetStack);
+        mSupervisor.handleNonResizableTaskIfNeeded(intentTask, WINDOWING_MODE_UNDEFINED,
+                DEFAULT_DISPLAY, mTargetStack);
     }
 
     private void resumeTargetStackIfNeeded() {
@@ -2706,11 +2707,6 @@ class ActivityStarter {
 
     ActivityStarter setAllowBackgroundActivityStart(boolean allowBackgroundActivityStart) {
         mRequest.allowBackgroundActivityStart = allowBackgroundActivityStart;
-        return this;
-    }
-
-    ActivityStarter setIsDream(boolean isDream) {
-        mRequest.isDream = isDream;
         return this;
     }
 

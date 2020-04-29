@@ -30,7 +30,6 @@ import android.content.pm.FeatureGroupInfo;
 import android.content.pm.FeatureInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageParser;
-import android.content.pm.ProcessInfo;
 import android.content.pm.parsing.component.ParsedActivity;
 import android.content.pm.parsing.component.ParsedAttribution;
 import android.content.pm.parsing.component.ParsedComponent;
@@ -323,7 +322,12 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
     private String className;
     private int compatibleWidthLimitDp;
     private int descriptionRes;
-    private boolean enabled;
+
+    // Usually there's code to set this to true during parsing, but it's possible to install an APK
+    // targeting <R that doesn't contain an <application> tag. That code would be skipped and never
+    // assign this, so initialize this to true for those cases.
+    private boolean enabled = true;
+
     private boolean crossProfile;
     private int fullBackupContent;
     private int iconRes;
@@ -405,8 +409,7 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
     private boolean hasFragileUserData;
     private boolean cantSaveState;
     private boolean allowNativeHeapPointerTagging;
-    private boolean dontAutoRevokePermissions;
-    private boolean allowDontAutoRevokePermissions;
+    private int autoRevokePermissions;
     private boolean preserveLegacyExternalStorage;
 
     protected int gwpAsanMode;
@@ -435,6 +438,10 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
                     R.styleable.AndroidManifest_compileSdkVersion, 0));
             setCompileSdkVersionCodename(manifestArray.getNonConfigurationString(
                     R.styleable.AndroidManifest_compileSdkVersionCodename, 0));
+
+            setIsolatedSplitLoading(manifestArray.getBoolean(
+                    R.styleable.AndroidManifest_isolatedSplits, false));
+
         }
     }
 
@@ -1089,8 +1096,7 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
         dest.writeBoolean(this.hasFragileUserData);
         dest.writeBoolean(this.cantSaveState);
         dest.writeBoolean(this.allowNativeHeapPointerTagging);
-        dest.writeBoolean(this.dontAutoRevokePermissions);
-        dest.writeBoolean(this.allowDontAutoRevokePermissions);
+        dest.writeInt(this.autoRevokePermissions);
         dest.writeBoolean(this.preserveLegacyExternalStorage);
         dest.writeArraySet(this.mimeGroups);
         dest.writeInt(this.gwpAsanMode);
@@ -1249,8 +1255,7 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
         this.hasFragileUserData = in.readBoolean();
         this.cantSaveState = in.readBoolean();
         this.allowNativeHeapPointerTagging = in.readBoolean();
-        this.dontAutoRevokePermissions = in.readBoolean();
-        this.allowDontAutoRevokePermissions = in.readBoolean();
+        this.autoRevokePermissions = in.readInt();
         this.preserveLegacyExternalStorage = in.readBoolean();
         this.mimeGroups = (ArraySet<String>) in.readArraySet(boot);
         this.gwpAsanMode = in.readInt();
@@ -2026,13 +2031,8 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
     }
 
     @Override
-    public boolean isDontAutoRevokePermmissions() {
-        return dontAutoRevokePermissions;
-    }
-
-    @Override
-    public boolean isAllowDontAutoRevokePermmissions() {
-        return allowDontAutoRevokePermissions;
+    public int getAutoRevokePermissions() {
+        return autoRevokePermissions;
     }
 
     @Override
@@ -2506,14 +2506,8 @@ public class ParsingPackageImpl implements ParsingPackage, Parcelable {
     }
 
     @Override
-    public ParsingPackageImpl setDontAutoRevokePermissions(boolean value) {
-        dontAutoRevokePermissions = value;
-        return this;
-    }
-
-    @Override
-    public ParsingPackageImpl setAllowDontAutoRevokePermissions(boolean value) {
-        allowDontAutoRevokePermissions = value;
+    public ParsingPackageImpl setAutoRevokePermissions(int value) {
+        autoRevokePermissions = value;
         return this;
     }
 

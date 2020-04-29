@@ -94,10 +94,10 @@ import android.os.Trace;
 import android.os.UserHandle;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageManagerInternal;
-import android.provider.DeviceConfig;
 import android.system.Os;
 import android.text.TextUtils;
 import android.util.ArrayMap;
+import android.util.ArraySet;
 import android.util.EventLog;
 import android.util.LongSparseArray;
 import android.util.Pair;
@@ -138,6 +138,7 @@ import java.util.BitSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Activity manager code dealing with processes.
@@ -152,10 +153,6 @@ public final class ProcessList {
     // A system property to control if obb app data isolation is enabled in vold.
     static final String ANDROID_VOLD_APP_DATA_ISOLATION_ENABLED_PROPERTY =
             "persist.sys.vold_app_data_isolation_enabled";
-
-    // A device config to control the minimum target SDK to enable app data isolation
-    static final String ANDROID_APP_DATA_ISOLATION_MIN_SDK =
-            "android_app_data_isolation_min_sdk";
 
     // The minimum time we allow between crashes, for us to consider this
     // application to be bad and stop and its services and reject broadcasts.
@@ -1851,11 +1848,13 @@ public final class ProcessList {
                 runtimeFlags |= Zygote.USE_APP_IMAGE_STARTUP_CACHE;
             }
 
-            // Enable heap pointer tagging, unless disabled by the app manifest, target sdk level,
-            // or the compat feature.
-            if (app.info.allowsNativeHeapPointerTagging()
-                    && mPlatformCompat.isChangeEnabled(NATIVE_HEAP_POINTER_TAGGING, app.info)) {
-                runtimeFlags |= Zygote.MEMORY_TAG_LEVEL_TBI;
+            if (Zygote.nativeSupportsTaggedPointers()) {
+                // Enable heap pointer tagging if supported by the kernel, unless disabled by the
+                // app manifest, target sdk level, or compat feature.
+                if (app.info.allowsNativeHeapPointerTagging()
+                        && mPlatformCompat.isChangeEnabled(NATIVE_HEAP_POINTER_TAGGING, app.info)) {
+                    runtimeFlags |= Zygote.MEMORY_TAG_LEVEL_TBI;
+                }
             }
 
             runtimeFlags |= decideGwpAsanLevel(app);
@@ -2125,25 +2124,6 @@ public final class ProcessList {
         }
     }
 
-    private boolean shouldIsolateAppData(ProcessRecord app) {
-        if (!mAppDataIsolationEnabled) {
-            return false;
-        }
-        if (!UserHandle.isApp(app.uid)) {
-            return false;
-        }
-        final int minTargetSdk = DeviceConfig.getInt(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER,
-                ANDROID_APP_DATA_ISOLATION_MIN_SDK, Build.VERSION_CODES.R);
-        if (app.info.targetSdkVersion < minTargetSdk) {
-            return false;
-        }
-
-        // TODO(b/147266020): Remove non-standard gating above & switch to isChangeEnabled.
-        mPlatformCompat.reportChange(APP_DATA_DIRECTORY_ISOLATION, app.info);
-
-        return true;
-    }
-
     private Map<String, Pair<String, Long>> getPackageAppDataInfoMap(PackageManagerInternal pmInt,
             String[] packages, int uid) {
         Map<String, Pair<String, Long>> result = new ArrayMap<>(packages.length);
@@ -2151,18 +2131,11 @@ public final class ProcessList {
         for (String packageName : packages) {
             String volumeUuid = pmInt.getPackage(packageName).getVolumeUuid();
             long inode = pmInt.getCeDataInode(packageName, userId);
-            if (inode != 0) {
-                result.put(packageName, Pair.create(volumeUuid, inode));
+            if (inode == 0) {
+                Slog.w(TAG, packageName + " inode == 0 (b/152760674)");
+                return null;
             }
-        }
-        if (mAppDataIsolationWhitelistedApps != null) {
-            for (String packageName : mAppDataIsolationWhitelistedApps) {
-                String volumeUuid = pmInt.getPackage(packageName).getVolumeUuid();
-                long inode = pmInt.getCeDataInode(packageName, userId);
-                if (inode != 0) {
-                    result.put(packageName, Pair.create(volumeUuid, inode));
-                }
-            }
+            result.put(packageName, Pair.create(volumeUuid, inode));
         }
 
         return result;
@@ -2184,34 +2157,56 @@ public final class ProcessList {
                 app.setHasForegroundActivities(true);
             }
 
+            final Map<String, Pair<String, Long>> pkgDataInfoMap;
+            final Map<String, Pair<String, Long>> whitelistedAppDataInfoMap;
+            boolean bindMountAppStorageDirs = false;
+            boolean bindMountAppsData = mAppDataIsolationEnabled
+                    && UserHandle.isApp(app.uid)
+                    && mPlatformCompat.isChangeEnabled(APP_DATA_DIRECTORY_ISOLATION, app.info);
+
+            // Get all packages belongs to the same shared uid. sharedPackages is empty array
+            // if it doesn't have shared uid.
+            final PackageManagerInternal pmInt = mService.getPackageManagerInternalLocked();
+            final String[] sharedPackages = pmInt.getSharedUserPackagesForPackage(
+                    app.info.packageName, app.userId);
+            final String[] targetPackagesList = sharedPackages.length == 0
+                    ? new String[]{app.info.packageName} : sharedPackages;
+
+            pkgDataInfoMap = getPackageAppDataInfoMap(pmInt, targetPackagesList, uid);
+            if (pkgDataInfoMap == null) {
+                // TODO(b/152760674): Handle inode == 0 case properly, now we just give it a
+                // tmp free pass.
+                bindMountAppsData = false;
+            }
+
+            // Remove all packages in pkgDataInfoMap from mAppDataIsolationWhitelistedApps, so
+            // it won't be mounted twice.
+            final Set<String> whitelistedApps = new ArraySet<>(mAppDataIsolationWhitelistedApps);
+            for (String pkg : targetPackagesList) {
+                whitelistedApps.remove(pkg);
+            }
+
+            whitelistedAppDataInfoMap = getPackageAppDataInfoMap(pmInt,
+                    whitelistedApps.toArray(new String[0]), uid);
+            if (whitelistedAppDataInfoMap == null) {
+                // TODO(b/152760674): Handle inode == 0 case properly, now we just give it a
+                // tmp free pass.
+                bindMountAppsData = false;
+            }
+
+            int userId = UserHandle.getUserId(uid);
             StorageManagerInternal storageManagerInternal = LocalServices.getService(
                     StorageManagerInternal.class);
-            final Map<String, Pair<String, Long>> pkgDataInfoMap;
-            boolean bindMountAppStorageDirs = false;
-
-            if (shouldIsolateAppData(app)) {
-                // Get all packages belongs to the same shared uid. sharedPackages is empty array
-                // if it doesn't have shared uid.
-                final PackageManagerInternal pmInt = mService.getPackageManagerInternalLocked();
-                final String[] sharedPackages = pmInt.getSharedUserPackagesForPackage(
-                        app.info.packageName, app.userId);
-                pkgDataInfoMap = getPackageAppDataInfoMap(pmInt, sharedPackages.length == 0
-                        ? new String[]{app.info.packageName} : sharedPackages, uid);
-
-                int userId = UserHandle.getUserId(uid);
-                if (mVoldAppDataIsolationEnabled && UserHandle.isApp(app.uid) &&
-                        !storageManagerInternal.isExternalStorageService(uid)) {
-                    bindMountAppStorageDirs = true;
-                    if (!storageManagerInternal.prepareStorageDirs(userId, pkgDataInfoMap.keySet(),
-                            app.processName)) {
-                        // Cannot prepare Android/app and Android/obb directory,
-                        // so we won't mount it in zygote.
-                        app.bindMountPending = true;
-                        bindMountAppStorageDirs = false;
-                    }
+            if (mVoldAppDataIsolationEnabled && UserHandle.isApp(app.uid)
+                    && !storageManagerInternal.isExternalStorageService(uid)) {
+                bindMountAppStorageDirs = true;
+                if (!storageManagerInternal.prepareStorageDirs(userId, pkgDataInfoMap.keySet(),
+                        app.processName)) {
+                    // Cannot prepare Android/app and Android/obb directory,
+                    // so we won't mount it in zygote.
+                    app.bindMountPending = true;
+                    bindMountAppStorageDirs = false;
                 }
-            } else {
-                pkgDataInfoMap = null;
             }
 
             final Process.ProcessStartResult startResult;
@@ -2229,7 +2224,8 @@ public final class ProcessList {
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
                         app.info.dataDir, null, app.info.packageName,
                         /*zygotePolicyFlags=*/ ZYGOTE_POLICY_FLAG_EMPTY, isTopApp,
-                        app.mDisabledCompatChanges, pkgDataInfoMap, bindMountAppStorageDirs,
+                        app.mDisabledCompatChanges, pkgDataInfoMap, whitelistedAppDataInfoMap,
+                        bindMountAppsData, bindMountAppStorageDirs,
                         new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             } else {
                 startResult = Process.start(entryPoint,
@@ -2237,7 +2233,7 @@ public final class ProcessList {
                         app.info.targetSdkVersion, seInfo, requiredAbi, instructionSet,
                         app.info.dataDir, invokeWith, app.info.packageName, zygotePolicyFlags,
                         isTopApp, app.mDisabledCompatChanges, pkgDataInfoMap,
-                        bindMountAppStorageDirs,
+                        whitelistedAppDataInfoMap, bindMountAppsData, bindMountAppStorageDirs,
                         new String[]{PROC_START_SEQ_IDENT + app.startSeq});
             }
             checkSlow(startTime, "startProcess: returned from zygote!");

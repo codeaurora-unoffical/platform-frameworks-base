@@ -1440,7 +1440,7 @@ public final class ActiveServices {
                                 active.mPackageName = r.packageName;
                                 active.mUid = r.appInfo.uid;
                                 active.mShownWhileScreenOn = mScreenOn;
-                                if (r.app != null) {
+                                if (r.app != null && r.app.uidRecord != null) {
                                     active.mAppOnTop = active.mShownWhileTop =
                                             r.app.uidRecord.getCurProcState()
                                                     <= ActivityManager.PROCESS_STATE_TOP;
@@ -1705,7 +1705,7 @@ public final class ActiveServices {
                     if (acceptances > 0 ||  rejections > 0) {
                         FrameworkStatsLog.write(
                                 FrameworkStatsLog.FOREGROUND_SERVICE_APP_OP_SESSION_ENDED,
-                                mProcessRecord.uid, AppOpsManager.opToLoggingId(op),
+                                mProcessRecord.uid, op,
                                 modeToEnum(mAppOpModes.get(op)),
                                 acceptances, rejections
                         );
@@ -4213,7 +4213,7 @@ public final class ActiveServices {
         }
 
         if (anrMessage != null) {
-            proc.appNotResponding(null, null, null, null, false, anrMessage);
+            mAm.mAnrHelper.appNotResponding(proc, anrMessage);
         }
     }
 
@@ -4238,7 +4238,7 @@ public final class ActiveServices {
         }
 
         if (app != null) {
-            app.appNotResponding(null, null, null, null, false,
+            mAm.mAnrHelper.appNotResponding(app,
                     "Context.startForegroundService() did not then call Service.startForeground(): "
                         + r);
         }
@@ -4898,6 +4898,12 @@ public final class ActiveServices {
             return true;
         }
 
+        // Is the calling UID a device owner app?
+        final boolean isDeviceOwner = mAm.mInternal.isDeviceOwner(callingUid);
+        if (isDeviceOwner) {
+            return true;
+        }
+
         r.mInfoDenyWhileInUsePermissionInFgs =
                 "Background FGS start while-in-use permission restriction [callingPackage: "
                 + callingPackage
@@ -4933,7 +4939,8 @@ public final class ActiveServices {
                             + r.mRecentCallingPackage
                             + "; intent:" + r.intent.getIntent()
                             + "] affected while-in-use permission:"
-                            + AppOpsManager.opToPublicName(op);
+                            + AppOpsManager.opToPublicName(op)
+                            + "; targetSdkVersion:" + r.appInfo.targetSdkVersion;
                     Slog.wtf(TAG, msg);
                 }
             }

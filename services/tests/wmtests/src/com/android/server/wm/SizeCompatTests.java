@@ -189,7 +189,7 @@ public class SizeCompatTests extends ActivityTestsBase {
         final int originalDpi = mActivity.getConfiguration().densityDpi;
 
         // Move the non-resizable activity to the new display.
-        mStack.reparent(newDisplay.mDisplayContent, true /* onTop */);
+        mStack.reparent(newDisplay.getDefaultTaskDisplayArea(), true /* onTop */);
 
         assertEquals(originalBounds.width(), mActivity.getBounds().width());
         assertEquals(originalBounds.height(), mActivity.getBounds().height());
@@ -257,7 +257,7 @@ public class SizeCompatTests extends ActivityTestsBase {
                 .setCanRotate(false).setNotch(notchHeight).build();
 
         // Move the non-resizable activity to the new display.
-        mStack.reparent(newDisplay, true /* onTop */);
+        mStack.reparent(newDisplay.getDefaultTaskDisplayArea(), true /* onTop */);
         // The configuration bounds should keep the same.
         assertEquals(origWidth, configBounds.width());
         assertEquals(origHeight, configBounds.height());
@@ -481,7 +481,7 @@ public class SizeCompatTests extends ActivityTestsBase {
         // The letterbox needs a main window to layout.
         addWindowToActivity(mActivity);
         // Compute the frames of the window and invoke {@link ActivityRecord#layoutLetterbox}.
-        mActivity.mRootWindowContainer.performSurfacePlacement(false /* recoveringMemory */);
+        mActivity.mRootWindowContainer.performSurfacePlacement();
         // The letterbox insets should be [350, 0 - 350, 0].
         assertEquals(new Rect(mActivity.getBounds().left, 0, dh - mActivity.getBounds().right, 0),
                 mActivity.getLetterboxInsets());
