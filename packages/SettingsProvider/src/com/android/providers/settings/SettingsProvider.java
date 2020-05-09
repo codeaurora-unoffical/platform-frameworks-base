@@ -2778,6 +2778,11 @@ public class SettingsProvider extends ContentProvider {
         public boolean insertSettingLocked(int type, int userId, String name, String value,
                 String tag, boolean makeDefault, boolean forceNonSystemPackage, String packageName,
                 boolean forceNotify, Set<String> criticalSettings, boolean overrideableByRestore) {
+            if (overrideableByRestore != Settings.DEFAULT_OVERRIDEABLE_BY_RESTORE) {
+                getContext().enforceCallingOrSelfPermission(
+                        Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE,
+                        "Caller is not allowed to modify settings overrideable by restore");
+            }
             final int key = makeKey(type, userId);
 
             boolean success = false;
@@ -2808,6 +2813,7 @@ public class SettingsProvider extends ContentProvider {
                 if (settingsState.isNewConfigBannedLocked(prefix, keyValues)) {
                     return false;
                 }
+                settingsState.unbanAllConfigIfBannedConfigUpdatedLocked(prefix);
                 List<String> changedSettings =
                         settingsState.setSettingsLocked(prefix, keyValues, packageName);
                 if (!changedSettings.isEmpty()) {
@@ -3431,7 +3437,7 @@ public class SettingsProvider extends ContentProvider {
         }
 
         private final class UpgradeController {
-            private static final int SETTINGS_VERSION = 188;
+            private static final int SETTINGS_VERSION = 189;
 
             private final int mUserId;
 
@@ -4752,6 +4758,23 @@ public class SettingsProvider extends ContentProvider {
                                 false /* makeDefault */, SettingsState.SYSTEM_PACKAGE_NAME);
                     }
                     currentVersion = 188;
+                }
+
+                if (currentVersion == 188) {
+                    // Deprecate ACCESSIBILITY_SHORTCUT_ENABLED, and migrate it
+                    // to ACCESSIBILITY_SHORTCUT_TARGET_SERVICE.
+                    final SettingsState secureSettings = getSecureSettingsLocked(userId);
+                    final Setting shortcutEnabled = secureSettings.getSettingLocked(
+                            "accessibility_shortcut_enabled");
+                    if ("0".equals(shortcutEnabled.getValue())) {
+                        // Clear shortcut key targets list setting.
+                        secureSettings.insertSettingLocked(
+                                Secure.ACCESSIBILITY_SHORTCUT_TARGET_SERVICE,
+                                "", null /* tag */, false /* makeDefault */,
+                                SettingsState.SYSTEM_PACKAGE_NAME);
+                    }
+                    secureSettings.deleteSettingLocked("accessibility_shortcut_enabled");
+                    currentVersion = 189;
                 }
 
                 // vXXX: Add new settings above this point.

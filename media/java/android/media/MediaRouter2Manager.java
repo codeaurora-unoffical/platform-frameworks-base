@@ -50,7 +50,7 @@ import java.util.stream.Collectors;
  * A class that monitors and controls media routing of other apps.
  * @hide
  */
-public class MediaRouter2Manager {
+public final class MediaRouter2Manager {
     private static final String TAG = "MR2Manager";
     private static final Object sLock = new Object();
 
@@ -61,7 +61,7 @@ public class MediaRouter2Manager {
 
     final String mPackageName;
 
-    private Context mContext;
+    private final Context mContext;
     @GuardedBy("sLock")
     private Client mClient;
     private final IMediaRouterService mMediaRouterService;
@@ -74,7 +74,9 @@ public class MediaRouter2Manager {
     @NonNull
     final ConcurrentMap<String, List<String>> mPreferredFeaturesMap = new ConcurrentHashMap<>();
 
-    private AtomicInteger mNextRequestId = new AtomicInteger(1);
+    private final AtomicInteger mNextRequestId = new AtomicInteger(1);
+    private final CopyOnWriteArrayList<TransferRequest> mTransferRequests =
+            new CopyOnWriteArrayList<>();
 
     /**
      * Gets an instance of media router manager that controls media route of other applications.
@@ -328,8 +330,11 @@ public class MediaRouter2Manager {
         if (client != null) {
             try {
                 int requestId = mNextRequestId.getAndIncrement();
+                //TODO: Ensure that every request is eventually removed.
+                mTransferRequests.add(new TransferRequest(requestId, sessionInfo, route));
+
                 mMediaRouterService.requestCreateSessionWithManager(
-                        client, sessionInfo.getClientPackageName(), route, requestId);
+                        client, requestId, sessionInfo.getClientPackageName(), route);
             } catch (RemoteException ex) {
                 Log.e(TAG, "Unable to select media route", ex);
             }
@@ -373,7 +378,7 @@ public class MediaRouter2Manager {
         if (client != null) {
             try {
                 int requestId = mNextRequestId.getAndIncrement();
-                mMediaRouterService.setRouteVolumeWithManager(client, route, volume, requestId);
+                mMediaRouterService.setRouteVolumeWithManager(client, requestId, route, volume);
             } catch (RemoteException ex) {
                 Log.e(TAG, "Unable to send control request.", ex);
             }
@@ -406,7 +411,7 @@ public class MediaRouter2Manager {
             try {
                 int requestId = mNextRequestId.getAndIncrement();
                 mMediaRouterService.setSessionVolumeWithManager(
-                        client, sessionInfo.getId(), volume, requestId);
+                        client, requestId, sessionInfo.getId(), volume);
             } catch (RemoteException ex) {
                 Log.e(TAG, "Unable to send control request.", ex);
             }
@@ -446,6 +451,77 @@ public class MediaRouter2Manager {
         }
     }
 
+    void createSessionOnHandler(int requestId, RoutingSessionInfo sessionInfo) {
+        TransferRequest matchingRequest = null;
+        for (TransferRequest request : mTransferRequests) {
+            if (request.mRequestId == requestId) {
+                matchingRequest = request;
+                break;
+            }
+        }
+
+        if (matchingRequest == null) {
+            return;
+        }
+
+        mTransferRequests.remove(matchingRequest);
+
+        MediaRoute2Info requestedRoute = matchingRequest.mTargetRoute;
+
+        if (sessionInfo == null) {
+            notifyTransferFailed(matchingRequest.mOldSessionInfo, requestedRoute);
+            return;
+        } else if (!sessionInfo.getSelectedRoutes().contains(requestedRoute.getId())) {
+            Log.w(TAG, "The session does not contain the requested route. "
+                    + "(requestedRouteId=" + requestedRoute.getId()
+                    + ", actualRoutes=" + sessionInfo.getSelectedRoutes()
+                    + ")");
+            notifyTransferFailed(matchingRequest.mOldSessionInfo, requestedRoute);
+            return;
+        } else if (!TextUtils.equals(requestedRoute.getProviderId(),
+                sessionInfo.getProviderId())) {
+            Log.w(TAG, "The session's provider ID does not match the requested route's. "
+                    + "(requested route's providerId=" + requestedRoute.getProviderId()
+                    + ", actual providerId=" + sessionInfo.getProviderId()
+                    + ")");
+            notifyTransferFailed(matchingRequest.mOldSessionInfo, requestedRoute);
+            return;
+        }
+        notifyTransferred(matchingRequest.mOldSessionInfo, sessionInfo);
+    }
+
+    void handleFailureOnHandler(int requestId, int reason) {
+        TransferRequest matchingRequest = null;
+        for (TransferRequest request : mTransferRequests) {
+            if (request.mRequestId == requestId) {
+                matchingRequest = request;
+                break;
+            }
+        }
+
+        if (matchingRequest != null) {
+            mTransferRequests.remove(matchingRequest);
+            notifyTransferFailed(matchingRequest.mOldSessionInfo, matchingRequest.mTargetRoute);
+            return;
+        }
+        notifyRequestFailed(reason);
+    }
+
+    void handleSessionsUpdated(RoutingSessionInfo sessionInfo) {
+        for (TransferRequest request : mTransferRequests) {
+            String sessionId = request.mOldSessionInfo.getId();
+            if (!TextUtils.equals(sessionId, sessionInfo.getId())) {
+                continue;
+            }
+            if (sessionInfo.getSelectedRoutes().contains(request.mTargetRoute.getId())) {
+                notifyTransferred(request.mOldSessionInfo, sessionInfo);
+                mTransferRequests.remove(request);
+                break;
+            }
+        }
+        notifySessionUpdated(sessionInfo);
+    }
+
     private void notifyRoutesAdded(List<MediaRoute2Info> routes) {
         for (CallbackRecord record: mCallbackRecords) {
             record.mExecutor.execute(
@@ -467,16 +543,9 @@ public class MediaRouter2Manager {
         }
     }
 
-    void notifySessionCreated(RoutingSessionInfo sessionInfo) {
+    void notifySessionUpdated(RoutingSessionInfo sessionInfo) {
         for (CallbackRecord record : mCallbackRecords) {
-            record.mExecutor.execute(() -> record.mCallback.onSessionCreated(
-                    new RoutingController(sessionInfo)));
-        }
-    }
-
-    void notifySessionInfosChanged() {
-        for (CallbackRecord record : mCallbackRecords) {
-            record.mExecutor.execute(() -> record.mCallback.onSessionsUpdated());
+            record.mExecutor.execute(() -> record.mCallback.onSessionUpdated(sessionInfo));
         }
     }
 
@@ -569,7 +638,7 @@ public class MediaRouter2Manager {
      *
      * @see #getSelectedRoutes(RoutingSessionInfo)
      * @see #getSelectableRoutes(RoutingSessionInfo)
-     * @see Callback#onSessionsUpdated()
+     * @see Callback#onSessionUpdated(RoutingSessionInfo)
      */
     public void selectRoute(@NonNull RoutingSessionInfo sessionInfo,
             @NonNull MediaRoute2Info route) {
@@ -594,7 +663,7 @@ public class MediaRouter2Manager {
             try {
                 int requestId = mNextRequestId.getAndIncrement();
                 mMediaRouterService.selectRouteWithManager(
-                        mClient, sessionInfo.getId(), route, requestId);
+                        mClient, requestId, sessionInfo.getId(), route);
             } catch (RemoteException ex) {
                 Log.e(TAG, "selectRoute: Failed to send a request.", ex);
             }
@@ -614,7 +683,7 @@ public class MediaRouter2Manager {
      *
      * @see #getSelectedRoutes(RoutingSessionInfo)
      * @see #getDeselectableRoutes(RoutingSessionInfo)
-     * @see Callback#onSessionsUpdated()
+     * @see Callback#onSessionUpdated(RoutingSessionInfo)
      */
     public void deselectRoute(@NonNull RoutingSessionInfo sessionInfo,
             @NonNull MediaRoute2Info route) {
@@ -639,7 +708,7 @@ public class MediaRouter2Manager {
             try {
                 int requestId = mNextRequestId.getAndIncrement();
                 mMediaRouterService.deselectRouteWithManager(
-                        mClient, sessionInfo.getId(), route, requestId);
+                        mClient, requestId, sessionInfo.getId(), route);
             } catch (RemoteException ex) {
                 Log.e(TAG, "deselectRoute: Failed to send a request.", ex);
             }
@@ -667,15 +736,17 @@ public class MediaRouter2Manager {
             return;
         }
 
+        int requestId = mNextRequestId.getAndIncrement();
+        mTransferRequests.add(new TransferRequest(requestId, sessionInfo, route));
+
         Client client;
         synchronized (sLock) {
             client = mClient;
         }
         if (client != null) {
             try {
-                int requestId = mNextRequestId.getAndIncrement();
                 mMediaRouterService.transferToRouteWithManager(
-                        mClient, sessionInfo.getId(), route, requestId);
+                        mClient, requestId, sessionInfo.getId(), route);
             } catch (RemoteException ex) {
                 Log.e(TAG, "transferToRoute: Failed to send a request.", ex);
             }
@@ -703,7 +774,7 @@ public class MediaRouter2Manager {
             try {
                 int requestId = mNextRequestId.getAndIncrement();
                 mMediaRouterService.releaseSessionWithManager(
-                        mClient, sessionInfo.getId(), requestId);
+                        mClient, requestId, sessionInfo.getId());
             } catch (RemoteException ex) {
                 Log.e(TAG, "releaseSession: Failed to send a request", ex);
             }
@@ -884,19 +955,11 @@ public class MediaRouter2Manager {
         public void onRoutesChanged(@NonNull List<MediaRoute2Info> routes) {}
 
         /**
-         * Called when a routing session is created.
-         *
-         * @param controller the controller to control the created session
+         * Called when a session is changed.
+         * @param sessionInfo the updated session
          */
-        public void onSessionCreated(@NonNull RoutingController controller) {}
+        public void onSessionUpdated(@NonNull RoutingSessionInfo sessionInfo) {}
 
-        /**
-         * Called when at least one session info is changed.
-         * Call {@link #getActiveSessions()} to get current active session info.
-         */
-        public void onSessionsUpdated() {}
-
-        //TODO: Call this.
         /**
          * Called when media is transferred.
          *
@@ -906,7 +969,6 @@ public class MediaRouter2Manager {
         public void onTransferred(@NonNull RoutingSessionInfo oldSession,
                 @Nullable RoutingSessionInfo newSession) { }
 
-        //TODO: Call this.
         /**
          * Called when {@link #transfer(RoutingSessionInfo, MediaRoute2Info)} fails.
          */
@@ -971,25 +1033,37 @@ public class MediaRouter2Manager {
         }
     }
 
+    static final class TransferRequest {
+        public final int mRequestId;
+        public final RoutingSessionInfo mOldSessionInfo;
+        public final MediaRoute2Info mTargetRoute;
+
+        TransferRequest(int requestId, @NonNull RoutingSessionInfo oldSessionInfo,
+                @NonNull MediaRoute2Info targetRoute) {
+            mRequestId = requestId;
+            mOldSessionInfo = oldSessionInfo;
+            mTargetRoute = targetRoute;
+        }
+    }
+
     class Client extends IMediaRouter2Manager.Stub {
         @Override
-        public void notifySessionCreated(RoutingSessionInfo sessionInfo) {
-            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::notifySessionCreated,
-                    MediaRouter2Manager.this, sessionInfo));
+        public void notifySessionCreated(int requestId, RoutingSessionInfo sessionInfo) {
+            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::createSessionOnHandler,
+                    MediaRouter2Manager.this, requestId, sessionInfo));
         }
 
         @Override
-        public void notifySessionsUpdated() {
-            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::notifySessionInfosChanged,
-                    MediaRouter2Manager.this));
-            // do nothing
+        public void notifySessionUpdated(RoutingSessionInfo sessionInfo) {
+            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::handleSessionsUpdated,
+                    MediaRouter2Manager.this, sessionInfo));
         }
 
         @Override
         public void notifyRequestFailed(int requestId, int reason) {
             // Note: requestId is not used.
-            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::notifyRequestFailed,
-                    MediaRouter2Manager.this, reason));
+            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::handleFailureOnHandler,
+                    MediaRouter2Manager.this, requestId, reason));
         }
 
         @Override

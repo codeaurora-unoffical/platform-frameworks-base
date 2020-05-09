@@ -28,6 +28,7 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManagerInternal;
 import android.os.Binder;
+import android.os.Build;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.util.Slog;
@@ -44,6 +45,7 @@ import com.android.server.LocalServices;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.Arrays;
 
 /**
  * System server internal API for gating and reporting compatibility changes.
@@ -55,6 +57,9 @@ public class PlatformCompat extends IPlatformCompat.Stub {
     private final Context mContext;
     private final ChangeReporter mChangeReporter;
     private final CompatConfig mCompatConfig;
+
+    private static int sMinTargetSdk = Build.VERSION_CODES.P;
+    private static int sMaxTargetSdk = Build.VERSION_CODES.Q;
 
     public PlatformCompat(Context context) {
         mContext = context;
@@ -166,6 +171,26 @@ public class PlatformCompat extends IPlatformCompat.Stub {
     }
 
     @Override
+    public int enableTargetSdkChanges(String packageName, int targetSdkVersion)
+            throws RemoteException, SecurityException {
+        checkCompatChangeOverridePermission();
+        int numChanges = mCompatConfig.enableTargetSdkChangesForPackage(packageName,
+                                                                        targetSdkVersion);
+        killPackage(packageName);
+        return numChanges;
+    }
+
+    @Override
+    public int disableTargetSdkChanges(String packageName, int targetSdkVersion)
+            throws RemoteException, SecurityException {
+        checkCompatChangeOverridePermission();
+        int numChanges = mCompatConfig.disableTargetSdkChangesForPackage(packageName,
+                                                                         targetSdkVersion);
+        killPackage(packageName);
+        return numChanges;
+    }
+
+    @Override
     public void clearOverrides(String packageName) throws RemoteException, SecurityException {
         checkCompatChangeOverridePermission();
         mCompatConfig.removePackageOverrides(packageName);
@@ -198,6 +223,12 @@ public class PlatformCompat extends IPlatformCompat.Stub {
     public CompatibilityChangeInfo[] listAllChanges() {
         checkCompatChangeReadPermission();
         return mCompatConfig.dumpChanges();
+    }
+
+    @Override
+    public CompatibilityChangeInfo[] listUIChanges() {
+        return Arrays.stream(listAllChanges()).filter(
+                x -> isShownInUI(x)).toArray(CompatibilityChangeInfo[]::new);
     }
 
     /**
@@ -318,5 +349,18 @@ public class PlatformCompat extends IPlatformCompat.Stub {
     private void checkCompatChangeReadAndLogPermission() throws SecurityException {
         checkCompatChangeReadPermission();
         checkCompatChangeLogPermission();
+    }
+
+    private boolean isShownInUI(CompatibilityChangeInfo change) {
+        if (change.getLoggingOnly()) {
+            return false;
+        }
+        if (change.getEnableAfterTargetSdk() > 0) {
+            if (change.getEnableAfterTargetSdk() < sMinTargetSdk
+                    || change.getEnableAfterTargetSdk() > sMaxTargetSdk) {
+                return false;
+            }
+        }
+        return true;
     }
 }

@@ -102,6 +102,7 @@ import com.android.systemui.statusbar.NotificationListener;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.NotificationRemoteInputManager;
+import com.android.systemui.statusbar.NotificationShadeDepthController;
 import com.android.systemui.statusbar.NotificationViewHierarchyManager;
 import com.android.systemui.statusbar.PulseExpansionHandler;
 import com.android.systemui.statusbar.RemoteInputController;
@@ -119,8 +120,10 @@ import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.collection.NotificationEntryBuilder;
 import com.android.systemui.statusbar.notification.init.NotificationsController;
 import com.android.systemui.statusbar.notification.interruption.BypassHeadsUpNotifier;
+import com.android.systemui.statusbar.notification.interruption.NotificationAlertingManager;
 import com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProviderImpl;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
+import com.android.systemui.statusbar.notification.logging.NotificationPanelLoggerFake;
 import com.android.systemui.statusbar.notification.row.NotificationGutsManager;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout;
 import com.android.systemui.statusbar.phone.dagger.StatusBarComponent;
@@ -190,6 +193,7 @@ public class StatusBarTest extends SysuiTestCase {
     @Mock private StatusBarNotificationPresenter mNotificationPresenter;
     @Mock private NotificationEntryListener mEntryListener;
     @Mock private NotificationFilter mNotificationFilter;
+    @Mock private NotificationAlertingManager mNotificationAlertingManager;
     @Mock private AmbientDisplayConfiguration mAmbientDisplayConfiguration;
     @Mock private NotificationLogger.ExpansionStateLogger mExpansionStateLogger;
     @Mock private KeyguardUpdateMonitor mKeyguardUpdateMonitor;
@@ -246,6 +250,7 @@ public class StatusBarTest extends SysuiTestCase {
     @Mock private ExtensionController mExtensionController;
     @Mock private UserInfoControllerImpl mUserInfoControllerImpl;
     @Mock private PhoneStatusBarPolicy mPhoneStatusBarPolicy;
+    @Mock private Lazy<NotificationShadeDepthController> mNotificationShadeDepthControllerLazy;
     private ShadeController mShadeController;
     private FakeExecutor mUiBgExecutor = new FakeExecutor(new FakeSystemClock());
     private InitController mInitController = new InitController();
@@ -273,7 +278,7 @@ public class StatusBarTest extends SysuiTestCase {
         mMetricsLogger = new FakeMetricsLogger();
         NotificationLogger notificationLogger = new NotificationLogger(mNotificationListener,
                 mUiBgExecutor, mock(NotificationEntryManager.class), mStatusBarStateController,
-                mExpansionStateLogger);
+                mExpansionStateLogger, new NotificationPanelLoggerFake());
         notificationLogger.setVisibilityReporter(mock(Runnable.class));
 
         when(mCommandQueue.asBinder()).thenReturn(new Binder());
@@ -347,6 +352,7 @@ public class StatusBarTest extends SysuiTestCase {
                 mNotificationInterruptStateProvider,
                 mNotificationViewHierarchyManager,
                 mKeyguardViewMediator,
+                mNotificationAlertingManager,
                 new DisplayMetrics(),
                 mMetricsLogger,
                 mUiBgExecutor,
@@ -400,6 +406,7 @@ public class StatusBarTest extends SysuiTestCase {
                 mPhoneStatusBarPolicy,
                 mKeyguardIndicationController,
                 mDismissCallbackRegistry,
+                mNotificationShadeDepthControllerLazy,
                 mStatusBarTouchableRegionManager);
 
         when(mNotificationShadeWindowView.findViewById(R.id.lock_icon_container)).thenReturn(

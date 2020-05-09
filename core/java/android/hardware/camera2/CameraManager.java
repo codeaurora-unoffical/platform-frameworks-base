@@ -160,8 +160,8 @@ public final class CameraManager {
      * @throws CameraAccessException if the camera device has been disconnected.
      */
     @NonNull
-    public Set<Set<String>> getConcurrentStreamingCameraIds() throws CameraAccessException {
-        return CameraManagerGlobal.get().getConcurrentStreamingCameraIds();
+    public Set<Set<String>> getConcurrentCameraIds() throws CameraAccessException {
+        return CameraManagerGlobal.get().getConcurrentCameraIds();
     }
 
     /**
@@ -189,11 +189,11 @@ public final class CameraManager {
      *
      * @return {@code true} if the given combination of session configurations and corresponding
      *                      camera ids are concurrently supported by the camera sub-system,
-     *         {@code false} otherwise.
+     *         {@code false} otherwise OR if the set of camera devices provided is not a subset of
+     *                       those returned by {@link #getConcurrentCameraIds}.
      *
-     * @throws IllegalArgumentException if the set of camera devices provided is not a subset of
-     *                                  those returned by getConcurrentStreamingCameraIds()
      * @throws CameraAccessException if one of the camera devices queried is no longer connected.
+     *
      */
     @RequiresPermission(android.Manifest.permission.CAMERA)
     public boolean isConcurrentSessionConfigurationSupported(
@@ -486,7 +486,7 @@ public final class CameraManager {
                             "Camera service is currently unavailable");
                     }
                     cameraUser = cameraService.connectDevice(callbacks, cameraId,
-                            mContext.getOpPackageName(), mContext.getFeatureId(), uid);
+                            mContext.getOpPackageName(), mContext.getAttributionTag(), uid);
                 } else {
                     // Use legacy camera implementation for HAL1 devices
                     int id;
@@ -846,6 +846,33 @@ public final class CameraManager {
                 @NonNull String physicalCameraId) {
             // default empty implementation
         }
+
+        /**
+         * A camera device has been opened by an application.
+         *
+         * <p>The default implementation of this method does nothing.</p>
+         *
+         * @param cameraId The unique identifier of the new camera.
+         * @param packageId The package Id of the application opening the camera.
+         *
+         * @see #onCameraClosed
+         */
+        /** @hide */
+        public void onCameraOpened(@NonNull String cameraId, @NonNull String packageId) {
+            // default empty implementation
+        }
+
+        /**
+         * A previously-opened camera has been closed.
+         *
+         * <p>The default implementation of this method does nothing.</p>
+         *
+         * @param cameraId The unique identifier of the closed camera.
+         */
+        /** @hide */
+        public void onCameraClosed(@NonNull String cameraId) {
+            // default empty implementation
+        }
     }
 
     /**
@@ -1156,7 +1183,7 @@ public final class CameraManager {
 
             try {
                 ConcurrentCameraIdCombination[] cameraIdCombinations =
-                        cameraService.getConcurrentStreamingCameraIds();
+                        cameraService.getConcurrentCameraIds();
                 for (ConcurrentCameraIdCombination comb : cameraIdCombinations) {
                     mConcurrentCameraIdCombinations.add(comb.getConcurrentCameraIdCombination());
                 }
@@ -1276,6 +1303,12 @@ public final class CameraManager {
                 }
                 @Override
                 public void onCameraAccessPrioritiesChanged() {
+                }
+                @Override
+                public void onCameraOpened(String id, String clientPackageId) {
+                }
+                @Override
+                public void onCameraClosed(String id) {
                 }};
 
             String[] cameraIds = null;
@@ -1339,7 +1372,7 @@ public final class CameraManager {
             return cameraIds;
         }
 
-        public @NonNull Set<Set<String>> getConcurrentStreamingCameraIds() {
+        public @NonNull Set<Set<String>> getConcurrentCameraIds() {
             Set<Set<String>> concurrentStreamingCameraIds = null;
             synchronized (mLock) {
                 // Try to make sure we have an up-to-date list of concurrent camera devices.
@@ -1365,7 +1398,7 @@ public final class CameraManager {
 
             synchronized (mLock) {
                 // Go through all the elements and check if the camera ids are valid at least /
-                // belong to one of the combinations returned by getConcurrentStreamingCameraIds()
+                // belong to one of the combinations returned by getConcurrentCameraIds()
                 boolean subsetFound = false;
                 for (Set<String> combination : mConcurrentCameraIdCombinations) {
                     if (combination.containsAll(cameraIdsAndSessionConfigurations.keySet())) {
@@ -1373,9 +1406,9 @@ public final class CameraManager {
                     }
                 }
                 if (!subsetFound) {
-                    throw new IllegalArgumentException(
-                            "The set of camera ids provided is not a subset of"
-                            + "getConcurrentStreamingCameraIds");
+                    Log.v(TAG, "isConcurrentSessionConfigurationSupported called with a subset of"
+                            + "camera ids not returned by getConcurrentCameraIds");
+                    return false;
                 }
                 CameraIdAndSessionConfiguration [] cameraIdsAndConfigs =
                         new CameraIdAndSessionConfiguration[size];
@@ -1403,10 +1436,10 @@ public final class CameraManager {
 
       /**
         * Helper function to find out if a camera id is in the set of combinations returned by
-        * getConcurrentStreamingCameraIds()
+        * getConcurrentCameraIds()
         * @param cameraId the unique identifier of the camera device to query
         * @return Whether the camera device was found in the set of combinations returned by
-        *         getConcurrentStreamingCameraIds
+        *         getConcurrentCameraIds
         */
         public boolean cameraIdHasConcurrentStreamsLocked(String cameraId) {
             if (!mDeviceStatus.containsKey(cameraId)) {
@@ -1496,6 +1529,38 @@ public final class CameraManager {
                         @Override
                         public void run() {
                             callback.onCameraAccessPrioritiesChanged();
+                        }
+                    });
+            } finally {
+                Binder.restoreCallingIdentity(ident);
+            }
+        }
+
+        private void postSingleCameraOpenedUpdate(final AvailabilityCallback callback,
+                final Executor executor, final String id, final String packageId) {
+            final long ident = Binder.clearCallingIdentity();
+            try {
+                executor.execute(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            callback.onCameraOpened(id, packageId);
+                        }
+                    });
+            } finally {
+                Binder.restoreCallingIdentity(ident);
+            }
+        }
+
+        private void postSingleCameraClosedUpdate(final AvailabilityCallback callback,
+                final Executor executor, final String id) {
+            final long ident = Binder.clearCallingIdentity();
+            try {
+                executor.execute(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            callback.onCameraClosed(id);
                         }
                     });
             } finally {
@@ -1842,6 +1907,32 @@ public final class CameraManager {
                     final AvailabilityCallback callback = mCallbackMap.keyAt(i);
 
                     postSingleAccessPriorityChangeUpdate(callback, executor);
+                }
+            }
+        }
+
+        @Override
+        public void onCameraOpened(String cameraId, String clientPackageId) {
+            synchronized (mLock) {
+                final int callbackCount = mCallbackMap.size();
+                for (int i = 0; i < callbackCount; i++) {
+                    Executor executor = mCallbackMap.valueAt(i);
+                    final AvailabilityCallback callback = mCallbackMap.keyAt(i);
+
+                    postSingleCameraOpenedUpdate(callback, executor, cameraId, clientPackageId);
+                }
+            }
+        }
+
+        @Override
+        public void onCameraClosed(String cameraId) {
+            synchronized (mLock) {
+                final int callbackCount = mCallbackMap.size();
+                for (int i = 0; i < callbackCount; i++) {
+                    Executor executor = mCallbackMap.valueAt(i);
+                    final AvailabilityCallback callback = mCallbackMap.keyAt(i);
+
+                    postSingleCameraClosedUpdate(callback, executor, cameraId);
                 }
             }
         }

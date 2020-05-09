@@ -59,6 +59,11 @@ interface ControlsController : UserAwareController {
     )
 
     /**
+     * Cancels a pending load call
+     */
+    fun cancelLoad()
+
+    /**
      * Request to subscribe for favorited controls per structure
      *
      * @param structureInfo structure to limit the subscription to
@@ -107,6 +112,25 @@ interface ControlsController : UserAwareController {
     )
 
     // FAVORITE MANAGEMENT
+
+    /**
+     * Send a request to seed favorites into the persisted XML file
+     *
+     * @param componentName the component to seed controls from
+     * @param callback true if the favorites were persisted
+     */
+    fun seedFavoritesForComponent(
+        componentName: ComponentName,
+        callback: Consumer<Boolean>
+    )
+
+    /**
+     * Callback to be informed when the seeding process has finished
+     *
+     * @param callback consumer accepts true if successful
+     * @return true if seeding is in progress and the callback was added
+     */
+    fun addSeedingFavoritesCallback(callback: Consumer<Boolean>): Boolean
 
     /**
      * Get all the favorites.

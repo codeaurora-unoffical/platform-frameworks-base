@@ -102,8 +102,8 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     public void test4gDataIcon() {
         // Switch to showing 4g icon and re-initialize the NetworkController.
         mConfig.show4gForLte = true;
-        mNetworkController = new NetworkControllerImpl(mContext, mMockCm, mMockTm, mMockWm, mMockSm,
-                mConfig, Looper.getMainLooper(), mCallbackHandler,
+        mNetworkController = new NetworkControllerImpl(mContext, mMockCm, mMockTm, mMockWm,
+                mMockNsm, mMockSm, mConfig, Looper.getMainLooper(), mCallbackHandler,
                 mock(AccessPointControllerImpl.class),
                 mock(DataUsageController.class), mMockSubDefaults,
                 mock(DeviceProvisionedController.class), mMockBd);
@@ -119,7 +119,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     @Test
     public void testNoInternetIcon_withDefaultSub() {
         setupNetworkController();
-        when(mMockTm.isDataConnectionEnabled()).thenReturn(false);
+        when(mMockTm.isDataConnectionAllowed()).thenReturn(false);
         setupDefaultSignal();
         updateDataConnectionState(TelephonyManager.DATA_CONNECTED, 0);
         setConnectivityViaBroadcast(NetworkCapabilities.TRANSPORT_CELLULAR, false, false);
@@ -133,7 +133,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     @Test
     public void testDataDisabledIcon_withDefaultSub() {
         setupNetworkController();
-        when(mMockTm.isDataConnectionEnabled()).thenReturn(false);
+        when(mMockTm.isDataConnectionAllowed()).thenReturn(false);
         setupDefaultSignal();
         updateDataConnectionState(TelephonyManager.DATA_DISCONNECTED, 0);
         setConnectivityViaBroadcast(NetworkCapabilities.TRANSPORT_CELLULAR, false, false);
@@ -147,7 +147,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     @Test
     public void testNonDefaultSIM_showsFullSignal_connected() {
         setupNetworkController();
-        when(mMockTm.isDataConnectionEnabled()).thenReturn(false);
+        when(mMockTm.isDataConnectionAllowed()).thenReturn(false);
         setupDefaultSignal();
         setDefaultSubId(mSubId + 1);
         updateDataConnectionState(TelephonyManager.DATA_CONNECTED, 0);
@@ -162,7 +162,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     @Test
     public void testNonDefaultSIM_showsFullSignal_disconnected() {
         setupNetworkController();
-        when(mMockTm.isDataConnectionEnabled()).thenReturn(false);
+        when(mMockTm.isDataConnectionAllowed()).thenReturn(false);
         setupDefaultSignal();
         setDefaultSubId(mSubId + 1);
         updateDataConnectionState(TelephonyManager.DATA_DISCONNECTED, 0);
@@ -177,7 +177,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     @Test
     public void testDataDisabledIcon_UserNotSetup() {
         setupNetworkController();
-        when(mMockTm.isDataConnectionEnabled()).thenReturn(false);
+        when(mMockTm.isDataConnectionAllowed()).thenReturn(false);
         setupDefaultSignal();
         updateDataConnectionState(TelephonyManager.DATA_DISCONNECTED, 0);
         setConnectivityViaBroadcast(NetworkCapabilities.TRANSPORT_CELLULAR, false, false);
@@ -192,7 +192,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
     @Test
     public void testAlwaysShowDataRatIcon() {
         setupDefaultSignal();
-        when(mMockTm.isDataConnectionEnabled()).thenReturn(false);
+        when(mMockTm.isDataConnectionAllowed()).thenReturn(false);
         updateDataConnectionState(TelephonyManager.DATA_DISCONNECTED,
                 TelephonyManager.NETWORK_TYPE_GSM);
 
@@ -235,7 +235,7 @@ public class NetworkControllerDataTest extends NetworkControllerBaseTest {
                 .build();
         when(mServiceState.getNetworkRegistrationInfo(DOMAIN_PS, TRANSPORT_TYPE_WWAN))
                 .thenReturn(fakeRegInfo);
-        when(mDisplayInfo.getNetworkType()).thenReturn(TelephonyManager.NETWORK_TYPE_HSPA);
+        when(mTelephonyDisplayInfo.getNetworkType()).thenReturn(TelephonyManager.NETWORK_TYPE_HSPA);
         updateServiceState();
         verifyDataIndicators(TelephonyIcons.ICON_H);
     }

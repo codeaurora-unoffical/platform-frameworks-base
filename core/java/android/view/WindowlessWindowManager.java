@@ -104,7 +104,7 @@ public class WindowlessWindowManager implements IWindowSession {
             int viewVisibility, int displayId, Rect outFrame, Rect outContentInsets,
             Rect outStableInsets,
             DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
-            InsetsState outInsetsState) {
+            InsetsState outInsetsState, InsetsSourceControl[] outActiveControls) {
         final SurfaceControl.Builder b = new SurfaceControl.Builder(mSurfaceSession)
                 .setParent(mRootSurface)
                 .setFormat(attrs.format)
@@ -179,7 +179,8 @@ public class WindowlessWindowManager implements IWindowSession {
             Rect outStableInsets, Rect outBackdropFrame,
             DisplayCutout.ParcelableWrapper cutout, MergedConfiguration mergedConfiguration,
             SurfaceControl outSurfaceControl, InsetsState outInsetsState,
-            Point outSurfaceSize, SurfaceControl outBLASTSurfaceControl) {
+            InsetsSourceControl[] outActiveControls, Point outSurfaceSize,
+            SurfaceControl outBLASTSurfaceControl) {
         final State state;
         synchronized (this) {
             state = mStateForWindow.get(window.asBinder());
@@ -309,6 +310,14 @@ public class WindowlessWindowManager implements IWindowSession {
     @Override
     public void setWallpaperPosition(android.os.IBinder windowToken, float x, float y,
             float xstep, float ystep) {
+    }
+
+    @Override
+    public void setWallpaperZoomOut(android.os.IBinder windowToken, float zoom) {
+    }
+
+    @Override
+    public void setShouldZoomOutWallpaper(android.os.IBinder windowToken, boolean shouldZoom) {
     }
 
     @Override

@@ -16,8 +16,8 @@
 
 package com.android.systemui.controls.management
 
+import android.content.ComponentName
 import android.graphics.Rect
-import android.graphics.drawable.Icon
 import android.service.controls.DeviceTypes
 import android.view.LayoutInflater
 import android.view.View
@@ -42,7 +42,6 @@ private typealias ModelFavoriteChanger = (String, Boolean) -> Unit
  * @param onlyFavorites set to true to only display favorites instead of all controls
  */
 class ControlAdapter(
-    private val layoutInflater: LayoutInflater,
     private val elevation: Float
 ) : RecyclerView.Adapter<Holder>() {
 
@@ -60,6 +59,7 @@ class ControlAdapter(
     private var model: ControlsModel? = null
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+        val layoutInflater = LayoutInflater.from(parent.context)
         return when (viewType) {
             TYPE_CONTROL -> {
                 ControlHolder(
@@ -68,6 +68,8 @@ class ControlAdapter(
                             width = ViewGroup.LayoutParams.MATCH_PARENT
                         }
                         elevation = this@ControlAdapter.elevation
+                        background = parent.context.getDrawable(
+                                R.drawable.control_background_ripple)
                     }
                 ) { id, favorite ->
                     model?.changeFavoriteStatus(id, favorite)
@@ -137,39 +139,37 @@ private class ControlHolder(view: View, val favoriteCallback: ModelFavoriteChang
     private val title: TextView = itemView.requireViewById(R.id.title)
     private val subtitle: TextView = itemView.requireViewById(R.id.subtitle)
     private val removed: TextView = itemView.requireViewById(R.id.status)
-    private val favorite: CheckBox = itemView.requireViewById<CheckBox>(R.id.favorite)
-    private val favoriteFrame: ViewGroup = itemView
-            .requireViewById<ViewGroup>(R.id.favorite_container)
-            .apply {
+    private val favorite: CheckBox = itemView.requireViewById<CheckBox>(R.id.favorite).apply {
         visibility = View.VISIBLE
     }
 
     override fun bindData(wrapper: ElementWrapper) {
         wrapper as ControlWrapper
         val data = wrapper.controlStatus
-        val renderInfo = getRenderInfo(data.control.deviceType)
+        val renderInfo = getRenderInfo(data.component, data.control.deviceType)
         title.text = data.control.title
         subtitle.text = data.control.subtitle
         favorite.isChecked = data.favorite
         removed.text = if (data.removed) "Removed" else ""
-        favorite.setOnClickListener {
+        itemView.setOnClickListener {
+            favorite.isChecked = !favorite.isChecked
             favoriteCallback(data.control.controlId, favorite.isChecked)
         }
-        favoriteFrame.setOnClickListener { favorite.performClick() }
         applyRenderInfo(renderInfo)
     }
 
     private fun getRenderInfo(
+        component: ComponentName,
         @DeviceTypes.DeviceType deviceType: Int
     ): RenderInfo {
-        return RenderInfo.lookup(deviceType, true)
+        return RenderInfo.lookup(itemView.context, component, deviceType, true)
     }
 
     private fun applyRenderInfo(ri: RenderInfo) {
         val context = itemView.context
         val fg = context.getResources().getColorStateList(ri.foreground, context.getTheme())
 
-        icon.setImageIcon(Icon.createWithResource(context, ri.iconResourceId))
+        icon.setImageDrawable(ri.icon)
         icon.setImageTintList(fg)
     }
 }

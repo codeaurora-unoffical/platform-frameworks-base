@@ -120,7 +120,7 @@ public class ImageWallpaper extends WallpaperService {
         private void init(DozeParameters dozeParameters) {
             mIsHighEndGfx = ActivityManager.isHighEndGfx();
             mDisplayNeedsBlanking = dozeParameters.getDisplayNeedsBlanking();
-            mNeedTransition = mIsHighEndGfx && !mDisplayNeedsBlanking;
+            mNeedTransition = false;
 
             // We will preserve EGL context when we are in lock screen or aod
             // to avoid janking in following transition, we need to release when back to home.
@@ -137,7 +137,7 @@ public class ImageWallpaper extends WallpaperService {
             mRenderer = getRendererInstance();
             getDisplayContext().getDisplay().getDisplayInfo(mDisplayInfo);
             setFixedSizeAllowed(true);
-            setOffsetNotificationsEnabled(true);
+            setOffsetNotificationsEnabled(mNeedTransition);
             updateSurfaceSize();
         }
 
@@ -201,6 +201,11 @@ public class ImageWallpaper extends WallpaperService {
                 // we don't return until the transition is finished. See b/136643341.
                 waitForBackgroundRendering();
             }
+        }
+
+        @Override
+        public boolean shouldZoomOutWallpaper() {
+            return true;
         }
 
         private void waitForBackgroundRendering() {

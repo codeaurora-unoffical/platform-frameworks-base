@@ -51,6 +51,7 @@ import com.android.systemui.statusbar.NavigationBarController;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.NotificationRemoteInputManager;
+import com.android.systemui.statusbar.NotificationShadeDepthController;
 import com.android.systemui.statusbar.NotificationViewHierarchyManager;
 import com.android.systemui.statusbar.PulseExpansionHandler;
 import com.android.systemui.statusbar.SuperStatusBarViewFactory;
@@ -61,6 +62,7 @@ import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
 import com.android.systemui.statusbar.notification.init.NotificationsController;
 import com.android.systemui.statusbar.notification.interruption.BypassHeadsUpNotifier;
+import com.android.systemui.statusbar.notification.interruption.NotificationAlertingManager;
 import com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProvider;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
 import com.android.systemui.statusbar.notification.row.NotificationGutsManager;
@@ -141,6 +143,7 @@ public interface StatusBarPhoneModule {
             NotificationInterruptStateProvider notificationInterruptStateProvider,
             NotificationViewHierarchyManager notificationViewHierarchyManager,
             KeyguardViewMediator keyguardViewMediator,
+            NotificationAlertingManager notificationAlertingManager,
             DisplayMetrics displayMetrics,
             MetricsLogger metricsLogger,
             @UiBackground Executor uiBgExecutor,
@@ -195,6 +198,7 @@ public interface StatusBarPhoneModule {
             UserInfoControllerImpl userInfoControllerImpl,
             PhoneStatusBarPolicy phoneStatusBarPolicy,
             KeyguardIndicationController keyguardIndicationController,
+            Lazy<NotificationShadeDepthController> notificationShadeDepthController,
             DismissCallbackRegistry dismissCallbackRegistry,
             StatusBarTouchableRegionManager statusBarTouchableRegionManager) {
         return new StatusBar(
@@ -219,6 +223,7 @@ public interface StatusBarPhoneModule {
                 notificationInterruptStateProvider,
                 notificationViewHierarchyManager,
                 keyguardViewMediator,
+                notificationAlertingManager,
                 displayMetrics,
                 metricsLogger,
                 uiBgExecutor,
@@ -273,6 +278,7 @@ public interface StatusBarPhoneModule {
                 phoneStatusBarPolicy,
                 keyguardIndicationController,
                 dismissCallbackRegistry,
+                notificationShadeDepthController,
                 statusBarTouchableRegionManager);
     }
 }

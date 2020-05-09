@@ -75,8 +75,10 @@ import static org.mockito.Mockito.spy;
 
 import android.app.IApplicationThread;
 import android.app.IServiceConnection;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManagerInternal;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
@@ -87,10 +89,12 @@ import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.SparseArray;
 
+import com.android.server.LocalServices;
 import com.android.server.wm.ActivityServiceConnectionsHolder;
 import com.android.server.wm.ActivityTaskManagerService;
 import com.android.server.wm.WindowProcessController;
 
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -127,6 +131,7 @@ public class MockingOomAdjusterTests {
     private static final String MOCKAPP5_PROCESSNAME = "test #5";
     private static final String MOCKAPP5_PACKAGENAME = "com.android.test.test5";
     private static Context sContext;
+    private static PackageManagerInternal sPackageManagerInternal;
     private static ActivityManagerService sService;
 
     @BeforeClass
@@ -134,13 +139,23 @@ public class MockingOomAdjusterTests {
         sContext = getInstrumentation().getTargetContext();
         System.setProperty("dexmaker.share_classloader", "true");
 
+        sPackageManagerInternal = mock(PackageManagerInternal.class);
+        doReturn(new ComponentName("", "")).when(sPackageManagerInternal)
+                .getSystemUiServiceComponent();
+        // Remove stale instance of PackageManagerInternal if there is any
+        LocalServices.removeServiceForTest(PackageManagerInternal.class);
+        LocalServices.addService(PackageManagerInternal.class, sPackageManagerInternal);
+
         sService = mock(ActivityManagerService.class);
         sService.mActivityTaskManager = new ActivityTaskManagerService(sContext);
         sService.mActivityTaskManager.initialize(null, null, sContext.getMainLooper());
+        sService.mPackageManagerInt = sPackageManagerInternal;
         sService.mAtmInternal = spy(sService.mActivityTaskManager.getAtmInternal());
 
         sService.mConstants = new ActivityManagerConstants(sContext, sService,
                 sContext.getMainThreadHandler());
+        setFieldValue(ActivityManagerService.class, sService, "mContext",
+                sContext);
         ProcessList pr = new ProcessList();
         pr.init(sService, new ActiveUids(sService, false), null);
         setFieldValue(ActivityManagerService.class, sService, "mProcessList",
@@ -158,6 +173,11 @@ public class MockingOomAdjusterTests {
         sService.mOomAdjuster = new OomAdjuster(sService, sService.mProcessList,
                 mock(ActiveUids.class));
         sService.mOomAdjuster.mAdjSeq = 10000;
+    }
+
+    @AfterClass
+    public static void tearDownOnce() {
+        LocalServices.removeServiceForTest(PackageManagerInternal.class);
     }
 
     private static <T> void setFieldValue(Class clazz, Object obj, String fieldName, T val) {
@@ -972,7 +992,7 @@ public class MockingOomAdjusterTests {
         sService.mOomAdjuster.updateOomAdjLocked(app, false, OomAdjuster.OOM_ADJ_REASON_NONE);
         doReturn(null).when(sService).getTopAppLocked();
 
-        assertProcStates(app, PROCESS_STATE_FOREGROUND_SERVICE, VISIBLE_APP_ADJ,
+        assertProcStates(app, PROCESS_STATE_BOUND_TOP, VISIBLE_APP_ADJ,
                 SCHED_GROUP_DEFAULT);
     }
 

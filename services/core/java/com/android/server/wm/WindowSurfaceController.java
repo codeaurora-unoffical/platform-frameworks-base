@@ -126,7 +126,8 @@ class WindowSurfaceController {
         if (useBLAST) {
             mBLASTSurfaceControl = win.makeSurface()
                 .setParent(mSurfaceControl)
-                .setName("BLAST Adapter Layer")
+                .setName(name + "(BLAST)")
+                .setHidden(false)
                 .setBLASTLayer()
                 .build();
         }
@@ -533,7 +534,15 @@ class WindowSurfaceController {
         return mSurfaceH;
     }
 
-    SurfaceControl getDeferTransactionBarrier() {
+    /**
+     * Returns the Surface which the client-framework ViewRootImpl will be using.
+     * This is either the WSA SurfaceControl or it's BLAST child surface.
+     * This has too main uses:
+     * 1. This is the Surface the client will add children to, we use this to make
+     *    sure we don't reparent the BLAST surface itself when calling reparentChildren
+     * 2. We use this as the barrier Surface for some deferTransaction operations.
+     */
+    SurfaceControl getClientViewRootSurface() {
         if (mBLASTSurfaceControl != null) {
             return mBLASTSurfaceControl;
         }

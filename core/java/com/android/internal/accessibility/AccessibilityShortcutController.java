@@ -56,6 +56,7 @@ import com.android.internal.util.function.pooled.PooledLambda;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -133,7 +134,7 @@ public class AccessibilityShortcutController {
         // Keep track of state of shortcut settings
         final ContentObserver co = new ContentObserver(handler) {
             @Override
-            public void onChange(boolean selfChange, Uri uri, int userId) {
+            public void onChange(boolean selfChange, Collection<Uri> uris, int flags, int userId) {
                 if (userId == mUserId) {
                     onSettingsChanged();
                 }
@@ -141,9 +142,6 @@ public class AccessibilityShortcutController {
         };
         mContext.getContentResolver().registerContentObserver(
                 Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_SHORTCUT_TARGET_SERVICE),
-                false, co, UserHandle.USER_ALL);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_SHORTCUT_ENABLED),
                 false, co, UserHandle.USER_ALL);
         mContext.getContentResolver().registerContentObserver(
                 Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_SHORTCUT_ON_LOCK_SCREEN),
@@ -173,8 +171,6 @@ public class AccessibilityShortcutController {
     public void onSettingsChanged() {
         final boolean hasShortcutTarget = hasShortcutTarget();
         final ContentResolver cr = mContext.getContentResolver();
-        final boolean enabled = Settings.Secure.getIntForUser(
-                cr, Settings.Secure.ACCESSIBILITY_SHORTCUT_ENABLED, 1, mUserId) == 1;
         // Enable the shortcut from the lockscreen by default if the dialog has been shown
         final int dialogAlreadyShown = Settings.Secure.getIntForUser(
                 cr, Settings.Secure.ACCESSIBILITY_SHORTCUT_DIALOG_SHOWN, DialogStaus.NOT_SHOWN,
@@ -182,7 +178,7 @@ public class AccessibilityShortcutController {
         mEnabledOnLockScreen = Settings.Secure.getIntForUser(
                 cr, Settings.Secure.ACCESSIBILITY_SHORTCUT_ON_LOCK_SCREEN,
                 dialogAlreadyShown, mUserId) == 1;
-        mIsShortcutEnabled = enabled && hasShortcutTarget;
+        mIsShortcutEnabled = hasShortcutTarget;
     }
 
     /**

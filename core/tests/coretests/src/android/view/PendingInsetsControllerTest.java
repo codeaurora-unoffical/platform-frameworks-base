@@ -20,24 +20,27 @@ import static android.view.WindowInsets.Type.navigationBars;
 import static android.view.WindowInsets.Type.systemBars;
 import static android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
 import static android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE;
+
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 
 import android.os.CancellationSignal;
 import android.platform.test.annotations.Presubmit;
+import android.view.WindowInsetsController.OnControllableInsetsChangedListener;
 import android.view.animation.LinearInterpolator;
+
+import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-
-import androidx.test.runner.AndroidJUnit4;
 
 /**
  * Tests for {@link PendingInsetsControllerTest}.
@@ -93,10 +96,11 @@ public class PendingInsetsControllerTest {
     public void testControl() {
         WindowInsetsAnimationControlListener listener =
                 mock(WindowInsetsAnimationControlListener.class);
-        CancellationSignal signal = mPendingInsetsController.controlWindowInsetsAnimation(
-                systemBars(), 0, new LinearInterpolator(), listener);
-        verify(listener).onCancelled();
-        assertTrue(signal.isCanceled());
+        CancellationSignal cancellationSignal = new CancellationSignal();
+        mPendingInsetsController.controlWindowInsetsAnimation(
+                systemBars(), 0, new LinearInterpolator(), cancellationSignal, listener);
+        verify(listener).onCancelled(null);
+        assertFalse(cancellationSignal.isCanceled());
     }
 
     @Test
@@ -104,10 +108,11 @@ public class PendingInsetsControllerTest {
         WindowInsetsAnimationControlListener listener =
                 mock(WindowInsetsAnimationControlListener.class);
         mPendingInsetsController.replayAndAttach(mReplayedController);
-        mPendingInsetsController.controlWindowInsetsAnimation(
-                systemBars(), 0L, new LinearInterpolator(), listener);
+        CancellationSignal cancellationSignal = new CancellationSignal();
+        mPendingInsetsController.controlWindowInsetsAnimation(systemBars(), 0L,
+                new LinearInterpolator(), cancellationSignal, listener);
         verify(mReplayedController).controlWindowInsetsAnimation(eq(systemBars()), eq(0L), any(),
-                eq(listener));
+                eq(cancellationSignal), eq(listener));
     }
 
     @Test
@@ -163,11 +168,43 @@ public class PendingInsetsControllerTest {
     }
 
     @Test
+    public void testAddOnControllableInsetsChangedListener() {
+        OnControllableInsetsChangedListener listener =
+                mock(OnControllableInsetsChangedListener.class);
+        mPendingInsetsController.addOnControllableInsetsChangedListener(listener);
+        mPendingInsetsController.replayAndAttach(mReplayedController);
+        verify(mReplayedController).addOnControllableInsetsChangedListener(eq(listener));
+        verify(listener).onControllableInsetsChanged(eq(mPendingInsetsController), eq(0));
+    }
+
+    @Test
+    public void testAddRemoveControllableInsetsChangedListener() {
+        OnControllableInsetsChangedListener listener =
+                mock(OnControllableInsetsChangedListener.class);
+        mPendingInsetsController.addOnControllableInsetsChangedListener(listener);
+        mPendingInsetsController.removeOnControllableInsetsChangedListener(listener);
+        mPendingInsetsController.replayAndAttach(mReplayedController);
+        verify(mReplayedController, never()).addOnControllableInsetsChangedListener(any());
+        verify(listener).onControllableInsetsChanged(eq(mPendingInsetsController), eq(0));
+    }
+
+    @Test
+    public void testAddOnControllableInsetsChangedListener_direct() {
+        mPendingInsetsController.replayAndAttach(mReplayedController);
+        OnControllableInsetsChangedListener listener =
+                mock(OnControllableInsetsChangedListener.class);
+        mPendingInsetsController.addOnControllableInsetsChangedListener(listener);
+        verify(mReplayedController).addOnControllableInsetsChangedListener(eq(listener));
+    }
+
+    @Test
     public void testReplayTwice() {
         mPendingInsetsController.show(systemBars());
         mPendingInsetsController.setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         mPendingInsetsController.setSystemBarsAppearance(APPEARANCE_LIGHT_STATUS_BARS,
                 APPEARANCE_LIGHT_STATUS_BARS);
+        mPendingInsetsController.addOnControllableInsetsChangedListener(
+                (controller, typeMask) -> {});
         mPendingInsetsController.replayAndAttach(mReplayedController);
         InsetsController secondController = mock(InsetsController.class);
         mPendingInsetsController.replayAndAttach(secondController);

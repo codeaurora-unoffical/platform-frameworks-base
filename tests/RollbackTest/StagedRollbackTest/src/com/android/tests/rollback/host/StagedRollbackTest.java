@@ -22,7 +22,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
-import static org.testng.Assert.assertThrows;
 
 import com.android.compatibility.common.tradefed.build.CompatibilityBuildHelper;
 import com.android.tradefed.testtype.DeviceJUnit4ClassRunner;
@@ -136,7 +135,10 @@ public class StagedRollbackTest extends BaseHostJUnit4Test {
         getDevice().reboot();
         runPhase("testBadApkOnly_Phase2");
 
-        assertThrows(AssertionError.class, () -> runPhase("testBadApkOnly_Phase3"));
+        // Trigger rollback and wait for reboot to happen
+        runPhase("testBadApkOnly_Phase3");
+        assertTrue(getDevice().waitForDeviceNotAvailable(TimeUnit.MINUTES.toMillis(2)));
+
         getDevice().waitForDeviceAvailable();
 
         runPhase("testBadApkOnly_Phase4");
@@ -241,6 +243,7 @@ public class StagedRollbackTest extends BaseHostJUnit4Test {
      */
     @Test
     public void testRollbackWhitelistedApp() throws Exception {
+        assumeTrue(hasMainlineModule());
         runPhase("testRollbackWhitelistedApp_Phase1");
         getDevice().reboot();
         runPhase("testRollbackWhitelistedApp_Phase2");
@@ -453,6 +456,18 @@ public class StagedRollbackTest extends BaseHostJUnit4Test {
     private boolean isCheckpointSupported() throws Exception {
         try {
             runPhase("isCheckpointSupported");
+            return true;
+        } catch (AssertionError ignore) {
+            return false;
+        }
+    }
+
+    /**
+     * True if this build has mainline modules installed.
+     */
+    private boolean hasMainlineModule() throws Exception {
+        try {
+            runPhase("hasMainlineModule");
             return true;
         } catch (AssertionError ignore) {
             return false;

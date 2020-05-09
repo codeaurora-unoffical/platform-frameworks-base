@@ -27,16 +27,17 @@ import com.android.systemui.car.CarDeviceProvisionedControllerImpl;
 import com.android.systemui.dagger.SystemUIRootComponent;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.dock.DockManagerImpl;
+import com.android.systemui.plugins.qs.QSFactory;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.power.EnhancedEstimates;
 import com.android.systemui.power.EnhancedEstimatesImpl;
+import com.android.systemui.qs.tileimpl.QSFactoryImpl;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.recents.RecentsImplementation;
 import com.android.systemui.stackdivider.DividerModule;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationLockscreenUserManagerImpl;
-import com.android.systemui.statusbar.car.CarShadeControllerImpl;
 import com.android.systemui.statusbar.car.CarStatusBar;
 import com.android.systemui.statusbar.car.CarStatusBarKeyguardViewManager;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
@@ -45,8 +46,11 @@ import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.KeyguardEnvironmentImpl;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.statusbar.phone.ShadeController;
+import com.android.systemui.statusbar.phone.ShadeControllerImpl;
 import com.android.systemui.statusbar.phone.StatusBar;
 import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
+import com.android.systemui.statusbar.policy.BatteryController;
+import com.android.systemui.statusbar.policy.BatteryControllerImpl;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
@@ -61,7 +65,7 @@ import dagger.Module;
 import dagger.Provides;
 
 @Module(includes = {DividerModule.class})
-abstract class CarSystemUIModule {
+public abstract class CarSystemUIModule {
 
     @Singleton
     @Provides
@@ -100,6 +104,15 @@ abstract class CarSystemUIModule {
             NotificationLockscreenUserManagerImpl notificationLockscreenUserManager);
 
     @Binds
+    @Singleton
+    public abstract BatteryController provideBatteryController(
+            BatteryControllerImpl controllerImpl);
+
+    @Binds
+    @Singleton
+    public abstract QSFactory provideQSFactory(QSFactoryImpl qsFactoryImpl);
+
+    @Binds
     abstract DockManager bindDockManager(DockManagerImpl dockManager);
 
     @Binds
@@ -107,7 +120,7 @@ abstract class CarSystemUIModule {
             KeyguardEnvironmentImpl keyguardEnvironment);
 
     @Binds
-    abstract ShadeController provideShadeController(CarShadeControllerImpl shadeController);
+    abstract ShadeController provideShadeController(ShadeControllerImpl shadeController);
 
     @Provides
     @Singleton

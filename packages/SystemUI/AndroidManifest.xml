@@ -147,6 +147,7 @@
     <uses-permission android:name="android.permission.CONFIGURE_WIFI_DISPLAY" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.CAMERA_OPEN_CLOSE_LISTENER" />
 
     <!-- Screen Capturing -->
     <uses-permission android:name="android.permission.MANAGE_MEDIA_PROJECTION" />
@@ -254,6 +255,9 @@
     <!-- Query all packages on device on R+ -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!-- Permission to register process observer -->
+    <uses-permission android:name="android.permission.SET_ACTIVITY_WATCHER"/>
+
     <protected-broadcast android:name="com.android.settingslib.action.REGISTER_SLICE_RECEIVER" />
     <protected-broadcast android:name="com.android.settingslib.action.UNREGISTER_SLICE_RECEIVER" />
     <protected-broadcast android:name="com.android.settings.flashlight.action.FLASHLIGHT_CHANGED" />
@@ -262,7 +266,8 @@
         android:name=".SystemUIApplication"
         android:persistent="true"
         android:allowClearUserData="false"
-        android:allowBackup="false"
+        android:backupAgent=".backup.BackupHelper"
+        android:killAfterRestore="false"
         android:hardwareAccelerated="true"
         android:label="@string/app_label"
         android:icon="@drawable/icon"
@@ -276,7 +281,7 @@
         <!-- Keep theme in sync with SystemUIApplication.onCreate().
              Setting the theme on the application does not affect views inflated by services.
              The application theme is set again from onCreate to take effect for those views. -->
-
+        <meta-data android:name="com.google.android.backup.api_key" android:value="AEdPqrEAAAAIWTZsUG100coeb3xbEoTWKd3ZL3R79JshRDZfYQ" />
         <!-- Broadcast receiver that gets the broadcast at boot time and starts
              up everything else.
              TODO: Should have an android:permission attribute
@@ -298,11 +303,6 @@
         <service android:name="SystemUISecondaryUserService"
             android:exported="false"
             android:permission="com.android.systemui.permission.SELF" />
-
-        <service android:name=".assist.AssistHandleService"
-            android:exported="true"
-            android:enabled="false"
-        />
 
         <!-- started from PhoneWindowManager
              TODO: Should have an android:permission attribute -->
@@ -693,6 +693,9 @@
                 <action android:name="android.service.controls.action.ADD_CONTROL" />
             </intent-filter>
         </receiver>
+
+        <service android:name=".controls.controller.AuxiliaryPersistenceWrapper$DeletionJobService"
+                 android:permission="android.permission.BIND_JOB_SERVICE"/>
 
         <!-- started from ControlsFavoritingActivity -->
         <activity

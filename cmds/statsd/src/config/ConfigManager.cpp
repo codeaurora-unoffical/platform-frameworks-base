@@ -43,66 +43,77 @@ using android::base::StringPrintf;
 using std::unique_ptr;
 
 struct ConfigReceiverDeathCookie {
-    ConfigReceiverDeathCookie(sp<ConfigManager> configManager, const ConfigKey& configKey,
-                              const shared_ptr<IPendingIntentRef>& pir):
-        mConfigManager(configManager),
-        mConfigKey(configKey),
-        mPir(pir) {}
+    ConfigReceiverDeathCookie(const wp<ConfigManager>& configManager, const ConfigKey& configKey,
+                              const shared_ptr<IPendingIntentRef>& pir) :
+            mConfigManager(configManager), mConfigKey(configKey), mPir(pir) {
+    }
 
-    sp<ConfigManager> mConfigManager;
+    wp<ConfigManager> mConfigManager;
     ConfigKey mConfigKey;
     shared_ptr<IPendingIntentRef> mPir;
 };
 
-static void configReceiverDied(void* cookie) {
+void ConfigManager::configReceiverDied(void* cookie) {
     auto cookie_ = static_cast<ConfigReceiverDeathCookie*>(cookie);
-    sp<ConfigManager> configManager = cookie_->mConfigManager;
-    ConfigKey configKey = cookie_->mConfigKey;
-    shared_ptr<IPendingIntentRef> pir = cookie_->mPir;
-
-    // TODO(b/149254662): Fix threading. This currently fails if a new
-    // pir gets set between the get and the remove.
-    if (configManager->GetConfigReceiver(configKey) == pir) {
-        configManager->RemoveConfigReceiver(configKey);
+    sp<ConfigManager> thiz = cookie_->mConfigManager.promote();
+    if (!thiz) {
+        return;
     }
-    // The death recipient corresponding to this specific pir can never
-    // be triggered again, so free up resources.
-    // TODO(b/149254662): Investigate other options to manage the memory.
+
+    ConfigKey& configKey = cookie_->mConfigKey;
+    shared_ptr<IPendingIntentRef>& pir = cookie_->mPir;
+
+    // Erase the mapping from the config key to the config receiver (pir) if the
+    // mapping still exists.
+    lock_guard<mutex> lock(thiz->mMutex);
+    auto it = thiz->mConfigReceivers.find(configKey);
+    if (it != thiz->mConfigReceivers.end() && it->second == pir) {
+        thiz->mConfigReceivers.erase(configKey);
+    }
+
+    // The death recipient corresponding to this specific pir can never be
+    // triggered again, so free up resources.
     delete cookie_;
 }
 
 struct ActiveConfigChangedReceiverDeathCookie {
-    ActiveConfigChangedReceiverDeathCookie(sp<ConfigManager> configManager, const int uid,
-                                           const shared_ptr<IPendingIntentRef>& pir):
-        mConfigManager(configManager),
-        mUid(uid),
-        mPir(pir) {}
+    ActiveConfigChangedReceiverDeathCookie(const wp<ConfigManager>& configManager, const int uid,
+                                           const shared_ptr<IPendingIntentRef>& pir) :
+            mConfigManager(configManager), mUid(uid), mPir(pir) {
+    }
 
-    sp<ConfigManager> mConfigManager;
+    wp<ConfigManager> mConfigManager;
     int mUid;
     shared_ptr<IPendingIntentRef> mPir;
 };
 
-static void activeConfigChangedReceiverDied(void* cookie) {
+void ConfigManager::activeConfigChangedReceiverDied(void* cookie) {
     auto cookie_ = static_cast<ActiveConfigChangedReceiverDeathCookie*>(cookie);
-    sp<ConfigManager> configManager = cookie_->mConfigManager;
-    int uid = cookie_->mUid;
-    shared_ptr<IPendingIntentRef> pir = cookie_->mPir;
-
-    // TODO(b/149254662): Fix threading. This currently fails if a new
-    // pir gets set between the get and the remove.
-    if (configManager->GetActiveConfigsChangedReceiver(uid) == pir) {
-        configManager->RemoveActiveConfigsChangedReceiver(uid);
+    sp<ConfigManager> thiz = cookie_->mConfigManager.promote();
+    if (!thiz) {
+        return;
     }
+
+    int uid = cookie_->mUid;
+    shared_ptr<IPendingIntentRef>& pir = cookie_->mPir;
+
+    // Erase the mapping from the config key to the active config changed
+    // receiver (pir) if the mapping still exists.
+    lock_guard<mutex> lock(thiz->mMutex);
+    auto it = thiz->mActiveConfigsChangedReceivers.find(uid);
+    if (it != thiz->mActiveConfigsChangedReceivers.end() && it->second == pir) {
+        thiz->mActiveConfigsChangedReceivers.erase(uid);
+    }
+
     // The death recipient corresponding to this specific pir can never
     // be triggered again, so free up resources.
     delete cookie_;
 }
 
-ConfigManager::ConfigManager():
+ConfigManager::ConfigManager() :
     mConfigReceiverDeathRecipient(AIBinder_DeathRecipient_new(configReceiverDied)),
     mActiveConfigChangedReceiverDeathRecipient(
-        AIBinder_DeathRecipient_new(activeConfigChangedReceiverDied)) {
+            AIBinder_DeathRecipient_new(activeConfigChangedReceiverDied)) {
 }
 
 ConfigManager::~ConfigManager() {
@@ -189,8 +200,10 @@ void ConfigManager::RemoveConfigReceiver(const ConfigKey& key) {
 
 void ConfigManager::SetActiveConfigsChangedReceiver(const int uid,
                                                     const shared_ptr<IPendingIntentRef>& pir) {
-    lock_guard<mutex> lock(mMutex);
-    mActiveConfigsChangedReceivers[uid] = pir;
+    {
+        lock_guard<mutex> lock(mMutex);
+        mActiveConfigsChangedReceivers[uid] = pir;
+    }
     AIBinder_linkToDeath(pir->asBinder().get(), mActiveConfigChangedReceiverDeathRecipient.get(),
                          new ActiveConfigChangedReceiverDeathCookie(this, uid, pir));
 }

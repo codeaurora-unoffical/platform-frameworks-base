@@ -15,8 +15,6 @@
  */
 package android.service.dreams;
 
-import static android.view.WindowManager.LayoutParams.TYPE_DREAM;
-
 import android.annotation.IdRes;
 import android.annotation.LayoutRes;
 import android.annotation.NonNull;
@@ -609,9 +607,7 @@ public class DreamService extends Service implements Window.Callback {
      *
      * @hide
      *
-     * TODO: Remove @UnsupportedAppUsage.
      */
-    @UnsupportedAppUsage
     public void setWindowless(boolean windowless) {
         mWindowless = windowless;
     }
@@ -908,22 +904,27 @@ public class DreamService extends Service implements Window.Callback {
             if (!mActivity.isFinishing()) {
                 // In case the activity is not finished yet, do it now.
                 mActivity.finishAndRemoveTask();
-                return;
             }
-        } else if (!mWindowless) {
-            Slog.w(TAG, "Finish was called before the dream was attached.");
+            return;
         }
 
-        if (!mFinished) {
-            mFinished = true;
+        if (mFinished) {
+            return;
+        }
+        mFinished = true;
 
-            try {
-                // finishSelf will unbind the dream controller from the dream service. This will
-                // trigger DreamService.this.onDestroy and DreamService.this will die.
-                mDreamManager.finishSelf(mDreamToken, true /*immediate*/);
-            } catch (RemoteException ex) {
-                // system server died
-            }
+        if (mDreamToken == null) {
+            Slog.w(TAG, "Finish was called before the dream was attached.");
+            stopSelf();
+            return;
+        }
+
+        try {
+            // finishSelf will unbind the dream controller from the dream service. This will
+            // trigger DreamService.this.onDestroy and DreamService.this will die.
+            mDreamManager.finishSelf(mDreamToken, true /*immediate*/);
+        } catch (RemoteException ex) {
+            // system server died
         }
     }
 
@@ -1053,6 +1054,7 @@ public class DreamService extends Service implements Window.Callback {
         // DreamServiceWrapper.onActivityCreated.
         if (!mWindowless) {
             Intent i = new Intent(this, DreamActivity.class);
+            i.setPackage(getApplicationContext().getPackageName());
             i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             i.putExtra(DreamActivity.EXTRA_CALLBACK, mDreamServiceWrapper);
 
@@ -1073,7 +1075,6 @@ public class DreamService extends Service implements Window.Callback {
     private void onWindowCreated(Window w) {
         mWindow = w;
         mWindow.setCallback(this);
-        mWindow.setType(TYPE_DREAM);
         mWindow.requestFeature(Window.FEATURE_NO_TITLE);
 
         WindowManager.LayoutParams lp = mWindow.getAttributes();

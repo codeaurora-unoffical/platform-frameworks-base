@@ -25,6 +25,7 @@ import static android.provider.settings.validators.SettingsValidators.COMMA_SEPA
 import static android.provider.settings.validators.SettingsValidators.COMPONENT_NAME_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.JSON_OBJECT_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.LOCALE_VALIDATOR;
+import static android.provider.settings.validators.SettingsValidators.NONE_NEGATIVE_LONG_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.NON_NEGATIVE_INTEGER_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.NULLABLE_COMPONENT_NAME_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.PACKAGE_NAME_VALIDATOR;
@@ -77,11 +78,8 @@ public class SecureSettingsValidators {
                 ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR);
         // technically either ComponentName or class name, but there's proper value
         // validation at callsites, so allow any non-null string
-        VALIDATORS.put(
-                Secure.ACCESSIBILITY_BUTTON_TARGET_COMPONENT,
-                ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR);
+        VALIDATORS.put(Secure.ACCESSIBILITY_BUTTON_TARGET_COMPONENT, value -> value != null);
         VALIDATORS.put(Secure.ACCESSIBILITY_SHORTCUT_DIALOG_SHOWN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.ACCESSIBILITY_SHORTCUT_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ACCESSIBILITY_SHORTCUT_ON_LOCK_SCREEN, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ACCESSIBILITY_HIGH_TEXT_CONTRAST_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(
@@ -143,6 +141,7 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.CAMERA_DOUBLE_TAP_POWER_GESTURE_DISABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.SYSTEM_NAVIGATION_KEYS_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.QS_TILES, TILE_LIST_VALIDATOR);
+        VALIDATORS.put(Secure.CONTROLS_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_ALWAYS_ON, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_PICK_UP_GESTURE, BOOLEAN_VALIDATOR);
@@ -235,7 +234,9 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.AWARE_TAP_PAUSE_TOUCH_COUNT, NON_NEGATIVE_INTEGER_VALIDATOR);
         VALIDATORS.put(Secure.ODI_CAPTIONS_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DARK_MODE_DIALOG_SEEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.UI_NIGHT_MODE, new InclusiveIntegerRangeValidator(0, 2));
+        VALIDATORS.put(Secure.UI_NIGHT_MODE, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(Secure.DARK_THEME_CUSTOM_START_TIME, NONE_NEGATIVE_LONG_VALIDATOR);
+        VALIDATORS.put(Secure.DARK_THEME_CUSTOM_END_TIME, NONE_NEGATIVE_LONG_VALIDATOR);
         VALIDATORS.put(Secure.GLOBAL_ACTIONS_PANEL_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.AWARE_LOCK_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DISPLAY_DENSITY_FORCED, NON_NEGATIVE_INTEGER_VALIDATOR);
@@ -246,7 +247,7 @@ public class SecureSettingsValidators {
                         Secure.ACCESSIBILITY_MAGNIFICATION_MODE_FULLSCREEN,
                         Secure.ACCESSIBILITY_MAGNIFICATION_MODE_WINDOW));
         VALIDATORS.put(
-                Secure.ACCESSIBILITY_BUTTON_LONG_PRESS_TARGETS,
+                Secure.ACCESSIBILITY_BUTTON_TARGETS,
                 ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR);
     }
 }

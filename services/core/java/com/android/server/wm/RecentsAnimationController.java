@@ -340,9 +340,11 @@ public class RecentsAnimationController implements DeathRecipient {
 
         // Make leashes for each of the visible/target tasks and add it to the recents animation to
         // be started
-        final ArrayList<Task> visibleTasks = mDisplayContent.getVisibleTasks();
-        final ActivityStack targetStack = mDisplayContent.getStack(WINDOWING_MODE_UNDEFINED,
-                targetActivityType);
+        // TODO(b/153090560): Support Recents on multiple task display areas
+        final ArrayList<Task> visibleTasks = mDisplayContent.getDefaultTaskDisplayArea()
+                .getVisibleTasks();
+        final ActivityStack targetStack = mDisplayContent.getDefaultTaskDisplayArea()
+                .getStack(WINDOWING_MODE_UNDEFINED, targetActivityType);
         if (targetStack != null) {
             final PooledConsumer c = PooledLambda.obtainConsumer((t, outList) ->
 	            { if (!outList.contains(t)) outList.add(t); }, PooledLambda.__(Task.class),
@@ -385,7 +387,8 @@ public class RecentsAnimationController implements DeathRecipient {
         }
 
         // Save the minimized home height
-        mMinimizedHomeBounds = mDisplayContent.getRootHomeTask().getBounds();
+        mMinimizedHomeBounds = mDisplayContent.getDefaultTaskDisplayArea().getRootHomeTask()
+                .getBounds();
 
         mService.mWindowPlacerLocked.performSurfacePlacement();
 
@@ -667,7 +670,7 @@ public class RecentsAnimationController implements DeathRecipient {
                         mTargetActivityRecord.token);
             }
             if (mTargetActivityRecord.hasFixedRotationTransform()) {
-                mTargetActivityRecord.clearFixedRotationTransform();
+                mTargetActivityRecord.finishFixedRotationTransform();
             }
         }
 
@@ -820,15 +823,19 @@ public class RecentsAnimationController implements DeathRecipient {
         private @AnimationType int mLastAnimationType;
         private final boolean mIsRecentTaskInvisible;
         private RemoteAnimationTarget mTarget;
-        private final Point mPosition = new Point();
         private final Rect mBounds = new Rect();
+        // The bounds of the target relative to its parent.
+        private Rect mLocalBounds = new Rect();
 
         TaskAnimationAdapter(Task task, boolean isRecentTaskInvisible) {
             mTask = task;
             mIsRecentTaskInvisible = isRecentTaskInvisible;
-            final WindowContainer container = mTask.getParent();
-            mBounds.set(container.getDisplayedBounds());
-            mPosition.set(mBounds.left, mBounds.top);
+            mBounds.set(mTask.getDisplayedBounds());
+
+            mLocalBounds.set(mBounds);
+            Point tmpPos = new Point();
+            mTask.getRelativeDisplayedPosition(tmpPos);
+            mLocalBounds.offsetTo(tmpPos.x, tmpPos.y);
         }
 
         RemoteAnimationTarget createRemoteAnimationTarget() {
@@ -847,8 +854,9 @@ public class RecentsAnimationController implements DeathRecipient {
                     : MODE_CLOSING;
             mTarget = new RemoteAnimationTarget(mTask.mTaskId, mode, mCapturedLeash,
                     !topApp.fillsParent(), mainWindow.mWinAnimator.mLastClipRect,
-                    insets, mTask.getPrefixOrderIndex(), mPosition, mBounds,
-                    mTask.getWindowConfiguration(), mIsRecentTaskInvisible, null, null);
+                    insets, mTask.getPrefixOrderIndex(), new Point(mBounds.left, mBounds.top),
+                    mLocalBounds, mBounds, mTask.getWindowConfiguration(),
+                    mIsRecentTaskInvisible, null, null);
             return mTarget;
         }
 
@@ -862,8 +870,8 @@ public class RecentsAnimationController implements DeathRecipient {
                 @AnimationType int type, OnAnimationFinishedCallback finishCallback) {
             // Restore z-layering, position and stack crop until client has a chance to modify it.
             t.setLayer(animationLeash, mTask.getPrefixOrderIndex());
-            t.setPosition(animationLeash, mPosition.x, mPosition.y);
-            mTmpRect.set(mBounds);
+            t.setPosition(animationLeash, mLocalBounds.left, mLocalBounds.top);
+            mTmpRect.set(mLocalBounds);
             mTmpRect.offsetTo(0, 0);
             t.setWindowCrop(animationLeash, mTmpRect);
             mCapturedLeash = animationLeash;
@@ -897,7 +905,7 @@ public class RecentsAnimationController implements DeathRecipient {
                 pw.print(prefix); pw.println("Target: null");
             }
             pw.println("mIsRecentTaskInvisible=" + mIsRecentTaskInvisible);
-            pw.println("mPosition=" + mPosition);
+            pw.println("mLocalBounds=" + mLocalBounds);
             pw.println("mBounds=" + mBounds);
             pw.println("mIsRecentTaskInvisible=" + mIsRecentTaskInvisible);
         }

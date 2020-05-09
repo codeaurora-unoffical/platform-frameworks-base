@@ -93,7 +93,8 @@ Status Idmap2Service::removeIdmap(const std::string& overlay_apk_path,
   return ok();
 }
 
-Status Idmap2Service::verifyIdmap(const std::string& overlay_apk_path,
+Status Idmap2Service::verifyIdmap(const std::string& target_apk_path,
+                                  const std::string& overlay_apk_path,
                                   int32_t fulfilled_policies ATTRIBUTE_UNUSED,
                                   bool enforce_overlayable ATTRIBUTE_UNUSED,
                                   int32_t user_id ATTRIBUTE_UNUSED, bool* _aidl_return) {
@@ -103,17 +104,22 @@ Status Idmap2Service::verifyIdmap(const std::string& overlay_apk_path,
   std::ifstream fin(idmap_path);
   const std::unique_ptr<const IdmapHeader> header = IdmapHeader::FromBinaryStream(fin);
   fin.close();
-  *_aidl_return = header && header->IsUpToDate();
+  if (!header) {
+    *_aidl_return = false;
+    return error("failed to parse idmap header");
+  }
+
+  *_aidl_return =
+      strcmp(header->GetTargetPath().data(), target_apk_path.data()) == 0 && header->IsUpToDate();
 
   // TODO(b/119328308): Check that the set of fulfilled policies of the overlay has not changed
-
   return ok();
 }
 
 Status Idmap2Service::createIdmap(const std::string& target_apk_path,
                                   const std::string& overlay_apk_path, int32_t fulfilled_policies,
                                   bool enforce_overlayable, int32_t user_id ATTRIBUTE_UNUSED,
-                                  std::unique_ptr<std::string>* _aidl_return) {
+                                  aidl::nullable<std::string>* _aidl_return) {
   assert(_aidl_return);
   SYSTRACE << "Idmap2Service::createIdmap " << target_apk_path << " " << overlay_apk_path;
   _aidl_return->reset(nullptr);
@@ -155,7 +161,7 @@ Status Idmap2Service::createIdmap(const std::string& target_apk_path,
     return error("failed to write to idmap path " + idmap_path);
   }
 
-  *_aidl_return = std::make_unique<std::string>(idmap_path);
+  *_aidl_return = aidl::make_nullable<std::string>(idmap_path);
   return ok();
 }
 

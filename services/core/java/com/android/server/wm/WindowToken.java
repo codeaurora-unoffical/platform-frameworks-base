@@ -28,13 +28,13 @@ import static com.android.server.wm.ProtoLogGroup.WM_ERROR;
 import static com.android.server.wm.WindowContainer.AnimationFlags.CHILDREN;
 import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
+import static com.android.server.wm.WindowContainerChildProto.WINDOW_TOKEN;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
 import static com.android.server.wm.WindowManagerService.UPDATE_FOCUS_NORMAL;
 import static com.android.server.wm.WindowTokenProto.HASH_CODE;
 import static com.android.server.wm.WindowTokenProto.PAUSED;
 import static com.android.server.wm.WindowTokenProto.WAITING_TO_SHOW;
-import static com.android.server.wm.WindowTokenProto.WINDOWS;
 import static com.android.server.wm.WindowTokenProto.WINDOW_CONTAINER;
 
 import android.annotation.CallSuper;
@@ -50,6 +50,7 @@ import android.view.InsetsState;
 import android.view.SurfaceControl;
 import android.view.WindowManager;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.policy.WindowManagerPolicy;
 import com.android.server.protolog.common.ProtoLog;
 
@@ -99,7 +100,11 @@ class WindowToken extends WindowContainer<WindowState> {
     private Configuration mLastReportedConfig;
     private int mLastReportedDisplay = INVALID_DISPLAY;
 
-    private final boolean mFromClientToken;
+    /**
+     * When set to {@code true}, this window token is created from {@link android.app.WindowContext}
+     */
+    @VisibleForTesting
+    final boolean mFromClientToken;
 
     /**
      * Used to fix the transform of the token to be rotated to a rotation different than it's
@@ -152,7 +157,10 @@ class WindowToken extends WindowContainer<WindowState> {
         void resetTransform() {
             for (int i = mRotatedContainers.size() - 1; i >= 0; i--) {
                 final WindowContainer<?> c = mRotatedContainers.get(i);
-                mRotator.finish(c.getPendingTransaction(), c);
+                // If the window is detached (no parent), its surface may have been released.
+                if (c.getParent() != null) {
+                    mRotator.finish(c.getPendingTransaction(), c);
+                }
             }
         }
     }
@@ -180,13 +188,13 @@ class WindowToken extends WindowContainer<WindowState> {
     WindowToken(WindowManagerService service, IBinder _token, int type, boolean persistOnEmpty,
             DisplayContent dc, boolean ownerCanManageAppTokens) {
         this(service, _token, type, persistOnEmpty, dc, ownerCanManageAppTokens,
-                false /* roundedCornersOverlay */);
+                false /* roundedCornerOverlay */);
     }
 
     WindowToken(WindowManagerService service, IBinder _token, int type, boolean persistOnEmpty,
-            DisplayContent dc, boolean ownerCanManageAppTokens, boolean fromClientToken) {
+            DisplayContent dc, boolean ownerCanManageAppTokens, boolean roundedCornerOverlay) {
         this(service, _token, type, persistOnEmpty, dc, ownerCanManageAppTokens,
-                false /* roundedCornersOverlay */, fromClientToken);
+                roundedCornerOverlay, false /* fromClientToken */);
     }
 
     WindowToken(WindowManagerService service, IBinder _token, int type, boolean persistOnEmpty,
@@ -276,11 +284,23 @@ class WindowToken extends WindowContainer<WindowState> {
             // Child windows are added to their parent windows.
             return;
         }
+        // This token is created from WindowContext and the client requests to addView now, create a
+        // surface for this token.
+        if (mSurfaceControl == null) {
+            createSurfaceControl(true /* force */);
+        }
         if (!mChildren.contains(win)) {
             ProtoLog.v(WM_DEBUG_ADD_REMOVE, "Adding %s to %s", win, this);
             addChild(win, mWindowComparator);
             mWmService.mWindowsChanged = true;
             // TODO: Should we also be setting layout needed here and other places?
+        }
+    }
+
+    @Override
+    void createSurfaceControl(boolean force) {
+        if (!mFromClientToken || force) {
+            super.createSurfaceControl(force);
         }
     }
 
@@ -377,7 +397,8 @@ class WindowToken extends WindowContainer<WindowState> {
     void assignLayer(SurfaceControl.Transaction t, int layer) {
         if (windowType == TYPE_DOCK_DIVIDER) {
             // See {@link DisplayContent#mSplitScreenDividerAnchor}
-            super.assignRelativeLayer(t, mDisplayContent.getSplitScreenDividerAnchor(), 1);
+            super.assignRelativeLayer(t,
+                    mDisplayContent.getDefaultTaskDisplayArea().getSplitScreenDividerAnchor(), 1);
         } else if (mRoundedCornerOverlay) {
             super.assignLayer(t, WindowManagerPolicy.COLOR_FADE_LAYER + 1);
         } else {
@@ -460,26 +481,42 @@ class WindowToken extends WindowContainer<WindowState> {
     }
 
     /**
-     * Clears the transformation and continue updating the orientation change of display. Only the
-     * state owner can clear the transform state.
+     * Finishes the transform and continue updating the orientation change of display. Only the
+     * state owner can finish the transform state.
      */
-    void clearFixedRotationTransform() {
-        final FixedRotationTransformState state = mFixedRotationTransformState;
-        if (state == null || state.mOwner != this) {
+    void finishFixedRotationTransform() {
+        if (mFixedRotationTransformState == null || mFixedRotationTransformState.mOwner != this) {
             return;
         }
-        state.resetTransform();
-        // Clear the flag so if the display will be updated to the same orientation, the transform
-        // won't take effect. The state is cleared at the end, because it is used to indicate that
-        // other windows can use seamless rotation when applying rotation to display.
-        state.mIsTransforming = false;
         final boolean changed =
                 mDisplayContent.continueUpdateOrientationForDiffOrienLaunchingApp(this);
-        // If it is not the launching app or the display is not rotated, make sure the merged
-        // override configuration is restored from parent.
+        // If it is not the launching app or the display is not rotated, make sure the transform is
+        // cleared and the configuration is restored from parent.
         if (!changed) {
-            onMergedOverrideConfigurationChanged();
+            clearFixedRotationTransform(null /* applyDisplayRotation */);
+            onConfigurationChanged(getParent().getConfiguration());
         }
+    }
+
+    /**
+     * Clears the transform and apply display rotation if the action is given. The caller needs to
+     * refresh the configuration of this container after this method call.
+     */
+    void clearFixedRotationTransform(Runnable applyDisplayRotation) {
+        final FixedRotationTransformState state = mFixedRotationTransformState;
+        if (state == null) {
+            return;
+        }
+
+        state.resetTransform();
+        // Clear the flag so if the display will be updated to the same orientation, the transform
+        // won't take effect.
+        state.mIsTransforming = false;
+        if (applyDisplayRotation != null) {
+            applyDisplayRotation.run();
+        }
+        // The state is cleared at the end, because it is used to indicate that other windows can
+        // use seamless rotation when applying rotation to display.
         for (int i = state.mAssociatedTokens.size() - 1; i >= 0; i--) {
             state.mAssociatedTokens.get(i).mFixedRotationTransformState = null;
         }
@@ -498,26 +535,13 @@ class WindowToken extends WindowContainer<WindowState> {
     }
 
     @Override
-    void updateSurfacePosition() {
-        super.updateSurfacePosition();
+    void updateSurfacePosition(SurfaceControl.Transaction t) {
+        super.updateSurfacePosition(t);
         if (isFixedRotationTransforming()) {
             // The window is layouted in a simulated rotated display but the real display hasn't
             // rotated, so here transforms its surface to fit in the real display.
             mFixedRotationTransformState.transform(this);
         }
-    }
-
-    /**
-     * Converts the rotated animation frames and insets back to display space for local animation.
-     * It should only be called when {@link #hasFixedRotationTransform} is true.
-     */
-    void unrotateAnimationFrames(Rect outFrame, Rect outInsets, Rect outStableInsets,
-            Rect outSurfaceInsets) {
-        final SeamlessRotator rotator = mFixedRotationTransformState.mRotator;
-        rotator.unrotateFrame(outFrame);
-        rotator.unrotateInsets(outInsets);
-        rotator.unrotateInsets(outStableInsets);
-        rotator.unrotateInsets(outSurfaceInsets);
     }
 
     /**
@@ -539,13 +563,14 @@ class WindowToken extends WindowContainer<WindowState> {
         final long token = proto.start(fieldId);
         super.dumpDebug(proto, WINDOW_CONTAINER, logLevel);
         proto.write(HASH_CODE, System.identityHashCode(this));
-        for (int i = 0; i < mChildren.size(); i++) {
-            final WindowState w = mChildren.get(i);
-            w.dumpDebug(proto, WINDOWS, logLevel);
-        }
         proto.write(WAITING_TO_SHOW, waitingToShow);
         proto.write(PAUSED, paused);
         proto.end(token);
+    }
+
+    @Override
+    long getProtoFieldId() {
+        return WINDOW_TOKEN;
     }
 
     void dump(PrintWriter pw, String prefix, boolean dumpAll) {

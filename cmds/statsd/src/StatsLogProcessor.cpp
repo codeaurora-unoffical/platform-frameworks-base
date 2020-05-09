@@ -34,7 +34,7 @@
 #include "state/StateManager.h"
 #include "stats_log_util.h"
 #include "stats_util.h"
-#include "statslog.h"
+#include "statslog_statsd.h"
 #include "storage/StorageManager.h"
 
 using namespace android;
@@ -79,6 +79,7 @@ constexpr const char* kPermissionUsage = "android.permission.PACKAGE_USAGE_STATS
 #define NS_PER_HOUR 3600 * NS_PER_SEC
 
 #define STATS_ACTIVE_METRIC_DIR "/data/misc/stats-active-metric"
+#define STATS_METADATA_DIR "/data/misc/stats-metadata"
 
 // Cool down period for writing data to disk to avoid overwriting files.
 #define WRITE_DATA_COOL_DOWN_SEC 5
@@ -287,17 +288,17 @@ void StatsLogProcessor::getAndUpdateTrainInfoOnDisk(bool is_rollback,
         int64_t firstId = trainInfo->experimentIds.at(0);
         auto& ids = trainInfo->experimentIds;
         switch (trainInfo->status) {
-            case android::util::BINARY_PUSH_STATE_CHANGED__STATE__INSTALL_SUCCESS:
+            case android::os::statsd::util::BINARY_PUSH_STATE_CHANGED__STATE__INSTALL_SUCCESS:
                 if (find(ids.begin(), ids.end(), firstId + 1) == ids.end()) {
                     ids.push_back(firstId + 1);
                 }
                 break;
-            case android::util::BINARY_PUSH_STATE_CHANGED__STATE__INSTALLER_ROLLBACK_INITIATED:
+            case android::os::statsd::util::BINARY_PUSH_STATE_CHANGED__STATE__INSTALLER_ROLLBACK_INITIATED:
                 if (find(ids.begin(), ids.end(), firstId + 2) == ids.end()) {
                     ids.push_back(firstId + 2);
                 }
                 break;
-            case android::util::BINARY_PUSH_STATE_CHANGED__STATE__INSTALLER_ROLLBACK_SUCCESS:
+            case android::os::statsd::util::BINARY_PUSH_STATE_CHANGED__STATE__INSTALLER_ROLLBACK_SUCCESS:
                 if (find(ids.begin(), ids.end(), firstId + 3) == ids.end()) {
                     ids.push_back(firstId + 3);
                 }
@@ -366,13 +367,13 @@ vector<int64_t> StatsLogProcessor::processWatchdogRollbackOccurred(const int32_t
     int64_t firstId = trainInfoOnDisk.experimentIds[0];
     auto& ids = trainInfoOnDisk.experimentIds;
     switch (rollbackTypeIn) {
-        case android::util::WATCHDOG_ROLLBACK_OCCURRED__ROLLBACK_TYPE__ROLLBACK_INITIATE:
+      case android::os::statsd::util::WATCHDOG_ROLLBACK_OCCURRED__ROLLBACK_TYPE__ROLLBACK_INITIATE:
             if (find(ids.begin(), ids.end(), firstId + 4) == ids.end()) {
                 ids.push_back(firstId + 4);
             }
             StorageManager::writeTrainInfo(trainInfoOnDisk);
             break;
-        case android::util::WATCHDOG_ROLLBACK_OCCURRED__ROLLBACK_TYPE__ROLLBACK_SUCCESS:
+      case android::os::statsd::util::WATCHDOG_ROLLBACK_OCCURRED__ROLLBACK_TYPE__ROLLBACK_SUCCESS:
             if (find(ids.begin(), ids.end(), firstId + 5) == ids.end()) {
                 ids.push_back(firstId + 5);
             }
@@ -405,13 +406,13 @@ void StatsLogProcessor::OnLogEvent(LogEvent* event, int64_t elapsedRealtimeNs) {
 
     // Hard-coded logic to update train info on disk and fill in any information
     // this log event may be missing.
-    if (event->GetTagId() == android::util::BINARY_PUSH_STATE_CHANGED) {
+    if (event->GetTagId() == android::os::statsd::util::BINARY_PUSH_STATE_CHANGED) {
         onBinaryPushStateChangedEventLocked(event);
     }
 
     // Hard-coded logic to update experiment ids on disk for certain rollback
     // types and fill the rollback atom with experiment ids
-    if (event->GetTagId() == android::util::WATCHDOG_ROLLBACK_OCCURRED) {
+    if (event->GetTagId() == android::os::statsd::util::WATCHDOG_ROLLBACK_OCCURRED) {
         onWatchdogRollbackOccurredLocked(event);
     }
 
@@ -429,7 +430,7 @@ void StatsLogProcessor::OnLogEvent(LogEvent* event, int64_t elapsedRealtimeNs) {
 
     // Hard-coded logic to update the isolated uid's in the uid-map.
     // The field numbers need to be currently updated by hand with atoms.proto
-    if (event->GetTagId() == android::util::ISOLATED_UID_CHANGED) {
+    if (event->GetTagId() == android::os::statsd::util::ISOLATED_UID_CHANGED) {
         onIsolatedUidChangedEventLocked(*event);
     }
 
@@ -446,7 +447,7 @@ void StatsLogProcessor::OnLogEvent(LogEvent* event, int64_t elapsedRealtimeNs) {
     }
 
 
-    if (event->GetTagId() != android::util::ISOLATED_UID_CHANGED) {
+    if (event->GetTagId() != android::os::statsd::util::ISOLATED_UID_CHANGED) {
         // Map the isolated uid to host uid if necessary.
         mapIsolatedUidToHostUidIfNecessaryLocked(event);
     }
@@ -536,6 +537,7 @@ void StatsLogProcessor::OnConfigUpdatedLocked(
             new MetricsManager(key, config, mTimeBaseNs, timestampNs, mUidMap, mPullerManager,
                                mAnomalyAlarmMonitor, mPeriodicAlarmMonitor);
     if (newMetricsManager->isConfigValid()) {
+        newMetricsManager->init();
         mUidMap->OnConfigUpdated(key);
         newMetricsManager->refreshTtl(timestampNs);
         mMetricsManagers[key] = newMetricsManager;
@@ -849,6 +851,110 @@ void StatsLogProcessor::SaveActiveConfigsToDisk(int64_t currentTimeNs) {
         return;
     }
     proto.flush(fd.get());
+}
+
+void StatsLogProcessor::SaveMetadataToDisk(int64_t currentWallClockTimeNs,
+                                           int64_t systemElapsedTimeNs) {
+    std::lock_guard<std::mutex> lock(mMetricsMutex);
+    // Do not write to disk if we already have in the last few seconds.
+    if (static_cast<unsigned long long> (systemElapsedTimeNs) <
+            mLastMetadataWriteNs + WRITE_DATA_COOL_DOWN_SEC * NS_PER_SEC) {
+        ALOGI("Statsd skipping writing metadata to disk. Already wrote data in last %d seconds",
+                WRITE_DATA_COOL_DOWN_SEC);
+        return;
+    }
+    mLastMetadataWriteNs = systemElapsedTimeNs;
+
+    metadata::StatsMetadataList metadataList;
+    WriteMetadataToProtoLocked(
+            currentWallClockTimeNs, systemElapsedTimeNs, &metadataList);
+
+    string file_name = StringPrintf("%s/metadata", STATS_METADATA_DIR);
+    StorageManager::deleteFile(file_name.c_str());
+
+    if (metadataList.stats_metadata_size() == 0) {
+        // Skip the write if we have nothing to write.
+        return;
+    }
+
+    std::string data;
+    metadataList.SerializeToString(&data);
+    StorageManager::writeFile(file_name.c_str(), data.c_str(), data.size());
+}
+
+void StatsLogProcessor::WriteMetadataToProto(int64_t currentWallClockTimeNs,
+                                             int64_t systemElapsedTimeNs,
+                                             metadata::StatsMetadataList* metadataList) {
+    std::lock_guard<std::mutex> lock(mMetricsMutex);
+    WriteMetadataToProtoLocked(currentWallClockTimeNs, systemElapsedTimeNs, metadataList);
+}
+
+void StatsLogProcessor::WriteMetadataToProtoLocked(int64_t currentWallClockTimeNs,
+                                                   int64_t systemElapsedTimeNs,
+                                                   metadata::StatsMetadataList* metadataList) {
+    for (const auto& pair : mMetricsManagers) {
+        const sp<MetricsManager>& metricsManager = pair.second;
+        metadata::StatsMetadata* statsMetadata = metadataList->add_stats_metadata();
+        bool metadataWritten = metricsManager->writeMetadataToProto(currentWallClockTimeNs,
+                systemElapsedTimeNs, statsMetadata);
+        if (!metadataWritten) {
+            metadataList->mutable_stats_metadata()->RemoveLast();
+        }
+    }
+}
+
+void StatsLogProcessor::LoadMetadataFromDisk(int64_t currentWallClockTimeNs,
+                                             int64_t systemElapsedTimeNs) {
+    std::lock_guard<std::mutex> lock(mMetricsMutex);
+    string file_name = StringPrintf("%s/metadata", STATS_METADATA_DIR);
+    int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
+    if (-1 == fd) {
+        VLOG("Attempt to read %s but failed", file_name.c_str());
+        StorageManager::deleteFile(file_name.c_str());
+        return;
+    }
+    string content;
+    if (!android::base::ReadFdToString(fd, &content)) {
+        ALOGE("Attempt to read %s but failed", file_name.c_str());
+        close(fd);
+        StorageManager::deleteFile(file_name.c_str());
+        return;
+    }
+
+    close(fd);
+
+    metadata::StatsMetadataList statsMetadataList;
+    if (!statsMetadataList.ParseFromString(content)) {
+        ALOGE("Attempt to read %s but failed; failed to metadata", file_name.c_str());
+        StorageManager::deleteFile(file_name.c_str());
+        return;
+    }
+    SetMetadataStateLocked(statsMetadataList, currentWallClockTimeNs, systemElapsedTimeNs);
+    StorageManager::deleteFile(file_name.c_str());
+}
+
+void StatsLogProcessor::SetMetadataState(const metadata::StatsMetadataList& statsMetadataList,
+                                         int64_t currentWallClockTimeNs,
+                                         int64_t systemElapsedTimeNs) {
+    std::lock_guard<std::mutex> lock(mMetricsMutex);
+    SetMetadataStateLocked(statsMetadataList, currentWallClockTimeNs, systemElapsedTimeNs);
+}
+
+void StatsLogProcessor::SetMetadataStateLocked(
+        const metadata::StatsMetadataList& statsMetadataList,
+        int64_t currentWallClockTimeNs,
+        int64_t systemElapsedTimeNs) {
+    for (const metadata::StatsMetadata& metadata : statsMetadataList.stats_metadata()) {
+        ConfigKey key(metadata.config_key().uid(), metadata.config_key().config_id());
+        auto it = mMetricsManagers.find(key);
+        if (it == mMetricsManagers.end()) {
+            ALOGE("No config found for configKey %s", key.ToString().c_str());
+            continue;
+        }
+        VLOG("Setting metadata %s", key.ToString().c_str());
+        it->second->loadMetadata(metadata, currentWallClockTimeNs, systemElapsedTimeNs);
+    }
+    VLOG("Successfully loaded %d metadata.", statsMetadataList.stats_metadata_size());
 }
 
 void StatsLogProcessor::WriteActiveConfigsToProtoOutputStream(

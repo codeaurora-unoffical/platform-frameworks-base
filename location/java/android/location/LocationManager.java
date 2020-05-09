@@ -103,6 +103,16 @@ public class LocationManager {
     private final Object mLock = new Object();
 
     /**
+     * For apps targeting Android R and above, {@link #getProvider(String)} will no longer throw any
+     * security exceptions.
+     *
+     * @hide
+     */
+    @ChangeId
+    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
+    private static final long GET_PROVIDER_SECURITY_EXCEPTIONS = 150935354L;
+
+    /**
      * For apps targeting Android K and above, supplied {@link PendingIntent}s must be targeted to a
      * specific package.
      *
@@ -602,7 +612,7 @@ public class LocationManager {
     public Location getLastLocation() {
         try {
             return mService.getLastLocation(null, mContext.getPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -635,23 +645,10 @@ public class LocationManager {
 
         try {
             return mService.getLastLocation(request, mContext.getPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
-    }
-
-    /**
-     * Create a string that allows an app to identify a listener
-     *
-     * @param listener The listener
-     *
-     * @return A identifying string
-     */
-    private static String getListenerIdentifier(@NonNull Object listener) {
-        return listener.getClass().getName()
-                + '@'
-                + Integer.toHexString(System.identityHashCode(listener));
     }
 
     /**
@@ -721,7 +718,7 @@ public class LocationManager {
             currentLocationRequest.setExpireIn(GET_CURRENT_LOCATION_MAX_TIMEOUT_MS);
         }
 
-        GetCurrentLocationTransport listenerTransport = new GetCurrentLocationTransport(executor,
+        GetCurrentLocationTransport transport = new GetCurrentLocationTransport(executor,
                 consumer);
 
         if (cancellationSignal != null) {
@@ -732,15 +729,15 @@ public class LocationManager {
 
         try {
             if (mService.getCurrentLocation(currentLocationRequest, remoteCancellationSignal,
-                    listenerTransport, mContext.getPackageName(), mContext.getFeatureId(),
-                    getListenerIdentifier(consumer))) {
-                listenerTransport.register(mContext.getSystemService(AlarmManager.class),
+                    transport, mContext.getPackageName(), mContext.getAttributionTag(),
+                    transport.getListenerId())) {
+                transport.register(mContext.getSystemService(AlarmManager.class),
                         remoteCancellationSignal);
                 if (cancellationSignal != null) {
-                    cancellationSignal.setOnCancelListener(listenerTransport::cancel);
+                    cancellationSignal.setOnCancelListener(transport::cancel);
                 }
             } else {
-                listenerTransport.fail();
+                transport.fail();
             }
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
@@ -1179,8 +1176,8 @@ public class LocationManager {
             boolean registered = false;
             try {
                 mService.requestLocationUpdates(locationRequest, transport, null,
-                        mContext.getPackageName(), mContext.getFeatureId(),
-                        getListenerIdentifier(listener));
+                        mContext.getPackageName(), mContext.getAttributionTag(),
+                        transport.getListenerId());
                 registered = true;
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
@@ -1225,8 +1222,7 @@ public class LocationManager {
 
         try {
             mService.requestLocationUpdates(locationRequest, null, pendingIntent,
-                    mContext.getPackageName(), mContext.getFeatureId(),
-                    getListenerIdentifier(pendingIntent));
+                    mContext.getPackageName(), mContext.getAttributionTag(), null);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1283,7 +1279,7 @@ public class LocationManager {
             transport.unregister();
 
             try {
-                mService.removeUpdates(transport, null, mContext.getPackageName());
+                mService.removeUpdates(transport, null);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
@@ -1302,7 +1298,7 @@ public class LocationManager {
         Preconditions.checkArgument(pendingIntent != null, "invalid null pending intent");
 
         try {
-            mService.removeUpdates(null, pendingIntent, mContext.getPackageName());
+            mService.removeUpdates(null, pendingIntent);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1401,6 +1397,22 @@ public class LocationManager {
      */
     public @Nullable LocationProvider getProvider(@NonNull String provider) {
         Preconditions.checkArgument(provider != null, "invalid null provider");
+
+        if (!Compatibility.isChangeEnabled(GET_PROVIDER_SECURITY_EXCEPTIONS)) {
+            if (NETWORK_PROVIDER.equals(provider) || FUSED_PROVIDER.equals(provider)) {
+                try {
+                    mContext.enforcePermission(ACCESS_FINE_LOCATION, Process.myPid(),
+                            Process.myUid(), null);
+                } catch (SecurityException e) {
+                    mContext.enforcePermission(ACCESS_COARSE_LOCATION, Process.myPid(),
+                            Process.myUid(), null);
+                }
+            } else {
+                mContext.enforcePermission(ACCESS_FINE_LOCATION, Process.myPid(), Process.myUid(),
+                        null);
+            }
+        }
+
         try {
             ProviderProperties properties = mService.getProviderProperties(provider);
             if (properties == null) {
@@ -1489,7 +1501,8 @@ public class LocationManager {
                 requiresSatellite, requiresCell, hasMonetaryCost, supportsAltitude, supportsSpeed,
                 supportsBearing, powerRequirement, accuracy);
         try {
-            mService.addTestProvider(provider, properties, mContext.getOpPackageName());
+            mService.addTestProvider(provider, properties, mContext.getOpPackageName(),
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1510,7 +1523,8 @@ public class LocationManager {
         Preconditions.checkArgument(provider != null, "invalid null provider");
 
         try {
-            mService.removeTestProvider(provider, mContext.getOpPackageName());
+            mService.removeTestProvider(provider, mContext.getOpPackageName(),
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1544,7 +1558,8 @@ public class LocationManager {
         }
 
         try {
-            mService.setTestProviderLocation(provider, location, mContext.getOpPackageName());
+            mService.setTestProviderLocation(provider, location, mContext.getOpPackageName(),
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1573,7 +1588,8 @@ public class LocationManager {
         Preconditions.checkArgument(provider != null, "invalid null provider");
 
         try {
-            mService.setTestProviderEnabled(provider, enabled, mContext.getOpPackageName());
+            mService.setTestProviderEnabled(provider, enabled, mContext.getOpPackageName(),
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1617,8 +1633,7 @@ public class LocationManager {
     public List<LocationRequest> getTestProviderCurrentRequests(String providerName) {
         Preconditions.checkArgument(providerName != null, "invalid null provider");
         try {
-            return mService.getTestProviderCurrentRequests(providerName,
-                    mContext.getOpPackageName());
+            return mService.getTestProviderCurrentRequests(providerName);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1685,7 +1700,7 @@ public class LocationManager {
         LocationRequest request = new LocationRequest().setExpireIn(expiration);
         try {
             mService.requestGeofence(request, fence, intent, mContext.getPackageName(),
-                    mContext.getFeatureId(), getListenerIdentifier(intent));
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1772,7 +1787,7 @@ public class LocationManager {
 
         try {
             mService.requestGeofence(request, fence, intent, mContext.getPackageName(),
-                    mContext.getFeatureId(), getListenerIdentifier(intent));
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1841,7 +1856,7 @@ public class LocationManager {
      */
     public @NonNull GnssCapabilities getGnssCapabilities() {
         try {
-            long gnssCapabilities = mService.getGnssCapabilities(mContext.getPackageName());
+            long gnssCapabilities = mService.getGnssCapabilities();
             if (gnssCapabilities == GnssCapabilities.INVALID_CAPABILITIES) {
                 gnssCapabilities = 0L;
             }
@@ -2467,7 +2482,7 @@ public class LocationManager {
             try {
                 if (mBatchedLocationCallbackManager.addListener(callback, handler)) {
                     return mService.startGnssBatch(periodNanos, wakeOnFifoFull,
-                            mContext.getPackageName());
+                            mContext.getPackageName(), mContext.getAttributionTag());
                 }
                 return false;
             } catch (RemoteException e) {
@@ -2543,6 +2558,10 @@ public class LocationManager {
             mConsumer = consumer;
             mAlarmManager = null;
             mRemoteCancellationSignal = null;
+        }
+
+        public String getListenerId() {
+            return mConsumer.getClass().getName() + "@" + System.identityHashCode(mConsumer);
         }
 
         public synchronized void register(AlarmManager alarmManager,
@@ -2668,6 +2687,10 @@ public class LocationManager {
 
         public LocationListener getKey() {
             return mListener;
+        }
+
+        public String getListenerId() {
+            return mListener.getClass().getName() + "@" + System.identityHashCode(mListener);
         }
 
         public void register(@NonNull Executor executor) {
@@ -2920,7 +2943,7 @@ public class LocationManager {
 
             GnssStatusListener transport = new GnssStatusListener();
             if (mService.registerGnssStatusCallback(transport, mContext.getPackageName(),
-                    mContext.getFeatureId())) {
+                    mContext.getAttributionTag())) {
                 mListenerTransport = transport;
                 return true;
             } else {
@@ -2986,7 +3009,7 @@ public class LocationManager {
 
             GnssMeasurementsListener transport = new GnssMeasurementsListener();
             if (mService.addGnssMeasurementsListener(request, transport, mContext.getPackageName(),
-                    mContext.getFeatureId(), "gnss measurement callback")) {
+                    mContext.getAttributionTag())) {
                 mListenerTransport = transport;
                 return true;
             } else {
@@ -3039,7 +3062,7 @@ public class LocationManager {
 
             GnssNavigationMessageListener transport = new GnssNavigationMessageListener();
             if (mService.addGnssNavigationMessageListener(transport, mContext.getPackageName(),
-                    mContext.getFeatureId(), "gnss navigation callback")) {
+                    mContext.getAttributionTag())) {
                 mListenerTransport = transport;
                 return true;
             } else {
@@ -3080,7 +3103,7 @@ public class LocationManager {
 
             GnssAntennaInfoListener transport = new GnssAntennaInfoListener();
             if (mService.addGnssAntennaInfoListener(transport, mContext.getPackageName(),
-                    mContext.getFeatureId(), "gnss antenna info callback")) {
+                    mContext.getAttributionTag())) {
                 mListenerTransport = transport;
                 return true;
             } else {
@@ -3117,7 +3140,7 @@ public class LocationManager {
 
             BatchedLocationCallback transport = new BatchedLocationCallback();
             if (mService.addGnssBatchingCallback(transport, mContext.getPackageName(),
-                    mContext.getFeatureId(), "batched location callback")) {
+                    mContext.getAttributionTag())) {
                 mListenerTransport = transport;
                 return true;
             } else {

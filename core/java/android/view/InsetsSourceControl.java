@@ -22,6 +22,8 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.view.InsetsState.InternalInsetsType;
 
+import java.util.function.Consumer;
+
 /**
  * Represents a parcelable object to allow controlling a single {@link InsetsSource}.
  * @hide
@@ -42,8 +44,7 @@ public class InsetsSourceControl implements Parcelable {
     public InsetsSourceControl(InsetsSourceControl other) {
         mType = other.mType;
         if (other.mLeash != null) {
-            mLeash = new SurfaceControl();
-            mLeash.copyFrom(other.mLeash);
+            mLeash = new SurfaceControl(other.mLeash);
         } else {
             mLeash = null;
         }
@@ -94,9 +95,9 @@ public class InsetsSourceControl implements Parcelable {
         dest.writeParcelable(mSurfacePosition, 0 /* flags*/);
     }
 
-    public void release() {
+    public void release(Consumer<SurfaceControl> surfaceReleaseConsumer) {
         if (mLeash != null) {
-            mLeash.release();
+            surfaceReleaseConsumer.accept(mLeash);
         }
     }
 

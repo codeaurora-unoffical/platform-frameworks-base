@@ -176,6 +176,7 @@ import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.statusbar.NotificationPresenter;
 import com.android.systemui.statusbar.NotificationRemoteInputManager;
+import com.android.systemui.statusbar.NotificationShadeDepthController;
 import com.android.systemui.statusbar.NotificationShelf;
 import com.android.systemui.statusbar.NotificationViewHierarchyManager;
 import com.android.systemui.statusbar.PulseExpansionHandler;
@@ -192,6 +193,7 @@ import com.android.systemui.statusbar.notification.VisualStabilityManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.init.NotificationsController;
 import com.android.systemui.statusbar.notification.interruption.BypassHeadsUpNotifier;
+import com.android.systemui.statusbar.notification.interruption.NotificationAlertingManager;
 import com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProvider;
 import com.android.systemui.statusbar.notification.logging.NotificationLogger;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
@@ -588,6 +590,7 @@ public class StatusBar extends SystemUI implements DemoMode,
     private ActivityLaunchAnimator mActivityLaunchAnimator;
     protected StatusBarNotificationPresenter mPresenter;
     private NotificationActivityStarter mNotificationActivityStarter;
+    private Lazy<NotificationShadeDepthController> mNotificationShadeDepthControllerLazy;
     private final BubbleController mBubbleController;
     private final BubbleController.BubbleExpandListener mBubbleExpandListener;
 
@@ -622,6 +625,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             NotificationInterruptStateProvider notificationInterruptStateProvider,
             NotificationViewHierarchyManager notificationViewHierarchyManager,
             KeyguardViewMediator keyguardViewMediator,
+            NotificationAlertingManager notificationAlertingManager, // need to inject for now
             DisplayMetrics displayMetrics,
             MetricsLogger metricsLogger,
             @UiBackground Executor uiBgExecutor,
@@ -677,6 +681,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             PhoneStatusBarPolicy phoneStatusBarPolicy,
             KeyguardIndicationController keyguardIndicationController,
             DismissCallbackRegistry dismissCallbackRegistry,
+            Lazy<NotificationShadeDepthController> notificationShadeDepthControllerLazy,
             StatusBarTouchableRegionManager statusBarTouchableRegionManager) {
         super(context);
         mNotificationsController = notificationsController;
@@ -733,6 +738,7 @@ public class StatusBar extends SystemUI implements DemoMode,
         mScreenPinningRequest = screenPinningRequest;
         mDozeScrimController = dozeScrimController;
         mBiometricUnlockControllerLazy = biometricUnlockControllerLazy;
+        mNotificationShadeDepthControllerLazy = notificationShadeDepthControllerLazy;
         mVolumeComponent = volumeComponent;
         mCommandQueue = commandQueue;
         mRecentsOptional = recentsOptional;
@@ -1071,7 +1077,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             }
         });
 
-        mAutoHideController.addAutoHideUiElement(new AutoHideUiElement() {
+        mAutoHideController.setStatusBar(new AutoHideUiElement() {
             @Override
             public void synchronizeState() {
                 checkBarModes();
@@ -1133,6 +1139,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             mBrightnessMirrorController = new BrightnessMirrorController(
                     mNotificationShadeWindowView,
                     mNotificationPanelViewController,
+                    mNotificationShadeDepthControllerLazy.get(),
                     (visible) -> {
                         mBrightnessMirrorVisible = visible;
                         updateScrimController();
@@ -1228,6 +1235,7 @@ public class StatusBar extends SystemUI implements DemoMode,
         // Set up the initial notification state.
         mActivityLaunchAnimator = new ActivityLaunchAnimator(
                 mNotificationShadeWindowViewController, this, mNotificationPanelViewController,
+                mNotificationShadeDepthControllerLazy.get(),
                 (NotificationListContainer) mStackScroller);
 
         // TODO: inject this.
@@ -2333,7 +2341,7 @@ public class StatusBar extends SystemUI implements DemoMode,
 
     void checkBarModes() {
         if (mDemoMode) return;
-        if (mNotificationShadeWindowViewController != null) {
+        if (mNotificationShadeWindowViewController != null && getStatusBarTransitions() != null) {
             checkBarMode(mStatusBarMode, mStatusBarWindowState, getStatusBarTransitions());
         }
         mNavigationBarController.checkNavBarModes(mDisplayId);
@@ -2600,7 +2608,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             }
             try {
                 result = ActivityTaskManager.getService().startActivityAsUser(
-                        null, mContext.getBasePackageName(), mContext.getFeatureId(),
+                        null, mContext.getBasePackageName(), mContext.getAttributionTag(),
                         intent,
                         intent.resolveTypeIfNeeded(mContext.getContentResolver()),
                         null, null, 0, Intent.FLAG_ACTIVITY_NEW_TASK, null,
@@ -3331,12 +3339,12 @@ public class StatusBar extends SystemUI implements DemoMode,
         Trace.traceCounter(Trace.TRACE_TAG_APP, "dozing", mDozing ? 1 : 0);
         Trace.beginSection("StatusBar#updateDozingState");
 
-        boolean sleepingFromKeyguard =
-                mStatusBarKeyguardViewManager.isGoingToSleepVisibleNotOccluded();
+        boolean visibleNotOccluded = mStatusBarKeyguardViewManager.isShowing()
+                && !mStatusBarKeyguardViewManager.isOccluded();
         boolean wakeAndUnlock = mBiometricUnlockController.getMode()
                 == BiometricUnlockController.MODE_WAKE_AND_UNLOCK;
         boolean animate = (!mDozing && mDozeServiceHost.shouldAnimateWakeup() && !wakeAndUnlock)
-                || (mDozing && mDozeServiceHost.shouldAnimateScreenOff() && sleepingFromKeyguard);
+                || (mDozing && mDozeServiceHost.shouldAnimateScreenOff() && visibleNotOccluded);
 
         mNotificationPanelViewController.setDozing(mDozing, animate, mWakeUpTouchLocation);
         updateQsExpansionEnabled();

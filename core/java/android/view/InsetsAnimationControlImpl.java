@@ -23,6 +23,8 @@ import static android.view.InsetsState.ISIDE_LEFT;
 import static android.view.InsetsState.ISIDE_RIGHT;
 import static android.view.InsetsState.ISIDE_TOP;
 
+import static com.android.internal.annotations.VisibleForTesting.Visibility.PACKAGE;
+
 import android.annotation.Nullable;
 import android.graphics.Insets;
 import android.graphics.Matrix;
@@ -31,9 +33,7 @@ import android.util.ArraySet;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
 import android.util.SparseSetArray;
-import android.view.InsetsController.LayoutInsetsDuringAnimation;
 import android.view.InsetsState.InternalInsetsSide;
-import android.view.InsetsState.InternalInsetsType;
 import android.view.SyncRtSurfaceTransactionApplier.SurfaceParams;
 import android.view.WindowInsets.Type.InsetsType;
 import android.view.WindowInsetsAnimation.Bounds;
@@ -49,7 +49,8 @@ import java.util.ArrayList;
  * @hide
  */
 @VisibleForTesting
-public class InsetsAnimationControlImpl implements WindowInsetsAnimationController  {
+public class InsetsAnimationControlImpl implements WindowInsetsAnimationController,
+        InsetsAnimationControlRunner {
 
     private final Rect mTmpFrame = new Rect();
 
@@ -69,7 +70,6 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
     private final @InsetsType int mTypes;
     private final InsetsAnimationControlCallbacks mController;
     private final WindowInsetsAnimation mAnimation;
-    private final boolean mFade;
     private Insets mCurrentInsets;
     private Insets mPendingInsets;
     private float mPendingFraction;
@@ -78,18 +78,18 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
     private boolean mShownOnFinish;
     private float mCurrentAlpha = 1.0f;
     private float mPendingAlpha = 1.0f;
+    @VisibleForTesting(visibility = PACKAGE)
+    public boolean mReadyDispatched;
 
     @VisibleForTesting
     public InsetsAnimationControlImpl(SparseArray<InsetsSourceControl> controls, Rect frame,
             InsetsState state, WindowInsetsAnimationControlListener listener,
             @InsetsType int types,
             InsetsAnimationControlCallbacks controller, long durationMs, Interpolator interpolator,
-            boolean fade, @LayoutInsetsDuringAnimation int layoutInsetsDuringAnimation,
             @AnimationType int animationType) {
         mControls = controls;
         mListener = listener;
         mTypes = types;
-        mFade = fade;
         mController = controller;
         mInitialInsetsState = new InsetsState(state, true /* copySources */);
         mCurrentInsets = getInsetsFromState(mInitialInsetsState, frame, null /* typeSideMap */);
@@ -105,7 +105,7 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         mAnimation.setAlpha(getCurrentAlpha());
         mAnimationType = animationType;
         mController.startAnimation(this, listener, types, mAnimation,
-                new Bounds(mHiddenInsets, mShownInsets), layoutInsetsDuringAnimation);
+                new Bounds(mHiddenInsets, mShownInsets));
     }
 
     @Override
@@ -133,17 +133,19 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         return mTypes;
     }
 
-    boolean controlsInternalType(@InternalInsetsType int type) {
-        return InsetsState.toInternalType(mTypes).contains(type);
-    }
-
-    @AnimationType int getAnimationType() {
+    @Override
+    public @AnimationType int getAnimationType() {
         return mAnimationType;
     }
 
     @Override
     public void setInsetsAndAlpha(Insets insets, float alpha, float fraction) {
-        if (mFinished) {
+        setInsetsAndAlpha(insets, alpha, fraction, false /* allowWhenFinished */);
+    }
+
+    private void setInsetsAndAlpha(Insets insets, float alpha, float fraction,
+            boolean allowWhenFinished) {
+        if (!allowWhenFinished && mFinished) {
             throw new IllegalStateException(
                     "Can't change insets on an animation that is finished.");
         }
@@ -154,7 +156,7 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         mPendingFraction = sanitize(fraction);
         mPendingInsets = sanitize(insets);
         mPendingAlpha = sanitize(alpha);
-        mController.scheduleApplyChangeInsets();
+        mController.scheduleApplyChangeInsets(this);
     }
 
     @VisibleForTesting
@@ -185,8 +187,17 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         mAnimation.setAlpha(mPendingAlpha);
         if (mFinished) {
             mController.notifyFinished(this, mShownOnFinish);
+            releaseLeashes();
         }
         return mFinished;
+    }
+
+    private void releaseLeashes() {
+        for (int i = mControls.size() - 1; i >= 0; i--) {
+            final InsetsSourceControl c = mControls.valueAt(i);
+            if (c == null) continue;
+            c.release(mController::releaseSurfaceControlFromRt);
+        }
     }
 
     @Override
@@ -194,9 +205,11 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         if (mCancelled || mFinished) {
             return;
         }
-        setInsetsAndAlpha(shown ? mShownInsets : mHiddenInsets, 1f /* alpha */, 1f /* fraction */);
-        mFinished = true;
         mShownOnFinish = shown;
+        mFinished = true;
+        setInsetsAndAlpha(shown ? mShownInsets : mHiddenInsets, 1f /* alpha */, 1f /* fraction */,
+                true /* allowWhenFinished */);
+        mListener.onFinished(this);
     }
 
     @Override
@@ -205,24 +218,38 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         return mAnimation.getFraction();
     }
 
-    public void onCancelled() {
+    @Override
+    public void cancel() {
         if (mFinished) {
             return;
         }
         mCancelled = true;
-        mListener.onCancelled();
+        mListener.onCancelled(mReadyDispatched ? this : null);
+
+        releaseLeashes();
     }
 
+    @Override
+    public boolean isFinished() {
+        return mFinished;
+    }
+
+    @Override
     public boolean isCancelled() {
         return mCancelled;
     }
 
-    WindowInsetsAnimation getAnimation() {
+    @Override
+    public WindowInsetsAnimation getAnimation() {
         return mAnimation;
     }
 
     WindowInsetsAnimationControlListener getListener() {
         return mListener;
+    }
+
+    SparseArray<InsetsSourceControl> getControls() {
+        return mControls;
     }
 
     private Insets calculateInsets(InsetsState state, Rect frame,
@@ -241,7 +268,6 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         return state.calculateInsets(frame, null /* ignoringVisibilityState */,
                 false /* isScreenRound */,
                 false /* alwaysConsumeSystemBars */, null /* displayCutout */,
-                null /* legacyContentInsets */, null /* legacyStableInsets */,
                 LayoutParams.SOFT_INPUT_ADJUST_RESIZE /* legacySoftInputMode*/,
                 0 /* legacySystemUiFlags */, typeSideMap)
                .getInsets(mTypes);
@@ -279,13 +305,11 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
 
             // If the system is controlling the insets source, the leash can be null.
             if (leash != null) {
-                // TODO: use a better interpolation for fade.
-                alpha = mFade ? ((float) inset / maxInset * 0.3f + 0.7f) : alpha;
                 SurfaceParams params = new SurfaceParams.Builder(leash)
                         .withAlpha(side == ISIDE_FLOATING ? 1 : alpha)
                         .withMatrix(mTmpMatrix)
                         .withVisibility(side == ISIDE_FLOATING
-                                ? state.getSource(source.getType()).isVisible()
+                                ? mShownOnFinish
                                 : inset != 0 /* visible */)
                         .build();
                 surfaceParams.add(params);

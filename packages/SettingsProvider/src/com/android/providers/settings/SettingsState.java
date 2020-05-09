@@ -459,6 +459,16 @@ final class SettingsState {
     }
 
     @GuardedBy("mLock")
+    public void unbanAllConfigIfBannedConfigUpdatedLocked(String prefix) {
+        // If the prefix updated is a banned namespace, clear mNamespaceBannedHashes
+        // to unban all unbanned namespaces.
+        if (mNamespaceBannedHashes.get(prefix) != null) {
+            mNamespaceBannedHashes.clear();
+            scheduleWriteIfNeededLocked();
+        }
+    }
+
+    @GuardedBy("mLock")
     public void banConfigurationLocked(String prefix, Map<String, String> keyValues) {
         if (prefix == null || keyValues.isEmpty()) {
             return;
@@ -1259,7 +1269,8 @@ final class SettingsState {
         public boolean reset() {
             // overrideableByRestore = true as resetting to default value isn't considered a
             // modification.
-            return update(this.defaultValue, false, packageName, null, true, true);
+            return update(this.defaultValue, false, packageName, null, true, true,
+                    /* resetToDefault */ true);
         }
 
         public boolean isTransient() {
@@ -1272,6 +1283,13 @@ final class SettingsState {
 
         public boolean update(String value, boolean setDefault, String packageName, String tag,
                 boolean forceNonSystemPackage, boolean overrideableByRestore) {
+            return update(value, setDefault, packageName, tag, forceNonSystemPackage,
+                    overrideableByRestore, /* resetToDefault */ false);
+        }
+
+        private boolean update(String value, boolean setDefault, String packageName, String tag,
+                boolean forceNonSystemPackage, boolean overrideableByRestore,
+                boolean resetToDefault) {
             if (NULL_VALUE.equals(value)) {
                 value = null;
             }
@@ -1305,7 +1323,8 @@ final class SettingsState {
             }
 
             // isValuePreservedInRestore shouldn't change back to false if it has been set to true.
-            boolean isPreserved = this.isValuePreservedInRestore || !overrideableByRestore;
+            boolean isPreserved = shouldPreserveSetting(overrideableByRestore, resetToDefault,
+                    packageName, value);
 
             // Is something gonna change?
             if (Objects.equals(value, this.value)
@@ -1328,6 +1347,22 @@ final class SettingsState {
                     + (defaultValue != null ? " default=" + defaultValue : "")
                     + " packageName=" + packageName + " tag=" + tag
                     + " defaultFromSystem=" + defaultFromSystem + "}";
+        }
+
+        private boolean shouldPreserveSetting(boolean overrideableByRestore,
+                boolean resetToDefault, String packageName, String value) {
+            if (resetToDefault) {
+                // By default settings are not marked as preserved.
+                return false;
+            }
+            if (value != null && value.equals(this.value)
+                    && SYSTEM_PACKAGE_NAME.equals(packageName)) {
+                // Do not mark preserved if it's the system reinitializing to the same value.
+                return false;
+            }
+
+            // isValuePreservedInRestore shouldn't change back to false if it has been set to true.
+            return this.isValuePreservedInRestore || !overrideableByRestore;
         }
     }
 

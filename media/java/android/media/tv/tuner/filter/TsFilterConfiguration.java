@@ -17,10 +17,8 @@
 package android.media.tv.tuner.filter;
 
 import android.annotation.NonNull;
-import android.annotation.RequiresPermission;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.content.Context;
-import android.media.tv.tuner.TunerUtils;
 
 /**
  * Filter configuration for a TS filter.
@@ -28,7 +26,7 @@ import android.media.tv.tuner.TunerUtils;
  * @hide
  */
 @SystemApi
-public class TsFilterConfiguration extends FilterConfiguration {
+public final class TsFilterConfiguration extends FilterConfiguration {
     private final int mTpid;
 
     private TsFilterConfiguration(Settings settings, int tpid) {
@@ -50,27 +48,26 @@ public class TsFilterConfiguration extends FilterConfiguration {
 
     /**
      * Creates a builder for {@link TsFilterConfiguration}.
-     *
-     * @param context the context of the caller.
      */
-    @RequiresPermission(android.Manifest.permission.ACCESS_TV_TUNER)
     @NonNull
-    public static Builder builder(@NonNull Context context) {
-        TunerUtils.checkTunerPermission(context);
+    public static Builder builder() {
         return new Builder();
     }
 
     /**
      * Builder for {@link TsFilterConfiguration}.
      */
-    public static class Builder extends FilterConfiguration.Builder<Builder> {
-        private int mTpid;
+    public static final class Builder {
+        private int mTpid = 0;
+        private Settings mSettings;
 
         private Builder() {
         }
 
         /**
          * Sets Tag Protocol ID.
+         *
+         * <p>Default value is 0.
          *
          * @param tpid the Tag Protocol ID.
          */
@@ -81,16 +78,20 @@ public class TsFilterConfiguration extends FilterConfiguration {
         }
 
         /**
+         * Sets filter settings.
+         */
+        @NonNull
+        public Builder setSettings(@Nullable Settings settings) {
+            mSettings = settings;
+            return this;
+        }
+
+        /**
          * Builds a {@link TsFilterConfiguration} object.
          */
         @NonNull
         public TsFilterConfiguration build() {
             return new TsFilterConfiguration(mSettings, mTpid);
-        }
-
-        @Override
-        Builder self() {
-            return this;
         }
     }
 }

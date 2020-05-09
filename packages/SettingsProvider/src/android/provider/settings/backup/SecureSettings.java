@@ -48,7 +48,6 @@ public class SecureSettings {
         Settings.Secure.ACCESSIBILITY_SHORTCUT_TARGET_SERVICE,
         Settings.Secure.ACCESSIBILITY_BUTTON_TARGET_COMPONENT,
         Settings.Secure.ACCESSIBILITY_SHORTCUT_DIALOG_SHOWN,
-        Settings.Secure.ACCESSIBILITY_SHORTCUT_ENABLED,
         Settings.Secure.ACCESSIBILITY_SHORTCUT_ON_LOCK_SCREEN,
         Settings.Secure.ACCESSIBILITY_HIGH_TEXT_CONTRAST_ENABLED,
         Settings.Secure.ACCESSIBILITY_CAPTIONING_PRESET,
@@ -97,6 +96,7 @@ public class SecureSettings {
         Settings.Secure.CAMERA_DOUBLE_TAP_POWER_GESTURE_DISABLED,
         Settings.Secure.SYSTEM_NAVIGATION_KEYS_ENABLED,
         Settings.Secure.QS_TILES,
+        Settings.Secure.CONTROLS_ENABLED,
         Settings.Secure.DOZE_ENABLED,
         Settings.Secure.DOZE_ALWAYS_ON,
         Settings.Secure.DOZE_PICK_UP_GESTURE,
@@ -141,6 +141,8 @@ public class SecureSettings {
         Settings.Secure.NOTIFICATION_NEW_INTERRUPTION_MODEL,
         Settings.Secure.TRUST_AGENTS_EXTEND_UNLOCK,
         Settings.Secure.UI_NIGHT_MODE,
+        Settings.Secure.DARK_THEME_CUSTOM_START_TIME,
+        Settings.Secure.DARK_THEME_CUSTOM_END_TIME,
         Settings.Secure.LOCK_SCREEN_WHEN_TRUST_LOST,
         Settings.Secure.SKIP_DIRECTION,
         Settings.Secure.THEME_CUSTOMIZATION_OVERLAY_PACKAGES,
@@ -162,6 +164,6 @@ public class SecureSettings {
         Settings.Secure.AWARE_TAP_PAUSE_TOUCH_COUNT,
         Settings.Secure.PEOPLE_STRIP,
         Settings.Secure.ACCESSIBILITY_MAGNIFICATION_MODE,
-        Settings.Secure.ACCESSIBILITY_BUTTON_LONG_PRESS_TARGETS,
+        Settings.Secure.ACCESSIBILITY_BUTTON_TARGETS,
     };
 }

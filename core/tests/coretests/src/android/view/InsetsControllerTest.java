@@ -21,6 +21,7 @@ import static android.view.InsetsController.ANIMATION_TYPE_NONE;
 import static android.view.InsetsController.ANIMATION_TYPE_SHOW;
 import static android.view.InsetsSourceConsumer.ShowResult.IME_SHOW_DELAYED;
 import static android.view.InsetsSourceConsumer.ShowResult.SHOW_IMMEDIATELY;
+import static android.view.InsetsState.ITYPE_CAPTION_BAR;
 import static android.view.InsetsState.ITYPE_IME;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
@@ -31,6 +32,8 @@ import static android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,19 +50,21 @@ import android.graphics.Point;
 import android.graphics.Rect;
 import android.os.CancellationSignal;
 import android.platform.test.annotations.Presubmit;
+import android.view.InsetsState.InternalInsetsType;
 import android.view.SurfaceControl.Transaction;
 import android.view.WindowInsets.Type;
+import android.view.WindowInsetsController.OnControllableInsetsChangedListener;
 import android.view.WindowManager.BadTokenException;
 import android.view.WindowManager.LayoutParams;
 import android.view.animation.LinearInterpolator;
 import android.view.test.InsetsModeSession;
 import android.widget.TextView;
 
-import com.android.server.testutils.OffsettableClock;
-import com.android.server.testutils.TestHandler;
-
 import androidx.test.InstrumentationRegistry;
 import androidx.test.runner.AndroidJUnit4;
+
+import com.android.server.testutils.OffsettableClock;
+import com.android.server.testutils.TestHandler;
 
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -67,9 +72,10 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.mockito.Mockito;
 
 import java.util.concurrent.CountDownLatch;
-import java.util.function.Supplier;
 
 /**
  * Tests for {@link InsetsController}.
@@ -83,7 +89,6 @@ import java.util.function.Supplier;
 @Presubmit
 @RunWith(AndroidJUnit4.class)
 public class InsetsControllerTest {
-
     private InsetsController mController;
     private SurfaceSession mSession = new SurfaceSession();
     private SurfaceControl mLeash;
@@ -158,7 +163,7 @@ public class InsetsControllerTest {
                     false,
                     new DisplayCutout(
                             Insets.of(10, 10, 10, 10), rect, rect, rect, rect),
-                    rect, rect, SOFT_INPUT_ADJUST_RESIZE, 0);
+                    SOFT_INPUT_ADJUST_RESIZE, 0);
             mController.onFrameChanged(new Rect(0, 0, 100, 100));
         });
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
@@ -166,39 +171,45 @@ public class InsetsControllerTest {
 
     @Test
     public void testControlsChanged() {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
-        mController.onControlsChanged(new InsetsSourceControl[] { control });
-        assertEquals(mLeash,
-                mController.getSourceConsumer(ITYPE_STATUS_BAR).getControl().getLeash());
+        mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
+        assertNotNull(mController.getSourceConsumer(ITYPE_STATUS_BAR).getControl().getLeash());
+        mController.addOnControllableInsetsChangedListener(
+                ((controller, typeMask) -> assertEquals(statusBars(), typeMask)));
     }
 
     @Test
     public void testControlsRevoked() {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
-        mController.onControlsChanged(new InsetsSourceControl[] { control });
+        OnControllableInsetsChangedListener listener
+                = mock(OnControllableInsetsChangedListener.class);
+        mController.addOnControllableInsetsChangedListener(listener);
+        mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
         mController.onControlsChanged(new InsetsSourceControl[0]);
         assertNull(mController.getSourceConsumer(ITYPE_STATUS_BAR).getControl());
+        InOrder inOrder = Mockito.inOrder(listener);
+        inOrder.verify(listener).onControllableInsetsChanged(eq(mController), eq(0));
+        inOrder.verify(listener).onControllableInsetsChanged(eq(mController), eq(statusBars()));
+        inOrder.verify(listener).onControllableInsetsChanged(eq(mController), eq(0));
     }
 
     @Test
     public void testControlsRevoked_duringAnim() {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-            InsetsSourceControl control =
-                    new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
-            mController.onControlsChanged(new InsetsSourceControl[] { control });
+            mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
+
+            ArgumentCaptor<WindowInsetsAnimationController> animationController =
+                    ArgumentCaptor.forClass(WindowInsetsAnimationController.class);
 
             WindowInsetsAnimationControlListener mockListener =
                     mock(WindowInsetsAnimationControlListener.class);
             mController.controlWindowInsetsAnimation(statusBars(), 10 /* durationMs */,
-                    new LinearInterpolator(), mockListener);
+                    new LinearInterpolator(), new CancellationSignal(), mockListener);
 
             // Ready gets deferred until next predraw
             mViewRoot.getView().getViewTreeObserver().dispatchOnPreDraw();
-            verify(mockListener).onReady(any(), anyInt());
+            verify(mockListener).onReady(animationController.capture(), anyInt());
             mController.onControlsChanged(new InsetsSourceControl[0]);
-            verify(mockListener).onCancelled();
+            verify(mockListener).onCancelled(notNull());
+            assertTrue(animationController.getValue().isCancelled());
         });
     }
 
@@ -206,11 +217,16 @@ public class InsetsControllerTest {
     public void testFrameDoesntMatchDisplay() {
         mController.onFrameChanged(new Rect(0, 0, 100, 100));
         mController.getState().setDisplayFrame(new Rect(0, 0, 200, 200));
+        InsetsSourceControl control =
+                new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
+        mController.onControlsChanged(new InsetsSourceControl[] { control });
         WindowInsetsAnimationControlListener controlListener =
                 mock(WindowInsetsAnimationControlListener.class);
         mController.controlWindowInsetsAnimation(0, 0 /* durationMs */, new LinearInterpolator(),
-                controlListener);
-        verify(controlListener).onCancelled();
+                new CancellationSignal(), controlListener);
+        mController.addOnControllableInsetsChangedListener(
+                (controller, typeMask) -> assertEquals(0, typeMask));
+        verify(controlListener).onCancelled(null);
         verify(controlListener, never()).onReady(any(), anyInt());
     }
 
@@ -245,11 +261,8 @@ public class InsetsControllerTest {
 
     @Test
     public void testApplyImeVisibility() {
-        final InsetsSourceControl ime = new InsetsSourceControl(ITYPE_IME, mLeash, new Point());
-
-        InsetsSourceControl[] controls = new InsetsSourceControl[3];
-        controls[0] = ime;
-        mController.onControlsChanged(controls);
+        InsetsSourceControl ime = createControl(ITYPE_IME);
+        mController.onControlsChanged(new InsetsSourceControl[] { ime });
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             mController.getSourceConsumer(ITYPE_IME).onWindowFocusGained();
             mController.applyImeVisibility(true);
@@ -412,9 +425,7 @@ public class InsetsControllerTest {
 
     @Test
     public void testRestoreStartsAnimation() {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
-        mController.onControlsChanged(new InsetsSourceControl[]{control});
+        mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             mController.hide(Type.statusBars());
@@ -431,7 +442,7 @@ public class InsetsControllerTest {
             assertTrue(mController.getState().getSource(ITYPE_STATUS_BAR).isVisible());
 
             // Gaining control
-            mController.onControlsChanged(new InsetsSourceControl[]{control});
+            mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
             assertEquals(ANIMATION_TYPE_HIDE, mController.getAnimationType(ITYPE_STATUS_BAR));
             mController.cancelExistingAnimation();
             assertFalse(mController.getSourceConsumer(ITYPE_STATUS_BAR).isRequestedVisible());
@@ -442,8 +453,6 @@ public class InsetsControllerTest {
 
     @Test
     public void testStartImeAnimationAfterGettingControl() {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_IME, mLeash, new Point());
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
 
@@ -454,7 +463,7 @@ public class InsetsControllerTest {
             mController.show(ime(), true /* fromIme */);
 
             // Gaining control shortly after
-            mController.onControlsChanged(new InsetsSourceControl[]{control});
+            mController.onControlsChanged(createSingletonControl(ITYPE_IME));
 
             assertEquals(ANIMATION_TYPE_SHOW, mController.getAnimationType(ITYPE_IME));
             mController.cancelExistingAnimation();
@@ -466,16 +475,13 @@ public class InsetsControllerTest {
 
     @Test
     public void testStartImeAnimationAfterGettingControl_imeLater() {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_IME, mLeash, new Point());
-
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
 
             mController.show(ime());
             assertFalse(mController.getState().getSource(ITYPE_IME).isVisible());
 
             // Gaining control shortly after
-            mController.onControlsChanged(new InsetsSourceControl[]{control});
+            mController.onControlsChanged(createSingletonControl(ITYPE_IME));
 
             // Pretend IME is calling
             mController.show(ime(), true /* fromIme */);
@@ -490,15 +496,13 @@ public class InsetsControllerTest {
 
     @Test
     public void testAnimationEndState_controller() throws Exception {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
-        mController.onControlsChanged(new InsetsSourceControl[] { control });
+        mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             WindowInsetsAnimationControlListener mockListener =
                     mock(WindowInsetsAnimationControlListener.class);
             mController.controlWindowInsetsAnimation(statusBars(), 0 /* durationMs */,
-                    new LinearInterpolator(), mockListener);
+                    new LinearInterpolator(), new CancellationSignal(), mockListener);
 
             ArgumentCaptor<WindowInsetsAnimationController> controllerCaptor =
                     ArgumentCaptor.forClass(WindowInsetsAnimationController.class);
@@ -518,16 +522,15 @@ public class InsetsControllerTest {
 
     @Test
     public void testCancellation_afterGainingControl() throws Exception {
-        InsetsSourceControl control =
-                new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash, new Point());
-        mController.onControlsChanged(new InsetsSourceControl[] { control });
+        mController.onControlsChanged(createSingletonControl(ITYPE_STATUS_BAR));
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             WindowInsetsAnimationControlListener mockListener =
                     mock(WindowInsetsAnimationControlListener.class);
-            CancellationSignal cancellationSignal = mController.controlWindowInsetsAnimation(
+            CancellationSignal cancellationSignal = new CancellationSignal();
+            mController.controlWindowInsetsAnimation(
                     statusBars(), 0 /* durationMs */,
-                    new LinearInterpolator(), mockListener);
+                    new LinearInterpolator(), cancellationSignal, mockListener);
 
             // Ready gets deferred until next predraw
             mViewRoot.getView().getViewTreeObserver().dispatchOnPreDraw();
@@ -535,7 +538,7 @@ public class InsetsControllerTest {
             verify(mockListener).onReady(any(), anyInt());
 
             cancellationSignal.cancel();
-            verify(mockListener).onCancelled();
+            verify(mockListener).onCancelled(notNull());
         });
         waitUntilNextFrame();
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
@@ -550,7 +553,8 @@ public class InsetsControllerTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             WindowInsetsAnimationControlListener listener =
                     mock(WindowInsetsAnimationControlListener.class);
-            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(), listener);
+            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(),
+                    null /* cancellationSignal */, listener);
 
             // Ready gets deferred until next predraw
             mViewRoot.getView().getViewTreeObserver().dispatchOnPreDraw();
@@ -574,7 +578,8 @@ public class InsetsControllerTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             WindowInsetsAnimationControlListener listener =
                     mock(WindowInsetsAnimationControlListener.class);
-            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(), listener);
+            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(),
+                    null /* cancellationSignal */, listener);
 
             // Ready gets deferred until next predraw
             mViewRoot.getView().getViewTreeObserver().dispatchOnPreDraw();
@@ -584,7 +589,7 @@ public class InsetsControllerTest {
             // Pretend that we are losing control
             mController.onControlsChanged(new InsetsSourceControl[0]);
 
-            verify(listener).onCancelled();
+            verify(listener).onCancelled(null);
         });
     }
 
@@ -594,7 +599,8 @@ public class InsetsControllerTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             WindowInsetsAnimationControlListener listener =
                     mock(WindowInsetsAnimationControlListener.class);
-            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(), listener);
+            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(),
+                    null /* cancellationSignal */, listener);
 
             // Ready gets deferred until next predraw
             mViewRoot.getView().getViewTreeObserver().dispatchOnPreDraw();
@@ -605,7 +611,7 @@ public class InsetsControllerTest {
             mTestClock.fastForward(2500);
             mTestHandler.timeAdvance();
 
-            verify(listener).onCancelled();
+            verify(listener).onCancelled(null);
         });
     }
 
@@ -615,10 +621,12 @@ public class InsetsControllerTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             WindowInsetsAnimationControlListener listener =
                     mock(WindowInsetsAnimationControlListener.class);
-            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(), listener)
-                    .cancel();
+            CancellationSignal cancellationSignal = new CancellationSignal();
+            mController.controlWindowInsetsAnimation(ime(), 0, new LinearInterpolator(),
+                    cancellationSignal, listener);
+            cancellationSignal.cancel();
 
-            verify(listener).onCancelled();
+            verify(listener).onCancelled(null);
 
             // Ready gets deferred until next predraw
             mViewRoot.getView().getViewTreeObserver().dispatchOnPreDraw();
@@ -628,6 +636,52 @@ public class InsetsControllerTest {
             // Pretend that timeout is happening
             mTestClock.fastForward(2500);
             mTestHandler.timeAdvance();
+        });
+    }
+
+    @Test
+    public void testFrameUpdateDuringAnimation() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+
+            mController.onControlsChanged(createSingletonControl(ITYPE_IME));
+
+            // Pretend IME is calling
+            mController.show(ime(), true /* fromIme */);
+
+            InsetsState copy = new InsetsState(mController.getState(), true /* copySources */);
+            copy.getSource(ITYPE_IME).setFrame(0, 1, 2, 3);
+            copy.getSource(ITYPE_IME).setVisibleFrame(new Rect(4, 5, 6, 7));
+            mController.onStateChanged(copy);
+            assertNotEquals(new Rect(0, 1, 2, 3),
+                    mController.getState().getSource(ITYPE_IME).getFrame());
+            assertNotEquals(new Rect(4, 5, 6, 7),
+                    mController.getState().getSource(ITYPE_IME).getVisibleFrame());
+            mController.cancelExistingAnimation();
+            assertEquals(new Rect(0, 1, 2, 3),
+                    mController.getState().getSource(ITYPE_IME).getFrame());
+            assertEquals(new Rect(4, 5, 6, 7),
+                    mController.getState().getSource(ITYPE_IME).getVisibleFrame());
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+    @Test
+    public void testCaptionInsetsStateAssemble() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            mController.onFrameChanged(new Rect(0, 0, 100, 300));
+            final InsetsState state = new InsetsState(mController.getState(), true);
+            final Rect captionFrame = new Rect(0, 0, 100, 100);
+            mController.setCaptionInsetsHeight(100);
+            mController.onStateChanged(state);
+            final InsetsState currentState = new InsetsState(mController.getState());
+            // The caption bar source should be synced with the info in mAttachInfo.
+            assertEquals(captionFrame, currentState.peekSource(ITYPE_CAPTION_BAR).getFrame());
+            assertTrue(currentState.equals(state, true /* excludingCaptionInsets*/));
+            mController.setCaptionInsetsHeight(0);
+            mController.onStateChanged(state);
+            // The caption bar source should not be there at all, because we don't add empty
+            // caption to the state from the server.
+            assertNull(mController.getState().peekSource(ITYPE_CAPTION_BAR));
         });
     }
 
@@ -638,12 +692,22 @@ public class InsetsControllerTest {
         latch.await();
     }
 
+    private InsetsSourceControl createControl(@InternalInsetsType int type) {
+
+        // Simulate binder behavior by copying SurfaceControl. Otherwise, InsetsController will
+        // attempt to release mLeash directly.
+        SurfaceControl copy = new SurfaceControl(mLeash);
+        return new InsetsSourceControl(type, copy, new Point());
+    }
+
+    private InsetsSourceControl[] createSingletonControl(@InternalInsetsType int type) {
+        return new InsetsSourceControl[] { createControl(type) };
+    }
+
     private InsetsSourceControl[] prepareControls() {
-        final InsetsSourceControl navBar = new InsetsSourceControl(ITYPE_NAVIGATION_BAR, mLeash,
-                new Point());
-        final InsetsSourceControl statusBar = new InsetsSourceControl(ITYPE_STATUS_BAR, mLeash,
-                new Point());
-        final InsetsSourceControl ime = new InsetsSourceControl(ITYPE_IME, mLeash, new Point());
+        final InsetsSourceControl navBar = createControl(ITYPE_NAVIGATION_BAR);
+        final InsetsSourceControl statusBar = createControl(ITYPE_STATUS_BAR);
+        final InsetsSourceControl ime = createControl(ITYPE_IME);
 
         InsetsSourceControl[] controls = new InsetsSourceControl[3];
         controls[0] = navBar;

@@ -29,6 +29,7 @@ import android.view.IWindow;
 import android.view.IWindowId;
 import android.view.MotionEvent;
 import android.view.WindowManager;
+import android.view.InsetsSourceControl;
 import android.view.InsetsState;
 import android.view.Surface;
 import android.view.SurfaceControl;
@@ -46,7 +47,7 @@ interface IWindowSession {
             in int viewVisibility, in int layerStackId, out Rect outFrame,
             out Rect outContentInsets, out Rect outStableInsets,
             out DisplayCutout.ParcelableWrapper displayCutout, out InputChannel outInputChannel,
-            out InsetsState insetsState);
+            out InsetsState insetsState, out InsetsSourceControl[] activeControls);
     int addToDisplayWithoutInputChannel(IWindow window, int seq, in WindowManager.LayoutParams attrs,
             in int viewVisibility, in int layerStackId, out Rect outContentInsets,
             out Rect outStableInsets, out InsetsState insetsState);
@@ -106,8 +107,8 @@ interface IWindowSession {
             out Rect outBackdropFrame,
             out DisplayCutout.ParcelableWrapper displayCutout,
             out MergedConfiguration outMergedConfiguration, out SurfaceControl outSurfaceControl,
-            out InsetsState insetsState, out Point outSurfaceSize,
-            out SurfaceControl outBlastSurfaceControl);
+            out InsetsState insetsState, out InsetsSourceControl[] activeControls,
+            out Point outSurfaceSize, out SurfaceControl outBlastSurfaceControl);
 
     /*
      * Notify the window manager that an application is relaunching and
@@ -221,6 +222,19 @@ interface IWindowSession {
      */
     void setWallpaperPosition(IBinder windowToken, float x, float y, float xstep, float ystep);
 
+    /**
+     * For wallpaper windows, sets the scale of the wallpaper based on
+     * SystemUI behavior.
+     */
+    void setWallpaperZoomOut(IBinder windowToken, float scale);
+
+    /**
+     * For wallpaper windows, sets whether the wallpaper should actually be
+     * scaled when setWallpaperZoomOut is called. If set to false, the WallpaperService will
+     * receive the zoom out value but the surface won't be scaled.
+     */
+    void setShouldZoomOutWallpaper(IBinder windowToken, boolean shouldZoom);
+
     @UnsupportedAppUsage
     void wallpaperOffsetsComplete(IBinder window);
 
@@ -305,8 +319,7 @@ interface IWindowSession {
      * Called when the client has changed the local insets state, and now the server should reflect
      * that new state.
      */
-    void insetsModified(IWindow window, in InsetsState state);
-
+    oneway void insetsModified(IWindow window, in InsetsState state);
 
     /**
      * Called when the system gesture exclusion has changed.

@@ -259,10 +259,13 @@ class InsetsSourceProvider {
         if (target == null) {
             // Cancelling the animation will invoke onAnimationCancelled, resetting all the fields.
             mWin.cancelAnimation();
+            setClientVisible(InsetsState.getDefaultVisibility(mSource.getType()));
             return;
         }
         mAdapter = new ControlAdapter();
-        setClientVisible(InsetsState.getDefaultVisibility(mSource.getType()));
+        if (getSource().getType() == ITYPE_IME) {
+            setClientVisible(InsetsState.getDefaultVisibility(mSource.getType()));
+        }
         final Transaction t = mDisplayContent.getPendingTransaction();
         mWin.startAnimation(t, mAdapter, !mClientVisible /* hidden */,
                 ANIMATION_TYPE_INSETS_CONTROL, null /* animationFinishedCallback */);
@@ -274,7 +277,7 @@ class InsetsSourceProvider {
             // window crop of the surface controls (including the leash) until the client finishes
             // drawing the new frame of the new orientation. Although we cannot defer the reparent
             // operation, it is fine, because reparent won't cause any visual effect.
-            final SurfaceControl barrier = mWin.getDeferTransactionBarrier();
+            final SurfaceControl barrier = mWin.getClientViewRootSurface();
             t.deferTransactionUntil(mWin.getSurfaceControl(), barrier, frameNumber);
             t.deferTransactionUntil(leash, barrier, frameNumber);
         }

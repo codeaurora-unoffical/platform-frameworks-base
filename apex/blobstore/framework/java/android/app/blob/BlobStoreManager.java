@@ -21,17 +21,22 @@ import android.annotation.CurrentTimeMillisLong;
 import android.annotation.IdRes;
 import android.annotation.IntRange;
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.SystemService;
+import android.annotation.TestApi;
 import android.content.Context;
+import android.os.LimitExceededException;
 import android.os.ParcelFileDescriptor;
 import android.os.ParcelableException;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
+import android.os.UserHandle;
 
 import com.android.internal.util.function.pooled.PooledLambda;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -145,9 +150,6 @@ public class BlobStoreManager {
     /** @hide */
     public static final int INVALID_RES_ID = -1;
 
-    /** @hide */
-    public static final String DESC_RES_TYPE_STRING = "string";
-
     private final Context mContext;
     private final IBlobStoreManager mService;
 
@@ -165,6 +167,12 @@ public class BlobStoreManager {
      * <p> The system may automatically destroy sessions that have not been
      * finalized (either committed or abandoned) within a reasonable period of
      * time, typically about a week.
+     *
+     * <p> If an app is planning to acquire a lease on this data (using
+     * {@link #acquireLease(BlobHandle, int)} or one of it's other variants) after committing
+     * this data (using {@link Session#commit(Executor, Consumer)}), it is recommended that
+     * the app checks the remaining quota for acquiring a lease first using
+     * {@link #getRemainingLeaseQuotaBytes()} and can skip contributing this data if needed.
      *
      * @param blobHandle the {@link BlobHandle} identifier for which a new session
      *                   needs to be created.
@@ -215,7 +223,7 @@ public class BlobStoreManager {
     }
 
     /**
-     * Delete an existing session and any data that was written to that session so far.
+     * Abandons an existing session and deletes any data that was written to that session so far.
      *
      * @param sessionId a unique id obtained via {@link #createSession(BlobHandle)} that
      *                  represents a particular session.
@@ -224,9 +232,9 @@ public class BlobStoreManager {
      * @throws SecurityException when the caller does not own the session, or
      *                           the session does not exist or is invalid.
      */
-    public void deleteSession(@IntRange(from = 1) long sessionId) throws IOException {
+    public void abandonSession(@IntRange(from = 1) long sessionId) throws IOException {
         try {
-            mService.deleteSession(sessionId, mContext.getOpPackageName());
+            mService.abandonSession(sessionId, mContext.getOpPackageName());
         } catch (ParcelableException e) {
             e.maybeRethrow(IOException.class);
             throw new RuntimeException(e);
@@ -293,8 +301,11 @@ public class BlobStoreManager {
      * @throws IllegalArgumentException when {@code blobHandle} is invalid or
      *                                  if the {@code leaseExpiryTimeMillis} is greater than the
      *                                  {@link BlobHandle#getExpiryTimeMillis()}.
-     * @throws IllegalStateException when a lease could not be acquired, such as when the
-     *                               caller is trying to acquire too many leases.
+     * @throws LimitExceededException when a lease could not be acquired, such as when the
+     *                                caller is trying to acquire leases on too much data. Apps
+     *                                can avoid this by checking the remaining quota using
+     *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
+     *                                acquire a lease.
      *
      * @see {@link #acquireLease(BlobHandle, int)}
      * @see {@link #acquireLease(BlobHandle, CharSequence)}
@@ -306,6 +317,7 @@ public class BlobStoreManager {
                     mContext.getOpPackageName());
         } catch (ParcelableException e) {
             e.maybeRethrow(IOException.class);
+            e.maybeRethrow(LimitExceededException.class);
             throw new RuntimeException(e);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
@@ -349,8 +361,11 @@ public class BlobStoreManager {
      * @throws IllegalArgumentException when {@code blobHandle} is invalid or
      *                                  if the {@code leaseExpiryTimeMillis} is greater than the
      *                                  {@link BlobHandle#getExpiryTimeMillis()}.
-     * @throws IllegalStateException when a lease could not be acquired, such as when the
-     *                               caller is trying to acquire too many leases.
+     * @throws LimitExceededException when a lease could not be acquired, such as when the
+     *                                caller is trying to acquire leases on too much data. Apps
+     *                                can avoid this by checking the remaining quota using
+     *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
+     *                                acquire a lease.
      *
      * @see {@link #acquireLease(BlobHandle, int, long)}
      * @see {@link #acquireLease(BlobHandle, CharSequence)}
@@ -362,6 +377,7 @@ public class BlobStoreManager {
                     mContext.getOpPackageName());
         } catch (ParcelableException e) {
             e.maybeRethrow(IOException.class);
+            e.maybeRethrow(LimitExceededException.class);
             throw new RuntimeException(e);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
@@ -398,8 +414,11 @@ public class BlobStoreManager {
      * @throws SecurityException when the blob represented by the {@code blobHandle} does not
      *                           exist or the caller does not have access to it.
      * @throws IllegalArgumentException when {@code blobHandle} is invalid.
-     * @throws IllegalStateException when a lease could not be acquired, such as when the
-     *                               caller is trying to acquire too many leases.
+     * @throws LimitExceededException when a lease could not be acquired, such as when the
+     *                                caller is trying to acquire leases on too much data. Apps
+     *                                can avoid this by checking the remaining quota using
+     *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
+     *                                acquire a lease.
      *
      * @see {@link #acquireLease(BlobHandle, int, long)}
      * @see {@link #acquireLease(BlobHandle, CharSequence, long)}
@@ -442,8 +461,11 @@ public class BlobStoreManager {
      * @throws SecurityException when the blob represented by the {@code blobHandle} does not
      *                           exist or the caller does not have access to it.
      * @throws IllegalArgumentException when {@code blobHandle} is invalid.
-     * @throws IllegalStateException when a lease could not be acquired, such as when the
-     *                               caller is trying to acquire too many leases.
+     * @throws LimitExceededException when a lease could not be acquired, such as when the
+     *                                caller is trying to acquire leases on too much data. Apps
+     *                                can avoid this by checking the remaining quota using
+     *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
+     *                                acquire a lease.
      *
      * @see {@link #acquireLease(BlobHandle, int)}
      * @see {@link #acquireLease(BlobHandle, CharSequence, long)}
@@ -454,13 +476,13 @@ public class BlobStoreManager {
     }
 
     /**
-     * Release all active leases to the blob represented by {@code blobHandle} which are
+     * Release any active lease to the blob represented by {@code blobHandle} which is
      * currently held by the caller.
      *
      * @param blobHandle the {@link BlobHandle} representing the blob that the caller wants to
-     *                   release the leases for.
+     *                   release the lease for.
      *
-     * @throws IOException when there is an I/O error while releasing the releases to the blob.
+     * @throws IOException when there is an I/O error while releasing the release to the blob.
      * @throws SecurityException when the blob represented by the {@code blobHandle} does not
      *                           exist or the caller does not have access to it.
      * @throws IllegalArgumentException when {@code blobHandle} is invalid.
@@ -477,10 +499,29 @@ public class BlobStoreManager {
     }
 
     /**
+     * Return the remaining quota size for acquiring a lease (in bytes) which indicates the
+     * remaining amount of data that an app can acquire a lease on before the System starts
+     * rejecting lease requests.
+     *
+     * If an app wants to acquire a lease on a blob but the remaining quota size is not sufficient,
+     * then it can try releasing leases on any older blobs which are not needed anymore.
+     *
+     * @return the remaining quota size for acquiring a lease.
+     */
+    public @IntRange(from = 0) long getRemainingLeaseQuotaBytes() {
+        try {
+            return mService.getRemainingLeaseQuotaBytes(mContext.getOpPackageName());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Wait until any pending tasks (like persisting data to disk) have finished.
      *
      * @hide
      */
+    @TestApi
     public void waitForIdle(long timeoutMillis) throws InterruptedException, TimeoutException {
         try {
             final CountDownLatch countDownLatch = new CountDownLatch(1);
@@ -489,6 +530,73 @@ public class BlobStoreManager {
                 throw new TimeoutException("Timed out waiting for service to become idle");
             }
         } catch (ParcelableException e) {
+            throw new RuntimeException(e);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** @hide */
+    @NonNull
+    public List<BlobInfo> queryBlobsForUser(@NonNull UserHandle user) throws IOException {
+        try {
+            return mService.queryBlobsForUser(user.getIdentifier());
+        } catch (ParcelableException e) {
+            e.maybeRethrow(IOException.class);
+            throw new RuntimeException(e);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** @hide */
+    public void deleteBlob(@NonNull BlobInfo blobInfo) throws IOException {
+        try {
+            mService.deleteBlob(blobInfo.getId());
+        } catch (ParcelableException e) {
+            e.maybeRethrow(IOException.class);
+            throw new RuntimeException(e);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Return the {@link BlobHandle BlobHandles} corresponding to the data blobs that
+     * the calling app currently has a lease on.
+     *
+     * @return a list of {@link BlobHandle BlobHandles} that the caller has a lease on.
+     */
+    @NonNull
+    public List<BlobHandle> getLeasedBlobs() throws IOException {
+        try {
+            return mService.getLeasedBlobs(mContext.getOpPackageName());
+        } catch (ParcelableException e) {
+            e.maybeRethrow(IOException.class);
+            throw new RuntimeException(e);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Return {@link LeaseInfo} representing a lease acquired using
+     * {@link #acquireLease(BlobHandle, int)} or one of it's other variants,
+     * or {@code null} if there is no lease acquired.
+     *
+     * @throws SecurityException when the blob represented by the {@code blobHandle} does not
+     *                           exist or the caller does not have access to it.
+     * @throws IllegalArgumentException when {@code blobHandle} is invalid.
+     *
+     * @hide
+     */
+    @TestApi
+    @Nullable
+    public LeaseInfo getLeaseInfo(@NonNull BlobHandle blobHandle) throws IOException {
+        try {
+            return mService.getLeaseInfo(blobHandle, mContext.getOpPackageName());
+        } catch (ParcelableException e) {
+            e.maybeRethrow(IOException.class);
             throw new RuntimeException(e);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
@@ -599,7 +707,7 @@ public class BlobStoreManager {
 
         /**
          * Close this session. It can be re-opened for writing/reading if it has not been
-         * abandoned (using {@link #abandon}) or closed (using {@link #commit}).
+         * abandoned (using {@link #abandon}) or committed (using {@link #commit}).
          *
          * @throws IOException when there is an I/O error while closing the session.
          * @throws SecurityException when the caller is not the owner of the session.

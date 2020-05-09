@@ -59,19 +59,19 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
 
     private final EnhancedEstimates mEstimates;
     private final BroadcastDispatcher mBroadcastDispatcher;
-    private final ArrayList<BatteryController.BatteryStateChangeCallback>
+    protected final ArrayList<BatteryController.BatteryStateChangeCallback>
             mChangeCallbacks = new ArrayList<>();
     private final ArrayList<EstimateFetchCompletion> mFetchCallbacks = new ArrayList<>();
     private final PowerManager mPowerManager;
     private final Handler mMainHandler;
     private final Handler mBgHandler;
-    private final Context mContext;
+    protected final Context mContext;
 
-    private int mLevel;
-    private boolean mPluggedIn;
-    private boolean mCharging;
+    protected int mLevel;
+    protected boolean mPluggedIn;
+    protected boolean mCharging;
     private boolean mCharged;
-    private boolean mPowerSave;
+    protected boolean mPowerSave;
     private boolean mAodPowerSave;
     private boolean mTestmode = false;
     private boolean mHasReceivedBattery = false;
@@ -80,7 +80,7 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
 
     @VisibleForTesting
     @Inject
-    BatteryControllerImpl(Context context, EnhancedEstimates enhancedEstimates,
+    protected BatteryControllerImpl(Context context, EnhancedEstimates enhancedEstimates,
             PowerManager powerManager, BroadcastDispatcher broadcastDispatcher,
             @Main Handler mainHandler, @Background Handler bgHandler) {
         mContext = context;
@@ -99,7 +99,6 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_BATTERY_CHANGED);
         filter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
-        filter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGING);
         filter.addAction(ACTION_LEVEL_TEST);
         mBroadcastDispatcher.registerReceiver(this, filter);
     }
@@ -155,8 +154,6 @@ public class BatteryControllerImpl extends BroadcastReceiver implements BatteryC
             fireBatteryLevelChanged();
         } else if (action.equals(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)) {
             updatePowerSave();
-        } else if (action.equals(PowerManager.ACTION_POWER_SAVE_MODE_CHANGING)) {
-            setPowerSave(intent.getBooleanExtra(PowerManager.EXTRA_POWER_SAVE_MODE, false));
         } else if (action.equals(ACTION_LEVEL_TEST)) {
             mTestmode = true;
             mMainHandler.post(new Runnable() {

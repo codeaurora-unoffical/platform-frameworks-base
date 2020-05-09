@@ -22,6 +22,7 @@ import android.content.IntentSender;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Messenger;
+import android.os.ParcelFileDescriptor;
 import android.os.ResultReceiver;
 import android.os.WorkSource;
 import android.net.NetworkStats;
@@ -472,8 +473,8 @@ interface ITelephony {
      * Send a visual voicemail SMS. Internal use only.
      * Requires caller to be the default dialer and have SEND_SMS permission
      */
-    void sendVisualVoicemailSmsForSubscriber(in String callingPackage, in int subId,
-            in String number, in int port, in String text, in PendingIntent sentIntent);
+    void sendVisualVoicemailSmsForSubscriber(in String callingPackage, String callingAttributeTag,
+            in int subId, in String number, in int port, in String text, in PendingIntent sentIntent);
 
     // Send the special dialer code. The IPC caller must be the current default dialer.
     void sendDialerSpecialCode(String callingPackageName, String inputCode);
@@ -2121,9 +2122,14 @@ interface ITelephony {
     void notifyOtaEmergencyNumberDbInstalled();
 
     /**
-     * Override the file partition name for testing OTA emergency number database.
+     * Override a customized file partition name for OTA emergency number database.
      */
-    void updateTestOtaEmergencyNumberDbFilePath(String otaFilePath);
+    void updateOtaEmergencyNumberDbFilePath(in ParcelFileDescriptor otaParcelFileDescriptor);
+
+    /**
+     * Reset file partition to default for OTA emergency number database.
+     */
+    void resetOtaEmergencyNumberDbFilePath();
 
     /**
      * Enable or disable a logical modem stack associated with the slotIndex.
@@ -2198,7 +2204,8 @@ interface ITelephony {
      * Enqueue a pending sms Consumer, which will answer with the user specified selection for an
      * outgoing SmsManager operation.
      */
-    oneway void enqueueSmsPickResult(String callingPackage, IIntegerConsumer subIdResult);
+    oneway void enqueueSmsPickResult(String callingPackage, String callingAttributeTag,
+        IIntegerConsumer subIdResult);
 
     /**
      * Returns the MMS user agent.

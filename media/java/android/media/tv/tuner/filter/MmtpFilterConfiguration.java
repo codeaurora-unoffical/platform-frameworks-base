@@ -17,10 +17,9 @@
 package android.media.tv.tuner.filter;
 
 import android.annotation.NonNull;
-import android.annotation.RequiresPermission;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
-import android.content.Context;
-import android.media.tv.tuner.TunerUtils;
+import android.media.tv.tuner.Tuner;
 
 /**
  * Filter configuration for a MMTP filter.
@@ -28,7 +27,7 @@ import android.media.tv.tuner.TunerUtils;
  * @hide
  */
 @SystemApi
-public class MmtpFilterConfiguration extends FilterConfiguration {
+public final class MmtpFilterConfiguration extends FilterConfiguration {
     private final int mMmtpPid;
 
     private MmtpFilterConfiguration(Settings settings, int mmtpPid) {
@@ -52,31 +51,39 @@ public class MmtpFilterConfiguration extends FilterConfiguration {
 
     /**
      * Creates a builder for {@link IpFilterConfiguration}.
-     *
-     * @param context the context of the caller.
      */
-    @RequiresPermission(android.Manifest.permission.ACCESS_TV_TUNER)
     @NonNull
-    public static Builder builder(@NonNull Context context) {
-        TunerUtils.checkTunerPermission(context);
+    public static Builder builder() {
         return new Builder();
     }
 
     /**
      * Builder for {@link IpFilterConfiguration}.
      */
-    public static class Builder extends FilterConfiguration.Builder<Builder> {
-        private int mMmtpPid;
+    public static final class Builder {
+        private int mMmtpPid = Tuner.INVALID_TS_PID;
+        private Settings mSettings;
 
         private Builder() {
         }
 
         /**
          * Sets MMTP Packet ID.
+         *
+         * <p>Default value is {@link Tuner#INVALID_TS_PID}.
          */
         @NonNull
         public Builder setMmtpPacketId(int mmtpPid) {
             mMmtpPid = mmtpPid;
+            return this;
+        }
+
+        /**
+         * Sets filter settings.
+         */
+        @NonNull
+        public Builder setSettings(@Nullable Settings settings) {
+            mSettings = settings;
             return this;
         }
 
@@ -86,11 +93,6 @@ public class MmtpFilterConfiguration extends FilterConfiguration {
         @NonNull
         public MmtpFilterConfiguration build() {
             return new MmtpFilterConfiguration(mSettings, mMmtpPid);
-        }
-
-        @Override
-        Builder self() {
-            return this;
         }
     }
 }

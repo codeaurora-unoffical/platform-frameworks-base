@@ -68,6 +68,7 @@ public final class CellIdentityWcdma extends CellIdentity {
         mUarfcn = CellInfo.UNAVAILABLE;
         mAdditionalPlmns = new ArraySet<>();
         mCsgInfo = null;
+        mGlobalCellId = null;
     }
 
     /**
@@ -101,6 +102,7 @@ public final class CellIdentityWcdma extends CellIdentity {
             }
         }
         mCsgInfo = csgInfo;
+        updateGlobalCellId();
     }
 
     /** @hide */
@@ -121,8 +123,10 @@ public final class CellIdentityWcdma extends CellIdentity {
         this(cid.base.base.lac, cid.base.base.cid, cid.base.base.psc, cid.base.base.uarfcn,
                 cid.base.base.mcc, cid.base.base.mnc, cid.base.operatorNames.alphaLong,
                 cid.base.operatorNames.alphaShort, cid.additionalPlmns,
-                cid.optionalCsgInfo.csgInfo() != null
-                        ? new ClosedSubscriberGroupInfo(cid.optionalCsgInfo.csgInfo()) : null);
+                cid.optionalCsgInfo.getDiscriminator()
+                        == android.hardware.radio.V1_5.OptionalCsgInfo.hidl_discriminator.csgInfo
+                                ? new ClosedSubscriberGroupInfo(cid.optionalCsgInfo.csgInfo())
+                                        : null);
     }
 
     private CellIdentityWcdma(@NonNull CellIdentityWcdma cid) {
@@ -140,6 +144,18 @@ public final class CellIdentityWcdma extends CellIdentity {
 
     @NonNull CellIdentityWcdma copy() {
         return new CellIdentityWcdma(this);
+    }
+
+    /** @hide */
+    @Override
+    protected void updateGlobalCellId() {
+        mGlobalCellId = null;
+        String plmn = getPlmn();
+        if (plmn == null) return;
+
+        if (mLac == CellInfo.UNAVAILABLE || mCid == CellInfo.UNAVAILABLE) return;
+
+        mGlobalCellId = plmn + String.format("%04x%04x", mLac, mCid);
     }
 
     /**

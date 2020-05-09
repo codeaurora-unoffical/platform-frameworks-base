@@ -162,23 +162,26 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         synchronized(this) {
             SQLiteDatabase db = getWritableDatabase();
             ContentValues values = new ContentValues();
-            values.put(SoundModelContract.KEY_MODEL_UUID, soundModel.uuid.toString());
-            if (soundModel.vendorUuid != null) {
-                values.put(SoundModelContract.KEY_VENDOR_UUID, soundModel.vendorUuid.toString());
+            values.put(SoundModelContract.KEY_MODEL_UUID, soundModel.getUuid().toString());
+            if (soundModel.getVendorUuid() != null) {
+                values.put(SoundModelContract.KEY_VENDOR_UUID,
+                        soundModel.getVendorUuid().toString());
             }
             values.put(SoundModelContract.KEY_TYPE, SoundTrigger.SoundModel.TYPE_KEYPHRASE);
-            values.put(SoundModelContract.KEY_DATA, soundModel.data);
-            values.put(SoundModelContract.KEY_MODEL_VERSION, soundModel.version);
+            values.put(SoundModelContract.KEY_DATA, soundModel.getData());
+            values.put(SoundModelContract.KEY_MODEL_VERSION, soundModel.getVersion());
 
-            if (soundModel.keyphrases != null && soundModel.keyphrases.length == 1) {
-                values.put(SoundModelContract.KEY_KEYPHRASE_ID, soundModel.keyphrases[0].id);
+            if (soundModel.getKeyphrases() != null && soundModel.getKeyphrases().length == 1) {
+                values.put(SoundModelContract.KEY_KEYPHRASE_ID,
+                        soundModel.getKeyphrases()[0].getId());
                 values.put(SoundModelContract.KEY_RECOGNITION_MODES,
-                        soundModel.keyphrases[0].recognitionModes);
+                        soundModel.getKeyphrases()[0].getRecognitionModes());
                 values.put(SoundModelContract.KEY_USERS,
-                        getCommaSeparatedString(soundModel.keyphrases[0].users));
+                        getCommaSeparatedString(soundModel.getKeyphrases()[0].getUsers()));
                 values.put(SoundModelContract.KEY_LOCALE,
-                        soundModel.keyphrases[0].locale.toLanguageTag());
-                values.put(SoundModelContract.KEY_HINT_TEXT, soundModel.keyphrases[0].text);
+                        soundModel.getKeyphrases()[0].getLocale().toLanguageTag());
+                values.put(SoundModelContract.KEY_HINT_TEXT,
+                        soundModel.getKeyphrases()[0].getText());
                 try {
                     return db.insertWithOnConflict(SoundModelContract.TABLE, null, values,
                             SQLiteDatabase.CONFLICT_REPLACE) != -1;
@@ -206,7 +209,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             // Delete all sound models for the given keyphrase and specified user.
             SQLiteDatabase db = getWritableDatabase();
             String soundModelClause = SoundModelContract.KEY_MODEL_UUID
-                    + "='" + soundModel.uuid.toString() + "'";
+                    + "='" + soundModel.getUuid().toString() + "'";
             try {
                 return db.delete(SoundModelContract.TABLE, soundModelClause, null) != 0;
             } finally {
@@ -257,6 +260,9 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             int userHandle) {
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = db.rawQuery(selectQuery, null);
+        if (DBG) {
+            Slog.w(TAG, "querying database: " + selectQuery);
+        }
 
         try {
             if (c.moveToFirst()) {
@@ -334,7 +340,10 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                     return model;
                 } while (c.moveToNext());
             }
-            Slog.w(TAG, "No SoundModel available for the given keyphrase");
+
+            if (DBG) {
+                Slog.w(TAG, "No SoundModel available for the given keyphrase");
+            }
         } finally {
             c.close();
             db.close();

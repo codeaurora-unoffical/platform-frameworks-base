@@ -183,6 +183,11 @@ public final class DataManagerTest {
 
         when(mExecutorService.scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any(
                 TimeUnit.class))).thenReturn(mScheduledFuture);
+        doAnswer(ans -> {
+            Runnable runnable = (Runnable) ans.getArguments()[0];
+            runnable.run();
+            return null;
+        }).when(mExecutorService).execute(any(Runnable.class));
 
         when(mUserManager.getEnabledProfiles(USER_ID_PRIMARY))
                 .thenReturn(Arrays.asList(
@@ -294,7 +299,7 @@ public final class DataManagerTest {
                 .build();
         AppTargetEvent appTargetEvent =
                 new AppTargetEvent.Builder(appTarget, AppTargetEvent.ACTION_LAUNCH)
-                        .setLaunchLocation(ChooserActivity.LAUNCH_LOCATON_DIRECT_SHARE)
+                        .setLaunchLocation(ChooserActivity.LAUNCH_LOCATION_DIRECT_SHARE)
                         .build();
         IntentFilter intentFilter = new IntentFilter(Intent.ACTION_SEND, "image/jpg");
         mDataManager.reportShareTargetEvent(appTargetEvent, intentFilter);
@@ -314,7 +319,7 @@ public final class DataManagerTest {
                 .build();
         AppTargetEvent appTargetEvent =
                 new AppTargetEvent.Builder(appTarget, AppTargetEvent.ACTION_LAUNCH)
-                        .setLaunchLocation(ChooserActivity.LAUNCH_LOCATON_DIRECT_SHARE)
+                        .setLaunchLocation(ChooserActivity.LAUNCH_LOCATION_DIRECT_SHARE)
                         .build();
         IntentFilter intentFilter = new IntentFilter(Intent.ACTION_SEND, "image/jpg");
 
@@ -662,7 +667,7 @@ public final class DataManagerTest {
                 .build();
         AppTargetEvent appTargetEvent =
                 new AppTargetEvent.Builder(appTarget, AppTargetEvent.ACTION_LAUNCH)
-                        .setLaunchLocation(ChooserActivity.LAUNCH_LOCATON_DIRECT_SHARE)
+                        .setLaunchLocation(ChooserActivity.LAUNCH_LOCATION_DIRECT_SHARE)
                         .build();
         IntentFilter intentFilter = new IntentFilter(Intent.ACTION_SEND, "image/jpg");
 

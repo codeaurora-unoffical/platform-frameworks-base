@@ -110,7 +110,6 @@ using android::base::StringAppendF;
 using android::base::StringPrintf;
 using android::base::WriteStringToFile;
 using android::base::GetBoolProperty;
-using android::base::GetProperty;
 
 #define CREATE_ERROR(...) StringPrintf("%s:%d: ", __FILE__, __LINE__). \
                               append(StringPrintf(__VA_ARGS__))
@@ -121,17 +120,17 @@ typedef const std::function<void(std::string)>& fail_fn_t;
 static pid_t gSystemServerPid = 0;
 
 static constexpr const char* kPropFuse = "persist.sys.fuse";
-static constexpr const char* kZygoteClassName = "com/android/internal/os/Zygote";
-
+static const char kZygoteClassName[] = "com/android/internal/os/Zygote";
 static jclass gZygoteClass;
 static jmethodID gCallPostForkSystemServerHooks;
 static jmethodID gCallPostForkChildHooks;
 
-static constexpr const char* kZygoteInitClassName = "com/android/internal/os/ZygoteInit";
-static jclass gZygoteInitClass;
-static jmethodID gCreateSystemServerClassLoader;
-
 static bool gIsSecurityEnforced = true;
+
+/**
+ * True if the app process is running in its mount namespace.
+ */
+static bool gInAppMountNamespace = false;
 
 /**
  * The maximum number of characters (not including a null terminator) that a
@@ -169,18 +168,6 @@ static int gUsapPoolEventFD = -1;
 static int gSystemServerSocketFd = -1;
 
 static constexpr int DEFAULT_DATA_DIR_PERMISSION = 0751;
-
-/**
- * Property to control if app data isolation is enabled.
- */
-static const std::string ANDROID_APP_DATA_ISOLATION_ENABLED_PROPERTY =
-    "persist.zygote.app_data_isolation";
-
-/**
- * Property to enable app data isolation for sdcard obb or data in vold.
- */
-static const std::string ANDROID_VOLD_APP_DATA_ISOLATION_ENABLED_PROPERTY =
-    "persist.sys.vold_app_data_isolation_enabled";
 
 static constexpr const uint64_t UPPER_HALF_WORD_MASK = 0xFFFF'FFFF'0000'0000;
 static constexpr const uint64_t LOWER_HALF_WORD_MASK = 0x0000'0000'FFFF'FFFF;
@@ -351,10 +338,14 @@ static const std::array<const std::string, MOUNT_EXTERNAL_COUNT> ExternalStorage
 
 // Must match values in com.android.internal.os.Zygote.
 enum RuntimeFlags : uint32_t {
-  DEBUG_ENABLE_JDWP = 1,
-  PROFILE_FROM_SHELL = 1 << 15,
-  MEMORY_TAG_LEVEL_MASK = (1 << 19) | (1 << 20),
-  MEMORY_TAG_LEVEL_TBI = 1 << 19,
+    DEBUG_ENABLE_JDWP = 1,
+    PROFILE_FROM_SHELL = 1 << 15,
+    MEMORY_TAG_LEVEL_MASK = (1 << 19) | (1 << 20),
+    MEMORY_TAG_LEVEL_TBI = 1 << 19,
+    GWP_ASAN_LEVEL_MASK = (1 << 21) | (1 << 22),
+    GWP_ASAN_LEVEL_NEVER = 0 << 21,
+    GWP_ASAN_LEVEL_LOTTERY = 1 << 21,
+    GWP_ASAN_LEVEL_ALWAYS = 2 << 21,
 };
 
 enum UnsolicitedZygoteMessageTypes : uint32_t {
@@ -546,6 +537,17 @@ static void SetGids(JNIEnv* env, jintArray managed_gids, fail_fn_t fail_fn) {
   if (setgroups(gids.size(), reinterpret_cast<const gid_t*>(&gids[0])) == -1) {
     fail_fn(CREATE_ERROR("setgroups failed: %s, gids.size=%zu", strerror(errno), gids.size()));
   }
+}
+
+static void ensureInAppMountNamespace(fail_fn_t fail_fn) {
+  if (gInAppMountNamespace) {
+    // In app mount namespace already
+    return;
+  }
+  if (unshare(CLONE_NEWNS) == -1) {
+    fail_fn(CREATE_ERROR("Failed to unshare(): %s", strerror(errno)));
+  }
+  gInAppMountNamespace = true;
 }
 
 // Sets the resource limits via setrlimit(2) for the values in the
@@ -811,9 +813,7 @@ static void MountEmulatedStorage(uid_t uid, jint mount_mode,
   }
 
   // Create a second private mount namespace for our process
-  if (unshare(CLONE_NEWNS) == -1) {
-    fail_fn(CREATE_ERROR("Failed to unshare(): %s", strerror(errno)));
-  }
+  ensureInAppMountNamespace(fail_fn);
 
   // Handle force_mount_namespace with MOUNT_EXTERNAL_NONE.
   if (mount_mode == MOUNT_EXTERNAL_NONE) {
@@ -1306,19 +1306,13 @@ static void relabelAllDirs(const char* path, security_context_t context, fail_fn
  * be decrypted after storage is decrypted.
  *
  */
-static void isolateAppData(JNIEnv* env, jobjectArray pkg_data_info_list,
-    uid_t uid, const char* process_name, jstring managed_nice_name,
-    fail_fn_t fail_fn) {
+static void isolateAppData(JNIEnv* env, const std::vector<std::string>& merged_data_info_list,
+    uid_t uid, const char* process_name,
+    jstring managed_nice_name, fail_fn_t fail_fn) {
 
   const userid_t userId = multiuser_get_user_id(uid);
 
-  auto extract_fn = std::bind(ExtractJString, env, process_name, managed_nice_name, _1);
-
-  int size = (pkg_data_info_list != nullptr) ? env->GetArrayLength(pkg_data_info_list) : 0;
-  // Size should be a multiple of 3, as it contains list of <package_name, volume_uuid, inode>
-  if ((size % 3) != 0) {
-    fail_fn(CREATE_ERROR("Wrong pkg_inode_list size %d", size));
-  }
+  int size = merged_data_info_list.size();
 
   // Mount tmpfs on all possible data directories, so app no longer see the original apps data.
   char internalCePath[PATH_MAX];
@@ -1363,14 +1357,10 @@ static void isolateAppData(JNIEnv* env, jobjectArray pkg_data_info_list,
   bool legacySymlinkCreated = false;
 
   for (int i = 0; i < size; i += 3) {
-    jstring package_str = (jstring) (env->GetObjectArrayElement(pkg_data_info_list, i));
-    std::string packageName = extract_fn(package_str).value();
+    std::string const & packageName = merged_data_info_list[i];
+    std::string const & volUuid  = merged_data_info_list[i + 1];
+    std::string const & inode = merged_data_info_list[i + 2];
 
-    jstring vol_str = (jstring) (env->GetObjectArrayElement(pkg_data_info_list, i + 1));
-    std::string volUuid = extract_fn(vol_str).value();
-
-    jstring inode_str = (jstring) (env->GetObjectArrayElement(pkg_data_info_list, i + 2));
-    std::string inode = extract_fn(inode_str).value();
     std::string::size_type sz;
     long long ceDataInode = std::stoll(inode, &sz);
 
@@ -1468,6 +1458,48 @@ static void isolateAppData(JNIEnv* env, jobjectArray pkg_data_info_list,
   freecon(dataDataContext);
 }
 
+static void insertPackagesToMergedList(JNIEnv* env,
+  std::vector<std::string>& merged_data_info_list,
+  jobjectArray data_info_list, const char* process_name,
+  jstring managed_nice_name, fail_fn_t fail_fn) {
+
+  auto extract_fn = std::bind(ExtractJString, env, process_name, managed_nice_name, _1);
+
+  int size = (data_info_list != nullptr) ? env->GetArrayLength(data_info_list) : 0;
+  // Size should be a multiple of 3, as it contains list of <package_name, volume_uuid, inode>
+  if ((size % 3) != 0) {
+    fail_fn(CREATE_ERROR("Wrong data_info_list size %d", size));
+  }
+
+  for (int i = 0; i < size; i += 3) {
+    jstring package_str = (jstring) (env->GetObjectArrayElement(data_info_list, i));
+    std::string packageName = extract_fn(package_str).value();
+    merged_data_info_list.push_back(packageName);
+
+    jstring vol_str = (jstring) (env->GetObjectArrayElement(data_info_list, i + 1));
+    std::string volUuid = extract_fn(vol_str).value();
+    merged_data_info_list.push_back(volUuid);
+
+    jstring inode_str = (jstring) (env->GetObjectArrayElement(data_info_list, i + 2));
+    std::string inode = extract_fn(inode_str).value();
+    merged_data_info_list.push_back(inode);
+  }
+}
+
+static void isolateAppData(JNIEnv* env, jobjectArray pkg_data_info_list,
+    jobjectArray whitelisted_data_info_list, uid_t uid, const char* process_name,
+    jstring managed_nice_name, fail_fn_t fail_fn) {
+
+  ensureInAppMountNamespace(fail_fn);
+  std::vector<std::string> merged_data_info_list;
+  insertPackagesToMergedList(env, merged_data_info_list, pkg_data_info_list,
+          process_name, managed_nice_name, fail_fn);
+  insertPackagesToMergedList(env, merged_data_info_list, whitelisted_data_info_list,
+          process_name, managed_nice_name, fail_fn);
+
+  isolateAppData(env, merged_data_info_list, uid, process_name, managed_nice_name, fail_fn);
+}
+
 /**
  * Like isolateAppData(), isolate jit profile directories, so apps don't see what
  * other apps are installed by reading content inside /data/misc/profiles/cur.
@@ -1553,23 +1585,6 @@ static void BindMountStorageDirs(JNIEnv* env, jobjectArray pkg_data_info_list,
   auto extract_fn = std::bind(ExtractJString, env, process_name, managed_nice_name, _1);
   const userid_t user_id = multiuser_get_user_id(uid);
 
-  // If FUSE is not ready for this user, skip it
-  // TODO(148772775): Pass primary volume name from zygote argument to here
-  std::string tmp = GetProperty("vold.fuse_running_users", "");
-  std::istringstream fuse_running_users(tmp);
-  bool user_found = false;
-  std::string s;
-  std::string user_id_str = std::to_string(user_id);
-  while (!user_found && std::getline(fuse_running_users, s, ',')) {
-    if (user_id_str == s) {
-      user_found = true;
-    }
-  }
-  if (!user_found) {
-    ALOGI("User %d is not running fuse yet, fuse_running_users=%s", user_id, tmp.c_str());
-    return;
-  }
-
   // Fuse is ready, so we can start using fuse path.
   int size = (pkg_data_info_list != nullptr) ? env->GetArrayLength(pkg_data_info_list) : 0;
 
@@ -1597,7 +1612,9 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
                              jstring managed_nice_name, bool is_system_server,
                              bool is_child_zygote, jstring managed_instruction_set,
                              jstring managed_app_data_dir, bool is_top_app,
-                             jobjectArray pkg_data_info_list) {
+                             jobjectArray pkg_data_info_list,
+                             jobjectArray whitelisted_data_info_list,
+                             bool mount_data_dirs, bool mount_storage_dirs) {
   const char* process_name = is_system_server ? "system_server" : "zygote";
   auto fail_fn = std::bind(ZygoteFailure, env, process_name, managed_nice_name, _1);
   auto extract_fn = std::bind(ExtractJString, env, process_name, managed_nice_name, _1);
@@ -1631,15 +1648,12 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
   // give a null in same_uid_pkgs and private_volumes so they don't need app data isolation.
   // Isolated process / webview / app zygote should be gated by SELinux and file permission
   // so they can't even traverse CE / DE directories.
-  if (pkg_data_info_list != nullptr
-      && GetBoolProperty(ANDROID_APP_DATA_ISOLATION_ENABLED_PROPERTY, true)) {
-    isolateAppData(env, pkg_data_info_list, uid, process_name, managed_nice_name, fail_fn);
+  if (mount_data_dirs) {
+    isolateAppData(env, pkg_data_info_list, whitelisted_data_info_list,
+            uid, process_name, managed_nice_name, fail_fn);
     isolateJitProfile(env, pkg_data_info_list, uid, process_name, managed_nice_name, fail_fn);
   }
-
-  if ((mount_external != MOUNT_EXTERNAL_INSTALLER) &&
-        GetBoolProperty(kPropFuse, false) &&
-        GetBoolProperty(ANDROID_VOLD_APP_DATA_ISOLATION_ENABLED_PROPERTY, false)) {
+  if ((mount_external != MOUNT_EXTERNAL_INSTALLER) && mount_storage_dirs) {
     BindMountStorageDirs(env, pkg_data_info_list, uid, process_name, managed_nice_name, fail_fn);
   }
 
@@ -1726,6 +1740,18 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
   }
   android_mallopt(M_SET_HEAP_TAGGING_LEVEL, &heap_tagging_level, sizeof(heap_tagging_level));
 
+  bool forceEnableGwpAsan = false;
+  switch (runtime_flags & RuntimeFlags::GWP_ASAN_LEVEL_MASK) {
+      default:
+      case RuntimeFlags::GWP_ASAN_LEVEL_NEVER:
+          break;
+      case RuntimeFlags::GWP_ASAN_LEVEL_ALWAYS:
+          forceEnableGwpAsan = true;
+          [[fallthrough]];
+      case RuntimeFlags::GWP_ASAN_LEVEL_LOTTERY:
+          android_mallopt(M_INITIALIZE_GWP_ASAN, &forceEnableGwpAsan, sizeof(forceEnableGwpAsan));
+  }
+
   if (NeedsNoRandomizeWorkaround()) {
     // Work around ARM kernel ASLR lossage (http://b/5817320).
     int old_personality = personality(0xffffffff);
@@ -1763,15 +1789,6 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
     env->CallStaticVoidMethod(gZygoteClass, gCallPostForkSystemServerHooks, runtime_flags);
     if (env->ExceptionCheck()) {
       fail_fn("Error calling post fork system server hooks.");
-    }
-
-    // Prefetch the classloader for the system server. This is done early to
-    // allow a tie-down of the proper system server selinux domain.
-    env->CallStaticVoidMethod(gZygoteInitClass, gCreateSystemServerClassLoader);
-    if (env->ExceptionCheck()) {
-      // Be robust here. The Java code will attempt to create the classloader
-      // at a later point (but may not have rights to use AoT artifacts).
-      env->ExceptionClear();
     }
 
     // TODO(oth): Remove hardcoded label here (b/117874058).
@@ -2006,7 +2023,8 @@ static jint com_android_internal_os_Zygote_nativeForkAndSpecialize(
         jint mount_external, jstring se_info, jstring nice_name,
         jintArray managed_fds_to_close, jintArray managed_fds_to_ignore, jboolean is_child_zygote,
         jstring instruction_set, jstring app_data_dir, jboolean is_top_app,
-        jobjectArray pkg_data_info_list) {
+        jobjectArray pkg_data_info_list, jobjectArray whitelisted_data_info_list,
+        jboolean mount_data_dirs, jboolean mount_storage_dirs) {
     jlong capabilities = CalculateCapabilities(env, uid, gid, gids, is_child_zygote);
 
     if (UNLIKELY(managed_fds_to_close == nullptr)) {
@@ -2043,7 +2061,10 @@ static jint com_android_internal_os_Zygote_nativeForkAndSpecialize(
                        capabilities, capabilities,
                        mount_external, se_info, nice_name, false,
                        is_child_zygote == JNI_TRUE, instruction_set, app_data_dir,
-                       is_top_app == JNI_TRUE, pkg_data_info_list);
+                       is_top_app == JNI_TRUE, pkg_data_info_list,
+                       whitelisted_data_info_list,
+                       mount_data_dirs == JNI_TRUE,
+                       mount_storage_dirs == JNI_TRUE);
     }
     return pid;
 }
@@ -2078,7 +2099,8 @@ static jint com_android_internal_os_Zygote_nativeForkSystemServer(
                        permitted_capabilities, effective_capabilities,
                        MOUNT_EXTERNAL_DEFAULT, nullptr, nullptr, true,
                        false, nullptr, nullptr, /* is_top_app= */ false,
-                       /* pkg_data_info_list */ nullptr);
+                       /* pkg_data_info_list */ nullptr,
+                       /* whitelisted_data_info_list */ nullptr, false, false);
   } else if (pid > 0) {
       // The zygote process checks whether the child process has died or not.
       ALOGI("System server process %d has been created", pid);
@@ -2208,14 +2230,16 @@ static void com_android_internal_os_Zygote_nativeSpecializeAppProcess(
     jint runtime_flags, jobjectArray rlimits,
     jint mount_external, jstring se_info, jstring nice_name,
     jboolean is_child_zygote, jstring instruction_set, jstring app_data_dir, jboolean is_top_app,
-    jobjectArray pkg_data_info_list) {
+    jobjectArray pkg_data_info_list, jobjectArray whitelisted_data_info_list,
+    jboolean mount_data_dirs, jboolean mount_storage_dirs) {
   jlong capabilities = CalculateCapabilities(env, uid, gid, gids, is_child_zygote);
 
   SpecializeCommon(env, uid, gid, gids, runtime_flags, rlimits,
                    capabilities, capabilities,
                    mount_external, se_info, nice_name, false,
                    is_child_zygote == JNI_TRUE, instruction_set, app_data_dir,
-                   is_top_app == JNI_TRUE, pkg_data_info_list);
+                   is_top_app == JNI_TRUE, pkg_data_info_list, whitelisted_data_info_list,
+                   mount_data_dirs == JNI_TRUE, mount_storage_dirs == JNI_TRUE);
 }
 
 /**
@@ -2406,10 +2430,19 @@ static jint com_android_internal_os_Zygote_nativeParseSigChld(JNIEnv* env, jclas
     return -1;
 }
 
+static jboolean com_android_internal_os_Zygote_nativeSupportsTaggedPointers(JNIEnv* env, jclass) {
+#ifdef __aarch64__
+  int res = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
+  return res >= 0 && res & PR_TAGGED_ADDR_ENABLE;
+#else
+  return false;
+#endif
+}
+
 static const JNINativeMethod gMethods[] = {
         {"nativeForkAndSpecialize",
          "(II[II[[IILjava/lang/String;Ljava/lang/String;[I[IZLjava/lang/String;Ljava/lang/"
-         "String;Z[Ljava/lang/String;)I",
+         "String;Z[Ljava/lang/String;[Ljava/lang/String;ZZ)I",
          (void*)com_android_internal_os_Zygote_nativeForkAndSpecialize},
         {"nativeForkSystemServer", "(II[II[[IJJ)I",
          (void*)com_android_internal_os_Zygote_nativeForkSystemServer},
@@ -2422,7 +2455,7 @@ static const JNINativeMethod gMethods[] = {
         {"nativeForkUsap", "(II[IZ)I", (void*)com_android_internal_os_Zygote_nativeForkUsap},
         {"nativeSpecializeAppProcess",
          "(II[II[[IILjava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/"
-         "String;Z[Ljava/lang/String;)V",
+         "String;Z[Ljava/lang/String;[Ljava/lang/String;ZZ)V",
          (void*)com_android_internal_os_Zygote_nativeSpecializeAppProcess},
         {"nativeInitNativeState", "(Z)V",
          (void*)com_android_internal_os_Zygote_nativeInitNativeState},
@@ -2441,6 +2474,8 @@ static const JNINativeMethod gMethods[] = {
          (void*)com_android_internal_os_Zygote_nativeBoostUsapPriority},
         {"nativeParseSigChld", "([BI[I)I",
          (void*)com_android_internal_os_Zygote_nativeParseSigChld},
+        {"nativeSupportsTaggedPointers", "()Z",
+         (void*)com_android_internal_os_Zygote_nativeSupportsTaggedPointers},
 };
 
 int register_com_android_internal_os_Zygote(JNIEnv* env) {
@@ -2451,13 +2486,6 @@ int register_com_android_internal_os_Zygote(JNIEnv* env) {
   gCallPostForkChildHooks = GetStaticMethodIDOrDie(env, gZygoteClass, "callPostForkChildHooks",
                                                    "(IZZLjava/lang/String;)V");
 
-  gZygoteInitClass = MakeGlobalRefOrDie(env, FindClassOrDie(env, kZygoteInitClassName));
-  gCreateSystemServerClassLoader = GetStaticMethodIDOrDie(env, gZygoteInitClass,
-                                                          "createSystemServerClassLoader",
-                                                          "()V");
-
-  RegisterMethodsOrDie(env, "com/android/internal/os/Zygote", gMethods, NELEM(gMethods));
-
-  return JNI_OK;
+  return RegisterMethodsOrDie(env, "com/android/internal/os/Zygote", gMethods, NELEM(gMethods));
 }
 }  // namespace android

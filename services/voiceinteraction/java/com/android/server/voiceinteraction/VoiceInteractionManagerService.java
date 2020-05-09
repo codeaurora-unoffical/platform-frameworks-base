@@ -99,7 +99,7 @@ import java.util.concurrent.Executor;
  * SystemService that publishes an IVoiceInteractionManagerService.
  */
 public class VoiceInteractionManagerService extends SystemService {
-    static final String TAG = "VoiceInteractionManagerService";
+    static final String TAG = "VoiceInteractionManager";
     static final boolean DEBUG = false;
 
     final Context mContext;
@@ -171,17 +171,17 @@ public class VoiceInteractionManagerService extends SystemService {
     }
 
     @Override
-    public void onStartUser(@NonNull UserInfo userInfo) {
-        if (DEBUG_USER) Slog.d(TAG, "onStartUser(" + userInfo + ")");
+    public void onUserStarting(@NonNull TargetUser user) {
+        if (DEBUG_USER) Slog.d(TAG, "onUserStarting(" + user + ")");
 
-        mServiceStub.initForUser(userInfo.id);
+        mServiceStub.initForUser(user.getUserIdentifier());
     }
 
     @Override
-    public void onUnlockUser(@NonNull UserInfo userInfo) {
-        if (DEBUG_USER) Slog.d(TAG, "onUnlockUser(" + userInfo + ")");
+    public void onUserUnlocking(@NonNull TargetUser user) {
+        if (DEBUG_USER) Slog.d(TAG, "onUserUnlocking(" + user + ")");
 
-        mServiceStub.initForUser(userInfo.id);
+        mServiceStub.initForUser(user.getUserIdentifier());
         mServiceStub.switchImplementationIfNeeded(false);
     }
 
@@ -1045,12 +1045,12 @@ public class VoiceInteractionManagerService extends SystemService {
                     return null;
                 }
 
-                for (SoundTrigger.Keyphrase phrase : model.keyphrases) {
-                    if (keyphrase.equals(phrase.text)) {
+                for (SoundTrigger.Keyphrase phrase : model.getKeyphrases()) {
+                    if (keyphrase.equals(phrase.getText())) {
                         ArraySet<Locale> locales = new ArraySet<>();
-                        locales.add(phrase.locale);
-                        return new KeyphraseMetadata(phrase.id, phrase.text, locales,
-                                phrase.recognitionModes);
+                        locales.add(phrase.getLocale());
+                        return new KeyphraseMetadata(phrase.getId(), phrase.getText(), locales,
+                                phrase.getRecognitionModes());
                     }
                 }
             } finally {
@@ -1093,8 +1093,8 @@ public class VoiceInteractionManagerService extends SystemService {
                 KeyphraseSoundModel soundModel =
                         mDbHelper.getKeyphraseSoundModel(keyphraseId, callingUid, bcp47Locale);
                 if (soundModel == null
-                        || soundModel.uuid == null
-                        || soundModel.keyphrases == null) {
+                        || soundModel.getUuid() == null
+                        || soundModel.getKeyphrases() == null) {
                     Slog.w(TAG, "No matching sound model found in startRecognition");
                     return SoundTriggerInternal.STATUS_ERROR;
                 } else {
@@ -1383,9 +1383,9 @@ public class VoiceInteractionManagerService extends SystemService {
                 mDbHelper.dump(pw);
                 if (mImpl == null) {
                     pw.println("  (No active implementation)");
-                    return;
+                } else {
+                    mImpl.dumpLocked(fd, pw, args);
                 }
-                mImpl.dumpLocked(fd, pw, args);
             }
             mSoundTriggerInternal.dump(fd, pw, args);
         }
@@ -1409,9 +1409,13 @@ public class VoiceInteractionManagerService extends SystemService {
             }
         }
 
+        private boolean isCallerHoldingPermission(String permission) {
+            return mContext.checkCallingOrSelfPermission(permission)
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+
         private void enforceCallingPermission(String permission) {
-            if (mContext.checkCallingOrSelfPermission(permission)
-                    != PackageManager.PERMISSION_GRANTED) {
+            if (!isCallerHoldingPermission(permission)) {
                 throw new SecurityException("Caller does not hold the permission " + permission);
             }
         }
@@ -1424,22 +1428,17 @@ public class VoiceInteractionManagerService extends SystemService {
         }
 
         private void enforceCallerAllowedToEnrollVoiceModel() {
-            enforceCallingPermission(Manifest.permission.MANAGE_VOICE_KEYPHRASES);
-            if (!isCallerCurrentVoiceInteractionService()
-                    && !isCallerTrustedEnrollmentApplication()) {
-                throw new SecurityException("Caller is required to be the current voice interaction"
-                        + " service or a system enrollment application to enroll voice models");
+            if (isCallerHoldingPermission(Manifest.permission.KEYPHRASE_ENROLLMENT_APPLICATION)) {
+                return;
             }
+
+            enforceCallingPermission(Manifest.permission.MANAGE_VOICE_KEYPHRASES);
+            enforceIsCurrentVoiceInteractionService();
         }
 
         private boolean isCallerCurrentVoiceInteractionService() {
             return mImpl != null
                     && mImpl.mInfo.getServiceInfo().applicationInfo.uid == Binder.getCallingUid();
-        }
-
-        private boolean isCallerTrustedEnrollmentApplication() {
-            return mImpl.mEnrollmentApplicationInfo.isUidSupportedEnrollmentApplication(
-                    Binder.getCallingUid());
         }
 
         private void setImplLocked(VoiceInteractionManagerServiceImpl impl) {

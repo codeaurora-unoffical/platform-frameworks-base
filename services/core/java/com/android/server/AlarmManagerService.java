@@ -1672,7 +1672,7 @@ class AlarmManagerService extends SystemService {
                     | Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND
                     | Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT
                     | Intent.FLAG_RECEIVER_VISIBLE_TO_INSTANT_APPS);
-            intent.putExtra("time-zone", zone.getID());
+            intent.putExtra(Intent.EXTRA_TIMEZONE, zone.getID());
             getContext().sendBroadcastAsUser(intent, UserHandle.ALL);
         }
     }
@@ -1876,7 +1876,7 @@ class AlarmManagerService extends SystemService {
                     // package was t(q) then the next delivery must be after t(q) + <window_size>
                     final long t = mAppWakeupHistory.getNthLastWakeupForPackage(
                             sourcePackage, sourceUserId, quotaForBucket);
-                    minElapsed = t + 1 + mConstants.APP_STANDBY_WINDOW;
+                    minElapsed = t + mConstants.APP_STANDBY_WINDOW;
                 }
                 if (alarm.expectedWhenElapsed < minElapsed) {
                     alarm.whenElapsed = alarm.maxWhenElapsed = minElapsed;

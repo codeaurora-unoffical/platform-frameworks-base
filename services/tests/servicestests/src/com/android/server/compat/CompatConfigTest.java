@@ -251,6 +251,28 @@ public class CompatConfigTest {
     }
 
     @Test
+    public void testAllowRemoveOverrideNoOverride() throws Exception {
+        CompatConfig compatConfig = CompatConfigBuilder.create(mBuildClassifier, mContext)
+                .addDisabledChangeWithId(1234L)
+                .addLoggingOnlyChangeWithId(2L)
+                .build();
+        ApplicationInfo applicationInfo = ApplicationInfoBuilder.create()
+                .withPackageName("com.some.package")
+                .build();
+        when(mPackageManager.getApplicationInfo(eq("com.some.package"), anyInt()))
+                .thenReturn(applicationInfo);
+
+        // Reject all override attempts.
+        // Force the validator to prevent overriding the change by using a user build.
+        when(mBuildClassifier.isDebuggableBuild()).thenReturn(false);
+        when(mBuildClassifier.isFinalBuild()).thenReturn(true);
+        // Try to remove a non existing override, and it doesn't fail.
+        assertThat(compatConfig.removeOverride(1234L, "com.some.package")).isFalse();
+        assertThat(compatConfig.removeOverride(2L, "com.some.package")).isFalse();
+        compatConfig.removePackageOverrides("com.some.package");
+    }
+
+    @Test
     public void testRemovePackageOverride() throws Exception {
         CompatConfig compatConfig = CompatConfigBuilder.create(mBuildClassifier, mContext)
                 .addEnabledChangeWithId(1234L)
@@ -264,6 +286,49 @@ public class CompatConfigTest {
 
         compatConfig.removeOverride(1234L, "com.some.package");
         assertThat(compatConfig.isChangeEnabled(1234L, applicationInfo)).isTrue();
+    }
+
+    @Test
+    public void testEnableTargetSdkChangesForPackage() throws Exception {
+        CompatConfig compatConfig = CompatConfigBuilder.create(mBuildClassifier, mContext)
+                .addEnabledChangeWithId(1L)
+                .addDisabledChangeWithId(2L)
+                .addTargetSdkChangeWithId(3, 3L)
+                .addTargetSdkChangeWithId(4, 4L)
+                .build();
+        ApplicationInfo applicationInfo = ApplicationInfoBuilder.create()
+                .withPackageName("foo.bar")
+                .withTargetSdk(2)
+                .build();
+
+        assertThat(compatConfig.isChangeEnabled(3, applicationInfo)).isFalse();
+        assertThat(compatConfig.isChangeEnabled(4, applicationInfo)).isFalse();
+
+        assertThat(compatConfig.enableTargetSdkChangesForPackage("foo.bar", 3)).isEqualTo(1);
+        assertThat(compatConfig.isChangeEnabled(3, applicationInfo)).isTrue();
+        assertThat(compatConfig.isChangeEnabled(4, applicationInfo)).isFalse();
+    }
+
+    @Test
+    public void testDisableTargetSdkChangesForPackage() throws Exception {
+        CompatConfig compatConfig = CompatConfigBuilder.create(mBuildClassifier, mContext)
+                .addEnabledChangeWithId(1L)
+                .addDisabledChangeWithId(2L)
+                .addTargetSdkChangeWithId(3, 3L)
+                .addTargetSdkChangeWithId(4, 4L)
+                .build();
+        ApplicationInfo applicationInfo = ApplicationInfoBuilder.create()
+                .withPackageName("foo.bar")
+                .withTargetSdk(2)
+                .build();
+
+        assertThat(compatConfig.enableTargetSdkChangesForPackage("foo.bar", 3)).isEqualTo(1);
+        assertThat(compatConfig.isChangeEnabled(3, applicationInfo)).isTrue();
+        assertThat(compatConfig.isChangeEnabled(4, applicationInfo)).isFalse();
+
+        assertThat(compatConfig.disableTargetSdkChangesForPackage("foo.bar", 3)).isEqualTo(1);
+        assertThat(compatConfig.isChangeEnabled(3, applicationInfo)).isFalse();
+        assertThat(compatConfig.isChangeEnabled(4, applicationInfo)).isFalse();
     }
 
     @Test

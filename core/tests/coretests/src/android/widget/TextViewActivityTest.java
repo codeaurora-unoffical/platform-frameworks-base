@@ -65,6 +65,7 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.os.Bundle;
 import android.support.test.uiautomator.UiDevice;
 import android.text.InputType;
 import android.text.Selection;
@@ -75,6 +76,7 @@ import android.view.ActionMode;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.textclassifier.SelectionEvent;
 import android.view.textclassifier.TextClassificationManager;
 import android.view.textclassifier.TextClassifier;
@@ -358,6 +360,20 @@ public class TextViewActivityTest {
     }
 
     @Test
+    public void testToolbarAppearsAccessibilityLongClick() throws Throwable {
+        final String text = "Toolbar appears after performing accessibility's ACTION_LONG_CLICK.";
+        mActivityRule.runOnUiThread(() -> {
+            final TextView textView = mActivity.findViewById(R.id.textview);
+            final Bundle args = new Bundle();
+            textView.performAccessibilityAction(AccessibilityNodeInfo.ACTION_LONG_CLICK, args);
+        });
+        mInstrumentation.waitForIdleSync();
+
+        sleepForFloatingToolbarPopup();
+        assertFloatingToolbarIsDisplayed();
+    }
+
+    @Test
     public void testSelectionRemovedWhenNonselectableTextLosesFocus() throws Throwable {
         final TextLinks.TextLink textLink = addLinkifiedTextToTextView(R.id.nonselectable_textview);
         final int position = (textLink.getStart() + textLink.getEnd()) / 2;
@@ -497,7 +513,7 @@ public class TextViewActivityTest {
 
     @Test
     public void testInsertionHandle_multiLine() {
-        final String text = "abcd\n" + "efg\n" + "hijk\n";
+        final String text = "abcd\n" + "efg\n" + "hijk\n" + "lmn\n";
         onView(withId(R.id.textview)).perform(replaceText(text));
 
         onView(withId(R.id.textview)).perform(clickOnTextAtIndex(text.length()));
@@ -506,12 +522,12 @@ public class TextViewActivityTest {
         final TextView textView = mActivity.findViewById(R.id.textview);
 
         onHandleView(com.android.internal.R.id.insertion_handle)
-                .perform(dragHandle(textView, Handle.INSERTION, text.indexOf('a')));
-        onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.indexOf("a")));
-
-        onHandleView(com.android.internal.R.id.insertion_handle)
                 .perform(dragHandle(textView, Handle.INSERTION, text.indexOf('f')));
         onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.indexOf("f")));
+
+        onHandleView(com.android.internal.R.id.insertion_handle)
+                .perform(dragHandle(textView, Handle.INSERTION, text.indexOf('i')));
+        onView(withId(R.id.textview)).check(hasInsertionPointerAtIndex(text.indexOf("i")));
     }
 
     private void enableFlagsForInsertionHandleGestures() {

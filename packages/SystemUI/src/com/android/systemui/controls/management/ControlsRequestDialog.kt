@@ -21,7 +21,6 @@ import android.app.Dialog
 import android.content.ComponentName
 import android.content.DialogInterface
 import android.content.Intent
-import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.os.UserHandle
 import android.service.controls.Control
@@ -56,7 +55,7 @@ class ControlsRequestDialog @Inject constructor(
     private lateinit var control: Control
     private var dialog: Dialog? = null
     private val callback = object : ControlsListingController.ControlsListingCallback {
-        override fun onServicesUpdated(candidates: List<ControlsServiceInfo>) {}
+        override fun onServicesUpdated(serviceInfos: List<ControlsServiceInfo>) {}
     }
 
     private val currentUserTracker = object : CurrentUserTracker(broadcastDispatcher) {
@@ -137,11 +136,10 @@ class ControlsRequestDialog @Inject constructor(
     }
 
     fun createDialog(label: CharSequence): Dialog {
-
-        val renderInfo = RenderInfo.lookup(control.deviceType, true)
+        val renderInfo = RenderInfo.lookup(this, component, control.deviceType, true)
         val frame = LayoutInflater.from(this).inflate(R.layout.controls_dialog, null).apply {
             requireViewById<ImageView>(R.id.icon).apply {
-                setImageIcon(Icon.createWithResource(context, renderInfo.iconResourceId))
+                setImageDrawable(renderInfo.icon)
                 setImageTintList(
                         context.resources.getColorStateList(renderInfo.foreground, context.theme))
             }
@@ -171,8 +169,11 @@ class ControlsRequestDialog @Inject constructor(
 
     override fun onClick(dialog: DialogInterface?, which: Int) {
         if (which == Dialog.BUTTON_POSITIVE) {
-            controller.addFavorite(componentName, control.structure ?: "",
-                    ControlInfo(control.controlId, control.title, control.deviceType))
+            controller.addFavorite(
+                componentName,
+                control.structure ?: "",
+                ControlInfo(control.controlId, control.title, control.subtitle, control.deviceType)
+            )
         }
         finish()
     }

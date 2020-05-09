@@ -51,6 +51,7 @@ import android.view.IWindowId;
 import android.view.IWindowSession;
 import android.view.IWindowSessionCallback;
 import android.view.InputChannel;
+import android.view.InsetsSourceControl;
 import android.view.InsetsState;
 import android.view.SurfaceControl;
 import android.view.SurfaceSession;
@@ -158,10 +159,10 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
             int viewVisibility, int displayId, Rect outFrame, Rect outContentInsets,
             Rect outStableInsets,
             DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
-            InsetsState outInsetsState) {
+            InsetsState outInsetsState, InsetsSourceControl[] outActiveControls) {
         return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId, outFrame,
                 outContentInsets, outStableInsets, outDisplayCutout, outInputChannel,
-                outInsetsState);
+                outInsetsState, outActiveControls);
     }
 
     @Override
@@ -171,7 +172,7 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
         return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId,
                 new Rect() /* outFrame */, outContentInsets, outStableInsets,
                 new DisplayCutout.ParcelableWrapper() /* cutout */, null /* outInputChannel */,
-                outInsetsState);
+                outInsetsState, null);
     }
 
     @Override
@@ -191,7 +192,8 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
             Rect outStableInsets, Rect outBackdropFrame,
             DisplayCutout.ParcelableWrapper cutout, MergedConfiguration mergedConfiguration,
             SurfaceControl outSurfaceControl, InsetsState outInsetsState,
-            Point outSurfaceSize, SurfaceControl outBLASTSurfaceControl) {
+            InsetsSourceControl[] outActiveControls, Point outSurfaceSize,
+            SurfaceControl outBLASTSurfaceControl) {
         if (false) Slog.d(TAG_WM, ">>>>>> ENTERED relayout from "
                 + Binder.getCallingPid());
         Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, mRelayoutTag);
@@ -199,8 +201,8 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
                 requestedWidth, requestedHeight, viewFlags, flags, frameNumber,
                 outFrame, outContentInsets, outVisibleInsets,
                 outStableInsets, outBackdropFrame, cutout,
-                mergedConfiguration, outSurfaceControl, outInsetsState, outSurfaceSize,
-                outBLASTSurfaceControl);
+                mergedConfiguration, outSurfaceControl, outInsetsState, outActiveControls,
+                outSurfaceSize, outBLASTSurfaceControl);
         Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
         if (false) Slog.d(TAG_WM, "<<<<<< EXITING relayout to "
                 + Binder.getCallingPid());
@@ -352,6 +354,31 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
             } finally {
                 Binder.restoreCallingIdentity(ident);
             }
+        }
+    }
+
+    @Override
+    public void setWallpaperZoomOut(IBinder window, float zoom) {
+        if (Float.compare(0f, zoom) > 0 || Float.compare(1f, zoom) < 0 || Float.isNaN(zoom)) {
+            throw new IllegalArgumentException("Zoom must be a valid float between 0 and 1: "
+                    + zoom);
+        }
+        synchronized (mService.mGlobalLock) {
+            long ident = Binder.clearCallingIdentity();
+            try {
+                actionOnWallpaper(window, (wpController, windowState) ->
+                        wpController.setWallpaperZoomOut(windowState, zoom));
+            } finally {
+                Binder.restoreCallingIdentity(ident);
+            }
+        }
+    }
+
+    @Override
+    public void setShouldZoomOutWallpaper(IBinder window, boolean shouldZoom) {
+        synchronized (mService.mGlobalLock) {
+            actionOnWallpaper(window, (wpController, windowState) ->
+                    wpController.setShouldZoomOutWallpaper(windowState, shouldZoom));
         }
     }
 

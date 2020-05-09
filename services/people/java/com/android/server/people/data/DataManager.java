@@ -26,8 +26,10 @@ import android.app.NotificationManager;
 import android.app.Person;
 import android.app.prediction.AppTarget;
 import android.app.prediction.AppTargetEvent;
+import android.app.usage.UsageEvents;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -69,6 +71,7 @@ import com.android.server.notification.NotificationManagerInternal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -87,13 +90,13 @@ public class DataManager {
 
     private static final String TAG = "DataManager";
 
-    private static final long QUERY_EVENTS_MAX_AGE_MS = DateUtils.DAY_IN_MILLIS;
+    private static final long QUERY_EVENTS_MAX_AGE_MS = 5L * DateUtils.MINUTE_IN_MILLIS;
     private static final long USAGE_STATS_QUERY_INTERVAL_SEC = 120L;
 
     private final Context mContext;
     private final Injector mInjector;
-    private final ScheduledExecutorService mUsageStatsQueryExecutor;
-    private final ScheduledExecutorService mDiskReadWriterExecutor;
+    private final ScheduledExecutorService mScheduledExecutor;
+    private final Object mLock = new Object();
 
     private final SparseArray<UserData> mUserDataArray = new SparseArray<>();
     private final SparseArray<BroadcastReceiver> mBroadcastReceivers = new SparseArray<>();
@@ -118,8 +121,7 @@ public class DataManager {
     DataManager(Context context, Injector injector) {
         mContext = context;
         mInjector = injector;
-        mUsageStatsQueryExecutor = mInjector.createScheduledExecutor();
-        mDiskReadWriterExecutor = mInjector.createScheduledExecutor();
+        mScheduledExecutor = mInjector.createScheduledExecutor();
     }
 
     /** Initialization. Called when the system services are up running. */
@@ -138,103 +140,26 @@ public class DataManager {
 
     /** This method is called when a user is unlocked. */
     public void onUserUnlocked(int userId) {
-        UserData userData = mUserDataArray.get(userId);
-        if (userData == null) {
-            userData = new UserData(userId, mDiskReadWriterExecutor);
-            mUserDataArray.put(userId, userData);
+        synchronized (mLock) {
+            UserData userData = mUserDataArray.get(userId);
+            if (userData == null) {
+                userData = new UserData(userId, mScheduledExecutor);
+                mUserDataArray.put(userId, userData);
+            }
+            userData.setUserUnlocked();
         }
-        userData.setUserUnlocked();
-        updateDefaultDialer(userData);
-        updateDefaultSmsApp(userData);
-
-        ScheduledFuture<?> scheduledFuture = mUsageStatsQueryExecutor.scheduleAtFixedRate(
-                new UsageStatsQueryRunnable(userId), 1L, USAGE_STATS_QUERY_INTERVAL_SEC,
-                TimeUnit.SECONDS);
-        mUsageStatsQueryFutures.put(userId, scheduledFuture);
-
-        IntentFilter intentFilter = new IntentFilter();
-        intentFilter.addAction(TelecomManager.ACTION_DEFAULT_DIALER_CHANGED);
-        intentFilter.addAction(SmsApplication.ACTION_DEFAULT_SMS_PACKAGE_CHANGED_INTERNAL);
-        BroadcastReceiver broadcastReceiver = new PerUserBroadcastReceiver(userId);
-        mBroadcastReceivers.put(userId, broadcastReceiver);
-        mContext.registerReceiverAsUser(
-                broadcastReceiver, UserHandle.of(userId), intentFilter, null, null);
-
-        ContentObserver contactsContentObserver = new ContactsContentObserver(
-                BackgroundThread.getHandler());
-        mContactsContentObservers.put(userId, contactsContentObserver);
-        mContext.getContentResolver().registerContentObserver(
-                Contacts.CONTENT_URI, /* notifyForDescendants= */ true,
-                contactsContentObserver, userId);
-
-        NotificationListener notificationListener = new NotificationListener();
-        mNotificationListeners.put(userId, notificationListener);
-        try {
-            notificationListener.registerAsSystemService(mContext,
-                    new ComponentName(mContext, getClass()), userId);
-        } catch (RemoteException e) {
-            // Should never occur for local calls.
-        }
-
-        PackageMonitor packageMonitor = new PerUserPackageMonitor();
-        packageMonitor.register(mContext, null, UserHandle.of(userId), true);
-        mPackageMonitors.put(userId, packageMonitor);
-
-        if (userId == UserHandle.USER_SYSTEM) {
-            // The call log and MMS/SMS messages are shared across user profiles. So only need to
-            // register the content observers once for the primary user.
-            // TODO: Register observers after the conversations and events being loaded from disk.
-            mCallLogContentObserver = new CallLogContentObserver(BackgroundThread.getHandler());
-            mContext.getContentResolver().registerContentObserver(
-                    CallLog.CONTENT_URI, /* notifyForDescendants= */ true,
-                    mCallLogContentObserver, UserHandle.USER_SYSTEM);
-
-            mMmsSmsContentObserver = new MmsSmsContentObserver(BackgroundThread.getHandler());
-            mContext.getContentResolver().registerContentObserver(
-                    MmsSms.CONTENT_URI, /* notifyForDescendants= */ false,
-                    mMmsSmsContentObserver, UserHandle.USER_SYSTEM);
-        }
-
-        DataMaintenanceService.scheduleJob(mContext, userId);
+        mScheduledExecutor.execute(() -> setupUser(userId));
     }
 
     /** This method is called when a user is stopping. */
     public void onUserStopping(int userId) {
-        if (mUserDataArray.indexOfKey(userId) >= 0) {
-            mUserDataArray.get(userId).setUserStopped();
-        }
-        if (mUsageStatsQueryFutures.indexOfKey(userId) >= 0) {
-            mUsageStatsQueryFutures.get(userId).cancel(true);
-        }
-        if (mBroadcastReceivers.indexOfKey(userId) >= 0) {
-            mContext.unregisterReceiver(mBroadcastReceivers.get(userId));
-        }
-        if (mContactsContentObservers.indexOfKey(userId) >= 0) {
-            mContext.getContentResolver().unregisterContentObserver(
-                    mContactsContentObservers.get(userId));
-        }
-        if (mNotificationListeners.indexOfKey(userId) >= 0) {
-            try {
-                mNotificationListeners.get(userId).unregisterAsSystemService();
-            } catch (RemoteException e) {
-                // Should never occur for local calls.
+        synchronized (mLock) {
+            UserData userData = mUserDataArray.get(userId);
+            if (userData != null) {
+                userData.setUserStopped();
             }
         }
-        if (mPackageMonitors.indexOfKey(userId) >= 0) {
-            mPackageMonitors.get(userId).unregister();
-        }
-        if (userId == UserHandle.USER_SYSTEM) {
-            if (mCallLogContentObserver != null) {
-                mContext.getContentResolver().unregisterContentObserver(mCallLogContentObserver);
-                mCallLogContentObserver = null;
-            }
-            if (mMmsSmsContentObserver != null) {
-                mContext.getContentResolver().unregisterContentObserver(mMmsSmsContentObserver);
-                mCallLogContentObserver = null;
-            }
-        }
-
-        DataMaintenanceService.cancelJob(mContext, userId);
+        mScheduledExecutor.execute(() -> cleanupUser(userId));
     }
 
     /**
@@ -288,11 +213,14 @@ public class DataManager {
             return;
         }
         UserData userData = getUnlockedUserData(appTarget.getUser().getIdentifier());
+        if (userData == null) {
+            return;
+        }
         PackageData packageData = userData.getOrCreatePackageData(appTarget.getPackageName());
         String mimeType = intentFilter != null ? intentFilter.getDataType(0) : null;
         @Event.EventType int eventType = mimeTypeToShareEventType(mimeType);
         EventHistoryImpl eventHistory;
-        if (ChooserActivity.LAUNCH_LOCATON_DIRECT_SHARE.equals(event.getLaunchLocation())) {
+        if (ChooserActivity.LAUNCH_LOCATION_DIRECT_SHARE.equals(event.getLaunchLocation())) {
             // Direct share event
             if (appTarget.getShortcutInfo() == null) {
                 return;
@@ -309,6 +237,27 @@ public class DataManager {
                     EventStore.CATEGORY_CLASS_BASED, appTarget.getClassName());
         }
         eventHistory.addEvent(new Event(System.currentTimeMillis(), eventType));
+    }
+
+    /**
+     * Queries events for moving app to foreground between {@code startTime} and {@code endTime}.
+     */
+    @NonNull
+    public List<UsageEvents.Event> queryAppMovingToForegroundEvents(@UserIdInt int callingUserId,
+            long startTime, long endTime) {
+        return UsageStatsQueryHelper.queryAppMovingToForegroundEvents(callingUserId, startTime,
+                endTime);
+    }
+
+    /**
+     * Queries launch counts of apps within {@code packageNameFilter} between {@code startTime}
+     * and {@code endTime}.
+     */
+    @NonNull
+    public Map<String, Integer> queryAppLaunchCount(@UserIdInt int callingUserId, long startTime,
+            long endTime, Set<String> packageNameFilter) {
+        return UsageStatsQueryHelper.queryAppLaunchCount(callingUserId, startTime, endTime,
+                packageNameFilter);
     }
 
     /** Prunes the data for the specified user. */
@@ -353,7 +302,116 @@ public class DataManager {
         userData.restore(payload);
     }
 
-    private int mimeTypeToShareEventType(String mimeType) {
+    private void setupUser(@UserIdInt int userId) {
+        synchronized (mLock) {
+            UserData userData = getUnlockedUserData(userId);
+            if (userData == null) {
+                return;
+            }
+            userData.loadUserData();
+
+            updateDefaultDialer(userData);
+            updateDefaultSmsApp(userData);
+
+            ScheduledFuture<?> scheduledFuture = mScheduledExecutor.scheduleAtFixedRate(
+                    new UsageStatsQueryRunnable(userId), 1L, USAGE_STATS_QUERY_INTERVAL_SEC,
+                    TimeUnit.SECONDS);
+            mUsageStatsQueryFutures.put(userId, scheduledFuture);
+
+            IntentFilter intentFilter = new IntentFilter();
+            intentFilter.addAction(TelecomManager.ACTION_DEFAULT_DIALER_CHANGED);
+            intentFilter.addAction(SmsApplication.ACTION_DEFAULT_SMS_PACKAGE_CHANGED_INTERNAL);
+            BroadcastReceiver broadcastReceiver = new PerUserBroadcastReceiver(userId);
+            mBroadcastReceivers.put(userId, broadcastReceiver);
+            mContext.registerReceiverAsUser(
+                    broadcastReceiver, UserHandle.of(userId), intentFilter, null, null);
+
+            ContentObserver contactsContentObserver = new ContactsContentObserver(
+                    BackgroundThread.getHandler());
+            mContactsContentObservers.put(userId, contactsContentObserver);
+            mContext.getContentResolver().registerContentObserver(
+                    Contacts.CONTENT_URI, /* notifyForDescendants= */ true,
+                    contactsContentObserver, userId);
+
+            NotificationListener notificationListener = new NotificationListener();
+            mNotificationListeners.put(userId, notificationListener);
+            try {
+                notificationListener.registerAsSystemService(mContext,
+                        new ComponentName(mContext, getClass()), userId);
+            } catch (RemoteException e) {
+                // Should never occur for local calls.
+            }
+
+            PackageMonitor packageMonitor = new PerUserPackageMonitor();
+            packageMonitor.register(mContext, null, UserHandle.of(userId), true);
+            mPackageMonitors.put(userId, packageMonitor);
+
+            if (userId == UserHandle.USER_SYSTEM) {
+                // The call log and MMS/SMS messages are shared across user profiles. So only need
+                // to register the content observers once for the primary user.
+                mCallLogContentObserver = new CallLogContentObserver(BackgroundThread.getHandler());
+                mContext.getContentResolver().registerContentObserver(
+                        CallLog.CONTENT_URI, /* notifyForDescendants= */ true,
+                        mCallLogContentObserver, UserHandle.USER_SYSTEM);
+
+                mMmsSmsContentObserver = new MmsSmsContentObserver(BackgroundThread.getHandler());
+                mContext.getContentResolver().registerContentObserver(
+                        MmsSms.CONTENT_URI, /* notifyForDescendants= */ false,
+                        mMmsSmsContentObserver, UserHandle.USER_SYSTEM);
+            }
+
+            DataMaintenanceService.scheduleJob(mContext, userId);
+        }
+    }
+
+    private void cleanupUser(@UserIdInt int userId) {
+        synchronized (mLock) {
+            UserData userData = mUserDataArray.get(userId);
+            if (userData == null || userData.isUnlocked()) {
+                return;
+            }
+            ContentResolver contentResolver = mContext.getContentResolver();
+            if (mUsageStatsQueryFutures.indexOfKey(userId) >= 0) {
+                mUsageStatsQueryFutures.get(userId).cancel(true);
+            }
+            if (mBroadcastReceivers.indexOfKey(userId) >= 0) {
+                mContext.unregisterReceiver(mBroadcastReceivers.get(userId));
+            }
+            if (mContactsContentObservers.indexOfKey(userId) >= 0) {
+                contentResolver.unregisterContentObserver(mContactsContentObservers.get(userId));
+            }
+            if (mNotificationListeners.indexOfKey(userId) >= 0) {
+                try {
+                    mNotificationListeners.get(userId).unregisterAsSystemService();
+                } catch (RemoteException e) {
+                    // Should never occur for local calls.
+                }
+            }
+            if (mPackageMonitors.indexOfKey(userId) >= 0) {
+                mPackageMonitors.get(userId).unregister();
+            }
+            if (userId == UserHandle.USER_SYSTEM) {
+                if (mCallLogContentObserver != null) {
+                    contentResolver.unregisterContentObserver(mCallLogContentObserver);
+                    mCallLogContentObserver = null;
+                }
+                if (mMmsSmsContentObserver != null) {
+                    contentResolver.unregisterContentObserver(mMmsSmsContentObserver);
+                    mCallLogContentObserver = null;
+                }
+            }
+
+            DataMaintenanceService.cancelJob(mContext, userId);
+        }
+    }
+
+    /**
+     * Converts {@code mimeType} to {@link Event.EventType}.
+     */
+    public int mimeTypeToShareEventType(String mimeType) {
+        if (mimeType == null) {
+            return Event.TYPE_SHARE_OTHER;
+        }
         if (mimeType.startsWith("text/")) {
             return Event.TYPE_SHARE_TEXT;
         } else if (mimeType.startsWith("image/")) {

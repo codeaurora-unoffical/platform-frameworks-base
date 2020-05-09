@@ -17,17 +17,17 @@
 package com.android.systemui.controls.ui
 
 import android.content.Context
-import android.graphics.BlendMode
 import android.graphics.drawable.ClipDrawable
-import android.graphics.drawable.Icon
+import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.service.controls.Control
+import android.service.controls.DeviceTypes
 import android.service.controls.actions.ControlAction
 import android.service.controls.templates.ControlTemplate
+import android.service.controls.templates.StatelessTemplate
 import android.service.controls.templates.TemperatureControlTemplate
 import android.service.controls.templates.ToggleRangeTemplate
 import android.service.controls.templates.ToggleTemplate
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
@@ -40,6 +40,8 @@ import com.android.systemui.R
 import kotlin.reflect.KClass
 
 private const val UPDATE_DELAY_IN_MILLIS = 3000L
+private const val ALPHA_ENABLED = (255.0 * 0.2).toInt()
+private const val ALPHA_DISABLED = 255
 
 class ControlViewHolder(
     val layout: ViewGroup,
@@ -49,7 +51,6 @@ class ControlViewHolder(
 ) {
     val icon: ImageView = layout.requireViewById(R.id.icon)
     val status: TextView = layout.requireViewById(R.id.status)
-    val statusExtra: TextView = layout.requireViewById(R.id.status_extra)
     val title: TextView = layout.requireViewById(R.id.title)
     val subtitle: TextView = layout.requireViewById(R.id.subtitle)
     val context: Context = layout.getContext()
@@ -57,11 +58,14 @@ class ControlViewHolder(
     lateinit var cws: ControlWithState
     var cancelUpdate: Runnable? = null
     var behavior: Behavior? = null
+    var lastAction: ControlAction? = null
 
     init {
         val ld = layout.getBackground() as LayerDrawable
         ld.mutate()
         clipLayer = ld.findDrawableByLayerId(R.id.clip_layer) as ClipDrawable
+        // needed for marquee to start
+        status.setSelected(true)
     }
 
     fun bindData(cws: ControlWithState) {
@@ -69,52 +73,56 @@ class ControlViewHolder(
 
         cancelUpdate?.run()
 
-        val (status, template) = cws.control?.let {
+        val (controlStatus, template) = cws.control?.let {
             title.setText(it.getTitle())
             subtitle.setText(it.getSubtitle())
             Pair(it.getStatus(), it.getControlTemplate())
         } ?: run {
             title.setText(cws.ci.controlTitle)
-            subtitle.setText("")
+            subtitle.setText(cws.ci.controlSubtitle)
             Pair(Control.STATUS_UNKNOWN, ControlTemplate.NO_TEMPLATE)
         }
 
         cws.control?.let {
+            layout.setClickable(true)
             layout.setOnLongClickListener(View.OnLongClickListener() {
                 ControlActionCoordinator.longPress(this@ControlViewHolder)
                 true
             })
         }
 
-        val clazz = findBehavior(status, template)
+        val clazz = findBehavior(controlStatus, template)
         if (behavior == null || behavior!!::class != clazz) {
             // Behavior changes can signal a change in template from the app or
             // first time setup
             behavior = clazz.java.newInstance()
             behavior?.initialize(this)
+
+            // let behaviors define their own, if necessary, and clear any existing ones
+            layout.setAccessibilityDelegate(null)
         }
+
         behavior?.bind(cws)
+
+        layout.setContentDescription("${title.text} ${subtitle.text} ${status.text}")
     }
 
     fun actionResponse(@ControlAction.ResponseResult response: Int) {
         // TODO: b/150931809 - handle response codes
-        Log.d(ControlsUiController.TAG, "Received response code: $response")
     }
 
     fun setTransientStatus(tempStatus: String) {
         val previousText = status.getText()
-        val previousTextExtra = statusExtra.getText()
 
         cancelUpdate = uiExecutor.executeDelayed({
                 status.setText(previousText)
-                statusExtra.setText(previousTextExtra)
             }, UPDATE_DELAY_IN_MILLIS)
 
         status.setText(tempStatus)
-        statusExtra.setText("")
     }
 
     fun action(action: ControlAction) {
+        lastAction = action
         controlsController.action(cws.componentName, cws.ci, action)
     }
 
@@ -122,28 +130,42 @@ class ControlViewHolder(
         return when {
             status == Control.STATUS_UNKNOWN -> UnknownBehavior::class
             template is ToggleTemplate -> ToggleBehavior::class
+            template is StatelessTemplate -> TouchBehavior::class
             template is ToggleRangeTemplate -> ToggleRangeBehavior::class
             template is TemperatureControlTemplate -> TemperatureControlBehavior::class
             else -> DefaultBehavior::class
         }
     }
 
-    internal fun applyRenderInfo(ri: RenderInfo) {
+    internal fun applyRenderInfo(enabled: Boolean, offset: Int = 0) {
+        setEnabled(enabled)
+
+        val deviceType = cws.control?.let { it.getDeviceType() } ?: cws.ci.deviceType
+        val ri = RenderInfo.lookup(context, cws.componentName, deviceType, enabled, offset)
+
         val fg = context.getResources().getColorStateList(ri.foreground, context.getTheme())
-        val bg = context.getResources().getColorStateList(ri.background, context.getTheme())
+        val (bg, alpha) = if (enabled) {
+            Pair(ri.enabledBackground, ALPHA_ENABLED)
+        } else {
+            Pair(R.color.control_default_background, ALPHA_DISABLED)
+        }
+
         status.setTextColor(fg)
-        statusExtra.setTextColor(fg)
 
-        icon.setImageIcon(Icon.createWithResource(context, ri.iconResourceId))
-        icon.setImageTintList(fg)
+        icon.setImageDrawable(ri.icon)
 
-        clipLayer.getDrawable().apply {
-            setTintBlendMode(BlendMode.HUE)
-            setTintList(bg)
+        // do not color app icons
+        if (deviceType != DeviceTypes.TYPE_ROUTINE) {
+            icon.setImageTintList(fg)
+        }
+
+        (clipLayer.getDrawable() as GradientDrawable).apply {
+            setColor(context.getResources().getColor(bg, context.getTheme()))
+            setAlpha(alpha)
         }
     }
 
-    fun setEnabled(enabled: Boolean) {
+    private fun setEnabled(enabled: Boolean) {
         status.setEnabled(enabled)
         icon.setEnabled(enabled)
     }
