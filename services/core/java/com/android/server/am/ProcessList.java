@@ -154,6 +154,9 @@ public final class ProcessList {
     static final String ANDROID_VOLD_APP_DATA_ISOLATION_ENABLED_PROPERTY =
             "persist.sys.vold_app_data_isolation_enabled";
 
+    // A system property to control if fuse is enabled.
+    static final String ANDROID_FUSE_ENABLED = "persist.sys.fuse";
+
     // The minimum time we allow between crashes, for us to consider this
     // application to be bad and stop and its services and reject broadcasts.
     static final int MIN_CRASH_INTERVAL = 60 * 1000;
@@ -707,8 +710,13 @@ public final class ProcessList {
         // want some apps enabled while some apps disabled
         mAppDataIsolationEnabled =
                 SystemProperties.getBoolean(ANDROID_APP_DATA_ISOLATION_ENABLED_PROPERTY, true);
-        mVoldAppDataIsolationEnabled = SystemProperties.getBoolean(
+        boolean fuseEnabled = SystemProperties.getBoolean(ANDROID_FUSE_ENABLED, false);
+        boolean voldAppDataIsolationEnabled = SystemProperties.getBoolean(
                 ANDROID_VOLD_APP_DATA_ISOLATION_ENABLED_PROPERTY, false);
+        if (!fuseEnabled && voldAppDataIsolationEnabled) {
+            Slog.e(TAG, "Fuse is not enabled while vold app data isolation is enabled");
+        }
+        mVoldAppDataIsolationEnabled = fuseEnabled && voldAppDataIsolationEnabled;
         mAppDataIsolationWhitelistedApps = new ArrayList<>(
                 SystemConfig.getInstance().getAppDataIsolationWhitelistedApps());
 
@@ -1660,6 +1668,33 @@ public final class ProcessList {
         return gidArray;
     }
 
+    private boolean shouldEnableTaggedPointers(ProcessRecord app) {
+        // Ensure we have platform + kernel support for TBI.
+        if (!Zygote.nativeSupportsTaggedPointers()) {
+            return false;
+        }
+
+        // Check to ensure the app hasn't explicitly opted-out of TBI via. the manifest attribute.
+        if (!app.info.allowsNativeHeapPointerTagging()) {
+            return false;
+        }
+
+        // Check to see that the compat feature for TBI is enabled.
+        if (!mPlatformCompat.isChangeEnabled(NATIVE_HEAP_POINTER_TAGGING, app.info)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private int decideTaggingLevel(ProcessRecord app) {
+        if (shouldEnableTaggedPointers(app)) {
+            return Zygote.MEMORY_TAG_LEVEL_TBI;
+        }
+
+        return 0;
+    }
+
     private int decideGwpAsanLevel(ProcessRecord app) {
         // Look at the process attribute first.
        if (app.processInfo != null
@@ -1848,15 +1883,6 @@ public final class ProcessList {
                 runtimeFlags |= Zygote.USE_APP_IMAGE_STARTUP_CACHE;
             }
 
-            if (Zygote.nativeSupportsTaggedPointers()) {
-                // Enable heap pointer tagging if supported by the kernel, unless disabled by the
-                // app manifest, target sdk level, or compat feature.
-                if (app.info.allowsNativeHeapPointerTagging()
-                        && mPlatformCompat.isChangeEnabled(NATIVE_HEAP_POINTER_TAGGING, app.info)) {
-                    runtimeFlags |= Zygote.MEMORY_TAG_LEVEL_TBI;
-                }
-            }
-
             runtimeFlags |= decideGwpAsanLevel(app);
 
             String invokeWith = null;
@@ -1886,6 +1912,20 @@ public final class ProcessList {
             app.gids = gids;
             app.setRequiredAbi(requiredAbi);
             app.instructionSet = instructionSet;
+
+            // If instructionSet is non-null, this indicates that the system_server is spawning a
+            // process with an ISA that may be different from its own. System (kernel and hardware)
+            // compatililty for these features is checked in the decideTaggingLevel in the
+            // system_server process (not the child process). As TBI is only supported in aarch64,
+            // we can simply ensure that the new process is also aarch64. This prevents the mismatch
+            // where a 64-bit system server spawns a 32-bit child that thinks it should enable some
+            // tagging variant. Theoretically, a 32-bit system server could exist that spawns 64-bit
+            // processes, in which case the new process won't get any tagging. This is fine as we
+            // haven't seen this configuration in practice, and we can reasonable assume that if
+            // tagging is desired, the system server will be 64-bit.
+            if (instructionSet == null || instructionSet.equals("arm64")) {
+                runtimeFlags |= decideTaggingLevel(app);
+            }
 
             // the per-user SELinux context must be set
             if (TextUtils.isEmpty(app.info.seInfoUser)) {
@@ -2141,6 +2181,17 @@ public final class ProcessList {
         return result;
     }
 
+    private boolean needsStorageDataIsolation(StorageManagerInternal storageManagerInternal,
+            ProcessRecord app) {
+        return mVoldAppDataIsolationEnabled && UserHandle.isApp(app.uid)
+                && !storageManagerInternal.isExternalStorageService(app.uid)
+                // Special mounting mode doesn't need to have data isolation as they won't
+                // access /mnt/user anyway.
+                && app.mountMode != Zygote.MOUNT_EXTERNAL_ANDROID_WRITABLE
+                && app.mountMode != Zygote.MOUNT_EXTERNAL_PASS_THROUGH
+                && app.mountMode != Zygote.MOUNT_EXTERNAL_INSTALLER;
+    }
+
     private Process.ProcessStartResult startProcess(HostingRecord hostingRecord, String entryPoint,
             ProcessRecord app, int uid, int[] gids, int runtimeFlags, int zygotePolicyFlags,
             int mountExternal, String seInfo, String requiredAbi, String instructionSet,
@@ -2197,13 +2248,13 @@ public final class ProcessList {
             int userId = UserHandle.getUserId(uid);
             StorageManagerInternal storageManagerInternal = LocalServices.getService(
                     StorageManagerInternal.class);
-            if (mVoldAppDataIsolationEnabled && UserHandle.isApp(app.uid)
-                    && !storageManagerInternal.isExternalStorageService(uid)) {
+            if (needsStorageDataIsolation(storageManagerInternal, app)) {
                 bindMountAppStorageDirs = true;
-                if (!storageManagerInternal.prepareStorageDirs(userId, pkgDataInfoMap.keySet(),
+                if (pkgDataInfoMap == null ||
+                        !storageManagerInternal.prepareStorageDirs(userId, pkgDataInfoMap.keySet(),
                         app.processName)) {
-                    // Cannot prepare Android/app and Android/obb directory,
-                    // so we won't mount it in zygote.
+                    // Cannot prepare Android/app and Android/obb directory or inode == 0,
+                    // so we won't mount it in zygote, but resume the mount after unlocking device.
                     app.bindMountPending = true;
                     bindMountAppStorageDirs = false;
                 }
@@ -3588,17 +3639,22 @@ public final class ProcessList {
             final int packageCount = app.pkgList.size();
             for (int j = 0; j < packageCount; j++) {
                 final String packageName = app.pkgList.keyAt(j);
-                if (updateFrameworkRes || packagesToUpdate.contains(packageName)) {
-                    try {
-                        final ApplicationInfo ai = AppGlobals.getPackageManager()
-                                .getApplicationInfo(packageName, STOCK_PM_FLAGS, app.userId);
-                        if (ai != null) {
-                            app.thread.scheduleApplicationInfoChanged(ai);
-                        }
-                    } catch (RemoteException e) {
-                        Slog.w(TAG, String.format("Failed to update %s ApplicationInfo for %s",
-                                packageName, app));
+                if (!updateFrameworkRes && !packagesToUpdate.contains(packageName)) {
+                    continue;
+                }
+                try {
+                    final ApplicationInfo ai = AppGlobals.getPackageManager()
+                            .getApplicationInfo(packageName, STOCK_PM_FLAGS, app.userId);
+                    if (ai == null) {
+                        continue;
                     }
+                    app.thread.scheduleApplicationInfoChanged(ai);
+                    if (ai.packageName.equals(app.info.packageName)) {
+                        app.info = ai;
+                    }
+                } catch (RemoteException e) {
+                    Slog.w(TAG, String.format("Failed to update %s ApplicationInfo for %s",
+                            packageName, app));
                 }
             }
         }

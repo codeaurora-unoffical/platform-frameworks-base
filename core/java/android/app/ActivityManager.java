@@ -69,6 +69,7 @@ import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.WorkSource;
+import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.DisplayMetrics;
 import android.util.Singleton;
@@ -1597,6 +1598,39 @@ public class ActivityManager {
                     + " resizeMode: " + ActivityInfo.resizeModeToString(mResizeMode)
                     + " minWidth: " + mMinWidth + " minHeight: " + mMinHeight;
         }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof TaskDescription)) {
+                return false;
+            }
+
+            TaskDescription other = (TaskDescription) obj;
+            return TextUtils.equals(mLabel, other.mLabel)
+                    && TextUtils.equals(mIconFilename, other.mIconFilename)
+                    && mIcon == other.mIcon
+                    && mColorPrimary == other.mColorPrimary
+                    && mColorBackground == other.mColorBackground
+                    && mStatusBarColor == other.mStatusBarColor
+                    && mNavigationBarColor == other.mNavigationBarColor
+                    && mEnsureStatusBarContrastWhenTransparent
+                            == other.mEnsureStatusBarContrastWhenTransparent
+                    && mEnsureNavigationBarContrastWhenTransparent
+                            == other.mEnsureNavigationBarContrastWhenTransparent
+                    && mResizeMode == other.mResizeMode
+                    && mMinWidth == other.mMinWidth
+                    && mMinHeight == other.mMinHeight;
+        }
+
+        /** @hide */
+        public static boolean equals(TaskDescription td1, TaskDescription td2) {
+            if (td1 == null && td2 == null) {
+                return true;
+            } else if (td1 != null && td2 != null) {
+                return td1.equals(td2);
+            }
+            return false;
+        }
     }
 
     /**
@@ -2757,7 +2791,9 @@ public class ActivityManager {
         @UnsupportedAppUsage
         public boolean visible;
         // Index of the stack in the display's stack list, can be used for comparison of stack order
+        // TODO: Can be removed since no one is using it.
         @UnsupportedAppUsage
+        @Deprecated
         public int position;
         public WindowContainerToken stackToken;
         /**

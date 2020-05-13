@@ -16,6 +16,9 @@
 */
 -->
 <resources>
+    <!-- Recommended minimum clickable element dimension -->
+    <dimen name="min_clickable_item_size">48dp</dimen>
+
     <!-- Amount to offset bottom of notification peek window from top of status bar. -->
     <dimen name="peek_window_y_offset">-12dp</dimen>
 
@@ -323,6 +326,7 @@
     <dimen name="screenshot_action_chip_padding_middle">8dp</dimen>
     <dimen name="screenshot_action_chip_padding_end">16dp</dimen>
     <dimen name="screenshot_action_chip_text_size">14sp</dimen>
+    <dimen name="screenshot_dismissal_height_delta">80dp</dimen>
 
 
     <!-- The width of the view containing navigation buttons -->
@@ -622,6 +626,15 @@
     <!-- The height of the gap between adjacent notification sections. -->
     <dimen name="notification_section_divider_height">@dimen/notification_side_paddings</dimen>
 
+    <!-- Size of the face pile shown on one-line (children of a group) conversation notifications -->
+    <dimen name="conversation_single_line_face_pile_size">36dp</dimen>
+
+    <!-- Size of an avatar shown on one-line (children of a group) conversation notifications -->
+    <dimen name="conversation_single_line_avatar_size">24dp</dimen>
+
+    <!-- Border width for avatars in the face pile shown on one-line (children of a group) conversation notifications -->
+    <dimen name="conversation_single_line_face_pile_protection_width">1dp</dimen>
+
     <!-- The minimum amount of top overscroll to go to the quick settings. -->
     <dimen name="min_top_overscroll_to_qs">36dp</dimen>
 
@@ -745,7 +758,7 @@
     <!-- The top padding of the clear all button -->
     <dimen name="clear_all_padding_top">12dp</dimen>
 
-    <dimen name="notification_section_header_height">56dp</dimen>
+    <dimen name="notification_section_header_height">48dp</dimen>
     <dimen name="notification_section_header_padding_left">16dp</dimen>
 
     <!-- Largest size an avatar might need to be drawn in the user picker, status bar, or
@@ -990,8 +1003,6 @@
     <dimen name="cell_overlay_padding">18dp</dimen>
 
     <!-- Global actions power menu -->
-    <dimen name="global_actions_top_margin">12dp</dimen>
-
     <dimen name="global_actions_panel_width">120dp</dimen>
     <dimen name="global_actions_padding">12dp</dimen>
     <dimen name="global_actions_translate">9dp</dimen>
@@ -1007,6 +1018,12 @@
          the bounds of the parent view. -->
     <dimen name="global_actions_grid_container_shadow_offset">20dp</dimen>
     <dimen name="global_actions_grid_container_negative_shadow_offset">-20dp</dimen>
+
+    <!-- Margins at the left and right of the power menu and home controls widgets. -->
+    <dimen name="global_actions_side_margin">16dp</dimen>
+
+    <!-- Amount to shift the layout when exiting/entering for controls activities -->
+    <dimen name="global_actions_controls_y_translation">20dp</dimen>
 
     <!-- The maximum offset in either direction that elements are moved horizontally to prevent
          burn-in on AOD. -->
@@ -1191,6 +1208,7 @@
          snap to the dismiss target. -->
     <dimen name="bubble_dismiss_target_padding_x">40dp</dimen>
     <dimen name="bubble_dismiss_target_padding_y">20dp</dimen>
+    <dimen name="bubble_manage_menu_elevation">4dp</dimen>
 
     <dimen name="dismiss_circle_size">52dp</dimen>
     <dimen name="dismiss_target_x_size">24dp</dimen>
@@ -1231,10 +1249,17 @@
     <!-- Home Controls -->
     <dimen name="controls_header_side_margin">4dp</dimen>
     <dimen name="controls_header_menu_size">48dp</dimen>
-    <dimen name="controls_header_app_icon_size">40dp</dimen>
-    <dimen name="controls_list_side_margin">16dp</dimen>
-    <dimen name="controls_top_margin">44dp</dimen>
-    <dimen name="control_header_text_size">22sp</dimen>
+    <dimen name="controls_header_bottom_margin">24dp</dimen>
+    <dimen name="controls_header_app_icon_size">24dp</dimen>
+    <dimen name="controls_top_margin">48dp</dimen>
+    <dimen name="control_header_text_size">20sp</dimen>
+    <dimen name="control_item_text_size">16sp</dimen>
+    <dimen name="control_menu_item_text_size">16sp</dimen>
+    <dimen name="control_menu_item_min_height">56dp</dimen>
+    <dimen name="control_menu_vertical_padding">12dp</dimen>
+    <dimen name="control_menu_horizontal_padding">16dp</dimen>
+    <dimen name="control_spinner_padding_vertical">24dp</dimen>
+    <dimen name="control_spinner_padding_horizontal">20dp</dimen>
     <dimen name="control_text_size">14sp</dimen>
     <dimen name="control_icon_size">24dp</dimen>
     <dimen name="control_spacing">4dp</dimen>
@@ -1247,6 +1272,14 @@
     <dimen name="control_status_expanded">18sp</dimen>
     <dimen name="control_base_item_margin">2dp</dimen>
     <dimen name="control_status_padding">3dp</dimen>
+    <fraction name="controls_toggle_bg_intensity">5%</fraction>
+    <fraction name="controls_dimmed_alpha">40%</fraction>
+
+    <!-- Home Controls activity view detail panel-->
+    <dimen name="controls_activity_view_top_padding">25dp</dimen>
+    <dimen name="controls_activity_view_side_padding">12dp</dimen>
+    <dimen name="controls_activity_view_top_offset">100dp</dimen>
+    <dimen name="controls_activity_view_text_size">17sp</dimen>
 
     <!-- Home Controls management screens -->
     <dimen name="controls_management_top_padding">48dp</dimen>
@@ -1280,4 +1313,9 @@
 
     <!-- Opacity at which the background for the shutdown UI will be drawn. -->
     <item name="shutdown_scrim_behind_alpha" format="float" type="dimen">0.95</item>
+
+    <!--  Allow CornerHandleView and PathSpecCornerPathRenderer to decouple from corner-radius -->
+    <dimen name="config_rounded_mask_size">@*android:dimen/rounded_corner_radius</dimen>
+    <dimen name="config_rounded_mask_size_top">@*android:dimen/rounded_corner_radius_top</dimen>
+    <dimen name="config_rounded_mask_size_bottom">@*android:dimen/rounded_corner_radius_bottom</dimen>
 </resources>

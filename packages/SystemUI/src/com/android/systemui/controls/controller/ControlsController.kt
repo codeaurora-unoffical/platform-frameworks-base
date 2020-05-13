@@ -23,6 +23,7 @@ import android.service.controls.actions.ControlAction
 import com.android.systemui.controls.ControlStatus
 import com.android.systemui.controls.UserAwareController
 import com.android.systemui.controls.management.ControlsFavoritingActivity
+import com.android.systemui.controls.ui.ControlWithState
 import com.android.systemui.controls.ui.ControlsUiController
 import java.util.function.Consumer
 
@@ -51,17 +52,15 @@ interface ControlsController : UserAwareController {
      * Load all available [Control] for a given service.
      *
      * @param componentName the [ComponentName] of the [ControlsProviderService] to load from
-     * @param dataCallback a callback in which to retrieve the result.
+     * @param dataCallback a callback in which to retrieve the result
+     * @param cancelWrapper a callback to receive a [Runnable] that can be run to cancel the
+     *                      request
      */
     fun loadForComponent(
         componentName: ComponentName,
-        dataCallback: Consumer<LoadData>
+        dataCallback: Consumer<LoadData>,
+        cancelWrapper: Consumer<Runnable>
     )
-
-    /**
-     * Cancels a pending load call
-     */
-    fun cancelLoad()
 
     /**
      * Request to subscribe for favorited controls per structure
@@ -111,6 +110,13 @@ interface ControlsController : UserAwareController {
         @ControlAction.ResponseResult response: Int
     )
 
+    /**
+     * When a control should be highlighted, dimming down what's around it.
+     *
+     * @param cws focused control, or {@code null} if nothing should be highlighted.
+     */
+    fun onFocusChanged(cws: ControlWithState?)
+
     // FAVORITE MANAGEMENT
 
     /**
@@ -148,6 +154,18 @@ interface ControlsController : UserAwareController {
     fun getFavoritesForComponent(componentName: ComponentName): List<StructureInfo>
 
     /**
+     * Get all the favorites for a given structure.
+     *
+     * @param componentName the name of the service that provides the [Control]
+     * @param structureName the name of the structure
+     * @return a list of the current favorites in that structure
+     */
+    fun getFavoritesForStructure(
+        componentName: ComponentName,
+        structureName: CharSequence
+    ): List<ControlInfo>
+
+    /**
      * Adds a single favorite to a given component and structure
      * @param componentName the name of the service that provides the [Control]
      * @param structureName the name of the structure that holds the [Control]
@@ -178,6 +196,11 @@ interface ControlsController : UserAwareController {
      * @return the number of current favorites for the given component
      */
     fun countFavoritesForComponent(componentName: ComponentName): Int
+
+    /**
+     * TEMPORARY for testing
+     */
+    fun resetFavorites()
 
     /**
      * Interface for structure to pass data to [ControlsFavoritingActivity].

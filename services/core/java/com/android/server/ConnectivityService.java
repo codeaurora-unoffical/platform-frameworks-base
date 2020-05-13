@@ -18,6 +18,14 @@ package com.android.server;
 
 import static android.Manifest.permission.RECEIVE_DATA_ACTIVITY_CHANGE;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+import static android.net.ConnectivityDiagnosticsManager.ConnectivityReport.KEY_NETWORK_PROBES_ATTEMPTED_BITMASK;
+import static android.net.ConnectivityDiagnosticsManager.ConnectivityReport.KEY_NETWORK_PROBES_SUCCEEDED_BITMASK;
+import static android.net.ConnectivityDiagnosticsManager.ConnectivityReport.KEY_NETWORK_VALIDATION_RESULT;
+import static android.net.ConnectivityDiagnosticsManager.DataStallReport.DETECTION_METHOD_DNS_EVENTS;
+import static android.net.ConnectivityDiagnosticsManager.DataStallReport.DETECTION_METHOD_TCP_METRICS;
+import static android.net.ConnectivityDiagnosticsManager.DataStallReport.KEY_DNS_CONSECUTIVE_TIMEOUTS;
+import static android.net.ConnectivityDiagnosticsManager.DataStallReport.KEY_TCP_METRICS_COLLECTION_PERIOD_MILLIS;
+import static android.net.ConnectivityDiagnosticsManager.DataStallReport.KEY_TCP_PACKET_FAIL_RATE;
 import static android.net.ConnectivityManager.CONNECTIVITY_ACTION;
 import static android.net.ConnectivityManager.NETID_UNSET;
 import static android.net.ConnectivityManager.PRIVATE_DNS_MODE_OPPORTUNISTIC;
@@ -72,6 +80,7 @@ import android.net.ConnectionInfo;
 import android.net.ConnectivityDiagnosticsManager.ConnectivityReport;
 import android.net.ConnectivityDiagnosticsManager.DataStallReport;
 import android.net.ConnectivityManager;
+import android.net.DataStallReportParcelable;
 import android.net.ICaptivePortal;
 import android.net.IConnectivityDiagnosticsCallback;
 import android.net.IConnectivityManager;
@@ -108,6 +117,7 @@ import android.net.NetworkSpecifier;
 import android.net.NetworkStack;
 import android.net.NetworkStackClient;
 import android.net.NetworkState;
+import android.net.NetworkTestResultParcelable;
 import android.net.NetworkUtils;
 import android.net.NetworkWatchlistManager;
 import android.net.PrivateDnsConfigParcel;
@@ -2093,6 +2103,20 @@ public class ConnectivityService extends IConnectivityManager.Stub
                 NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK);
     }
 
+    private void enforceNetworkFactoryOrSettingsPermission() {
+        enforceAnyPermissionOf(
+                android.Manifest.permission.NETWORK_SETTINGS,
+                android.Manifest.permission.NETWORK_FACTORY,
+                NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK);
+    }
+
+    private void enforceNetworkFactoryOrTestNetworksPermission() {
+        enforceAnyPermissionOf(
+                android.Manifest.permission.MANAGE_TEST_NETWORKS,
+                android.Manifest.permission.NETWORK_FACTORY,
+                NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK);
+    }
+
     private boolean checkSettingsPermission() {
         return checkAnyPermissionOf(
                 android.Manifest.permission.NETWORK_SETTINGS,
@@ -2151,7 +2175,8 @@ public class ConnectivityService extends IConnectivityManager.Stub
     private boolean checkNetworkSignalStrengthWakeupPermission(int pid, int uid) {
         return checkAnyPermissionOf(pid, uid,
                 android.Manifest.permission.NETWORK_SIGNAL_STRENGTH_WAKEUP,
-                NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK);
+                NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK,
+                android.Manifest.permission.NETWORK_SETTINGS);
     }
 
     private void enforceConnectivityRestrictedNetworksPermission() {
@@ -2721,7 +2746,9 @@ public class ConnectivityService extends IConnectivityManager.Stub
                     break;
                 }
                 case NetworkAgent.EVENT_NETWORK_PROPERTIES_CHANGED: {
-                    handleUpdateLinkProperties(nai, (LinkProperties) msg.obj);
+                    LinkProperties newLp = (LinkProperties) msg.obj;
+                    processLinkPropertiesFromAgent(nai, newLp);
+                    handleUpdateLinkProperties(nai, newLp);
                     break;
                 }
                 case NetworkAgent.EVENT_NETWORK_INFO_CHANGED: {
@@ -2803,14 +2830,6 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
                     handleNetworkTested(nai, results.mTestResult,
                             (results.mRedirectUrl == null) ? "" : results.mRedirectUrl);
-
-                    // Invoke ConnectivityReport generation for this Network test event.
-                    final Message m =
-                            mConnectivityDiagnosticsHandler.obtainMessage(
-                                    ConnectivityDiagnosticsHandler.EVENT_NETWORK_TESTED,
-                                    new ConnectivityReportEvent(results.mTimestampMillis, nai));
-                    m.setData(msg.getData());
-                    mConnectivityDiagnosticsHandler.sendMessage(m);
                     break;
                 }
                 case EVENT_PROVISIONING_NOTIFICATION: {
@@ -2989,23 +3008,33 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
         @Override
         public void notifyNetworkTested(int testResult, @Nullable String redirectUrl) {
-            notifyNetworkTestedWithExtras(testResult, redirectUrl, SystemClock.elapsedRealtime(),
-                    PersistableBundle.EMPTY);
+            // Legacy version of notifyNetworkTestedWithExtras.
+            // Would only be called if the system has a NetworkStack module older than the
+            // framework, which does not happen in practice.
         }
 
         @Override
-        public void notifyNetworkTestedWithExtras(
-                int testResult,
-                @Nullable String redirectUrl,
-                long timestampMillis,
-                @NonNull PersistableBundle extras) {
-            final Message msg =
-                    mTrackerHandler.obtainMessage(
-                            EVENT_NETWORK_TESTED,
-                            new NetworkTestedResults(
-                                    mNetId, testResult, timestampMillis, redirectUrl));
-            msg.setData(new Bundle(extras));
+        public void notifyNetworkTestedWithExtras(NetworkTestResultParcelable p) {
+            final Message msg = mTrackerHandler.obtainMessage(
+                    EVENT_NETWORK_TESTED,
+                    new NetworkTestedResults(
+                            mNetId, p.result, p.timestampMillis, p.redirectUrl));
             mTrackerHandler.sendMessage(msg);
+
+            // Invoke ConnectivityReport generation for this Network test event.
+            final NetworkAgentInfo nai = getNetworkAgentInfoForNetId(mNetId);
+            if (nai == null) return;
+            final Message m = mConnectivityDiagnosticsHandler.obtainMessage(
+                    ConnectivityDiagnosticsHandler.EVENT_NETWORK_TESTED,
+                    new ConnectivityReportEvent(p.timestampMillis, nai));
+
+            final PersistableBundle extras = new PersistableBundle();
+            extras.putInt(KEY_NETWORK_VALIDATION_RESULT, p.result);
+            extras.putInt(KEY_NETWORK_PROBES_SUCCEEDED_BITMASK, p.probesSucceeded);
+            extras.putInt(KEY_NETWORK_PROBES_ATTEMPTED_BITMASK, p.probesAttempted);
+
+            m.setData(new Bundle(extras));
+            mConnectivityDiagnosticsHandler.sendMessage(m);
         }
 
         @Override
@@ -3054,12 +3083,25 @@ public class ConnectivityService extends IConnectivityManager.Stub
         }
 
         @Override
-        public void notifyDataStallSuspected(
-                long timestampMillis, int detectionMethod, PersistableBundle extras) {
-            final Message msg =
-                    mConnectivityDiagnosticsHandler.obtainMessage(
-                            ConnectivityDiagnosticsHandler.EVENT_DATA_STALL_SUSPECTED,
-                            detectionMethod, mNetId, timestampMillis);
+        public void notifyDataStallSuspected(DataStallReportParcelable p) {
+            final Message msg = mConnectivityDiagnosticsHandler.obtainMessage(
+                    ConnectivityDiagnosticsHandler.EVENT_DATA_STALL_SUSPECTED,
+                    p.detectionMethod, mNetId, p.timestampMillis);
+
+            final PersistableBundle extras = new PersistableBundle();
+            switch (p.detectionMethod) {
+                case DETECTION_METHOD_DNS_EVENTS:
+                    extras.putInt(KEY_DNS_CONSECUTIVE_TIMEOUTS, p.dnsConsecutiveTimeouts);
+                    break;
+                case DETECTION_METHOD_TCP_METRICS:
+                    extras.putInt(KEY_TCP_PACKET_FAIL_RATE, p.tcpPacketFailRate);
+                    extras.putInt(KEY_TCP_METRICS_COLLECTION_PERIOD_MILLIS,
+                            p.tcpMetricsCollectionPeriodMillis);
+                    break;
+                default:
+                    log("Unknown data stall detection method, ignoring: " + p.detectionMethod);
+                    return;
+            }
             msg.setData(new Bundle(extras));
 
             // NetworkStateTrackerHandler currently doesn't take any actions based on data
@@ -3339,6 +3381,8 @@ public class ConnectivityService extends IConnectivityManager.Stub
                         getNetworkPermission(networkAgent.networkCapabilities));
             }
             mDnsResolver.createNetworkCache(networkAgent.network.netId);
+            mDnsManager.updateTransportsForNetwork(networkAgent.network.netId,
+                    networkAgent.networkCapabilities.getTransportTypes());
             return true;
         } catch (RemoteException | ServiceSpecificException e) {
             loge("Error creating network " + networkAgent.network.netId + ": "
@@ -5678,7 +5722,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     @Override
     public int registerNetworkProvider(Messenger messenger, String name) {
-        enforceNetworkFactoryPermission();
+        enforceNetworkFactoryOrSettingsPermission();
         NetworkProviderInfo npi = new NetworkProviderInfo(name, messenger,
                 null /* asyncChannel */, nextNetworkProviderId(),
                 () -> unregisterNetworkProvider(messenger));
@@ -5688,7 +5732,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     @Override
     public void unregisterNetworkProvider(Messenger messenger) {
-        enforceNetworkFactoryPermission();
+        enforceNetworkFactoryOrSettingsPermission();
         mHandler.sendMessage(mHandler.obtainMessage(EVENT_UNREGISTER_NETWORK_PROVIDER, messenger));
     }
 
@@ -5708,7 +5752,11 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     @Override
     public void declareNetworkRequestUnfulfillable(NetworkRequest request) {
-        enforceNetworkFactoryPermission();
+        if (request.hasTransport(TRANSPORT_TEST)) {
+            enforceNetworkFactoryOrTestNetworksPermission();
+        } else {
+            enforceNetworkFactoryPermission();
+        }
         mHandler.post(() -> handleReleaseNetworkRequest(request, Binder.getCallingUid(), true));
     }
 
@@ -5814,7 +5862,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
         }
 
         LinkProperties lp = new LinkProperties(linkProperties);
-        lp.ensureDirectlyConnectedRoutes();
+
         // TODO: Instead of passing mDefaultRequest, provide an API to determine whether a Network
         // satisfies mDefaultRequest.
         final NetworkCapabilities nc = new NetworkCapabilities(networkCapabilities);
@@ -5822,8 +5870,11 @@ public class ConnectivityService extends IConnectivityManager.Stub
                 new Network(mNetIdManager.reserveNetId()), new NetworkInfo(networkInfo), lp, nc,
                 currentScore, mContext, mTrackerHandler, new NetworkAgentConfig(networkAgentConfig),
                 this, mNetd, mDnsResolver, mNMS, providerId);
-        // Make sure the network capabilities reflect what the agent info says.
+
+        // Make sure the LinkProperties and NetworkCapabilities reflect what the agent info says.
         nai.getAndSetNetworkCapabilities(mixInCapabilities(nai, nc));
+        processLinkPropertiesFromAgent(nai, nai.linkProperties);
+
         final String extraInfo = networkInfo.getExtraInfo();
         final String name = TextUtils.isEmpty(extraInfo)
                 ? nai.networkCapabilities.getSsid() : extraInfo;
@@ -5859,6 +5910,11 @@ public class ConnectivityService extends IConnectivityManager.Stub
         NetworkInfo networkInfo = nai.networkInfo;
         updateNetworkInfo(nai, networkInfo);
         updateUids(nai, null, nai.networkCapabilities);
+    }
+
+    private void processLinkPropertiesFromAgent(NetworkAgentInfo nai, LinkProperties lp) {
+        lp.ensureDirectlyConnectedRoutes();
+        nai.clatd.setNat64PrefixFromRa(lp.getNat64Prefix());
     }
 
     private void updateLinkProperties(NetworkAgentInfo networkAgent, LinkProperties newLp,
@@ -6088,7 +6144,13 @@ public class ConnectivityService extends IConnectivityManager.Stub
             log("Setting DNS servers for network " + netId + " to " + dnses);
         }
         try {
-            mDnsManager.setDnsConfigurationForNetwork(netId, newLp, isDefaultNetwork);
+            mDnsManager.noteDnsServersForNetwork(netId, newLp);
+            // TODO: netd should listen on [::1]:53 and proxy queries to the current
+            // default network, and we should just set net.dns1 to ::1, not least
+            // because applications attempting to use net.dns resolvers will bypass
+            // the privacy protections of things like DNS-over-TLS.
+            if (isDefaultNetwork) mDnsManager.setDefaultDnsSystemProperties(newLp.getDnsServers());
+            mDnsManager.flushVmDnsCache();
         } catch (Exception e) {
             loge("Exception in setDnsConfigurationForNetwork: " + e);
         }
@@ -6286,6 +6348,10 @@ public class ConnectivityService extends IConnectivityManager.Stub
             // bubble those changes through.
             updateAllVpnsCapabilities();
         }
+
+        if (!newNc.equalsTransportTypes(prevNc)) {
+            mDnsManager.updateTransportsForNetwork(nai.network.netId, newNc.getTransportTypes());
+        }
     }
 
     /**
@@ -6378,13 +6444,13 @@ public class ConnectivityService extends IConnectivityManager.Stub
             // Ignore updates for disconnected networks
             return;
         }
-        // newLp is already a defensive copy.
-        newLp.ensureDirectlyConnectedRoutes();
         if (VDBG || DDBG) {
             log("Update of LinkProperties for " + nai.toShortString()
                     + "; created=" + nai.created
                     + "; everConnected=" + nai.everConnected);
         }
+        // TODO: eliminate this defensive copy after confirming that updateLinkProperties does not
+        // modify its oldLp parameter.
         updateLinkProperties(nai, newLp, new LinkProperties(nai.linkProperties));
     }
 
