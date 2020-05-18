@@ -74,6 +74,7 @@ import com.android.systemui.Dumpable;
 import com.android.systemui.R;
 import com.android.systemui.bubbles.dagger.BubbleModule;
 import com.android.systemui.dump.DumpManager;
+import com.android.systemui.model.SysUiState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.PinnedStackListenerForwarder;
@@ -174,6 +175,7 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
 
     private final NotificationInterruptStateProvider mNotificationInterruptStateProvider;
     private IStatusBarService mBarService;
+    private SysUiState mSysUiState;
 
     // Used for determining view rect for touch interaction
     private Rect mTempRect = new Rect();
@@ -290,11 +292,12 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
             NotifPipeline notifPipeline,
             FeatureFlags featureFlags,
             DumpManager dumpManager,
-            FloatingContentCoordinator floatingContentCoordinator) {
+            FloatingContentCoordinator floatingContentCoordinator,
+            SysUiState sysUiState) {
         this(context, notificationShadeWindowController, statusBarStateController, shadeController,
                 data, null /* synchronizer */, configurationController, interruptionStateProvider,
                 zenModeController, notifUserManager, groupManager, entryManager,
-                notifPipeline, featureFlags, dumpManager, floatingContentCoordinator);
+                notifPipeline, featureFlags, dumpManager, floatingContentCoordinator, sysUiState);
     }
 
     /**
@@ -315,7 +318,8 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
             NotifPipeline notifPipeline,
             FeatureFlags featureFlags,
             DumpManager dumpManager,
-            FloatingContentCoordinator floatingContentCoordinator) {
+            FloatingContentCoordinator floatingContentCoordinator,
+            SysUiState sysUiState) {
         dumpManager.registerDumpable(TAG, this);
         mContext = context;
         mShadeController = shadeController;
@@ -327,19 +331,20 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
             @Override
             public void onZenChanged(int zen) {
                 for (Bubble b : mBubbleData.getBubbles()) {
-                    b.setShowDot(b.showInShade(), true /* animate */);
+                    b.setShowDot(b.showInShade());
                 }
             }
 
             @Override
             public void onConfigChanged(ZenModeConfig config) {
                 for (Bubble b : mBubbleData.getBubbles()) {
-                    b.setShowDot(b.showInShade(), true /* animate */);
+                    b.setShowDot(b.showInShade());
                 }
             }
         });
 
         configurationController.addCallback(this /* configurationListener */);
+        mSysUiState = sysUiState;
 
         mBubbleData = data;
         mBubbleData.setListener(mBubbleDataListener);
@@ -593,7 +598,8 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
     private void ensureStackViewCreated() {
         if (mStackView == null) {
             mStackView = new BubbleStackView(
-                    mContext, mBubbleData, mSurfaceSynchronizer, mFloatingContentCoordinator);
+                    mContext, mBubbleData, mSurfaceSynchronizer, mFloatingContentCoordinator,
+                    mSysUiState);
             ViewGroup nsv = mNotificationShadeWindowController.getNotificationShadeView();
             int bubbleScrimIndex = nsv.indexOfChild(nsv.findViewById(R.id.scrim_for_bubble));
             int stackIndex = bubbleScrimIndex + 1;  // Show stack above bubble scrim.
@@ -713,13 +719,6 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
     }
 
     /**
-     * Tell the stack of bubbles to expand.
-     */
-    public void expandStack() {
-        mBubbleData.setExpanded(true);
-    }
-
-    /**
      * Tell the stack of bubbles to collapse.
      */
     public void collapseStack() {
@@ -747,12 +746,6 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
         return (isSummary && isSuppressedSummary) || isBubbleAndSuppressed;
     }
 
-    @VisibleForTesting
-    void selectBubble(String key) {
-        Bubble bubble = mBubbleData.getBubbleWithKey(key);
-        mBubbleData.setSelectedBubble(bubble);
-    }
-
     void promoteBubbleFromOverflow(Bubble bubble) {
         bubble.setInflateSynchronously(mInflateSynchronously);
         mBubbleData.promoteBubbleFromOverflow(bubble, mStackView, mBubbleIconFactory);
@@ -769,13 +762,6 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
             mBubbleData.setSelectedBubble(bubble);
             mBubbleData.setExpanded(true);
         }
-    }
-
-    /**
-     * Tell the stack of bubbles to be dismissed, this will remove all of the bubbles in the stack.
-     */
-    void dismissStack(@DismissReason int reason) {
-        mBubbleData.dismissAll(reason);
     }
 
     /**
@@ -957,9 +943,10 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
             String key = orderedKeys[i];
             NotificationEntry entry = mNotificationEntryManager.getPendingOrActiveNotif(key);
             rankingMap.getRanking(key, mTmpRanking);
-            if (mBubbleData.hasBubbleWithKey(key) && !mTmpRanking.canBubble()) {
+            boolean isActiveBubble = mBubbleData.hasBubbleWithKey(key);
+            if (isActiveBubble && !mTmpRanking.canBubble()) {
                 mBubbleData.notificationEntryRemoved(entry, BubbleController.DISMISS_BLOCKED);
-            } else if (entry != null && mTmpRanking.isBubble()) {
+            } else if (entry != null && mTmpRanking.isBubble() && !isActiveBubble) {
                 entry.setFlagBubble(true);
                 onEntryUpdated(entry);
             }
@@ -1094,7 +1081,7 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
         } else if (interceptBubbleDismissal) {
             Bubble bubble = mBubbleData.getBubbleWithKey(entry.getKey());
             bubble.setSuppressNotification(true);
-            bubble.setShowDot(false /* show */, true /* animate */);
+            bubble.setShowDot(false /* show */);
         } else {
             return false;
         }
@@ -1134,7 +1121,7 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
                     Bubble bubbleChild = mBubbleData.getBubbleWithKey(child.getKey());
                     mNotificationGroupManager.onEntryRemoved(bubbleChild.getEntry());
                     bubbleChild.setSuppressNotification(true);
-                    bubbleChild.setShowDot(false /* show */, true /* animate */);
+                    bubbleChild.setShowDot(false /* show */);
                 } else {
                     // non-bubbled children can be removed
                     for (NotifCallback cb : mCallbacks) {
@@ -1305,7 +1292,7 @@ public class BubbleController implements ConfigurationController.ConfigurationLi
      */
     static boolean canLaunchInActivityView(Context context, NotificationEntry entry) {
         PendingIntent intent = entry.getBubbleMetadata() != null
-                ? entry.getBubbleMetadata().getBubbleIntent()
+                ? entry.getBubbleMetadata().getIntent()
                 : null;
         if (entry.getBubbleMetadata() != null
                 && entry.getBubbleMetadata().getShortcutId() != null) {

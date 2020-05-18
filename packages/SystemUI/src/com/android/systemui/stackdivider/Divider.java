@@ -32,12 +32,14 @@ import android.os.Handler;
 import android.os.RemoteException;
 import android.provider.Settings;
 import android.util.Slog;
-import android.view.IWindowContainer;
+import android.window.TaskOrganizer;
+import android.window.WindowContainerToken;
 import android.view.LayoutInflater;
 import android.view.SurfaceControl;
 import android.view.SurfaceSession;
 import android.view.View;
-import android.view.WindowContainerTransaction;
+import android.window.WindowContainerTransaction;
+import android.window.WindowOrganizer;
 
 import androidx.annotation.Nullable;
 
@@ -111,6 +113,9 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
 
     private DisplayChangeController.OnDisplayChangingListener mRotationController =
             (display, fromRotation, toRotation, t) -> {
+                if (!mSplits.isSplitScreenSupported()) {
+                    return;
+                }
                 DisplayLayout displayLayout =
                         new DisplayLayout(mDisplayController.getDisplayLayout(display));
                 SplitDisplayLayout sdl = new SplitDisplayLayout(mContext, displayLayout, mSplits);
@@ -176,15 +181,9 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
         private boolean mPausedTargetAdjusted = false;
 
         private boolean getSecondaryHasFocus(int displayId) {
-            try {
-                IWindowContainer imeSplit = ActivityTaskManager.getTaskOrganizerController()
-                        .getImeTarget(displayId);
-                return imeSplit != null
-                        && (imeSplit.asBinder() == mSplits.mSecondary.token.asBinder());
-            } catch (RemoteException e) {
-                Slog.w(TAG, "Failed to get IME target", e);
-            }
-            return false;
+            WindowContainerToken imeSplit = TaskOrganizer.getImeTarget(displayId);
+            return imeSplit != null
+                    && (imeSplit.asBinder() == mSplits.mSecondary.token.asBinder());
         }
 
         private void updateDimTargets() {
@@ -266,17 +265,16 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
                 wct.setScreenSizeDp(mSplits.mSecondary.token,
                         SCREEN_WIDTH_DP_UNDEFINED, SCREEN_HEIGHT_DP_UNDEFINED);
             }
-            try {
-                ActivityTaskManager.getTaskOrganizerController()
-                        .applyContainerTransaction(wct, null /* organizer */);
-            } catch (RemoteException e) {
-            }
+
+            WindowOrganizer.applyTransaction(wct);
 
             // Update all the adjusted-for-ime states
-            mView.setAdjustedForIme(mTargetShown, mTargetShown
-                    ? DisplayImeController.ANIMATION_DURATION_SHOW_MS
-                    : DisplayImeController.ANIMATION_DURATION_HIDE_MS);
-            setAdjustedForIme(mTargetShown);
+            if (!mPaused) {
+                mView.setAdjustedForIme(mTargetShown, mTargetShown
+                        ? DisplayImeController.ANIMATION_DURATION_SHOW_MS
+                        : DisplayImeController.ANIMATION_DURATION_HIDE_MS);
+            }
+            setAdjustedForIme(mTargetShown && !mPaused);
         }
 
         @Override
@@ -390,6 +388,9 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
                 mTargetPrimaryDim = mTargetSecondaryDim = 0.f;
                 updateImeAdjustState();
                 startAsyncAnimation();
+                if (mAnimation != null) {
+                    mAnimation.end();
+                }
             });
         }
 
@@ -468,23 +469,28 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
                 mDisplayController.getDisplayLayout(displayId), mSplits);
         mImeController.addPositionProcessor(mImePositionProcessor);
         mDisplayController.addDisplayChangingController(mRotationController);
+        if (!ActivityTaskManager.supportsSplitScreenMultiWindow(mContext)) {
+            removeDivider();
+            return;
+        }
         try {
-            mSplits.init(ActivityTaskManager.getTaskOrganizerController(), mSurfaceSession);
+            mSplits.init(mSurfaceSession);
             // Set starting tile bounds based on middle target
             final WindowContainerTransaction tct = new WindowContainerTransaction();
             int midPos = mSplitLayout.getSnapAlgorithm().getMiddleTarget().position;
             mSplitLayout.resizeSplits(midPos, tct);
-            ActivityTaskManager.getTaskOrganizerController().applyContainerTransaction(tct,
-                    null /* organizer */);
+            WindowOrganizer.applyTransaction(tct);
         } catch (Exception e) {
             Slog.e(TAG, "Failed to register docked stack listener", e);
+            removeDivider();
+            return;
         }
         update(mDisplayController.getDisplayContext(displayId).getResources().getConfiguration());
     }
 
     @Override
     public void onDisplayConfigurationChanged(int displayId, Configuration newConfig) {
-        if (displayId != DEFAULT_DISPLAY) {
+        if (displayId != DEFAULT_DISPLAY || !mSplits.isSplitScreenSupported()) {
             return;
         }
         mSplitLayout = new SplitDisplayLayout(mDisplayController.getDisplayContext(displayId),
@@ -493,13 +499,8 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
             int midPos = mSplitLayout.getSnapAlgorithm().getMiddleTarget().position;
             final WindowContainerTransaction tct = new WindowContainerTransaction();
             mSplitLayout.resizeSplits(midPos, tct);
-            try {
-                ActivityTaskManager.getTaskOrganizerController().applyContainerTransaction(tct,
-                        null /* organizer */);
-            } catch (RemoteException e) {
-            }
-        } else if (mRotateSplitLayout != null
-                && mSplitLayout.mDisplayLayout.rotation()
+            WindowOrganizer.applyTransaction(tct);
+        } else if (mSplitLayout.mDisplayLayout.rotation()
                         == mRotateSplitLayout.mDisplayLayout.rotation()) {
             mSplitLayout.mPrimary = new Rect(mRotateSplitLayout.mPrimary);
             mSplitLayout.mSecondary = new Rect(mRotateSplitLayout.mSecondary);
@@ -605,15 +606,17 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
                     + mHomeStackResizable + "->" + homeStackResizable + " split:" + inSplitMode());
         }
         WindowContainerTransaction wct = new WindowContainerTransaction();
+        final boolean minimizedChanged = mMinimized != minimized;
         // Update minimized state
-        if (mMinimized != minimized) {
+        if (minimizedChanged) {
             mMinimized = minimized;
         }
         // Always set this because we could be entering split when mMinimized is already true
         wct.setFocusable(mSplits.mPrimary.token, !mMinimized);
 
         // Update home-stack resizability
-        if (mHomeStackResizable != homeStackResizable) {
+        final boolean homeResizableChanged = mHomeStackResizable != homeStackResizable;
+        if (homeResizableChanged) {
             mHomeStackResizable = homeStackResizable;
             if (inSplitMode()) {
                 WindowManagerProxy.applyHomeTasksMinimized(
@@ -629,14 +632,17 @@ public class Divider extends SystemUI implements DividerView.DividerCallbacks,
             if (mMinimized) {
                 mImePositionProcessor.pause(displayId);
             }
-            mView.setMinimizedDockStack(minimized, getAnimDuration(), homeStackResizable);
+            if (minimizedChanged || homeResizableChanged) {
+                // This conflicts with IME adjustment, so only call it when things change.
+                mView.setMinimizedDockStack(minimized, getAnimDuration(), homeStackResizable);
+            }
             if (!mMinimized) {
                 // afterwards so it can end any animations started in view
                 mImePositionProcessor.resume(displayId);
             }
         }
         updateTouchable();
-        WindowManagerProxy.applyContainerTransaction(wct);
+        WindowOrganizer.applyTransaction(wct);
     }
 
     void setAdjustedForIme(boolean adjustedForIme) {

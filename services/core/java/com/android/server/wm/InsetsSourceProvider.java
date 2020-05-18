@@ -215,11 +215,7 @@ class InsetsSourceProvider {
             final Rect frame = mWin.getWindowFrames().mFrame;
             if (mControl.setSurfacePosition(frame.left, frame.top) && mControlTarget != null) {
                 // The leash has been stale, we need to create a new one for the client.
-                if (mControlTarget != mDisplayContent.mRemoteInsetsControlTarget) {
-                    // Hacky: recreating leash for RemoteInsetsControlTarget might cause IME
-                    // flicker, so we just report the new surface position to it.
-                    updateControlForTarget(mControlTarget, true /* force */);
-                }
+                updateControlForTarget(mControlTarget, true /* force */);
                 mStateController.notifyControlChanged(mControlTarget);
             }
         }
@@ -263,10 +259,13 @@ class InsetsSourceProvider {
         if (target == null) {
             // Cancelling the animation will invoke onAnimationCancelled, resetting all the fields.
             mWin.cancelAnimation();
+            setClientVisible(InsetsState.getDefaultVisibility(mSource.getType()));
             return;
         }
         mAdapter = new ControlAdapter();
-        setClientVisible(InsetsState.getDefaultVisibility(mSource.getType()));
+        if (getSource().getType() == ITYPE_IME) {
+            setClientVisible(InsetsState.getDefaultVisibility(mSource.getType()));
+        }
         final Transaction t = mDisplayContent.getPendingTransaction();
         mWin.startAnimation(t, mAdapter, !mClientVisible /* hidden */,
                 ANIMATION_TYPE_INSETS_CONTROL, null /* animationFinishedCallback */);

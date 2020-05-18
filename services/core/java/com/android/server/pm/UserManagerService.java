@@ -1716,27 +1716,6 @@ public class UserManagerService extends IUserManager.Stub {
         }
     }
 
-    private void setDevicePolicyUserRestrictionsInner(@UserIdInt int originatingUserId,
-            @Nullable Bundle restrictions,
-            @UserManagerInternal.OwnerType int restrictionOwnerType) {
-        final Bundle global = new Bundle();
-        final Bundle local = new Bundle();
-
-        // Sort restrictions into local and global ensuring they don't overlap.
-        UserRestrictionsUtils.sortToGlobalAndLocal(restrictions, restrictionOwnerType, global,
-                local);
-        boolean isDeviceOwner = restrictionOwnerType == UserManagerInternal.OWNER_TYPE_DEVICE_OWNER;
-
-        RestrictionsSet localRestrictionsSet;
-        if (UserRestrictionsUtils.isEmpty(local)) {
-            localRestrictionsSet = new RestrictionsSet();
-        } else {
-            localRestrictionsSet = new RestrictionsSet(originatingUserId, local);
-        }
-        setDevicePolicyUserRestrictionsInner(originatingUserId, global, localRestrictionsSet,
-                isDeviceOwner);
-    }
-
     /**
      * See {@link UserManagerInternal#setDevicePolicyUserRestrictions}
      */
@@ -3438,10 +3417,10 @@ public class UserManagerService extends IUserManager.Stub {
                     StorageManager.FLAG_STORAGE_DE | StorageManager.FLAG_STORAGE_CE);
             t.traceEnd();
 
-            final Set<String> installablePackages =
+            final Set<String> userTypeInstallablePackages =
                     mSystemPackageInstaller.getInstallablePackagesForUserType(userType);
             t.traceBegin("PM.createNewUser");
-            mPm.createNewUser(userId, installablePackages, disallowedPackages);
+            mPm.createNewUser(userId, userTypeInstallablePackages, disallowedPackages);
             t.traceEnd();
 
             userInfo.partial = false;
@@ -3562,8 +3541,10 @@ public class UserManagerService extends IUserManager.Stub {
     }
 
     /** Install/uninstall system packages for all users based on their user-type, as applicable. */
-    boolean installWhitelistedSystemPackages(boolean isFirstBoot, boolean isUpgrade) {
-        return mSystemPackageInstaller.installWhitelistedSystemPackages(isFirstBoot, isUpgrade);
+    boolean installWhitelistedSystemPackages(boolean isFirstBoot, boolean isUpgrade,
+            @Nullable ArraySet<String> existingPackages) {
+        return mSystemPackageInstaller.installWhitelistedSystemPackages(
+                isFirstBoot, isUpgrade, existingPackages);
     }
 
     private long getCreationTime() {
@@ -4752,10 +4733,10 @@ public class UserManagerService extends IUserManager.Stub {
     private class LocalService extends UserManagerInternal {
         @Override
         public void setDevicePolicyUserRestrictions(@UserIdInt int originatingUserId,
-                @Nullable Bundle restrictions,
-                @OwnerType int restrictionOwnerType) {
+                @NonNull Bundle global, @NonNull RestrictionsSet local,
+                boolean isDeviceOwner) {
             UserManagerService.this.setDevicePolicyUserRestrictionsInner(originatingUserId,
-                    restrictions, restrictionOwnerType);
+                    global, local, isDeviceOwner);
         }
 
         @Override

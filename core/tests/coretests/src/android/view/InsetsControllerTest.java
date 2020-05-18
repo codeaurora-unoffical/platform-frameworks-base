@@ -21,6 +21,7 @@ import static android.view.InsetsController.ANIMATION_TYPE_NONE;
 import static android.view.InsetsController.ANIMATION_TYPE_SHOW;
 import static android.view.InsetsSourceConsumer.ShowResult.IME_SHOW_DELAYED;
 import static android.view.InsetsSourceConsumer.ShowResult.SHOW_IMMEDIATELY;
+import static android.view.InsetsState.ITYPE_CAPTION_BAR;
 import static android.view.InsetsState.ITYPE_IME;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
@@ -31,6 +32,7 @@ import static android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -87,7 +89,6 @@ import java.util.concurrent.CountDownLatch;
 @Presubmit
 @RunWith(AndroidJUnit4.class)
 public class InsetsControllerTest {
-
     private InsetsController mController;
     private SurfaceSession mSession = new SurfaceSession();
     private SurfaceControl mLeash;
@@ -162,7 +163,7 @@ public class InsetsControllerTest {
                     false,
                     new DisplayCutout(
                             Insets.of(10, 10, 10, 10), rect, rect, rect, rect),
-                    rect, rect, SOFT_INPUT_ADJUST_RESIZE, 0);
+                    SOFT_INPUT_ADJUST_RESIZE, 0);
             mController.onFrameChanged(new Rect(0, 0, 100, 100));
         });
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
@@ -638,6 +639,52 @@ public class InsetsControllerTest {
         });
     }
 
+    @Test
+    public void testFrameUpdateDuringAnimation() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+
+            mController.onControlsChanged(createSingletonControl(ITYPE_IME));
+
+            // Pretend IME is calling
+            mController.show(ime(), true /* fromIme */);
+
+            InsetsState copy = new InsetsState(mController.getState(), true /* copySources */);
+            copy.getSource(ITYPE_IME).setFrame(0, 1, 2, 3);
+            copy.getSource(ITYPE_IME).setVisibleFrame(new Rect(4, 5, 6, 7));
+            mController.onStateChanged(copy);
+            assertNotEquals(new Rect(0, 1, 2, 3),
+                    mController.getState().getSource(ITYPE_IME).getFrame());
+            assertNotEquals(new Rect(4, 5, 6, 7),
+                    mController.getState().getSource(ITYPE_IME).getVisibleFrame());
+            mController.cancelExistingAnimation();
+            assertEquals(new Rect(0, 1, 2, 3),
+                    mController.getState().getSource(ITYPE_IME).getFrame());
+            assertEquals(new Rect(4, 5, 6, 7),
+                    mController.getState().getSource(ITYPE_IME).getVisibleFrame());
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+    @Test
+    public void testCaptionInsetsStateAssemble() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            mController.onFrameChanged(new Rect(0, 0, 100, 300));
+            final InsetsState state = new InsetsState(mController.getState(), true);
+            final Rect captionFrame = new Rect(0, 0, 100, 100);
+            mController.setCaptionInsetsHeight(100);
+            mController.onStateChanged(state);
+            final InsetsState currentState = new InsetsState(mController.getState());
+            // The caption bar source should be synced with the info in mAttachInfo.
+            assertEquals(captionFrame, currentState.peekSource(ITYPE_CAPTION_BAR).getFrame());
+            assertTrue(currentState.equals(state, true /* excludingCaptionInsets*/));
+            mController.setCaptionInsetsHeight(0);
+            mController.onStateChanged(state);
+            // The caption bar source should not be there at all, because we don't add empty
+            // caption to the state from the server.
+            assertNull(mController.getState().peekSource(ITYPE_CAPTION_BAR));
+        });
+    }
+
     private void waitUntilNextFrame() throws Exception {
         final CountDownLatch latch = new CountDownLatch(1);
         Choreographer.getMainThreadInstance().postCallback(Choreographer.CALLBACK_COMMIT,
@@ -649,8 +696,7 @@ public class InsetsControllerTest {
 
         // Simulate binder behavior by copying SurfaceControl. Otherwise, InsetsController will
         // attempt to release mLeash directly.
-        SurfaceControl copy = new SurfaceControl();
-        copy.copyFrom(mLeash);
+        SurfaceControl copy = new SurfaceControl(mLeash);
         return new InsetsSourceControl(type, copy, new Point());
     }
 

@@ -43,6 +43,7 @@ import com.android.systemui.statusbar.NotificationMediaManager;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerService.Tunable;
 import com.android.systemui.util.Utils;
+import com.android.systemui.util.concurrency.DelayableExecutor;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -65,7 +66,10 @@ public class QuickQSPanel extends QSPanel {
     private int mMaxTiles;
     protected QSPanel mFullPanel;
     private QuickQSMediaPlayer mMediaPlayer;
+    /** Whether or not the QS media player feature is enabled. */
     private boolean mUsingMediaPlayer;
+    /** Whether or not the QuickQSPanel currently contains a media player. */
+    private boolean mHasMediaPlayer;
     private LinearLayout mHorizontalLinearLayout;
 
     // Only used with media
@@ -81,7 +85,7 @@ public class QuickQSPanel extends QSPanel {
             QSLogger qsLogger,
             NotificationMediaManager notificationMediaManager,
             @Main Executor foregroundExecutor,
-            @Background Executor backgroundExecutor,
+            @Background DelayableExecutor backgroundExecutor,
             @Nullable LocalBluetoothManager localBluetoothManager
     ) {
         super(context, attrs, dumpManager, broadcastDispatcher, qsLogger, notificationMediaManager,
@@ -184,8 +188,8 @@ public class QuickQSPanel extends QSPanel {
 
     boolean switchTileLayout() {
         if (!mUsingMediaPlayer) return false;
-        if (mMediaPlayer.hasMediaSession()
-                && mHorizontalLinearLayout.getVisibility() == View.GONE) {
+        mHasMediaPlayer = mMediaPlayer.hasMediaSession();
+        if (mHasMediaPlayer && mHorizontalLinearLayout.getVisibility() == View.GONE) {
             mHorizontalLinearLayout.setVisibility(View.VISIBLE);
             ((View) mRegularTileLayout).setVisibility(View.GONE);
             mTileLayout.setListening(false);
@@ -197,8 +201,7 @@ public class QuickQSPanel extends QSPanel {
             if (mHost != null) setTiles(mHost.getTiles());
             mTileLayout.setListening(mListening);
             return true;
-        } else if (!mMediaPlayer.hasMediaSession()
-                && mHorizontalLinearLayout.getVisibility() == View.VISIBLE) {
+        } else if (!mHasMediaPlayer && mHorizontalLinearLayout.getVisibility() == View.VISIBLE) {
             mHorizontalLinearLayout.setVisibility(View.GONE);
             ((View) mRegularTileLayout).setVisibility(View.VISIBLE);
             mTileLayout.setListening(false);
@@ -214,8 +217,9 @@ public class QuickQSPanel extends QSPanel {
         return false;
     }
 
-    public boolean hasMediaPlayerSession() {
-        return mMediaPlayer.hasMediaSession();
+    /** Returns true if this panel currently contains a media player. */
+    public boolean hasMediaPlayer() {
+        return mHasMediaPlayer;
     }
 
     @Override

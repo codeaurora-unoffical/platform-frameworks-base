@@ -16,8 +16,11 @@
 package android.media;
 
 import android.annotation.CheckResult;
+import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.StringDef;
+import android.media.MediaCodec.CryptoInfo;
 import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Pair;
@@ -44,6 +47,7 @@ import com.google.android.exoplayer2.extractor.ogg.OggExtractor;
 import com.google.android.exoplayer2.extractor.ts.Ac3Extractor;
 import com.google.android.exoplayer2.extractor.ts.Ac4Extractor;
 import com.google.android.exoplayer2.extractor.ts.AdtsExtractor;
+import com.google.android.exoplayer2.extractor.ts.DefaultTsPayloadReaderFactory;
 import com.google.android.exoplayer2.extractor.ts.PsExtractor;
 import com.google.android.exoplayer2.extractor.ts.TsExtractor;
 import com.google.android.exoplayer2.extractor.wav.WavExtractor;
@@ -51,12 +55,16 @@ import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.ParsableByteArray;
+import com.google.android.exoplayer2.util.Util;
 import com.google.android.exoplayer2.video.ColorInfo;
 
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -380,26 +388,27 @@ public final class MediaParser {
         /**
          * Called once all the data of a sample has been passed to {@link #onSampleDataFound}.
          *
-         * <p>Also includes sample metadata, like presentation timestamp and flags.
+         * <p>Includes sample metadata, like presentation timestamp and flags.
          *
          * @param trackIndex The index of the track to which the sample corresponds.
          * @param timeMicros The media timestamp associated with the sample, in microseconds.
-         * @param flags Flags associated with the sample. See {@link MediaCodec
-         *     MediaCodec.BUFFER_FLAG_*}.
+         * @param flags Flags associated with the sample. See the {@code SAMPLE_FLAG_*} constants.
          * @param size The size of the sample data, in bytes.
          * @param offset The number of bytes that have been consumed by {@code
          *     onSampleDataFound(int, MediaParser.InputReader)} for the specified track, since the
          *     last byte belonging to the sample whose metadata is being passed.
-         * @param cryptoData Encryption data required to decrypt the sample. May be null for
-         *     unencrypted samples.
+         * @param cryptoInfo Encryption data required to decrypt the sample. May be null for
+         *     unencrypted samples. MediaParser may reuse {@link CryptoInfo} instances to avoid
+         *     allocations, so implementations of this method must not write to or keep reference to
+         *     the fields of this parameter.
          */
         void onSampleCompleted(
                 int trackIndex,
                 long timeMicros,
-                int flags,
+                @SampleFlags int flags,
                 int size,
                 int offset,
-                @Nullable MediaCodec.CryptoInfo cryptoData);
+                @Nullable CryptoInfo cryptoInfo);
     }
 
     /**
@@ -440,7 +449,136 @@ public final class MediaParser {
         }
     }
 
-    // Public constants.
+    // Sample flags.
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(
+            flag = true,
+            value = {
+                SAMPLE_FLAG_KEY_FRAME,
+                SAMPLE_FLAG_HAS_SUPPLEMENTAL_DATA,
+                SAMPLE_FLAG_LAST_SAMPLE,
+                SAMPLE_FLAG_ENCRYPTED,
+                SAMPLE_FLAG_DECODE_ONLY
+            })
+    public @interface SampleFlags {}
+    /** Indicates that the sample holds a synchronization sample. */
+    public static final int SAMPLE_FLAG_KEY_FRAME = MediaCodec.BUFFER_FLAG_KEY_FRAME;
+    /** Indicates that the sample has supplemental data. */
+    public static final int SAMPLE_FLAG_HAS_SUPPLEMENTAL_DATA = 1 << 28;
+    /** Indicates that the sample is known to contain the last media sample of the stream. */
+    public static final int SAMPLE_FLAG_LAST_SAMPLE = 1 << 29;
+    /** Indicates that the sample is (at least partially) encrypted. */
+    public static final int SAMPLE_FLAG_ENCRYPTED = 1 << 30;
+    /** Indicates that the sample should be decoded but not rendered. */
+    public static final int SAMPLE_FLAG_DECODE_ONLY = 1 << 31;
+
+    // Parser implementation names.
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @StringDef(
+            prefix = {"PARSER_NAME_"},
+            value = {
+                PARSER_NAME_UNKNOWN,
+                PARSER_NAME_MATROSKA,
+                PARSER_NAME_FMP4,
+                PARSER_NAME_MP4,
+                PARSER_NAME_MP3,
+                PARSER_NAME_ADTS,
+                PARSER_NAME_AC3,
+                PARSER_NAME_TS,
+                PARSER_NAME_FLV,
+                PARSER_NAME_OGG,
+                PARSER_NAME_PS,
+                PARSER_NAME_WAV,
+                PARSER_NAME_AMR,
+                PARSER_NAME_AC4,
+                PARSER_NAME_FLAC
+            })
+    public @interface ParserName {}
+
+    /** Parser name returned by {@link #getParserName()} when no parser has been selected yet. */
+    public static final String PARSER_NAME_UNKNOWN = "android.media.mediaparser.UNKNOWN";
+    /**
+     * Parser for the Matroska container format, as defined in the <a
+     * href="https://matroska.org/technical/specs/">spec</a>.
+     */
+    public static final String PARSER_NAME_MATROSKA = "android.media.mediaparser.MatroskaParser";
+    /**
+     * Parser for fragmented files using the MP4 container format, as defined in ISO/IEC 14496-12.
+     */
+    public static final String PARSER_NAME_FMP4 = "android.media.mediaparser.FragmentedMp4Parser";
+    /**
+     * Parser for non-fragmented files using the MP4 container format, as defined in ISO/IEC
+     * 14496-12.
+     */
+    public static final String PARSER_NAME_MP4 = "android.media.mediaparser.Mp4Parser";
+    /** Parser for the MP3 container format, as defined in ISO/IEC 11172-3. */
+    public static final String PARSER_NAME_MP3 = "android.media.mediaparser.Mp3Parser";
+    /** Parser for the ADTS container format, as defined in ISO/IEC 13818-7. */
+    public static final String PARSER_NAME_ADTS = "android.media.mediaparser.AdtsParser";
+    /**
+     * Parser for the AC-3 container format, as defined in Digital Audio Compression Standard
+     * (AC-3).
+     */
+    public static final String PARSER_NAME_AC3 = "android.media.mediaparser.Ac3Parser";
+    /** Parser for the TS container format, as defined in ISO/IEC 13818-1. */
+    public static final String PARSER_NAME_TS = "android.media.mediaparser.TsParser";
+    /**
+     * Parser for the FLV container format, as defined in Adobe Flash Video File Format
+     * Specification.
+     */
+    public static final String PARSER_NAME_FLV = "android.media.mediaparser.FlvParser";
+    /** Parser for the OGG container format, as defined in RFC 3533. */
+    public static final String PARSER_NAME_OGG = "android.media.mediaparser.OggParser";
+    /** Parser for the PS container format, as defined in ISO/IEC 11172-1. */
+    public static final String PARSER_NAME_PS = "android.media.mediaparser.PsParser";
+    /**
+     * Parser for the WAV container format, as defined in Multimedia Programming Interface and Data
+     * Specifications.
+     */
+    public static final String PARSER_NAME_WAV = "android.media.mediaparser.WavParser";
+    /** Parser for the AMR container format, as defined in RFC 4867. */
+    public static final String PARSER_NAME_AMR = "android.media.mediaparser.AmrParser";
+    /**
+     * Parser for the AC-4 container format, as defined by Dolby AC-4: Audio delivery for
+     * Next-Generation Entertainment Services.
+     */
+    public static final String PARSER_NAME_AC4 = "android.media.mediaparser.Ac4Parser";
+    /**
+     * Parser for the FLAC container format, as defined in the <a
+     * href="https://xiph.org/flac/">spec</a>.
+     */
+    public static final String PARSER_NAME_FLAC = "android.media.mediaparser.FlacParser";
+
+    // MediaParser parameters.
+
+    /** @hide */
+    @Retention(RetentionPolicy.SOURCE)
+    @StringDef(
+            prefix = {"PARAMETER_"},
+            value = {
+                PARAMETER_ADTS_ENABLE_CBR_SEEKING,
+                PARAMETER_AMR_ENABLE_CBR_SEEKING,
+                PARAMETER_FLAC_DISABLE_ID3,
+                PARAMETER_MP4_IGNORE_EDIT_LISTS,
+                PARAMETER_MP4_IGNORE_TFDT_BOX,
+                PARAMETER_MP4_TREAT_VIDEO_FRAMES_AS_KEYFRAMES,
+                PARAMETER_MATROSKA_DISABLE_CUES_SEEKING,
+                PARAMETER_MP3_DISABLE_ID3,
+                PARAMETER_MP3_ENABLE_CBR_SEEKING,
+                PARAMETER_MP3_ENABLE_INDEX_SEEKING,
+                PARAMETER_TS_MODE,
+                PARAMETER_TS_ALLOW_NON_IDR_AVC_KEYFRAMES,
+                PARAMETER_TS_IGNORE_AAC_STREAM,
+                PARAMETER_TS_IGNORE_AVC_STREAM,
+                PARAMETER_TS_IGNORE_SPLICE_INFO_STREAM,
+                PARAMETER_TS_DETECT_ACCESS_UNITS,
+                PARAMETER_TS_ENABLE_HDMV_DTS_AUDIO_STREAMS
+            })
+    public @interface ParameterName {}
 
     /**
      * Sets whether constant bitrate seeking should be enabled for ADTS parsing. {@code boolean}
@@ -575,6 +713,9 @@ public final class MediaParser {
 
     private static final Map<String, ExtractorFactory> EXTRACTOR_FACTORIES_BY_NAME;
     private static final Map<String, Class> EXPECTED_TYPE_BY_PARAMETER_NAME;
+    private static final String TS_MODE_SINGLE_PMT = "single_pmt";
+    private static final String TS_MODE_MULTI_PMT = "multi_pmt";
+    private static final String TS_MODE_HLS = "hls";
 
     // Instance creation methods.
 
@@ -589,7 +730,7 @@ public final class MediaParser {
      */
     @NonNull
     public static MediaParser createByName(
-            @NonNull String name, @NonNull OutputConsumer outputConsumer) {
+            @NonNull @ParserName String name, @NonNull OutputConsumer outputConsumer) {
         String[] nameAsArray = new String[] {name};
         assertValidNames(nameAsArray);
         return new MediaParser(outputConsumer, /* sniff= */ false, name);
@@ -607,7 +748,7 @@ public final class MediaParser {
      */
     @NonNull
     public static MediaParser create(
-            @NonNull OutputConsumer outputConsumer, @NonNull String... parserNames) {
+            @NonNull OutputConsumer outputConsumer, @NonNull @ParserName String... parserNames) {
         assertValidNames(parserNames);
         if (parserNames.length == 0) {
             parserNames = EXTRACTOR_FACTORIES_BY_NAME.keySet().toArray(new String[0]);
@@ -621,11 +762,83 @@ public final class MediaParser {
      * Returns an immutable list with the names of the parsers that are suitable for container
      * formats with the given {@link MediaFormat}.
      *
-     * <p>TODO: List which properties are taken into account. E.g. MimeType.
+     * <p>A parser supports a {@link MediaFormat} if the mime type associated with {@link
+     * MediaFormat#KEY_MIME} corresponds to the supported container format.
+     *
+     * @param mediaFormat The {@link MediaFormat} to check support for.
+     * @return The parser names that support the given {@code mediaFormat}, or the list of all
+     *     parsers available if no container specific format information is provided.
      */
     @NonNull
+    @ParserName
     public static List<String> getParserNames(@NonNull MediaFormat mediaFormat) {
-        throw new UnsupportedOperationException();
+        String mimeType = mediaFormat.getString(MediaFormat.KEY_MIME);
+        mimeType = mimeType == null ? null : Util.toLowerInvariant(mimeType.trim());
+        if (TextUtils.isEmpty(mimeType)) {
+            // No MIME type provided. Return all.
+            return Collections.unmodifiableList(
+                    new ArrayList<>(EXTRACTOR_FACTORIES_BY_NAME.keySet()));
+        }
+        ArrayList<String> result = new ArrayList<>();
+        switch (mimeType) {
+            case "video/x-matroska":
+            case "audio/x-matroska":
+            case "video/x-webm":
+            case "audio/x-webm":
+                result.add(PARSER_NAME_MATROSKA);
+                break;
+            case "video/mp4":
+            case "audio/mp4":
+            case "application/mp4":
+                result.add(PARSER_NAME_MP4);
+                result.add(PARSER_NAME_FMP4);
+                break;
+            case "audio/mpeg":
+                result.add(PARSER_NAME_MP3);
+                break;
+            case "audio/aac":
+                result.add(PARSER_NAME_ADTS);
+                break;
+            case "audio/ac3":
+                result.add(PARSER_NAME_AC3);
+                break;
+            case "video/mp2t":
+            case "audio/mp2t":
+                result.add(PARSER_NAME_TS);
+                break;
+            case "video/x-flv":
+                result.add(PARSER_NAME_FLV);
+                break;
+            case "video/ogg":
+            case "audio/ogg":
+            case "application/ogg":
+                result.add(PARSER_NAME_OGG);
+                break;
+            case "video/mp2p":
+            case "video/mp1s":
+                result.add(PARSER_NAME_PS);
+                break;
+            case "audio/vnd.wave":
+            case "audio/wav":
+            case "audio/wave":
+            case "audio/x-wav":
+                result.add(PARSER_NAME_WAV);
+                break;
+            case "audio/amr":
+                result.add(PARSER_NAME_AMR);
+                break;
+            case "audio/ac4":
+                result.add(PARSER_NAME_AC4);
+                break;
+            case "audio/flac":
+            case "audio/x-flac":
+                result.add(PARSER_NAME_FLAC);
+                break;
+            default:
+                // No parsers support the given mime type. Do nothing.
+                break;
+        }
+        return Collections.unmodifiableList(result);
     }
 
     // Private fields.
@@ -658,7 +871,8 @@ public final class MediaParser {
      * @throws IllegalStateException If called after calling {@link #advance} on the same instance.
      */
     @NonNull
-    public MediaParser setParameter(@NonNull String parameterName, @NonNull Object value) {
+    public MediaParser setParameter(
+            @NonNull @ParameterName String parameterName, @NonNull Object value) {
         if (mExtractor != null) {
             throw new IllegalStateException(
                     "setParameters() must be called before the first advance() call.");
@@ -675,6 +889,12 @@ public final class MediaParser {
                             + value.getClass().getSimpleName()
                             + " was passed.");
         }
+        if (PARAMETER_TS_MODE.equals(parameterName)
+                && !TS_MODE_SINGLE_PMT.equals(value)
+                && !TS_MODE_HLS.equals(value)
+                && !TS_MODE_MULTI_PMT.equals(value)) {
+            throw new IllegalArgumentException(PARAMETER_TS_MODE + " does not accept: " + value);
+        }
         mParserParameters.put(parameterName, value);
         return this;
     }
@@ -686,7 +906,7 @@ public final class MediaParser {
      *     constants.
      * @return Whether the given {@code parameterName} is supported.
      */
-    public boolean supportsParameter(@NonNull String parameterName) {
+    public boolean supportsParameter(@NonNull @ParameterName String parameterName) {
         return EXPECTED_TYPE_BY_PARAMETER_NAME.containsKey(parameterName);
     }
 
@@ -694,14 +914,15 @@ public final class MediaParser {
      * Returns the name of the backing parser implementation.
      *
      * <p>If this instance was creating using {@link #createByName}, the provided name is returned.
-     * If this instance was created using {@link #create}, this method will return null until the
-     * first call to {@link #advance}, after which the name of the backing parser implementation is
-     * returned.
+     * If this instance was created using {@link #create}, this method will return {@link
+     * #PARSER_NAME_UNKNOWN} until the first call to {@link #advance}, after which the name of the
+     * backing parser implementation is returned.
      *
      * @return The name of the backing parser implementation, or null if the backing parser
      *     implementation has not yet been selected.
      */
-    @Nullable
+    @NonNull
+    @ParserName
     public String getParserName() {
         return mExtractorName;
     }
@@ -737,13 +958,12 @@ public final class MediaParser {
 
         // TODO: Apply parameters when creating extractor instances.
         if (mExtractor == null) {
-            if (mExtractorName != null) {
+            if (!mExtractorName.equals(PARSER_NAME_UNKNOWN)) {
                 mExtractor = EXTRACTOR_FACTORIES_BY_NAME.get(mExtractorName).createInstance();
                 mExtractor.init(new ExtractorOutputAdapter());
             } else {
                 for (String parserName : mParserNamesPool) {
-                    Extractor extractor =
-                            EXTRACTOR_FACTORIES_BY_NAME.get(parserName).createInstance();
+                    Extractor extractor = createExtractor(parserName);
                     try {
                         if (extractor.sniff(mExtractorInput)) {
                             mExtractorName = parserName;
@@ -831,9 +1051,7 @@ public final class MediaParser {
         mParserParameters = new HashMap<>();
         mOutputConsumer = outputConsumer;
         mParserNamesPool = parserNamesPool;
-        if (!sniff) {
-            mExtractorName = parserNamesPool[0];
-        }
+        mExtractorName = sniff ? PARSER_NAME_UNKNOWN : parserNamesPool[0];
         mPositionHolder = new PositionHolder();
         mDataSource = new InputReadingDataSource();
         removePendingSeek();
@@ -848,6 +1066,124 @@ public final class MediaParser {
     private void removePendingSeek() {
         mPendingSeekPosition = -1;
         mPendingSeekTimeMicros = -1;
+    }
+
+    private Extractor createExtractor(String parserName) {
+        int flags = 0;
+        switch (parserName) {
+            case PARSER_NAME_MATROSKA:
+                flags =
+                        getBooleanParameter(PARAMETER_MATROSKA_DISABLE_CUES_SEEKING)
+                                ? MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES
+                                : 0;
+                return new MatroskaExtractor(flags);
+            case PARSER_NAME_FMP4:
+                flags |=
+                        getBooleanParameter(PARAMETER_MP4_IGNORE_EDIT_LISTS)
+                                ? FragmentedMp4Extractor.FLAG_WORKAROUND_IGNORE_EDIT_LISTS
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_MP4_IGNORE_TFDT_BOX)
+                                ? FragmentedMp4Extractor.FLAG_WORKAROUND_IGNORE_TFDT_BOX
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_MP4_TREAT_VIDEO_FRAMES_AS_KEYFRAMES)
+                                ? FragmentedMp4Extractor
+                                        .FLAG_WORKAROUND_EVERY_VIDEO_FRAME_IS_SYNC_FRAME
+                                : 0;
+                return new FragmentedMp4Extractor(flags);
+            case PARSER_NAME_MP4:
+                flags |=
+                        getBooleanParameter(PARAMETER_MP4_IGNORE_EDIT_LISTS)
+                                ? Mp4Extractor.FLAG_WORKAROUND_IGNORE_EDIT_LISTS
+                                : 0;
+                return new Mp4Extractor();
+            case PARSER_NAME_MP3:
+                flags |=
+                        getBooleanParameter(PARAMETER_MP3_DISABLE_ID3)
+                                ? Mp3Extractor.FLAG_DISABLE_ID3_METADATA
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_MP3_ENABLE_CBR_SEEKING)
+                                ? Mp3Extractor.FLAG_ENABLE_CONSTANT_BITRATE_SEEKING
+                                : 0;
+                // TODO: Add index seeking once we update the ExoPlayer version.
+                return new Mp3Extractor(flags);
+            case PARSER_NAME_ADTS:
+                flags |=
+                        getBooleanParameter(PARAMETER_ADTS_ENABLE_CBR_SEEKING)
+                                ? AdtsExtractor.FLAG_ENABLE_CONSTANT_BITRATE_SEEKING
+                                : 0;
+                return new AdtsExtractor(flags);
+            case PARSER_NAME_AC3:
+                return new Ac3Extractor();
+            case PARSER_NAME_TS:
+                flags |=
+                        getBooleanParameter(PARAMETER_TS_ALLOW_NON_IDR_AVC_KEYFRAMES)
+                                ? DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_TS_DETECT_ACCESS_UNITS)
+                                ? DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_TS_ENABLE_HDMV_DTS_AUDIO_STREAMS)
+                                ? DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_TS_IGNORE_AAC_STREAM)
+                                ? DefaultTsPayloadReaderFactory.FLAG_IGNORE_AAC_STREAM
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_TS_IGNORE_AVC_STREAM)
+                                ? DefaultTsPayloadReaderFactory.FLAG_IGNORE_H264_STREAM
+                                : 0;
+                flags |=
+                        getBooleanParameter(PARAMETER_TS_IGNORE_SPLICE_INFO_STREAM)
+                                ? DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM
+                                : 0;
+                String tsMode = getStringParameter(PARAMETER_TS_MODE, TS_MODE_SINGLE_PMT);
+                int hlsMode =
+                        TS_MODE_SINGLE_PMT.equals(tsMode)
+                                ? TsExtractor.MODE_SINGLE_PMT
+                                : TS_MODE_HLS.equals(tsMode)
+                                        ? TsExtractor.MODE_HLS
+                                        : TsExtractor.MODE_MULTI_PMT;
+                return new TsExtractor(hlsMode, flags);
+            case PARSER_NAME_FLV:
+                return new FlvExtractor();
+            case PARSER_NAME_OGG:
+                return new OggExtractor();
+            case PARSER_NAME_PS:
+                return new PsExtractor();
+            case PARSER_NAME_WAV:
+                return new WavExtractor();
+            case PARSER_NAME_AMR:
+                flags |=
+                        getBooleanParameter(PARAMETER_AMR_ENABLE_CBR_SEEKING)
+                                ? AmrExtractor.FLAG_ENABLE_CONSTANT_BITRATE_SEEKING
+                                : 0;
+                return new AmrExtractor(flags);
+            case PARSER_NAME_AC4:
+                return new Ac4Extractor();
+            case PARSER_NAME_FLAC:
+                flags |=
+                        getBooleanParameter(PARAMETER_FLAC_DISABLE_ID3)
+                                ? FlacExtractor.FLAG_DISABLE_ID3_METADATA
+                                : 0;
+                return new FlacExtractor(flags);
+            default:
+                // Should never happen.
+                throw new IllegalStateException("Unexpected attempt to create: " + parserName);
+        }
+    }
+
+    private boolean getBooleanParameter(String name) {
+        return (boolean) mParserParameters.getOrDefault(name, false);
+    }
+
+    private String getStringParameter(String name, String defaultValue) {
+        return (String) mParserParameters.getOrDefault(name, defaultValue);
     }
 
     // Private classes.
@@ -1134,7 +1470,7 @@ public final class MediaParser {
         return null;
     }
 
-    private static MediaCodec.CryptoInfo toCryptoInfo(TrackOutput.CryptoData encryptionData) {
+    private static CryptoInfo toCryptoInfo(TrackOutput.CryptoData encryptionData) {
         // TODO: Implement.
         return null;
     }
@@ -1165,20 +1501,20 @@ public final class MediaParser {
         LinkedHashMap<String, ExtractorFactory> extractorFactoriesByName = new LinkedHashMap<>();
         // Parsers are ordered to match ExoPlayer's DefaultExtractorsFactory extractor ordering,
         // which in turn aims to minimize the chances of incorrect extractor selections.
-        extractorFactoriesByName.put("exo.MatroskaParser", MatroskaExtractor::new);
-        extractorFactoriesByName.put("exo.FragmentedMp4Parser", FragmentedMp4Extractor::new);
-        extractorFactoriesByName.put("exo.Mp4Parser", Mp4Extractor::new);
-        extractorFactoriesByName.put("exo.Mp3Parser", Mp3Extractor::new);
-        extractorFactoriesByName.put("exo.AdtsParser", AdtsExtractor::new);
-        extractorFactoriesByName.put("exo.Ac3Parser", Ac3Extractor::new);
-        extractorFactoriesByName.put("exo.TsParser", TsExtractor::new);
-        extractorFactoriesByName.put("exo.FlvParser", FlvExtractor::new);
-        extractorFactoriesByName.put("exo.OggParser", OggExtractor::new);
-        extractorFactoriesByName.put("exo.PsParser", PsExtractor::new);
-        extractorFactoriesByName.put("exo.WavParser", WavExtractor::new);
-        extractorFactoriesByName.put("exo.AmrParser", AmrExtractor::new);
-        extractorFactoriesByName.put("exo.Ac4Parser", Ac4Extractor::new);
-        extractorFactoriesByName.put("exo.FlacParser", FlacExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_MATROSKA, MatroskaExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_FMP4, FragmentedMp4Extractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_MP4, Mp4Extractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_MP3, Mp3Extractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_ADTS, AdtsExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_AC3, Ac3Extractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_TS, TsExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_FLV, FlvExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_OGG, OggExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_PS, PsExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_WAV, WavExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_AMR, AmrExtractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_AC4, Ac4Extractor::new);
+        extractorFactoriesByName.put(PARSER_NAME_FLAC, FlacExtractor::new);
         EXTRACTOR_FACTORIES_BY_NAME = Collections.unmodifiableMap(extractorFactoriesByName);
 
         HashMap<String, Class> expectedTypeByParameterName = new HashMap<>();

@@ -994,8 +994,8 @@ public class ResolverActivity extends Activity implements
         if (isAutolaunching() || maybeAutolaunchActivity()) {
             return;
         }
-        if (shouldShowEmptyState(listAdapter)) {
-            mMultiProfilePagerAdapter.showNoAppsAvailableEmptyState(listAdapter);
+        if (mMultiProfilePagerAdapter.shouldShowEmptyStateScreen(listAdapter)) {
+            mMultiProfilePagerAdapter.showEmptyResolverListEmptyState(listAdapter);
         } else {
             mMultiProfilePagerAdapter.showListView(listAdapter);
         }
@@ -1578,6 +1578,7 @@ public class ResolverActivity extends Activity implements
                 viewPager.setCurrentItem(1);
             }
             setupViewVisibilities();
+            maybeLogProfileChange();
             DevicePolicyEventLogger
                     .createEvent(DevicePolicyEnums.RESOLVER_SWITCH_TABS)
                     .setInt(viewPager.getCurrentItem())
@@ -1608,6 +1609,8 @@ public class ResolverActivity extends Activity implements
     }
 
     private void resetTabsHeaderStyle(TabWidget tabWidget) {
+        String workContentDescription = getString(R.string.resolver_work_tab_accessibility);
+        String personalContentDescription = getString(R.string.resolver_personal_tab_accessibility);
         for (int i = 0; i < tabWidget.getChildCount(); i++) {
             View tabView = tabWidget.getChildAt(i);
             TextView title = tabView.findViewById(android.R.id.title);
@@ -1615,6 +1618,11 @@ public class ResolverActivity extends Activity implements
             title.setTextColor(getAttrColor(this, android.R.attr.textColorTertiary));
             title.setTextSize(TypedValue.COMPLEX_UNIT_PX,
                     getResources().getDimension(R.dimen.resolver_tab_text_size));
+            if (title.getText().equals(getString(R.string.resolver_personal_tab))) {
+                tabView.setContentDescription(personalContentDescription);
+            } else if (title.getText().equals(getString(R.string.resolver_work_tab))) {
+                tabView.setContentDescription(workContentDescription);
+            }
         }
     }
 
@@ -1633,14 +1641,9 @@ public class ResolverActivity extends Activity implements
 
     private void setupViewVisibilities() {
         ResolverListAdapter activeListAdapter = mMultiProfilePagerAdapter.getActiveListAdapter();
-        if (!shouldShowEmptyState(activeListAdapter)) {
+        if (!mMultiProfilePagerAdapter.shouldShowEmptyStateScreen(activeListAdapter)) {
             addUseDifferentAppLabelIfNecessary(activeListAdapter);
         }
-    }
-
-    private boolean shouldShowEmptyState(ResolverListAdapter listAdapter) {
-        int count = listAdapter.getUnfilteredCount();
-        return count == 0 && listAdapter.getPlaceholderCount() == 0;
     }
 
     /**
@@ -1991,4 +1994,6 @@ public class ResolverActivity extends Activity implements
             }
         }
     }
+
+    protected void maybeLogProfileChange() {}
 }

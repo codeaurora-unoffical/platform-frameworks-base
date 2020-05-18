@@ -67,8 +67,7 @@ public class TimeFilter implements AutoCloseable {
     @Result
     public int setCurrentTimestamp(long timestamp) {
         int res = nativeSetTimestamp(timestamp);
-        // TODO: use a constant for SUCCESS
-        if (res == 0) {
+        if (res == Tuner.RESULT_SUCCESS) {
             mEnable = true;
         }
         return res;
@@ -84,7 +83,7 @@ public class TimeFilter implements AutoCloseable {
     @Result
     public int clearTimestamp() {
         int res = nativeClearTimestamp();
-        if (res == 0) {
+        if (res == Tuner.RESULT_SUCCESS) {
             mEnable = false;
         }
         return res;

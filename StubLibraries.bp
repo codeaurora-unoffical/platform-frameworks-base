@@ -61,11 +61,7 @@ stubs_defaults {
     merge_annotations_dirs: [
         "metalava-manual",
     ],
-    api_levels_annotations_enabled: true,
-    api_levels_annotations_dirs: [
-        "sdk-dir",
-        "api-versions-jars-dir",
-    ],
+    api_levels_annotations_enabled: false,
     filter_packages: packages_to_document,
 }
 
@@ -79,7 +75,11 @@ stubs_defaults {
 stubs_defaults {
     name: "metalava-non-updatable-api-stubs-default",
     defaults: ["metalava-base-api-stubs-default"],
-    sdk_version: "system_current",
+    sdk_version: "core_platform",
+    libs: ["framework-all"],
+    aidl: {
+        local_include_dirs: ["apex/media/framework/java"],
+    },
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -95,6 +95,7 @@ droidstubs {
     api_filename: "public_api.txt",
     private_api_filename: "private.txt",
     removed_api_filename: "removed.txt",
+    removed_dex_api_filename: "removed-dex.txt",
     arg_files: [
         "core/res/AndroidManifest.xml",
     ],
@@ -114,6 +115,11 @@ droidstubs {
             new_since: ":last-released-public-api",
             baseline_file: "api/lint-baseline.txt",
         },
+    },
+    dist: {
+        targets: ["sdk", "win_sdk"],
+        dir: "apistubs/android/public/api",
+        dest: "android.txt",
     },
     jdiff_enabled: true,
 }
@@ -136,6 +142,7 @@ droidstubs {
     private_api_filename: "system-private.txt",
     private_dex_api_filename: "system-private-dex.txt",
     removed_api_filename: "system-removed.txt",
+    removed_dex_api_filename: "system-removed-dex.txt",
     arg_files: [
         "core/res/AndroidManifest.xml",
     ],
@@ -155,6 +162,11 @@ droidstubs {
             new_since: ":last-released-system-api",
             baseline_file: "api/system-lint-baseline.txt",
         },
+    },
+    dist: {
+        targets: ["sdk", "win_sdk"],
+        dir: "apistubs/android/system/api",
+        dest: "android.txt",
     },
     jdiff_enabled: true,
 }
@@ -179,6 +191,11 @@ droidstubs {
             baseline_file: "api/test-lint-baseline.txt",
         },
     },
+    dist: {
+        targets: ["sdk", "win_sdk"],
+        dir: "apistubs/android/test/api",
+        dest: "android.txt",
+    },
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -195,6 +212,7 @@ droidstubs {
 droidstubs {
     name: "module-lib-api",
     defaults: ["metalava-full-api-stubs-default"],
+    api_tag_name: "MODULE_LIB",
     arg_files: ["core/res/AndroidManifest.xml"],
     args: metalava_framework_docs_args + module_libs,
     check_api: {
@@ -212,6 +230,11 @@ droidstubs {
             new_since: ":last-released-module-lib-api",
             baseline_file: "api/module-lib-lint-baseline.txt",
         },
+    },
+    dist: {
+        targets: ["sdk", "win_sdk"],
+        dir: "apistubs/android/module-lib/api",
+        dest: "android.txt",
     },
 }
 
@@ -316,44 +339,6 @@ java_library_static {
     srcs: [
         ":hwbinder-stubs-docs",
     ],
-}
-
-/////////////////////////////////////////////////////////////////////
-// Stubs for hiddenapi processing.
-/////////////////////////////////////////////////////////////////////
-
-droidstubs {
-    name: "hiddenapi-lists-docs",
-    defaults: ["metalava-full-api-stubs-default"],
-    arg_files: [
-        "core/res/AndroidManifest.xml",
-    ],
-    dex_api_filename: "public-dex.txt",
-    private_dex_api_filename: "private-dex.txt",
-    removed_dex_api_filename: "removed-dex.txt",
-    args: metalava_framework_docs_args +
-        " --show-unannotated " +
-        priv_apps +
-        " --show-annotation android.annotation.TestApi ",
-}
-
-droidstubs {
-    name: "hiddenapi-mappings",
-    defaults: ["metalava-full-api-stubs-default"],
-    srcs: [
-        ":opt-telephony-common-srcs",
-    ],
-
-    arg_files: [
-        "core/res/AndroidManifest.xml",
-    ],
-    dex_mapping_filename: "dex-mapping.txt",
-    args: metalava_framework_docs_args +
-        " --hide ReferencesHidden " +
-        " --hide UnhiddenSystemApi " +
-        " --show-unannotated " +
-        priv_apps +
-        " --show-annotation android.annotation.TestApi ",
 }
 
 /////////////////////////////////////////////////////////////////////

@@ -17,6 +17,9 @@
 package com.android.server.pm;
 
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -56,7 +59,9 @@ import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 
 import java.security.cert.CertificateException;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -633,6 +638,62 @@ public class AppsFilterTest {
                 appsFilter.shouldFilterApplication(DUMMY_CALLING_UID, instrumentation, target, 0));
         assertFalse(
                 appsFilter.shouldFilterApplication(DUMMY_TARGET_UID, target, instrumentation, 0));
+    }
+
+    @Test
+    public void testWhoCanSee() throws Exception {
+        final AppsFilter appsFilter =
+                new AppsFilter(mFeatureConfigMock, new String[]{}, false, null);
+        appsFilter.onSystemReady();
+
+        final int systemAppId = Process.FIRST_APPLICATION_UID - 1;
+        final int seesNothingAppId = Process.FIRST_APPLICATION_UID;
+        final int hasProviderAppId = Process.FIRST_APPLICATION_UID + 1;
+        final int queriesProviderAppId = Process.FIRST_APPLICATION_UID + 2;
+        PackageSetting system = simulateAddPackage(appsFilter, pkg("some.system.pkg"), systemAppId);
+        PackageSetting seesNothing = simulateAddPackage(appsFilter, pkg("com.some.package"),
+                seesNothingAppId);
+        PackageSetting hasProvider = simulateAddPackage(appsFilter,
+                pkgWithProvider("com.some.other.package", "com.some.authority"), hasProviderAppId);
+        PackageSetting queriesProvider = simulateAddPackage(appsFilter,
+                pkgQueriesProvider("com.yet.some.other.package", "com.some.authority"),
+                queriesProviderAppId);
+
+        final int[] systemFilter =
+                appsFilter.getVisibilityWhitelist(system, new int[]{0}, mExisting).get(0);
+        assertThat(toList(systemFilter), empty());
+
+        final int[] seesNothingFilter =
+                appsFilter.getVisibilityWhitelist(seesNothing, new int[]{0}, mExisting).get(0);
+        assertThat(toList(seesNothingFilter),
+                contains(seesNothingAppId));
+
+        final int[] hasProviderFilter =
+                appsFilter.getVisibilityWhitelist(hasProvider, new int[]{0}, mExisting).get(0);
+        assertThat(toList(hasProviderFilter),
+                contains(hasProviderAppId, queriesProviderAppId));
+
+        int[] queriesProviderFilter =
+                appsFilter.getVisibilityWhitelist(queriesProvider, new int[]{0}, mExisting).get(0);
+        assertThat(toList(queriesProviderFilter),
+                contains(queriesProviderAppId));
+
+        // provider read
+        appsFilter.grantImplicitAccess(hasProviderAppId, queriesProviderAppId);
+
+        // ensure implicit access is included in the filter
+        queriesProviderFilter =
+                appsFilter.getVisibilityWhitelist(queriesProvider, new int[]{0}, mExisting).get(0);
+        assertThat(toList(queriesProviderFilter),
+                contains(hasProviderAppId, queriesProviderAppId));
+    }
+
+    private List<Integer> toList(int[] array) {
+        ArrayList<Integer> ret = new ArrayList<>(array.length);
+        for (int i = 0; i < array.length; i++) {
+            ret.add(i, array[i]);
+        }
+        return ret;
     }
 
     private interface WithSettingBuilder {

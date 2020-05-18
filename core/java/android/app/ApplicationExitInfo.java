@@ -90,7 +90,8 @@ public final class ApplicationExitInfo implements Parcelable {
      * {@link #REASON_SIGNALED} and {@link #getStatus} will return
      * the value {@link android.system.OsConstants#SIGKILL}.
      *
-     * Application should use {@link ActivityManager#isLowMemoryKillReportSupported} to check
+     * Application should use {@link android.app.ActivityManager#isLowMemoryKillReportSupported()
+     * ActivityManager.isLowMemoryKillReportSupported()} to check
      * if the device supports reporting {@link #REASON_LOW_MEMORY} or not.
      * </p>
      */
@@ -499,9 +500,11 @@ public final class ApplicationExitInfo implements Parcelable {
 
     /**
      * Return the defining kernel user identifier, maybe different from {@link #getRealUid} and
-     * {@link #getPackageUid}, if an external service was bound with the flag
-     * {@link android.content.Context#BIND_EXTERNAL_SERVICE} - in this case, this field here
-     * will be the kernel user identifier of the external service provider.
+     * {@link #getPackageUid}, if an external service has the
+     * {@link android.R.styleable#AndroidManifestService_useAppZygote android:useAppZygote} set
+     * to <code>true<code> and was bound with the flag
+     * {@link android.content.Context#BIND_EXTERNAL_SERVICE} - in this case, this field here will
+     * be the kernel user identifier of the external service provider.
      */
     public int getDefiningUid() {
         return mDefiningUid;
@@ -521,7 +524,7 @@ public final class ApplicationExitInfo implements Parcelable {
         return mReason;
     }
 
-    /*
+    /**
      * The exit status argument of exit() if the application calls it, or the signal
      * number if the application is signaled.
      */
@@ -536,7 +539,7 @@ public final class ApplicationExitInfo implements Parcelable {
         return mImportance;
     }
 
-    /*
+    /**
      * Last proportional set size of the memory that the process had used in kB.
      *
      * <p class="note">Note: This is the value from last sampling on the process,
@@ -560,7 +563,7 @@ public final class ApplicationExitInfo implements Parcelable {
 
     /**
      * The timestamp of the process's death, in milliseconds since the epoch,
-     * as returned by {@link System#currentTimeMillis System.currentTimeMillis()}.
+     * as returned by {@link java.lang.System#currentTimeMillis() System.currentTimeMillis()}.
      */
     public @CurrentTimeMillisLong long getTimestamp() {
         return mTimestamp;
@@ -584,8 +587,9 @@ public final class ApplicationExitInfo implements Parcelable {
     }
 
     /**
-     * Return the state data set by calling {@link ActivityManager#setProcessStateSummary}
-     * from the process before its death.
+     * Return the state data set by calling
+     * {@link android.app.ActivityManager#setProcessStateSummary(byte[])
+     * ActivityManager.setProcessStateSummary(byte[])} from the process before its death.
      *
      * @return The process-customized data
      * @see ActivityManager#setProcessStateSummary(byte[])

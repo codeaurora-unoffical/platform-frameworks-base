@@ -66,6 +66,11 @@ import static android.content.Intent.EXTRA_REPLACING;
 import static android.content.pm.PermissionInfo.PROTECTION_DANGEROUS;
 import static android.content.pm.PermissionInfo.PROTECTION_FLAG_APPOP;
 
+import static com.android.server.am.OomAdjuster.DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA;
+import static com.android.server.am.OomAdjuster.DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA_Q;
+import static com.android.server.am.OomAdjuster.DEBUG_PROCESS_CAPABILITY_FOREGROUND_LOCATION;
+import static com.android.server.am.OomAdjuster.DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
+import static com.android.server.am.OomAdjuster.DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE_Q;
 import static com.android.server.appop.AppOpsService.ModeCallback.ALL_OPS;
 
 import static java.lang.Long.max;
@@ -248,9 +253,6 @@ public class AppOpsService extends IAppOpsService.Stub {
     private static final int RARELY_USED_PACKAGES_INITIALIZATION_DELAY_MILLIS = 300000;
 
     //TODO: remove this when development is done.
-    private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_LOCATION = 1 << 31;
-    private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_CAMERA = 1 << 30;
-    private static final int TEMP_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE = 1 << 29;
     private static final int DEBUG_FGS_ALLOW_WHILE_IN_USE = 0;
     private static final int DEBUG_FGS_ENFORCE_TYPE = 1;
 
@@ -552,7 +554,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                             if ((capability & PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0) {
                                 return MODE_ALLOWED;
                             } else if ((capability
-                                    & TEMP_PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0) {
+                                    & DEBUG_PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0) {
                                 // The FGS has the location capability, but due to FGS BG start
                                 // restriction it lost the capability, use temp location capability
                                 // to mark this case.
@@ -564,11 +566,14 @@ public class AppOpsService extends IAppOpsService.Stub {
                         case OP_CAMERA:
                             if ((capability & PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0) {
                                 return MODE_ALLOWED;
-                            } else if ((capability & TEMP_PROCESS_CAPABILITY_FOREGROUND_CAMERA)
+                            } else if ((capability & DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA_Q)
                                     != 0) {
-                                // CHANGE TO MODE_IGNORED when enforce this feature.
                                 maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
                                 return MODE_ALLOWED;
+                            } else if ((capability & DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA)
+                                    != 0) {
+                                maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
+                                return MODE_IGNORED;
                             } else {
                                 maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ALLOW_WHILE_IN_USE);
                                 return MODE_IGNORED;
@@ -576,11 +581,14 @@ public class AppOpsService extends IAppOpsService.Stub {
                         case OP_RECORD_AUDIO:
                             if ((capability & PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0) {
                                 return MODE_ALLOWED;
-                            } else if  ((capability & TEMP_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE)
-                                    != 0) {
-                                // CHANGE TO MODE_IGNORED when enforce this feature.
+                            } else if ((capability
+                                    & DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE_Q) != 0) {
                                 maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
                                 return MODE_ALLOWED;
+                            } else if  ((capability
+                                    & DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0) {
+                                maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
+                                return MODE_IGNORED;
                             } else {
                                 maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ALLOW_WHILE_IN_USE);
                                 return MODE_IGNORED;
@@ -597,10 +605,13 @@ public class AppOpsService extends IAppOpsService.Stub {
                     case OP_CAMERA:
                         if ((capability & PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0) {
                             return MODE_ALLOWED;
-                        } else if ((capability & TEMP_PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0) {
-                            // CHANGE TO MODE_IGNORED when enforce this feature.
+                        } else if ((capability
+                                & DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA_Q) != 0) {
                             maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
                             return MODE_ALLOWED;
+                        } else if ((capability & DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0) {
+                            maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
+                            return MODE_IGNORED;
                         } else {
                             maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ALLOW_WHILE_IN_USE);
                             return MODE_IGNORED;
@@ -608,11 +619,14 @@ public class AppOpsService extends IAppOpsService.Stub {
                     case OP_RECORD_AUDIO:
                         if ((capability & PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0) {
                             return MODE_ALLOWED;
-                        } else if ((capability & TEMP_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE)
+                        } else if ((capability & DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE_Q)
                                 != 0) {
-                            // CHANGE TO MODE_IGNORED when enforce this feature.
                             maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
                             return MODE_ALLOWED;
+                        } else if ((capability & DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE)
+                                != 0) {
+                            maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ENFORCE_TYPE);
+                            return MODE_IGNORED;
                         } else {
                             maybeShowWhileInUseDebugToast(op, DEBUG_FGS_ALLOW_WHILE_IN_USE);
                             return MODE_IGNORED;
@@ -670,15 +684,19 @@ public class AppOpsService extends IAppOpsService.Stub {
         }
 
         // TODO: remove this toast after feature development is done
-        // If the procstate is foreground service and while-in-use permission is denied, show a
-        // toast message to ask user to file a bugreport so we know how many apps are impacted by
-        // the new background started foreground service while-in-use permission restriction.
+        // For DEBUG_FGS_ALLOW_WHILE_IN_USE, if the procstate is foreground service and while-in-use
+        // permission is denied, show a toast message and generate a WTF log so we know
+        // how many apps are impacted by the new background started foreground service while-in-use
+        // permission restriction.
+        // For DEBUG_FGS_ENFORCE_TYPE, The process has a foreground service that does not have
+        // camera/microphone foregroundServiceType in manifest file, and the process is asking
+        // AppOps for camera/microphone ops, show a toast message and generate a WTF log.
         void maybeShowWhileInUseDebugToast(int op, int mode) {
-            if (state != UID_STATE_FOREGROUND_SERVICE) {
+            if (mode == DEBUG_FGS_ALLOW_WHILE_IN_USE && state != UID_STATE_FOREGROUND_SERVICE) {
                 return;
             }
             final long now = System.currentTimeMillis();
-            if (lastTimeShowDebugToast == 0 ||  now - lastTimeShowDebugToast > 3600000) {
+            if (lastTimeShowDebugToast == 0 ||  now - lastTimeShowDebugToast > 600000) {
                 lastTimeShowDebugToast = now;
                 mHandler.sendMessage(PooledLambda.obtainMessage(
                         ActivityManagerInternal::showWhileInUseDebugToast,
@@ -5835,10 +5853,6 @@ public class AppOpsService extends IAppOpsService.Stub {
         if (pkg == null) {
             return false;
         }
-        if (pkg.applicationInfo.targetSdkVersion <= Build.VERSION_CODES.Q) {
-            return false;
-        }
-
         String[] requestedPermissions = pkg.requestedPermissions;
         if (requestedPermissions == null) {
             return false;

@@ -135,6 +135,27 @@ AtomMatcher CreateBatterySaverModeStopAtomMatcher() {
         "BatterySaverModeStop", BatterySaverModeStateChanged::OFF);
 }
 
+AtomMatcher CreateBatteryStateChangedAtomMatcher(const string& name,
+                                                 BatteryPluggedStateEnum state) {
+    AtomMatcher atom_matcher;
+    atom_matcher.set_id(StringToId(name));
+    auto simple_atom_matcher = atom_matcher.mutable_simple_atom_matcher();
+    simple_atom_matcher->set_atom_id(util::PLUGGED_STATE_CHANGED);
+    auto field_value_matcher = simple_atom_matcher->add_field_value_matcher();
+    field_value_matcher->set_field(1);  // State field.
+    field_value_matcher->set_eq_int(state);
+    return atom_matcher;
+}
+
+AtomMatcher CreateBatteryStateNoneMatcher() {
+    return CreateBatteryStateChangedAtomMatcher("BatteryPluggedNone",
+                                                BatteryPluggedStateEnum::BATTERY_PLUGGED_NONE);
+}
+
+AtomMatcher CreateBatteryStateUsbMatcher() {
+    return CreateBatteryStateChangedAtomMatcher("BatteryPluggedUsb",
+                                                BatteryPluggedStateEnum::BATTERY_PLUGGED_USB);
+}
 
 AtomMatcher CreateScreenStateChangedAtomMatcher(
     const string& name, android::view::DisplayStateEnum state) {
@@ -231,6 +252,14 @@ Predicate CreateBatterySaverModePredicate() {
     predicate.set_id(StringToId("BatterySaverIsOn"));
     predicate.mutable_simple_predicate()->set_start(StringToId("BatterySaverModeStart"));
     predicate.mutable_simple_predicate()->set_stop(StringToId("BatterySaverModeStop"));
+    return predicate;
+}
+
+Predicate CreateDeviceUnpluggedPredicate() {
+    Predicate predicate;
+    predicate.set_id(StringToId("DeviceUnplugged"));
+    predicate.mutable_simple_predicate()->set_start(StringToId("BatteryPluggedNone"));
+    predicate.mutable_simple_predicate()->set_stop(StringToId("BatteryPluggedUsb"));
     return predicate;
 }
 
@@ -410,25 +439,96 @@ FieldMatcher CreateDimensions(const int atomId, const std::vector<int>& fields) 
     return dimensions;
 }
 
-shared_ptr<LogEvent> CreateTwoValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value1,
-                                            int32_t value2) {
-    AStatsEvent* statsEvent = AStatsEvent_obtain();
-    AStatsEvent_setAtomId(statsEvent, atomId);
-    AStatsEvent_overwriteTimestamp(statsEvent, eventTimeNs);
+FieldMatcher CreateAttributionUidAndOtherDimensions(const int atomId,
+                                                    const std::vector<Position>& positions,
+                                                    const std::vector<int>& fields) {
+    FieldMatcher dimensions = CreateAttributionUidDimensions(atomId, positions);
 
-    AStatsEvent_writeInt32(statsEvent, value1);
-    AStatsEvent_writeInt32(statsEvent, value2);
+    for (const int field : fields) {
+        dimensions.add_child()->set_field(field);
+    }
+    return dimensions;
+}
+
+// START: get primary key functions
+void getUidProcessKey(int uid, HashableDimensionKey* key) {
+    int pos1[] = {1, 0, 0};
+    Field field1(27 /* atom id */, pos1, 0 /* depth */);
+    Value value1((int32_t)uid);
+
+    key->addValue(FieldValue(field1, value1));
+}
+
+void getOverlayKey(int uid, string packageName, HashableDimensionKey* key) {
+    int pos1[] = {1, 0, 0};
+    int pos2[] = {2, 0, 0};
+
+    Field field1(59 /* atom id */, pos1, 0 /* depth */);
+    Field field2(59 /* atom id */, pos2, 0 /* depth */);
+
+    Value value1((int32_t)uid);
+    Value value2(packageName);
+
+    key->addValue(FieldValue(field1, value1));
+    key->addValue(FieldValue(field2, value2));
+}
+
+void getPartialWakelockKey(int uid, const std::string& tag, HashableDimensionKey* key) {
+    int pos1[] = {1, 1, 1};
+    int pos3[] = {2, 0, 0};
+    int pos4[] = {3, 0, 0};
+
+    Field field1(10 /* atom id */, pos1, 2 /* depth */);
+
+    Field field3(10 /* atom id */, pos3, 0 /* depth */);
+    Field field4(10 /* atom id */, pos4, 0 /* depth */);
+
+    Value value1((int32_t)uid);
+    Value value3((int32_t)1 /*partial*/);
+    Value value4(tag);
+
+    key->addValue(FieldValue(field1, value1));
+    key->addValue(FieldValue(field3, value3));
+    key->addValue(FieldValue(field4, value4));
+}
+
+void getPartialWakelockKey(int uid, HashableDimensionKey* key) {
+    int pos1[] = {1, 1, 1};
+    int pos3[] = {2, 0, 0};
+
+    Field field1(10 /* atom id */, pos1, 2 /* depth */);
+    Field field3(10 /* atom id */, pos3, 0 /* depth */);
+
+    Value value1((int32_t)uid);
+    Value value3((int32_t)1 /*partial*/);
+
+    key->addValue(FieldValue(field1, value1));
+    key->addValue(FieldValue(field3, value3));
+}
+// END: get primary key functions
+
+void writeAttribution(AStatsEvent* statsEvent, const vector<int>& attributionUids,
+                      const vector<string>& attributionTags) {
+    vector<const char*> cTags(attributionTags.size());
+    for (int i = 0; i < cTags.size(); i++) {
+        cTags[i] = attributionTags[i].c_str();
+    }
+
+    AStatsEvent_writeAttributionChain(statsEvent,
+                                      reinterpret_cast<const uint32_t*>(attributionUids.data()),
+                                      cTags.data(), attributionUids.size());
+}
+
+void parseStatsEventToLogEvent(AStatsEvent* statsEvent, LogEvent* logEvent) {
     AStatsEvent_build(statsEvent);
 
     size_t size;
     uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
-    shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
     logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
 
-    return logEvent;
+    AStatsEvent_release(statsEvent);
 }
-//
+
 void CreateTwoValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeNs, int32_t value1,
                             int32_t value2) {
     AStatsEvent* statsEvent = AStatsEvent_obtain();
@@ -437,31 +537,14 @@ void CreateTwoValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeNs,
 
     AStatsEvent_writeInt32(statsEvent, value1);
     AStatsEvent_writeInt32(statsEvent, value2);
-    AStatsEvent_build(statsEvent);
 
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent);
 }
 
-shared_ptr<LogEvent> CreateThreeValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value1,
-                                              int32_t value2, int32_t value3) {
-    AStatsEvent* statsEvent = AStatsEvent_obtain();
-    AStatsEvent_setAtomId(statsEvent, atomId);
-    AStatsEvent_overwriteTimestamp(statsEvent, eventTimeNs);
-
-    AStatsEvent_writeInt32(statsEvent, value1);
-    AStatsEvent_writeInt32(statsEvent, value2);
-    AStatsEvent_writeInt32(statsEvent, value3);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
+shared_ptr<LogEvent> CreateTwoValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value1,
+                                            int32_t value2) {
     shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
-
+    CreateTwoValueLogEvent(logEvent.get(), atomId, eventTimeNs, value1, value2);
     return logEvent;
 }
 
@@ -474,29 +557,14 @@ void CreateThreeValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeN
     AStatsEvent_writeInt32(statsEvent, value1);
     AStatsEvent_writeInt32(statsEvent, value2);
     AStatsEvent_writeInt32(statsEvent, value3);
-    AStatsEvent_build(statsEvent);
 
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent);
 }
 
-shared_ptr<LogEvent> CreateRepeatedValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value) {
-    AStatsEvent* statsEvent = AStatsEvent_obtain();
-    AStatsEvent_setAtomId(statsEvent, atomId);
-    AStatsEvent_overwriteTimestamp(statsEvent, eventTimeNs);
-
-    AStatsEvent_writeInt32(statsEvent, value);
-    AStatsEvent_writeInt32(statsEvent, value);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
+shared_ptr<LogEvent> CreateThreeValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value1,
+                                              int32_t value2, int32_t value3) {
     shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
-
+    CreateThreeValueLogEvent(logEvent.get(), atomId, eventTimeNs, value1, value2, value3);
     return logEvent;
 }
 
@@ -508,26 +576,27 @@ void CreateRepeatedValueLogEvent(LogEvent* logEvent, int atomId, int64_t eventTi
 
     AStatsEvent_writeInt32(statsEvent, value);
     AStatsEvent_writeInt32(statsEvent, value);
-    AStatsEvent_build(statsEvent);
 
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent);
 }
 
-shared_ptr<LogEvent> CreateNoValuesLogEvent(int atomId, int64_t eventTimeNs) {
+shared_ptr<LogEvent> CreateRepeatedValueLogEvent(int atomId, int64_t eventTimeNs, int32_t value) {
+    shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
+    CreateRepeatedValueLogEvent(logEvent.get(), atomId, eventTimeNs, value);
+    return logEvent;
+}
+
+void CreateNoValuesLogEvent(LogEvent* logEvent, int atomId, int64_t eventTimeNs) {
     AStatsEvent* statsEvent = AStatsEvent_obtain();
     AStatsEvent_setAtomId(statsEvent, atomId);
     AStatsEvent_overwriteTimestamp(statsEvent, eventTimeNs);
-    AStatsEvent_build(statsEvent);
 
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
+    parseStatsEventToLogEvent(statsEvent, logEvent);
+}
+
+shared_ptr<LogEvent> CreateNoValuesLogEvent(int atomId, int64_t eventTimeNs) {
     shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
-
+    CreateNoValuesLogEvent(logEvent.get(), atomId, eventTimeNs);
     return logEvent;
 }
 
@@ -536,16 +605,10 @@ std::unique_ptr<LogEvent> CreateScreenStateChangedEvent(
     AStatsEvent* statsEvent = AStatsEvent_obtain();
     AStatsEvent_setAtomId(statsEvent, util::SCREEN_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
-
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -553,16 +616,10 @@ std::unique_ptr<LogEvent> CreateBatterySaverOnEvent(uint64_t timestampNs) {
     AStatsEvent* statsEvent = AStatsEvent_obtain();
     AStatsEvent_setAtomId(statsEvent, util::BATTERY_SAVER_MODE_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
-
     AStatsEvent_writeInt32(statsEvent, BatterySaverModeStateChanged::ON);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -570,16 +627,21 @@ std::unique_ptr<LogEvent> CreateBatterySaverOffEvent(uint64_t timestampNs) {
     AStatsEvent* statsEvent = AStatsEvent_obtain();
     AStatsEvent_setAtomId(statsEvent, util::BATTERY_SAVER_MODE_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
-
     AStatsEvent_writeInt32(statsEvent, BatterySaverModeStateChanged::OFF);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
+    return logEvent;
+}
+
+std::unique_ptr<LogEvent> CreateBatteryStateChangedEvent(const uint64_t timestampNs, const BatteryPluggedStateEnum state) {
+    AStatsEvent* statsEvent = AStatsEvent_obtain();
+    AStatsEvent_setAtomId(statsEvent, util::PLUGGED_STATE_CHANGED);
+    AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
+    AStatsEvent_writeInt32(statsEvent, state);
+
+    std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -587,45 +649,46 @@ std::unique_ptr<LogEvent> CreateScreenBrightnessChangedEvent(uint64_t timestampN
     AStatsEvent* statsEvent = AStatsEvent_obtain();
     AStatsEvent_setAtomId(statsEvent, util::SCREEN_BRIGHTNESS_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
-
     AStatsEvent_writeInt32(statsEvent, level);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
-//std::unique_ptr<LogEvent> CreateScheduledJobStateChangedEvent(
-//        const std::vector<AttributionNodeInternal>& attributions, const string& jobName,
-//        const ScheduledJobStateChanged::State state, uint64_t timestampNs) {
-//    auto event = std::make_unique<LogEvent>(util::SCHEDULED_JOB_STATE_CHANGED, timestampNs);
-//    event->write(attributions);
-//    event->write(jobName);
-//    event->write(state);
-//    event->init();
-//    return event;
-//}
-//
-//std::unique_ptr<LogEvent> CreateStartScheduledJobEvent(
-//    const std::vector<AttributionNodeInternal>& attributions,
-//    const string& name, uint64_t timestampNs) {
-//    return CreateScheduledJobStateChangedEvent(
-//            attributions, name, ScheduledJobStateChanged::STARTED, timestampNs);
-//}
-//
-//// Create log event when scheduled job finishes.
-//std::unique_ptr<LogEvent> CreateFinishScheduledJobEvent(
-//    const std::vector<AttributionNodeInternal>& attributions,
-//    const string& name, uint64_t timestampNs) {
-//    return CreateScheduledJobStateChangedEvent(
-//            attributions, name, ScheduledJobStateChanged::FINISHED, timestampNs);
-//}
-//
+std::unique_ptr<LogEvent> CreateScheduledJobStateChangedEvent(
+        const vector<int>& attributionUids, const vector<string>& attributionTags,
+        const string& jobName, const ScheduledJobStateChanged::State state, uint64_t timestampNs) {
+    AStatsEvent* statsEvent = AStatsEvent_obtain();
+    AStatsEvent_setAtomId(statsEvent, util::SCHEDULED_JOB_STATE_CHANGED);
+    AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
+
+    writeAttribution(statsEvent, attributionUids, attributionTags);
+    AStatsEvent_writeString(statsEvent, jobName.c_str());
+    AStatsEvent_writeInt32(statsEvent, state);
+
+    std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
+    return logEvent;
+}
+
+std::unique_ptr<LogEvent> CreateStartScheduledJobEvent(uint64_t timestampNs,
+                                                       const vector<int>& attributionUids,
+                                                       const vector<string>& attributionTags,
+                                                       const string& jobName) {
+    return CreateScheduledJobStateChangedEvent(attributionUids, attributionTags, jobName,
+                                               ScheduledJobStateChanged::STARTED, timestampNs);
+}
+
+// Create log event when scheduled job finishes.
+std::unique_ptr<LogEvent> CreateFinishScheduledJobEvent(uint64_t timestampNs,
+                                                        const vector<int>& attributionUids,
+                                                        const vector<string>& attributionTags,
+                                                        const string& jobName) {
+    return CreateScheduledJobStateChangedEvent(attributionUids, attributionTags, jobName,
+                                               ScheduledJobStateChanged::FINISHED, timestampNs);
+}
+
 std::unique_ptr<LogEvent> CreateWakelockStateChangedEvent(uint64_t timestampNs,
                                                           const vector<int>& attributionUids,
                                                           const vector<string>& attributionTags,
@@ -635,25 +698,13 @@ std::unique_ptr<LogEvent> CreateWakelockStateChangedEvent(uint64_t timestampNs,
     AStatsEvent_setAtomId(statsEvent, util::WAKELOCK_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
 
-    vector<const char*> cTags(attributionTags.size());
-    for (int i = 0; i < cTags.size(); i++) {
-        cTags[i] = attributionTags[i].c_str();
-    }
-
-    AStatsEvent_writeAttributionChain(statsEvent,
-                                      reinterpret_cast<const uint32_t*>(attributionUids.data()),
-                                      cTags.data(), attributionUids.size());
+    writeAttribution(statsEvent, attributionUids, attributionTags);
     AStatsEvent_writeInt32(statsEvent, android::os::WakeLockLevelEnum::PARTIAL_WAKE_LOCK);
     AStatsEvent_writeString(statsEvent, wakelockName.c_str());
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -683,14 +734,9 @@ std::unique_ptr<LogEvent> CreateActivityForegroundStateChangedEvent(
     AStatsEvent_writeString(statsEvent, "pkg_name");
     AStatsEvent_writeString(statsEvent, "class_name");
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -713,24 +759,12 @@ std::unique_ptr<LogEvent> CreateSyncStateChangedEvent(uint64_t timestampNs,
     AStatsEvent_setAtomId(statsEvent, util::SYNC_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
 
-    vector<const char*> cTags(attributionTags.size());
-    for (int i = 0; i < cTags.size(); i++) {
-        cTags[i] = attributionTags[i].c_str();
-    }
-
-    AStatsEvent_writeAttributionChain(statsEvent,
-                                      reinterpret_cast<const uint32_t*>(attributionUids.data()),
-                                      cTags.data(), attributionUids.size());
+    writeAttribution(statsEvent, attributionUids, attributionTags);
     AStatsEvent_writeString(statsEvent, name.c_str());
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -759,14 +793,9 @@ std::unique_ptr<LogEvent> CreateProcessLifeCycleStateChangedEvent(
     AStatsEvent_writeInt32(statsEvent, uid);
     AStatsEvent_writeString(statsEvent, "");
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -783,14 +812,9 @@ std::unique_ptr<LogEvent> CreateAppCrashOccurredEvent(uint64_t timestampNs, cons
     AStatsEvent_writeInt32(statsEvent, uid);
     AStatsEvent_writeString(statsEvent, "eventType");
     AStatsEvent_writeString(statsEvent, "processName");
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -803,14 +827,9 @@ std::unique_ptr<LogEvent> CreateIsolatedUidChangedEvent(uint64_t timestampNs, in
     AStatsEvent_writeInt32(statsEvent, hostUid);
     AStatsEvent_writeInt32(statsEvent, isolatedUid);
     AStatsEvent_writeInt32(statsEvent, is_create);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -822,14 +841,48 @@ std::unique_ptr<LogEvent> CreateUidProcessStateChangedEvent(
 
     AStatsEvent_writeInt32(statsEvent, uid);
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_build(statsEvent);
-
-    size_t size;
-    uint8_t* buf = AStatsEvent_getBuffer(statsEvent, &size);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
-    logEvent->parseBuffer(buf, size);
-    AStatsEvent_release(statsEvent);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
+    return logEvent;
+}
+
+std::unique_ptr<LogEvent> CreateBleScanStateChangedEvent(uint64_t timestampNs,
+                                                         const vector<int>& attributionUids,
+                                                         const vector<string>& attributionTags,
+                                                         const BleScanStateChanged::State state,
+                                                         const bool filtered, const bool firstMatch,
+                                                         const bool opportunistic) {
+    AStatsEvent* statsEvent = AStatsEvent_obtain();
+    AStatsEvent_setAtomId(statsEvent, util::BLE_SCAN_STATE_CHANGED);
+    AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
+
+    writeAttribution(statsEvent, attributionUids, attributionTags);
+    AStatsEvent_writeInt32(statsEvent, state);
+    AStatsEvent_writeInt32(statsEvent, filtered);       // filtered
+    AStatsEvent_writeInt32(statsEvent, firstMatch);     // first match
+    AStatsEvent_writeInt32(statsEvent, opportunistic);  // opportunistic
+
+    std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
+    return logEvent;
+}
+
+std::unique_ptr<LogEvent> CreateOverlayStateChangedEvent(int64_t timestampNs, const int32_t uid,
+                                                         const string& packageName,
+                                                         const bool usingAlertWindow,
+                                                         const OverlayStateChanged::State state) {
+    AStatsEvent* statsEvent = AStatsEvent_obtain();
+    AStatsEvent_setAtomId(statsEvent, util::OVERLAY_STATE_CHANGED);
+    AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
+
+    AStatsEvent_writeInt32(statsEvent, uid);
+    AStatsEvent_writeString(statsEvent, packageName.c_str());
+    AStatsEvent_writeInt32(statsEvent, usingAlertWindow);
+    AStatsEvent_writeInt32(statsEvent, state);
+
+    std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
 
@@ -859,13 +912,6 @@ sp<StatsLogProcessor> CreateStatsLogProcessor(const int64_t timeBaseNs, const in
     return processor;
 }
 
-AttributionNodeInternal CreateAttribution(const int& uid, const string& tag) {
-    AttributionNodeInternal attribution;
-    attribution.set_uid(uid);
-    attribution.set_tag(tag);
-    return attribution;
-}
-
 void sortLogEventsByTimestamp(std::vector<std::unique_ptr<LogEvent>> *events) {
   std::sort(events->begin(), events->end(),
             [](const std::unique_ptr<LogEvent>& a, const std::unique_ptr<LogEvent>& b) {
@@ -875,6 +921,22 @@ void sortLogEventsByTimestamp(std::vector<std::unique_ptr<LogEvent>> *events) {
 
 int64_t StringToId(const string& str) {
     return static_cast<int64_t>(std::hash<std::string>()(str));
+}
+
+void ValidateWakelockAttributionUidAndTagDimension(const DimensionsValue& value, const int atomId,
+                                                   const int uid, const string& tag) {
+    EXPECT_EQ(value.field(), atomId);
+    EXPECT_EQ(value.value_tuple().dimensions_value_size(), 2);
+    // Attribution field.
+    EXPECT_EQ(value.value_tuple().dimensions_value(0).field(), 1);
+    // Uid field.
+    EXPECT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value_size(), 1);
+    EXPECT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value(0).field(), 1);
+    EXPECT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value(0).value_int(),
+              uid);
+    // Tag field.
+    EXPECT_EQ(value.value_tuple().dimensions_value(1).field(), 3);
+    EXPECT_EQ(value.value_tuple().dimensions_value(1).value_str(), tag);
 }
 
 void ValidateAttributionUidDimension(const DimensionsValue& value, int atomId, int uid) {

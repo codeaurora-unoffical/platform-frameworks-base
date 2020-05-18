@@ -51,7 +51,8 @@ using BlockSize = int16_t;
 using FileIdx = int16_t;
 using BlockIdx = int32_t;
 using NumBlocks = int32_t;
-using CompressionType = int16_t;
+using BlockType = int8_t;
+using CompressionType = int8_t;
 using RequestType = int16_t;
 using MagicType = uint32_t;
 
@@ -59,7 +60,7 @@ static constexpr int BUFFER_SIZE = 256 * 1024;
 static constexpr int BLOCKS_COUNT = BUFFER_SIZE / INCFS_DATA_FILE_BLOCK_SIZE;
 
 static constexpr int COMMAND_SIZE = 4 + 2 + 2 + 4; // bytes
-static constexpr int HEADER_SIZE = 2 + 2 + 4 + 2;  // bytes
+static constexpr int HEADER_SIZE = 2 + 1 + 1 + 4 + 2; // bytes
 static constexpr std::string_view OKAY = "OKAY"sv;
 static constexpr MagicType INCR = 0x52434e49; // BE INCR
 
@@ -110,6 +111,7 @@ const JniIds& jniIds(JNIEnv* env) {
 
 struct BlockHeader {
     FileIdx fileIdx = -1;
+    BlockType blockType = -1;
     CompressionType compressionType = -1;
     BlockIdx blockIdx = -1;
     BlockSize blockSize = -1;
@@ -225,56 +227,40 @@ static inline unique_fd convertPfdToFdAndDup(JNIEnv* env, const JniIds& jni, job
     return result;
 }
 
+enum MetadataMode : int8_t {
+    STDIN = 0,
+    LOCAL_FILE = 1,
+    DATA_ONLY_STREAMING = 2,
+    STREAMING = 3,
+};
+
 struct InputDesc {
     unique_fd fd;
     IncFsSize size;
     IncFsBlockKind kind = INCFS_BLOCK_KIND_DATA;
     bool waitOnEof = false;
     bool streaming = false;
+    MetadataMode mode = STDIN;
 };
 using InputDescs = std::vector<InputDesc>;
 
-static inline InputDescs openInputs(JNIEnv* env, const JniIds& jni, jobject shellCommand,
-                                    IncFsSize size, IncFsSpan metadata) {
+template <class T>
+std::optional<T> read(IncFsSpan& data) {
+    if (data.size < (int32_t)sizeof(T)) {
+        return {};
+    }
+    T res;
+    memcpy(&res, data.data, sizeof(res));
+    data.data += sizeof(res);
+    data.size -= sizeof(res);
+    return res;
+}
+
+static inline InputDescs openLocalFile(JNIEnv* env, const JniIds& jni, jobject shellCommand,
+                                       IncFsSize size, const std::string& filePath) {
     InputDescs result;
     result.reserve(2);
 
-    if (metadata.size == 0 || *metadata.data == '-') {
-        // stdin
-        auto fd = convertPfdToFdAndDup(
-                env, jni,
-                env->CallStaticObjectMethod(jni.packageManagerShellCommandDataLoader,
-                                            jni.pmscdGetStdInPFD, shellCommand));
-        if (fd.ok()) {
-            result.push_back(InputDesc{
-                    .fd = std::move(fd),
-                    .size = size,
-                    .waitOnEof = true,
-            });
-        }
-        return result;
-    }
-    if (*metadata.data == '+') {
-        // verity tree from stdin, rest is streaming
-        auto fd = convertPfdToFdAndDup(
-                env, jni,
-                env->CallStaticObjectMethod(jni.packageManagerShellCommandDataLoader,
-                                            jni.pmscdGetStdInPFD, shellCommand));
-        if (fd.ok()) {
-            auto treeSize = verityTreeSizeForFile(size);
-            result.push_back(InputDesc{
-                    .fd = std::move(fd),
-                    .size = treeSize,
-                    .kind = INCFS_BLOCK_KIND_HASH,
-                    .waitOnEof = true,
-                    .streaming = true,
-            });
-        }
-        return result;
-    }
-
-    // local file and possibly signature
-    const std::string filePath(metadata.data, metadata.size);
     const std::string idsigPath = filePath + ".idsig";
 
     auto idsigFd = convertPfdToFdAndDup(
@@ -309,6 +295,59 @@ static inline InputDescs openInputs(JNIEnv* env, const JniIds& jni, jobject shel
         });
     }
 
+    return result;
+}
+
+static inline InputDescs openInputs(JNIEnv* env, const JniIds& jni, jobject shellCommand,
+                                    IncFsSize size, IncFsSpan metadata) {
+    auto mode = read<int8_t>(metadata).value_or(STDIN);
+    if (mode == LOCAL_FILE) {
+        // local file and possibly signature
+        return openLocalFile(env, jni, shellCommand, size,
+                             std::string(metadata.data, metadata.size));
+    }
+
+    auto fd = convertPfdToFdAndDup(
+            env, jni,
+            env->CallStaticObjectMethod(jni.packageManagerShellCommandDataLoader,
+                                        jni.pmscdGetStdInPFD, shellCommand));
+    if (!fd.ok()) {
+        return {};
+    }
+
+    InputDescs result;
+    switch (mode) {
+        case STDIN: {
+            result.push_back(InputDesc{
+                    .fd = std::move(fd),
+                    .size = size,
+                    .waitOnEof = true,
+            });
+            break;
+        }
+        case DATA_ONLY_STREAMING: {
+            // verity tree from stdin, rest is streaming
+            auto treeSize = verityTreeSizeForFile(size);
+            result.push_back(InputDesc{
+                    .fd = std::move(fd),
+                    .size = treeSize,
+                    .kind = INCFS_BLOCK_KIND_HASH,
+                    .waitOnEof = true,
+                    .streaming = true,
+                    .mode = DATA_ONLY_STREAMING,
+            });
+            break;
+        }
+        case STREAMING: {
+            result.push_back(InputDesc{
+                    .fd = std::move(fd),
+                    .size = 0,
+                    .streaming = true,
+                    .mode = STREAMING,
+            });
+            break;
+        }
+    }
     return result;
 }
 
@@ -353,6 +392,7 @@ private:
         mArgs = params.arguments();
         mIfs = ifs;
         mStatusListener = statusListener;
+        mIfs->setParams({.readLogsEnabled = true});
         return true;
     }
     bool onStart() final { return true; }
@@ -388,6 +428,7 @@ private:
         blocks.reserve(BLOCKS_COUNT);
 
         unique_fd streamingFd;
+        MetadataMode streamingMode;
         for (auto&& file : addedFiles) {
             auto inputs = openInputs(env, jni, shellCommand, file.size, file.metadata);
             if (inputs.empty()) {
@@ -398,7 +439,7 @@ private:
             }
 
             const auto fileId = IncFs_FileIdFromMetadata(file.metadata);
-            const auto incfsFd(mIfs->openWrite(fileId));
+            const base::unique_fd incfsFd(mIfs->openForSpecialOps(fileId).release());
             if (incfsFd < 0) {
                 ALOGE("Failed to open an IncFS file for metadata: %.*s, final file name is: %s. "
                       "Error %d",
@@ -409,6 +450,7 @@ private:
             for (auto&& input : inputs) {
                 if (input.streaming && !streamingFd.ok()) {
                     streamingFd.reset(dup(input.fd));
+                    streamingMode = input.mode;
                 }
                 if (!copyToIncFs(incfsFd, input.size, input.kind, input.fd, input.waitOnEof,
                                  &buffer, &blocks)) {
@@ -423,7 +465,7 @@ private:
 
         if (streamingFd.ok()) {
             ALOGE("onPrepareImage: done, proceeding to streaming.");
-            return initStreaming(std::move(streamingFd));
+            return initStreaming(std::move(streamingFd), streamingMode);
         }
 
         ALOGE("onPrepareImage: done.");
@@ -562,7 +604,7 @@ private:
     }
 
     // Streaming.
-    bool initStreaming(unique_fd inout) {
+    bool initStreaming(unique_fd inout, MetadataMode mode) {
         mEventFd.reset(eventfd(0, EFD_CLOEXEC));
         if (mEventFd < 0) {
             ALOGE("Failed to create eventfd.");
@@ -589,8 +631,8 @@ private:
             }
         }
 
-        mReceiverThread =
-                std::thread([this, io = std::move(inout)]() mutable { receiver(std::move(io)); });
+        mReceiverThread = std::thread(
+                [this, io = std::move(inout), mode]() mutable { receiver(std::move(io), mode); });
         ALOGI("Started streaming...");
         return true;
     }
@@ -622,7 +664,7 @@ private:
         }
     }
 
-    void receiver(unique_fd inout) {
+    void receiver(unique_fd inout, MetadataMode mode) {
         std::vector<uint8_t> data;
         std::vector<IncFsDataBlock> instructions;
         std::unordered_map<FileIdx, unique_fd> writeFds;
@@ -649,8 +691,8 @@ private:
             auto remainingData = std::span(data);
             while (!remainingData.empty()) {
                 auto header = readHeader(remainingData);
-                if (header.fileIdx == -1 && header.compressionType == 0 && header.blockIdx == 0 &&
-                    header.blockSize == 0) {
+                if (header.fileIdx == -1 && header.blockType == 0 && header.compressionType == 0 &&
+                    header.blockIdx == 0 && header.blockSize == 0) {
                     ALOGI("Stop signal received. Sending exit command (remaining bytes: %d).",
                           int(remainingData.size()));
 
@@ -658,14 +700,14 @@ private:
                     mStopReceiving = true;
                     break;
                 }
-                if (header.fileIdx < 0 || header.blockSize <= 0 || header.compressionType < 0 ||
-                    header.blockIdx < 0) {
+                if (header.fileIdx < 0 || header.blockSize <= 0 || header.blockType < 0 ||
+                    header.compressionType < 0 || header.blockIdx < 0) {
                     ALOGE("invalid header received. Abort.");
                     mStopReceiving = true;
                     break;
                 }
                 const FileIdx fileIdx = header.fileIdx;
-                const android::dataloader::FileId fileId = convertFileIndexToFileId(fileIdx);
+                const android::dataloader::FileId fileId = convertFileIndexToFileId(mode, fileIdx);
                 if (!android::incfs::isValidFileId(fileId)) {
                     ALOGE("Unknown data destination for file ID %d. "
                           "Ignore.",
@@ -675,9 +717,9 @@ private:
 
                 auto& writeFd = writeFds[fileIdx];
                 if (writeFd < 0) {
-                    writeFd.reset(this->mIfs->openWrite(fileId));
+                    writeFd.reset(this->mIfs->openForSpecialOps(fileId).release());
                     if (writeFd < 0) {
-                        ALOGE("Failed to open file %d for writing (%d). Aboring.", header.fileIdx,
+                        ALOGE("Failed to open file %d for writing (%d). Aborting.", header.fileIdx,
                               -writeFd);
                         break;
                     }
@@ -687,7 +729,7 @@ private:
                         .fileFd = writeFd,
                         .pageIndex = static_cast<IncFsBlockIndex>(header.blockIdx),
                         .compression = static_cast<IncFsCompressionKind>(header.compressionType),
-                        .kind = INCFS_BLOCK_KIND_DATA,
+                        .kind = static_cast<IncFsBlockKind>(header.blockType),
                         .dataSize = static_cast<uint16_t>(header.blockSize),
                         .data = (const char*)remainingData.data(),
                 };
@@ -714,9 +756,11 @@ private:
     }
 
     FileIdx convertFileIdToFileIndex(android::dataloader::FileId fileId) {
-        // FileId is a string in format '+FileIdx\0'.
+        // FileId has format '\2FileIdx'.
         const char* meta = (const char*)&fileId;
-        if (*meta != '+') {
+
+        int8_t mode = *meta;
+        if (mode != DATA_ONLY_STREAMING && mode != STREAMING) {
             return -1;
         }
 
@@ -730,10 +774,10 @@ private:
         return FileIdx(fileIdx);
     }
 
-    android::dataloader::FileId convertFileIndexToFileId(FileIdx fileIdx) {
+    android::dataloader::FileId convertFileIndexToFileId(MetadataMode mode, FileIdx fileIdx) {
         IncFsFileId fileId = {};
         char* meta = (char*)&fileId;
-        *meta = '+';
+        *meta = mode;
         if (auto [p, ec] = std::to_chars(meta + 1, meta + sizeof(fileId), fileIdx);
             ec != std::errc()) {
             return {};
@@ -761,8 +805,8 @@ BlockHeader readHeader(std::span<uint8_t>& data) {
     }
 
     header.fileIdx = static_cast<FileIdx>(be16toh(*reinterpret_cast<const uint16_t*>(&data[0])));
-    header.compressionType =
-            static_cast<CompressionType>(be16toh(*reinterpret_cast<const uint16_t*>(&data[2])));
+    header.blockType = static_cast<BlockType>(data[2]);
+    header.compressionType = static_cast<CompressionType>(data[3]);
     header.blockIdx = static_cast<BlockIdx>(be32toh(*reinterpret_cast<const uint32_t*>(&data[4])));
     header.blockSize =
             static_cast<BlockSize>(be16toh(*reinterpret_cast<const uint16_t*>(&data[8])));

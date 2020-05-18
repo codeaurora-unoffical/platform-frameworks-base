@@ -205,6 +205,7 @@ import android.os.UserManager;
 import android.provider.Settings;
 import android.security.KeyStore;
 import android.system.Os;
+import android.telephony.TelephonyManager;
 import android.test.mock.MockContentResolver;
 import android.text.TextUtils;
 import android.util.ArraySet;
@@ -307,12 +308,16 @@ public class ConnectivityServiceTest {
 
     private static final long TIMESTAMP = 1234L;
 
+    private static final int NET_ID = 110;
+
     private static final String CLAT_PREFIX = "v4-";
     private static final String MOBILE_IFNAME = "test_rmnet_data0";
     private static final String WIFI_IFNAME = "test_wlan0";
     private static final String WIFI_WOL_IFNAME = "test_wlan_wol";
     private static final String TEST_PACKAGE_NAME = "com.android.test.package";
     private static final String[] EMPTY_STRING_ARRAY = new String[0];
+
+    private static final String INTERFACE_NAME = "interface";
 
     private MockContext mServiceContext;
     private HandlerThread mCsHandlerThread;
@@ -345,6 +350,7 @@ public class ConnectivityServiceTest {
     @Mock IBinder mIBinder;
     @Mock LocationManager mLocationManager;
     @Mock AppOpsManager mAppOpsManager;
+    @Mock TelephonyManager mTelephonyManager;
 
     private ArgumentCaptor<ResolverParamsParcel> mResolverParamsParcelCaptor =
             ArgumentCaptor.forClass(ResolverParamsParcel.class);
@@ -431,6 +437,7 @@ public class ConnectivityServiceTest {
             if (Context.ALARM_SERVICE.equals(name)) return mAlarmManager;
             if (Context.LOCATION_SERVICE.equals(name)) return mLocationManager;
             if (Context.APP_OPS_SERVICE.equals(name)) return mAppOpsManager;
+            if (Context.TELEPHONY_SERVICE.equals(name)) return mTelephonyManager;
             return super.getSystemService(name);
         }
 
@@ -1015,6 +1022,7 @@ public class ConnectivityServiceTest {
         private int mVpnType = VpnManager.TYPE_VPN_SERVICE;
 
         private VpnInfo mVpnInfo;
+        private Network[] mUnderlyingNetworks;
 
         public MockVpn(int userId) {
             super(startHandlerThreadAndReturnLooper(), mServiceContext, mNetworkManagementService,
@@ -1104,8 +1112,20 @@ public class ConnectivityServiceTest {
             return super.getVpnInfo();
         }
 
-        private void setVpnInfo(VpnInfo vpnInfo) {
+        private synchronized void setVpnInfo(VpnInfo vpnInfo) {
             mVpnInfo = vpnInfo;
+        }
+
+        @Override
+        public synchronized Network[] getUnderlyingNetworks() {
+            if (mUnderlyingNetworks != null) return mUnderlyingNetworks;
+
+            return super.getUnderlyingNetworks();
+        }
+
+        /** Don't override behavior for {@link Vpn#setUnderlyingNetworks}. */
+        private synchronized void overrideUnderlyingNetworks(Network[] underlyingNetworks) {
+            mUnderlyingNetworks = underlyingNetworks;
         }
     }
 
@@ -2896,7 +2916,7 @@ public class ConnectivityServiceTest {
         class ConfidentialMatchAllNetworkSpecifier extends NetworkSpecifier implements
                 Parcelable {
             @Override
-            public boolean satisfiedBy(NetworkSpecifier other) {
+            public boolean canBeSatisfiedBy(NetworkSpecifier other) {
                 return true;
             }
 
@@ -2924,7 +2944,7 @@ public class ConnectivityServiceTest {
             }
 
             @Override
-            public boolean satisfiedBy(NetworkSpecifier other) {
+            public boolean canBeSatisfiedBy(NetworkSpecifier other) {
                 if (other instanceof LocalStringNetworkSpecifier) {
                     return TextUtils.equals(mString,
                             ((LocalStringNetworkSpecifier) other).mString);
@@ -3045,7 +3065,10 @@ public class ConnectivityServiceTest {
         });
 
         class NonParcelableSpecifier extends NetworkSpecifier {
-            public boolean satisfiedBy(NetworkSpecifier other) { return false; }
+            @Override
+            public boolean canBeSatisfiedBy(NetworkSpecifier other) {
+                return false;
+            }
         };
         class ParcelableSpecifier extends NonParcelableSpecifier implements Parcelable {
             @Override public int describeContents() { return 0; }
@@ -6313,6 +6336,7 @@ public class ConnectivityServiceTest {
         LinkProperties lp = new LinkProperties();
         lp.setInterfaceName("tun0");
         lp.addRoute(new RouteInfo(new IpPrefix(Inet4Address.ANY, 0), null));
+        lp.addRoute(new RouteInfo(new IpPrefix(Inet6Address.ANY, 0), RTN_UNREACHABLE));
         // The uid range needs to cover the test app so the network is visible to it.
         final Set<UidRange> vpnRange = Collections.singleton(UidRange.createForUser(VPN_USER));
         final TestNetworkAgentWrapper vpnNetworkAgent = establishVpn(lp, VPN_UID, vpnRange);
@@ -6338,6 +6362,7 @@ public class ConnectivityServiceTest {
     public void testLegacyVpnDoesNotResultInInterfaceFilteringRule() throws Exception {
         LinkProperties lp = new LinkProperties();
         lp.setInterfaceName("tun0");
+        lp.addRoute(new RouteInfo(new IpPrefix(Inet6Address.ANY, 0), null));
         lp.addRoute(new RouteInfo(new IpPrefix(Inet4Address.ANY, 0), null));
         // The uid range needs to cover the test app so the network is visible to it.
         final Set<UidRange> vpnRange = Collections.singleton(UidRange.createForUser(VPN_USER));
@@ -6369,6 +6394,7 @@ public class ConnectivityServiceTest {
         LinkProperties lp = new LinkProperties();
         lp.setInterfaceName("tun0");
         lp.addRoute(new RouteInfo(new IpPrefix(Inet4Address.ANY, 0), null));
+        lp.addRoute(new RouteInfo(new IpPrefix(Inet6Address.ANY, 0), null));
         // The uid range needs to cover the test app so the network is visible to it.
         final Set<UidRange> vpnRange = Collections.singleton(UidRange.createForUser(VPN_USER));
         final TestNetworkAgentWrapper vpnNetworkAgent = establishVpn(lp, VPN_UID, vpnRange);
@@ -6405,6 +6431,7 @@ public class ConnectivityServiceTest {
         reset(mMockNetd);
         lp = new LinkProperties();
         lp.setInterfaceName("tun1");
+        lp.addRoute(new RouteInfo(new IpPrefix(Inet4Address.ANY, 0), RTN_UNREACHABLE));
         lp.addRoute(new RouteInfo(new IpPrefix(Inet6Address.ANY, 0), null));
         vpnNetworkAgent.sendLinkProperties(lp);
         waitForIdle();
@@ -6417,6 +6444,7 @@ public class ConnectivityServiceTest {
     public void testUidUpdateChangesInterfaceFilteringRule() throws Exception {
         LinkProperties lp = new LinkProperties();
         lp.setInterfaceName("tun0");
+        lp.addRoute(new RouteInfo(new IpPrefix(Inet4Address.ANY, 0), RTN_UNREACHABLE));
         lp.addRoute(new RouteInfo(new IpPrefix(Inet6Address.ANY, 0), null));
         // The uid range needs to cover the test app so the network is visible to it.
         final UidRange vpnRange = UidRange.createForUser(VPN_USER);
@@ -6727,16 +6755,12 @@ public class ConnectivityServiceTest {
 
         verify(mIBinder).linkToDeath(any(ConnectivityDiagnosticsCallbackInfo.class), anyInt());
         verify(mConnectivityDiagnosticsCallback).asBinder();
-        assertTrue(
-                mService.mConnectivityDiagnosticsCallbacks.containsKey(
-                        mConnectivityDiagnosticsCallback));
+        assertTrue(mService.mConnectivityDiagnosticsCallbacks.containsKey(mIBinder));
 
         mService.unregisterConnectivityDiagnosticsCallback(mConnectivityDiagnosticsCallback);
         verify(mIBinder, timeout(TIMEOUT_MS))
                 .unlinkToDeath(any(ConnectivityDiagnosticsCallbackInfo.class), anyInt());
-        assertFalse(
-                mService.mConnectivityDiagnosticsCallbacks.containsKey(
-                        mConnectivityDiagnosticsCallback));
+        assertFalse(mService.mConnectivityDiagnosticsCallbacks.containsKey(mIBinder));
         verify(mConnectivityDiagnosticsCallback, atLeastOnce()).asBinder();
     }
 
@@ -6754,9 +6778,7 @@ public class ConnectivityServiceTest {
 
         verify(mIBinder).linkToDeath(any(ConnectivityDiagnosticsCallbackInfo.class), anyInt());
         verify(mConnectivityDiagnosticsCallback).asBinder();
-        assertTrue(
-                mService.mConnectivityDiagnosticsCallbacks.containsKey(
-                        mConnectivityDiagnosticsCallback));
+        assertTrue(mService.mConnectivityDiagnosticsCallbacks.containsKey(mIBinder));
 
         // Register the same callback again
         mService.registerConnectivityDiagnosticsCallback(
@@ -6765,9 +6787,7 @@ public class ConnectivityServiceTest {
         // Block until all other events are done processing.
         HandlerUtilsKt.waitForIdle(mCsHandlerThread, TIMEOUT_MS);
 
-        assertTrue(
-                mService.mConnectivityDiagnosticsCallbacks.containsKey(
-                        mConnectivityDiagnosticsCallback));
+        assertTrue(mService.mConnectivityDiagnosticsCallbacks.containsKey(mIBinder));
     }
 
     @Test
@@ -6795,15 +6815,11 @@ public class ConnectivityServiceTest {
 
         mServiceContext.setPermission(android.Manifest.permission.NETWORK_STACK, PERMISSION_DENIED);
 
-        try {
-            assertFalse(
-                    "Mismatched uid/package name should not pass the location permission check",
-                    mService.checkConnectivityDiagnosticsPermissions(
-                            Process.myPid() + 1, Process.myUid() + 1, naiWithoutUid,
-                            mContext.getOpPackageName()));
-        } catch (SecurityException e) {
-            fail("checkConnectivityDiagnosticsPermissions shouldn't surface a SecurityException");
-        }
+        assertFalse(
+                "Mismatched uid/package name should not pass the location permission check",
+                mService.checkConnectivityDiagnosticsPermissions(
+                        Process.myPid() + 1, Process.myUid() + 1, naiWithoutUid,
+                        mContext.getOpPackageName()));
     }
 
     @Test
@@ -6824,9 +6840,10 @@ public class ConnectivityServiceTest {
 
     @Test
     public void testCheckConnectivityDiagnosticsPermissionsActiveVpn() throws Exception {
+        final Network network = new Network(NET_ID);
         final NetworkAgentInfo naiWithoutUid =
                 new NetworkAgentInfo(
-                        null, null, null, null, null, new NetworkCapabilities(), 0,
+                        null, null, network, null, null, new NetworkCapabilities(), 0,
                         mServiceContext, null, null, mService, null, null, null, 0);
 
         setupLocationPermissions(Build.VERSION_CODES.Q, true, AppOpsManager.OPSTR_FINE_LOCATION,
@@ -6839,8 +6856,16 @@ public class ConnectivityServiceTest {
         info.ownerUid = Process.myUid();
         info.vpnIface = "interface";
         mMockVpn.setVpnInfo(info);
+        mMockVpn.overrideUnderlyingNetworks(new Network[] {network});
         assertTrue(
                 "Active VPN permission not applied",
+                mService.checkConnectivityDiagnosticsPermissions(
+                        Process.myPid(), Process.myUid(), naiWithoutUid,
+                        mContext.getOpPackageName()));
+
+        mMockVpn.overrideUnderlyingNetworks(null);
+        assertFalse(
+                "VPN shouldn't receive callback on non-underlying network",
                 mService.checkConnectivityDiagnosticsPermissions(
                         Process.myPid(), Process.myUid(), naiWithoutUid,
                         mContext.getOpPackageName()));
@@ -6887,6 +6912,38 @@ public class ConnectivityServiceTest {
                 mService.checkConnectivityDiagnosticsPermissions(
                         Process.myPid() + 1, Process.myUid() + 1, naiWithUid,
                         mContext.getOpPackageName()));
+    }
+
+    @Test
+    public void testRegisterConnectivityDiagnosticsCallbackCallsOnConnectivityReport()
+            throws Exception {
+        // Set up the Network, which leads to a ConnectivityReport being cached for the network.
+        final TestNetworkCallback callback = new TestNetworkCallback();
+        mCm.registerDefaultNetworkCallback(callback);
+        final LinkProperties linkProperties = new LinkProperties();
+        linkProperties.setInterfaceName(INTERFACE_NAME);
+        mCellNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_CELLULAR, linkProperties);
+        mCellNetworkAgent.connect(true);
+        callback.expectAvailableThenValidatedCallbacks(mCellNetworkAgent);
+        callback.assertNoCallback();
+
+        final NetworkRequest request = new NetworkRequest.Builder().build();
+        when(mConnectivityDiagnosticsCallback.asBinder()).thenReturn(mIBinder);
+
+        mServiceContext.setPermission(
+                android.Manifest.permission.NETWORK_STACK, PERMISSION_GRANTED);
+
+        mService.registerConnectivityDiagnosticsCallback(
+                mConnectivityDiagnosticsCallback, request, mContext.getPackageName());
+
+        // Block until all other events are done processing.
+        HandlerUtilsKt.waitForIdle(mCsHandlerThread, TIMEOUT_MS);
+
+        verify(mConnectivityDiagnosticsCallback)
+                .onConnectivityReportAvailable(argThat(report -> {
+                    return INTERFACE_NAME.equals(report.getLinkProperties().getInterfaceName())
+                            && report.getNetworkCapabilities().hasTransport(TRANSPORT_CELLULAR);
+                }));
     }
 
     private void setUpConnectivityDiagnosticsCallback() throws Exception {
