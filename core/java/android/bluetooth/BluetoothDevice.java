@@ -255,6 +255,28 @@ public final class BluetoothDevice implements Parcelable {
 
     /**
      * Used as a Parcelable {@link BluetoothClass} extra field in {@link
+     * #ACTION_ACL_DISCONNECTED} intents.
+     *
+     * @hide
+     */
+    public static final String EXTRA_DISC_REASON = "android.bluetooth.device.extra.DISC_REASON";
+
+    /**
+     * Indicates the remote device is disconnected due to other reasons.
+     *
+     * @hide
+     */
+    public static final int DISC_REASON_OTHER = 0;
+
+    /**
+     * Indicates the remote device disconnected due to link loss.
+     *
+     * @hide
+     */
+    public static final int DISC_REASON_LINK_LOSS = 1;
+
+    /**
+     * Used as a Parcelable {@link BluetoothClass} extra field in {@link
      * #ACTION_FOUND} and {@link #ACTION_CLASS_CHANGED} intents.
      */
     public static final String EXTRA_CLASS = "android.bluetooth.device.extra.CLASS";
