@@ -32,6 +32,7 @@ import android.util.SparseArray;
 import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.DragEvent;
+import android.view.IScrollCaptureController;
 import android.view.IWindow;
 import android.view.IWindowManager;
 import android.view.IWindowSession;
@@ -200,6 +201,14 @@ public class SystemWindows {
             attrs.flags |= FLAG_HARDWARE_ACCELERATED;
             viewRoot.setView(view, attrs);
             mViewRoots.put(view, viewRoot);
+
+            try {
+                mWmService.setShellRootAccessibilityWindow(mDisplayId, windowType,
+                        viewRoot.getWindowToken());
+            } catch (RemoteException e) {
+                Slog.e(TAG, "Error setting accessibility window for " + mDisplayId + ":"
+                        + windowType, e);
+            }
         }
 
         SysUiWindowManager addRoot(int windowType) {
@@ -352,5 +361,14 @@ public class SystemWindows {
 
         @Override
         public void dispatchPointerCaptureChanged(boolean hasCapture) {}
+
+        @Override
+        public void requestScrollCapture(IScrollCaptureController controller) {
+            try {
+                controller.onClientUnavailable();
+            } catch (RemoteException ex) {
+                // ignore
+            }
+        }
     }
 }

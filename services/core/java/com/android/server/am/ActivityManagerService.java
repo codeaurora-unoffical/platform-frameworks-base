@@ -397,6 +397,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -464,6 +465,8 @@ public class ActivityManagerService extends IActivityManager.Stub
     public static final int STOCK_PM_FLAGS = PackageManager.GET_SHARED_LIBRARY_FILES;
 
     static final String SYSTEM_DEBUGGABLE = "ro.debuggable";
+
+    static final String SYSTEM_USER_HOME_NEEDED = "ro.system_user_home_needed";
 
     public static final String ANR_TRACE_DIR = "/data/anr";
 
@@ -2681,7 +2684,6 @@ public class ActivityManagerService extends IActivityManager.Stub
         Slog.d("AppOps", "AppOpsService published");
         LocalServices.addService(ActivityManagerInternal.class, mInternal);
         mActivityTaskManager.onActivityManagerInternalAdded();
-        mUgmInternal.onActivityManagerInternalAdded();
         mPendingIntentController.onActivityManagerInternalAdded();
         // Wait for the synchronized block started in mProcessCpuThread,
         // so that any other access to mProcessCpuTracker from main thread
@@ -6410,7 +6412,7 @@ public class ActivityManagerService extends IActivityManager.Stub
         if (pid == MY_PID) {
             return PackageManager.PERMISSION_GRANTED;
         }
-        return mUgmInternal.checkUriPermission(new GrantUri(userId, uri, false), uid, modeFlags)
+        return mUgmInternal.checkUriPermission(new GrantUri(userId, uri, modeFlags), uid, modeFlags)
                 ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
     }
 
@@ -6422,7 +6424,7 @@ public class ActivityManagerService extends IActivityManager.Stub
     public void grantUriPermission(IApplicationThread caller, String targetPkg, Uri uri,
             final int modeFlags, int userId) {
         enforceNotIsolatedCaller("grantUriPermission");
-        GrantUri grantUri = new GrantUri(userId, uri, false);
+        GrantUri grantUri = new GrantUri(userId, uri, modeFlags);
         synchronized(this) {
             final ProcessRecord r = getRecordForAppLocked(caller);
             if (r == null) {
@@ -6480,8 +6482,8 @@ public class ActivityManagerService extends IActivityManager.Stub
                 return;
             }
 
-            mUgmInternal.revokeUriPermission(targetPackage, r.uid, new GrantUri(userId, uri, false),
-                    modeFlags);
+            mUgmInternal.revokeUriPermission(targetPackage, r.uid,
+                    new GrantUri(userId, uri, modeFlags), modeFlags);
         }
     }
 
@@ -9592,7 +9594,8 @@ public class ActivityManagerService extends IActivityManager.Stub
             // to handle home activity in this case.
             if (UserManager.isSplitSystemUser() &&
                     Settings.Secure.getInt(mContext.getContentResolver(),
-                         Settings.Secure.USER_SETUP_COMPLETE, 0) != 0) {
+                         Settings.Secure.USER_SETUP_COMPLETE, 0) != 0
+                    || SystemProperties.getBoolean(SYSTEM_USER_HOME_NEEDED, false)) {
                 t.traceBegin("enableHomeActivity");
                 ComponentName cName = new ComponentName(mContext, SystemUserHomeActivity.class);
                 try {
@@ -9986,6 +9989,30 @@ public class ActivityManagerService extends IActivityManager.Stub
         addErrorToDropBox("wtf", r, processName, null, null, null, tag, null, null, crashInfo);
 
         return r;
+    }
+
+    /**
+     * Schedule to handle any pending system_server WTFs.
+     */
+    public void schedulePendingSystemServerWtfs(
+            final LinkedList<Pair<String, ApplicationErrorReport.CrashInfo>> list) {
+        mHandler.post(() -> handlePendingSystemServerWtfs(list));
+    }
+
+    /**
+     * Handle any pending system_server WTFs, add into the dropbox
+     */
+    private void handlePendingSystemServerWtfs(
+            final LinkedList<Pair<String, ApplicationErrorReport.CrashInfo>> list) {
+        ProcessRecord proc;
+        synchronized (mPidsSelfLocked) {
+            proc = mPidsSelfLocked.get(MY_PID);
+        }
+        for (Pair<String, ApplicationErrorReport.CrashInfo> p = list.poll();
+                p != null; p = list.poll()) {
+            addErrorToDropBox("wtf", proc, "system_server", null, null, null, p.first, null, null,
+                    p.second);
+        }
     }
 
     /**
@@ -18145,7 +18172,7 @@ public class ActivityManagerService extends IActivityManager.Stub
         for (int i = mProcessList.mRemovedProcesses.size() - 1; i >= 0; i--) {
             final ProcessRecord app = mProcessList.mRemovedProcesses.get(i);
             if (!app.hasActivitiesOrRecentTasks()
-                    && app.curReceivers.isEmpty() && app.services.size() == 0) {
+                    && app.curReceivers.isEmpty() && app.numberOfRunningServices() == 0) {
                 Slog.i(
                     TAG, "Exiting empty application process "
                     + app.toShortString() + " ("
@@ -18749,6 +18776,15 @@ public class ActivityManagerService extends IActivityManager.Stub
                 String processName, String abiOverride, int uid, Runnable crashHandler) {
             return ActivityManagerService.this.startIsolatedProcess(entryPoint, entryPointArgs,
                     processName, abiOverride, uid, crashHandler);
+        }
+
+        @Override
+        public void onUserRemoved(@UserIdInt int userId) {
+            // Clean up any ActivityTaskManager state (by telling it the user is stopped)
+            mAtmInternal.onUserStopped(userId);
+            // Clean up various services by removing the user
+            mBatteryStatsService.onUserRemoved(userId);
+            mUserController.onUserRemoved(userId);
         }
 
         @Override
