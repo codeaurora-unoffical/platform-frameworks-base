@@ -331,4 +331,43 @@ public class SoftApConfigurationTest {
         assertThat(wifiConfig_2g5g.apChannel).isEqualTo(0);
         assertThat(wifiConfig_2g5g.hiddenSSID).isEqualTo(true);
     }
+
+    @Test
+    public void testSetBandsCustomized() {
+        ArrayList<Integer> bands_2g_2g = new ArrayList<>();
+        bands_2g_2g.add(SoftApConfiguration.BAND_2GHZ);
+        bands_2g_2g.add(SoftApConfiguration.BAND_2GHZ);
+        SoftApConfiguration softApConfig_2g_2g = new SoftApConfiguration.Builder()
+               .setBands(bands_2g_2g)
+               .build();
+        assertThat(softApConfig_2g_2g.getBands()).isEqualTo(bands_2g_2g);
+
+        ArrayList<Integer> bands_5g_5g = new ArrayList<>();
+        bands_5g_5g.add(SoftApConfiguration.BAND_5GHZ);
+        bands_5g_5g.add(SoftApConfiguration.BAND_5GHZ);
+        SoftApConfiguration softApConfig_5g_5g = new SoftApConfiguration.Builder()
+               .setBands(bands_5g_5g)
+               .build();
+        assertThat(softApConfig_5g_5g.getBands()).isEqualTo(bands_5g_5g);
+
+        ArrayList<Integer> bands_2g_5g = new ArrayList<>();
+        bands_2g_5g.add(SoftApConfiguration.BAND_2GHZ);
+        bands_2g_5g.add(SoftApConfiguration.BAND_5GHZ);
+        SoftApConfiguration softApConfig_2g_5g = new SoftApConfiguration.Builder()
+               .setBands(bands_2g_5g)
+               .build();
+        assertThat(softApConfig_2g_5g.getBands()).isEqualTo(bands_2g_5g);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testInvalidBandsSize() {
+       ArrayList<Integer> bands = new ArrayList<>();
+       bands.add(SoftApConfiguration.BAND_2GHZ);
+       bands.add(SoftApConfiguration.BAND_5GHZ);
+       bands.add(SoftApConfiguration.BAND_6GHZ);
+       SoftApConfiguration softApConfig = new SoftApConfiguration.Builder()
+              .setBands(bands)
+              .build();
+    }
+
 }
