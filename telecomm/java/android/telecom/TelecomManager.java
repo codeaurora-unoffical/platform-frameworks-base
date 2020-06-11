@@ -1534,12 +1534,22 @@ public class TelecomManager {
     /**
      * Return the line 1 phone number for given phone account.
      *
-     * Requires permission: {@link android.Manifest.permission#READ_PHONE_STATE}
+     * <p>Requires Permission:
+     *     {@link android.Manifest.permission#READ_SMS READ_SMS},
+     *     {@link android.Manifest.permission#READ_PHONE_NUMBERS READ_PHONE_NUMBERS},
+     *     or that the caller is the default SMS app for any API level.
+     *     {@link android.Manifest.permission#READ_PHONE_STATE READ_PHONE_STATE}
+     *     for apps targeting SDK API level 29 and below.
      *
      * @param accountHandle The handle for the account retrieve a number for.
      * @return A string representation of the line 1 phone number.
      */
-    @RequiresPermission(android.Manifest.permission.READ_PHONE_STATE)
+    @SuppressAutoDoc // Blocked by b/72967236 - no support for carrier privileges or default SMS app
+    @RequiresPermission(anyOf = {
+            android.Manifest.permission.READ_PHONE_STATE,
+            android.Manifest.permission.READ_SMS,
+            android.Manifest.permission.READ_PHONE_NUMBERS
+            }, conditional = true)
     public String getLine1Number(PhoneAccountHandle accountHandle) {
         try {
             if (isServiceConnected()) {
@@ -2205,18 +2215,27 @@ public class TelecomManager {
      * @hide
      */
     @SystemApi
+    @TestApi
     @NonNull
     public Intent createLaunchEmergencyDialerIntent(@Nullable String number) {
         ITelecomService service = getTelecomService();
-        Intent result = null;
         if (service != null) {
             try {
-                result = service.createLaunchEmergencyDialerIntent(number);
+                return service.createLaunchEmergencyDialerIntent(number);
             } catch (RemoteException e) {
                 Log.e(TAG, "Error createLaunchEmergencyDialerIntent", e);
             }
+        } else {
+            Log.w(TAG, "createLaunchEmergencyDialerIntent - Telecom service not available.");
         }
-        return result;
+
+        // Telecom service knows the package name of the expected emergency dialer package; if it
+        // is not available, then fallback to not targeting a specific package.
+        Intent intent = new Intent(Intent.ACTION_DIAL_EMERGENCY);
+        if (!TextUtils.isEmpty(number) && TextUtils.isDigitsOnly(number)) {
+            intent.setData(Uri.fromParts(PhoneAccount.SCHEME_TEL, number, null));
+        }
+        return intent;
     }
 
     /**

@@ -228,6 +228,7 @@ public final class SurfaceControl implements Parcelable {
      */
     public long mNativeObject;
     private long mNativeHandle;
+    private Throwable mReleaseStack = null;
 
     // TODO: Move this to native.
     private final Object mSizeLock = new Object();
@@ -426,11 +427,18 @@ public final class SurfaceControl implements Parcelable {
         if (mNativeObject != 0) {
             release();
         }
-      	if (nativeObject != 0) {
+        if (nativeObject != 0) {
             mCloseGuard.open("release");
         }
         mNativeObject = nativeObject;
         mNativeHandle = mNativeObject != 0 ? nativeGetHandle(nativeObject) : 0;
+        if (mNativeObject == 0) {
+            if (Build.IS_DEBUGGABLE) {
+                mReleaseStack = new Throwable("assigned zero nativeObject here");
+            }
+        } else {
+            mReleaseStack = null;
+        }
     }
 
     /**
@@ -886,7 +894,7 @@ public final class SurfaceControl implements Parcelable {
             throw new IllegalArgumentException("source must not be null");
         }
 
-        mName = in.readString();
+        mName = in.readString8();
         mWidth = in.readInt();
         mHeight = in.readInt();
 
@@ -904,7 +912,7 @@ public final class SurfaceControl implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel dest, int flags) {
-        dest.writeString(mName);
+        dest.writeString8(mName);
         dest.writeInt(mWidth);
         dest.writeInt(mHeight);
         if (mNativeObject == 0) {
@@ -989,8 +997,19 @@ public final class SurfaceControl implements Parcelable {
             nativeRelease(mNativeObject);
             mNativeObject = 0;
             mNativeHandle = 0;
+            if (Build.IS_DEBUGGABLE) {
+                mReleaseStack = new Throwable("released here");
+            }
             mCloseGuard.close();
         }
+    }
+
+    /**
+     * Returns the call stack that assigned mNativeObject to zero.
+     * @hide
+     */
+    public Throwable getReleaseStack() {
+        return mReleaseStack;
     }
 
     /**
@@ -1004,8 +1023,11 @@ public final class SurfaceControl implements Parcelable {
     }
 
     private void checkNotReleased() {
-        if (mNativeObject == 0) throw new NullPointerException(
-                "mNativeObject is null. Have you called release() already?");
+        if (mNativeObject == 0) {
+            Log.wtf(TAG, "Invalid " + this + " caused by:", mReleaseStack);
+            throw new NullPointerException(
+                "mNativeObject of " + this + " is null. Have you called release() already?");
+        }
     }
 
     /**
@@ -2888,7 +2910,8 @@ public final class SurfaceControl implements Parcelable {
     /**
      * Acquire a frame rate flexibility token, which allows surface flinger to freely switch display
      * frame rates. This is used by CTS tests to put the device in a consistent state. See
-     * ISurfaceComposer::acquireFrameRateFlexibilityToken().
+     * ISurfaceComposer::acquireFrameRateFlexibilityToken(). The caller must have the
+     * ACCESS_SURFACE_FLINGER permission, or else the call will fail, returning 0.
      * @hide
      */
     @TestApi

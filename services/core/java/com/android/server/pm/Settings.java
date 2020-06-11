@@ -1282,7 +1282,8 @@ public final class Settings {
         return result;
     }
 
-    boolean removeIntentFilterVerificationLPw(String packageName, int userId) {
+    boolean removeIntentFilterVerificationLPw(String packageName, int userId,
+            boolean alsoResetStatus) {
         PackageSetting ps = mPackages.get(packageName);
         if (ps == null) {
             if (DEBUG_DOMAIN_VERIFICATION) {
@@ -1290,14 +1291,17 @@ public final class Settings {
             }
             return false;
         }
-        ps.clearDomainVerificationStatusForUser(userId);
+        if (alsoResetStatus) {
+            ps.clearDomainVerificationStatusForUser(userId);
+        }
+        ps.setIntentFilterVerificationInfo(null);
         return true;
     }
 
     boolean removeIntentFilterVerificationLPw(String packageName, int[] userIds) {
         boolean result = false;
         for (int userId : userIds) {
-            result |= removeIntentFilterVerificationLPw(packageName, userId);
+            result |= removeIntentFilterVerificationLPw(packageName, userId, true);
         }
         return result;
     }
@@ -1827,6 +1831,10 @@ public final class Settings {
                 mBlockUninstallPackages.remove(userId);
             }
         }
+    }
+
+    void clearBlockUninstallLPw(int userId) {
+        mBlockUninstallPackages.remove(userId);
     }
 
     boolean getBlockUninstallLPr(int userId, String packageName) {
@@ -4207,18 +4215,12 @@ public final class Settings {
             }
         }
         t.traceBegin("createAppData");
-        for (int i = 0; i < packagesCount; i++) {
-            if (names[i] == null) {
-                continue;
-            }
-            // TODO: triage flags!
-            final int flags = StorageManager.FLAG_STORAGE_CE | StorageManager.FLAG_STORAGE_DE;
-            try {
-                installer.createAppData(volumeUuids[i], names[i], userHandle, flags, appIds[i],
-                        seinfos[i], targetSdkVersions[i]);
-            } catch (InstallerException e) {
-                Slog.w(TAG, "Failed to prepare app data", e);
-            }
+        final int flags = StorageManager.FLAG_STORAGE_CE | StorageManager.FLAG_STORAGE_DE;
+        try {
+            installer.createAppDataBatched(volumeUuids, names, userHandle, flags, appIds, seinfos,
+                    targetSdkVersions);
+        } catch (InstallerException e) {
+            Slog.w(TAG, "Failed to prepare app data", e);
         }
         t.traceEnd(); // createAppData
         synchronized (mLock) {
@@ -4361,19 +4363,21 @@ public final class Settings {
         return pkg.installSource.isOrphaned;
     }
 
-    int getApplicationEnabledSettingLPr(String packageName, int userId) {
+    int getApplicationEnabledSettingLPr(String packageName, int userId)
+            throws PackageManager.NameNotFoundException {
         final PackageSetting pkg = mPackages.get(packageName);
         if (pkg == null) {
-            throw new IllegalArgumentException("Unknown package: " + packageName);
+            throw new PackageManager.NameNotFoundException(packageName);
         }
         return pkg.getEnabled(userId);
     }
 
-    int getComponentEnabledSettingLPr(ComponentName componentName, int userId) {
+    int getComponentEnabledSettingLPr(ComponentName componentName, int userId)
+            throws PackageManager.NameNotFoundException {
         final String packageName = componentName.getPackageName();
         final PackageSetting pkg = mPackages.get(packageName);
         if (pkg == null) {
-            throw new IllegalArgumentException("Unknown component: " + componentName);
+            throw new PackageManager.NameNotFoundException(componentName.getPackageName());
         }
         final String classNameStr = componentName.getClassName();
         return pkg.getCurrentEnabledStateLPr(classNameStr, userId);

@@ -233,12 +233,9 @@ public class AppOpsManager {
                 }
 
                 private void reportStackTraceIfNeeded(@NonNull SyncNotedAppOp op) {
-                    if (sConfig.getSampledOpCode() == OP_NONE
-                            && sConfig.getExpirationTimeSinceBootMillis()
-                            >= SystemClock.elapsedRealtime()) {
+                    if (!isCollectingStackTraces()) {
                         return;
                     }
-
                     MessageSamplingConfig config = sConfig;
                     if (leftCircularDistance(strOpToOp(op.getOp()), config.getSampledOpCode(),
                             _NUM_OP) <= config.getAcceptableLeftDistance()
@@ -1086,7 +1083,7 @@ public class AppOpsManager {
      * @hide
      */
     public static final int OP_ACTIVATE_PLATFORM_VPN = AppProtoEnums.APP_OP_ACTIVATE_PLATFORM_VPN;
-    /** @hide */
+    /** @hide Controls whether or not read logs are available for incremental installations. */
     public static final int OP_LOADER_USAGE_STATS = AppProtoEnums.APP_OP_LOADER_USAGE_STATS;
 
     // App op deprecated/removed.
@@ -2583,6 +2580,44 @@ public class AppOpsManager {
      */
     public static boolean opAllowsReset(int op) {
         return !sOpDisableReset[op];
+    }
+
+    /**
+     * Returns a listenerId suitable for use with {@link #noteOp(int, int, String, String, String)}.
+     *
+     * This is intended for use client side, when the receiver id must be created before the
+     * associated call is made to the system server. If using {@link PendingIntent} as the receiver,
+     * avoid using this method as it will include a pointless additional x-process call. Instead to
+     * prefer passing the PendingIntent to the system server, and then invoking
+     * {@link #toReceiverId(PendingIntent)} instead.
+     *
+     * @param obj the receiver in use
+     * @return a string representation of the receiver suitable for app ops use
+     * @hide
+     */
+    // TODO: this should probably be @SystemApi as well
+    public static @NonNull String toReceiverId(@NonNull Object obj) {
+        if (obj instanceof PendingIntent) {
+            return toReceiverId((PendingIntent) obj);
+        } else {
+            return obj.getClass().getName() + "@" + System.identityHashCode(obj);
+        }
+    }
+
+    /**
+     * Returns a listenerId suitable for use with {@link #noteOp(int, int, String, String, String)}.
+     *
+     * This is intended for use server side, where ActivityManagerService can be referenced without
+     * an additional x-process call.
+     *
+     * @param pendingIntent the pendingIntent in use
+     * @return a string representation of the pending intent suitable for app ops use
+     * @see #toReceiverId(Object)
+     * @hide
+     */
+    // TODO: this should probably be @SystemApi as well
+    public static @NonNull String toReceiverId(@NonNull PendingIntent pendingIntent) {
+        return pendingIntent.getTag("");
     }
 
     /**
@@ -8143,7 +8178,22 @@ public class AppOpsManager {
      * @hide
      */
     public static boolean isListeningForOpNoted() {
-        return sOnOpNotedCallback != null;
+        return sOnOpNotedCallback != null || isCollectingStackTraces();
+    }
+
+    /**
+     * @return {@code true} iff the process is currently sampled for stacktrace collection.
+     *
+     * @see #setOnOpNotedCallback
+     *
+     * @hide
+     */
+    private static boolean isCollectingStackTraces() {
+        if (sConfig.getSampledOpCode() == OP_NONE &&
+                sConfig.getExpirationTimeSinceBootMillis() >= SystemClock.elapsedRealtime()) {
+            return false;
+        }
+        return true;
     }
 
     /**

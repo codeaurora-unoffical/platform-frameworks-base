@@ -34,8 +34,13 @@ private const val POSITION_UPDATE_INTERVAL_MILLIS = 100L
 /** ViewModel for seek bar in QS media player. */
 class SeekBarViewModel(val bgExecutor: DelayableExecutor) {
 
+    private var _data = Progress(false, false, null, null, null)
+        set(value) {
+            field = value
+            _progress.postValue(value)
+        }
     private val _progress = MutableLiveData<Progress>().apply {
-        postValue(Progress(false, false, null, null, null))
+        postValue(_data)
     }
     val progress: LiveData<Progress>
         get() = _progress
@@ -72,18 +77,30 @@ class SeekBarViewModel(val bgExecutor: DelayableExecutor) {
         val seekAvailable = ((playbackState?.actions ?: 0L) and PlaybackState.ACTION_SEEK_TO) != 0L
         val position = playbackState?.position?.toInt()
         val duration = mediaMetadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.toInt()
-        val enabled = if (duration != null && duration <= 0) false else true
-        _progress.postValue(Progress(enabled, seekAvailable, position, duration, color))
+        val enabled = if (playbackState == null ||
+                playbackState?.getState() == PlaybackState.STATE_NONE ||
+                (duration != null && duration <= 0)) false else true
+        _data = Progress(enabled, seekAvailable, position, duration, color)
         if (shouldPollPlaybackPosition()) {
             checkPlaybackPosition()
         }
     }
 
+    /**
+     * Puts the seek bar into a resumption state.
+     *
+     * This should be called when the media session behind the controller has been destroyed.
+     */
+    @AnyThread
+    fun clearController() = bgExecutor.execute {
+        _data = _data.copy(enabled = false)
+    }
+
     @AnyThread
     private fun checkPlaybackPosition(): Runnable = bgExecutor.executeDelayed({
         val currentPosition = controller?.playbackState?.position?.toInt()
-        if (currentPosition != null && _progress.value!!.elapsedTime != currentPosition) {
-            _progress.postValue(_progress.value!!.copy(elapsedTime = currentPosition))
+        if (currentPosition != null && _data.elapsedTime != currentPosition) {
+            _data = _data.copy(elapsedTime = currentPosition)
         }
         if (shouldPollPlaybackPosition()) {
             checkPlaybackPosition()

@@ -136,6 +136,7 @@ extern int register_android_os_HwBlob(JNIEnv *env);
 extern int register_android_os_HwParcel(JNIEnv *env);
 extern int register_android_os_HwRemoteBinder(JNIEnv *env);
 extern int register_android_os_NativeHandle(JNIEnv *env);
+extern int register_android_os_ServiceManager(JNIEnv *env);
 extern int register_android_os_MessageQueue(JNIEnv* env);
 extern int register_android_os_Parcel(JNIEnv* env);
 extern int register_android_os_SELinux(JNIEnv* env);
@@ -301,6 +302,8 @@ AndroidRuntime::~AndroidRuntime()
 }
 
 void AndroidRuntime::setArgv0(const char* argv0, bool setProcName) {
+    // Set the kernel's task name, for as much of the name as we can fit.
+    // The kernel's TASK_COMM_LEN minus one for the terminating NUL == 15.
     if (setProcName) {
         int len = strlen(argv0);
         if (len < 15) {
@@ -309,8 +312,14 @@ void AndroidRuntime::setArgv0(const char* argv0, bool setProcName) {
             pthread_setname_np(pthread_self(), argv0 + len - 15);
         }
     }
+
+    // Directly change the memory pointed to by argv[0].
     memset(mArgBlockStart, 0, mArgBlockLength);
     strlcpy(mArgBlockStart, argv0, mArgBlockLength);
+
+    // Let bionic know that we just did that, because __progname points
+    // into argv[0] (https://issuetracker.google.com/152893281).
+    setprogname(mArgBlockStart);
 }
 
 status_t AndroidRuntime::callMain(const String8& className, jclass clazz,
@@ -1244,12 +1253,11 @@ void AndroidRuntime::exit(int code)
 {
     if (mExitWithoutCleanup) {
         ALOGI("VM exiting with result code %d, cleanup skipped.", code);
-        ::_exit(code);
     } else {
         ALOGI("VM exiting with result code %d.", code);
         onExit(code);
-        ::exit(code);
     }
+    ::_exit(code);
 }
 
 void AndroidRuntime::onVmCreated(JNIEnv* env)
@@ -1454,6 +1462,7 @@ static const RegJNIRec gRegJNI[] = {
         REG_JNI(register_android_os_HwParcel),
         REG_JNI(register_android_os_HwRemoteBinder),
         REG_JNI(register_android_os_NativeHandle),
+        REG_JNI(register_android_os_ServiceManager),
         REG_JNI(register_android_os_storage_StorageManager),
         REG_JNI(register_android_os_VintfObject),
         REG_JNI(register_android_os_VintfRuntimeInfo),
