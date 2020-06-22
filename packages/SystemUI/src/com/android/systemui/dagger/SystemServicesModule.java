@@ -19,13 +19,16 @@ package com.android.systemui.dagger;
 import android.annotation.Nullable;
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
+import android.app.ActivityTaskManager;
 import android.app.AlarmManager;
 import android.app.IActivityManager;
+import android.app.IActivityTaskManager;
 import android.app.IWallpaperManager;
 import android.app.KeyguardManager;
 import android.app.NotificationManager;
 import android.app.WallpaperManager;
 import android.app.admin.DevicePolicyManager;
+import android.app.role.RoleManager;
 import android.app.trust.TrustManager;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -35,7 +38,9 @@ import android.content.pm.PackageManager;
 import android.content.pm.ShortcutManager;
 import android.content.res.Resources;
 import android.hardware.SensorPrivacyManager;
+import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
+import android.media.MediaRouter2Manager;
 import android.net.ConnectivityManager;
 import android.net.NetworkScoreManager;
 import android.net.wifi.WifiManager;
@@ -111,6 +116,12 @@ public class SystemServicesModule {
     }
 
     @Provides
+    @Singleton
+    static DevicePolicyManager provideDevicePolicyManager(Context context) {
+        return context.getSystemService(DevicePolicyManager.class);
+    }
+
+    @Provides
     @DisplayId
     static int provideDisplayId(Context context) {
         return context.getDisplayId();
@@ -118,14 +129,20 @@ public class SystemServicesModule {
 
     @Provides
     @Singleton
-    static DevicePolicyManager provideDevicePolicyManager(Context context) {
-        return context.getSystemService(DevicePolicyManager.class);
+    static DisplayManager provideDisplayManager(Context context) {
+        return context.getSystemService(DisplayManager.class);
     }
 
     @Singleton
     @Provides
     static IActivityManager provideIActivityManager() {
         return ActivityManager.getService();
+    }
+
+    @Singleton
+    @Provides
+    static IActivityTaskManager provideIActivityTaskManager() {
+        return ActivityTaskManager.getService();
     }
 
     @Provides
@@ -193,6 +210,11 @@ public class SystemServicesModule {
     static LocalBluetoothManager provideLocalBluetoothController(Context context,
             @Background Handler bgHandler) {
         return LocalBluetoothManager.create(context, bgHandler, UserHandle.ALL);
+    }
+
+    @Provides
+    static MediaRouter2Manager provideMediaRouter2Manager(Context context) {
+        return MediaRouter2Manager.getInstance(context);
     }
 
     @Provides
@@ -293,4 +315,9 @@ public class SystemServicesModule {
         return context.getSystemService(WindowManager.class);
     }
 
+    @Provides
+    @Singleton
+    static RoleManager provideRoleManager(Context context) {
+        return context.getSystemService(RoleManager.class);
+    }
 }

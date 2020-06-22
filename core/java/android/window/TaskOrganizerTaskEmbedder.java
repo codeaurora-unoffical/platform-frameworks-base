@@ -21,8 +21,6 @@ import static android.app.WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
 
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
-import android.app.ActivityView;
-import android.app.TaskStackListener;
 import android.content.Context;
 import android.graphics.Rect;
 import android.util.Log;
@@ -55,11 +53,6 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
         super(context, host);
     }
 
-    @Override
-    public TaskStackListener createTaskStackListener() {
-        return new TaskStackListenerImpl();
-    }
-
     /**
      * Whether this container has been initialized.
      *
@@ -82,7 +75,8 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
         // infrastructure is ready.
         mTaskOrganizer.registerOrganizer(WINDOWING_MODE_MULTI_WINDOW);
         mTaskOrganizer.setInterceptBackPressedOnTaskRoot(true);
-        return true;
+
+        return super.onInitialize();
     }
 
     @Override
@@ -103,6 +97,7 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
      */
     @Override
     public void start() {
+        super.start();
         if (DEBUG) {
             log("start");
         }
@@ -126,6 +121,7 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
      */
     @Override
     public void stop() {
+        super.stop();
         if (DEBUG) {
             log("stop");
         }
@@ -150,6 +146,7 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
      */
     @Override
     public void notifyBoundsChanged() {
+        super.notifyBoundsChanged();
         if (DEBUG) {
             log("notifyBoundsChanged: screenBounds=" + mHost.getScreenBounds());
         }
@@ -219,42 +216,20 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
         Log.d(TAG, "[" + System.identityHashCode(this) + "] " + msg);
     }
 
-    /**
-     * A task change listener that detects background color change of the topmost stack on our
-     * virtual display and updates the background of the surface view. This background will be shown
-     * when surface view is resized, but the app hasn't drawn its content in new size yet.
-     * It also calls StateCallback.onTaskMovedToFront to notify interested parties that the stack
-     * associated with the {@link ActivityView} has had a Task moved to the front. This is useful
-     * when needing to also bring the host Activity to the foreground at the same time.
-     */
-    private class TaskStackListenerImpl extends TaskStackListener {
-
-        @Override
-        public void onTaskDescriptionChanged(ActivityManager.RunningTaskInfo taskInfo) {
-            if (!isInitialized()) {
-                return;
-            }
-            if (taskInfo.taskId == mTaskInfo.taskId) {
-                mTaskInfo.taskDescription = taskInfo.taskDescription;
-                mHost.onTaskBackgroundColorChanged(TaskOrganizerTaskEmbedder.this,
-                        taskInfo.taskDescription.getBackgroundColor());
-            }
-        }
-    }
-
     private class TaskOrganizerImpl extends TaskOrganizer {
         @Override
-        public void onTaskAppeared(ActivityManager.RunningTaskInfo taskInfo) {
+        public void onTaskAppeared(ActivityManager.RunningTaskInfo taskInfo, SurfaceControl leash) {
             if (DEBUG) {
                 log("taskAppeared: " + taskInfo.taskId);
             }
 
-            // TODO: Ensure visibility/alpha of the leash in its initial state?
             mTaskInfo = taskInfo;
             mTaskToken = taskInfo.token;
-            mTaskLeash = mTaskToken.getLeash();
+            mTaskLeash = leash;
             mTransaction.reparent(mTaskLeash, mSurfaceControl)
-                    .show(mSurfaceControl).apply();
+                    .show(mTaskLeash)
+                    .show(mSurfaceControl)
+                    .apply();
             if (mPendingNotifyBoundsChanged) {
                 // TODO: Either defer show or hide and synchronize show with the resize
                 notifyBoundsChanged();
@@ -265,6 +240,13 @@ public class TaskOrganizerTaskEmbedder extends TaskEmbedder {
             if (mListener != null) {
                 mListener.onTaskCreated(taskInfo.taskId, taskInfo.baseActivity);
             }
+        }
+
+        @Override
+        public void onTaskInfoChanged(ActivityManager.RunningTaskInfo taskInfo) {
+            mTaskInfo.taskDescription = taskInfo.taskDescription;
+            mHost.post(() -> mHost.onTaskBackgroundColorChanged(TaskOrganizerTaskEmbedder.this,
+                    taskInfo.taskDescription.getBackgroundColor()));
         }
 
         @Override

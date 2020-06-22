@@ -27,6 +27,7 @@ public final class XmlTags {
     public static final String ATTR_ID = "id";
     public static final String ATTR_PACKAGE = "p";
     public static final String ATTR_UID = "u";
+    public static final String ATTR_CREATION_TIME_MS = "crt";
 
     // For BlobMetadata
     public static final String TAG_BLOB = "b";
@@ -48,6 +49,7 @@ public final class XmlTags {
 
     // For committer
     public static final String TAG_COMMITTER = "c";
+    public static final String ATTR_COMMIT_TIME_MS = "cmt";
 
     // For leasee
     public static final String TAG_LEASEE = "l";

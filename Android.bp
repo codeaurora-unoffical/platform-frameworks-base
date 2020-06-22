@@ -273,9 +273,6 @@ filegroup {
         // etc.
         ":framework-javastream-protos",
         ":statslog-framework-java-gen", // FrameworkStatsLog.java
-
-        // telephony annotations
-        ":framework-telephony-annotations",
     ],
 }
 
@@ -295,13 +292,13 @@ filegroup {
 java_library {
     name: "framework-updatable-stubs-module_libs_api",
     static_libs: [
-        "framework-media-stubs-module_libs_api",
-        "framework-mediaprovider-stubs-module_libs_api",
-        "framework-permission-stubs-module_libs_api",
-        "framework-sdkextensions-stubs-module_libs_api",
-        "framework-statsd-stubs-module_libs_api",
-        "framework-tethering-stubs-module_libs_api",
-        "framework-wifi-stubs-module_libs_api",
+        "framework-media.stubs.module_lib",
+        "framework-mediaprovider.stubs.module_lib",
+        "framework-permission.stubs.module_lib",
+        "framework-sdkextensions.stubs.module_lib",
+        "framework-statsd.stubs.module_lib",
+        "framework-tethering.stubs.module_lib",
+        "framework-wifi.stubs.module_lib",
     ],
     sdk_version: "module_current",
     visibility: [":__pkg__"],
@@ -339,9 +336,7 @@ java_defaults {
             "sax/java",
             "telecomm/java",
 
-            // TODO(b/148660295): remove this
-            "apex/media/framework/java",
-
+            "apex/media/aidl/stable",
             // TODO(b/147699819): remove this
             "telephony/java",
         ],
@@ -675,7 +670,7 @@ java_library {
 
 filegroup {
     name: "framework-ike-shared-srcs",
-    visibility: ["//frameworks/opt/net/ike"],
+    visibility: ["//packages/modules/IPsec"],
     srcs: [
         "core/java/android/annotation/StringDef.java",
         "core/java/android/net/annotations/PolicyDirection.java",
@@ -713,11 +708,9 @@ filegroup {
     name: "framework-services-net-module-wifi-shared-srcs",
     srcs: [
         "core/java/android/net/DhcpResults.java",
-        "core/java/android/net/shared/Inet4AddressUtils.java",
         "core/java/android/net/shared/InetAddressUtils.java",
         "core/java/android/net/util/IpUtils.java",
         "core/java/android/util/LocalLog.java",
-        "core/java/com/android/internal/util/Preconditions.java",
     ],
 }
 
@@ -729,7 +722,6 @@ filegroup {
         "core/java/com/android/internal/util/IndentingPrintWriter.java",
         "core/java/com/android/internal/util/IState.java",
         "core/java/com/android/internal/util/MessageUtils.java",
-        "core/java/com/android/internal/util/Preconditions.java",
         "core/java/com/android/internal/util/State.java",
         "core/java/com/android/internal/util/StateMachine.java",
         "core/java/com/android/internal/util/TrafficStatsConstants.java",
@@ -938,12 +930,15 @@ filegroup {
     srcs: [
         "core/java/android/os/incremental/IIncrementalService.aidl",
         "core/java/android/os/incremental/IncrementalNewFileParams.aidl",
+        "core/java/android/os/incremental/IStorageHealthListener.aidl",
+        "core/java/android/os/incremental/StorageHealthCheckParams.aidl",
     ],
     path: "core/java",
 }
 
 aidl_interface {
     name: "libincremental_aidl",
+    unstable: true,
     srcs: [
         ":incremental_aidl",
     ],
@@ -962,6 +957,7 @@ aidl_interface {
 
 aidl_interface {
     name: "libdataloader_aidl",
+    unstable: true,
     srcs: [
         ":dataloader_aidl",
     ],
@@ -983,6 +979,7 @@ aidl_interface {
 
 aidl_interface {
     name: "libincremental_manager_aidl",
+    unstable: true,
     srcs: [
         ":incremental_manager_aidl",
     ],
@@ -1126,6 +1123,7 @@ filegroup {
         "core/java/com/android/internal/os/SomeArgs.java",
         "core/java/com/android/internal/util/BitwiseInputStream.java",
         "core/java/com/android/internal/util/BitwiseOutputStream.java",
+        "core/java/com/android/internal/util/FunctionalUtils.java",
         "core/java/com/android/internal/util/HexDump.java",
         "core/java/com/android/internal/util/IndentingPrintWriter.java",
         "core/java/com/android/internal/util/Preconditions.java",
@@ -1177,7 +1175,10 @@ java_library {
         "framework-annotations-lib",
         "unsupportedappusage",
     ],
-    visibility: ["//frameworks/base/wifi"],
+    visibility: [
+        "//frameworks/base/wifi",
+        "//frameworks/base/services/net",
+    ],
 }
 
 filegroup {
@@ -1225,70 +1226,3 @@ build = [
     "StubLibraries.bp",
     "ApiDocs.bp",
 ]
-
-// TODO(b/147699819): move to frameworks/base/telephony/ folder
-droidstubs {
-    name: "framework-telephony-stubs-srcs",
-    srcs: [
-        ":framework-telephony-sources",
-        ":framework_native_aidl",
-        ":framework-javastream-protos",
-    ],
-    aidl: {
-        local_include_dirs: [
-            "core/java",
-            "telecomm/java"
-        ],
-    },
-    libs: [
-        "framework-annotations-lib",
-        "android.hardware.radio-V1.5-java",
-    ],
-    check_api: {
-        current: {
-            // TODO(b/147699819): remove telephony prefix when moved
-            api_file: "telephony/api/system-current.txt",
-            removed_api_file: "telephony/api/system-removed.txt",
-        },
-    },
-    // TODO: make telephony inherit the shared stubs and remove this
-    args: "--show-annotation android.annotation.SystemApi\\(" +
-            "client=android.annotation.SystemApi.Client.PRIVILEGED_APPS" +
-        "\\) " +
-        "--error UnhiddenSystemApi " +
-        "--hide BroadcastBehavior " +
-        "--hide DeprecationMismatch " +
-        "--hide HiddenSuperclass " +
-        "--hide HiddenTypedefConstant " +
-        "--hide HiddenTypeParameter " +
-        "--hide MissingPermission " +
-        "--hide RequiresPermission " +
-        "--hide SdkConstant " +
-        "--hide Todo " +
-        "--hide Typo " +
-        "--hide UnavailableSymbol ",
-    filter_packages: ["android.telephony"],
-    sdk_version: "system_current",
-}
-
-java_library {
-    name: "framework-telephony-stubs",
-    srcs: [":framework-telephony-stubs-srcs"],
-    // TODO(b/147699819): move public aidls to a separate folder and potentially remove
-    // below aidl exports.
-    aidl: {
-        export_include_dirs: ["telephony/java"],
-    },
-    sdk_version: "module_current",
-}
-
-filegroup {
-    // TODO (b/147690217): move to frameworks/base/telephony/common.
-    name: "framework-telephony-annotations",
-    srcs: ["telephony/java/android/telephony/Annotation.java"],
-}
-
-filegroup {
-    name: "framework-telephony-jarjar-rules",
-    srcs: ["telephony/framework-telephony-jarjar-rules.txt"],
-}

@@ -61,22 +61,6 @@ public final class SystemUiDeviceConfigFlags {
     public static final String SCREENSHOT_NOTIFICATION_SMART_ACTIONS_TIMEOUT_MS =
             "screenshot_notification_smart_actions_timeout_ms";
 
-    // Flags related to controls
-
-    /**
-     * (boolean) Whether to have split behavior when opening QS
-     */
-    public static final String QS_SPLIT_ENABLED = "qs_split_enabled";
-
-    /**
-     * (int) Open settings panels for WiFi and BT tiles
-     * 0 - default behavior, link to settings
-     * 1 - open panel on long press, click remains the same
-     * 2 - open panel on click, long press remains the same
-     * 3 - use details on long press
-     */
-    public static final String QS_USE_SETTINGS_PANELS = "qs_use_settings_panels";
-
     // Flags related to Smart Suggestions - these are read in SmartReplyConstants.
 
     /** (boolean) Whether to enable smart suggestions in notifications. */
@@ -210,7 +194,7 @@ public final class SystemUiDeviceConfigFlags {
      * Allow touch passthrough above assist area during a session.
      */
     public static final String ASSIST_TAP_PASSTHROUGH = "assist_tap_passthrough";
-  
+
     /**
      * (bool) Whether to show handles when taught.
      */
@@ -389,9 +373,29 @@ public final class SystemUiDeviceConfigFlags {
     public static final String APPEND_DIRECT_SHARE_ENABLED = "append_direct_share_enabled";
 
     /**
+     * (boolean) Whether ChooserTargets ranking on Sharesheet is enabled.
+     */
+    public static final String CHOOSER_TARGET_RANKING_ENABLED = "chooser_target_ranking_enabled";
+
+    /**
      * (boolean) Whether to enable user-drag resizing for PIP.
      */
     public static final String PIP_USER_RESIZE = "pip_user_resize";
+
+    /**
+     * (float) Bottom height in DP for Back Gesture.
+     */
+    public static final String BACK_GESTURE_BOTTOM_HEIGHT = "back_gesture_bottom_height";
+
+    /**
+     * (float) Edge width in DP where touch down is allowed for Back Gesture.
+     */
+    public static final String BACK_GESTURE_EDGE_WIDTH = "back_gesture_edge_width";
+
+    /**
+     * (float) Slop multiplier for Back Gesture.
+     */
+    public static final String BACK_GESTURE_SLOP_MULTIPLIER = "back_gesture_slop_multiplier";
 
     private SystemUiDeviceConfigFlags() {
     }

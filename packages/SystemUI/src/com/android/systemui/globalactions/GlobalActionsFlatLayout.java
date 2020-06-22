@@ -23,6 +23,7 @@ import static com.android.systemui.util.leak.RotationUtils.ROTATION_SEASCAPE;
 import android.content.Context;
 import android.util.AttributeSet;
 import android.view.View;
+import android.view.ViewGroup;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.systemui.HardwareBgDrawable;
@@ -32,7 +33,6 @@ import com.android.systemui.R;
  * Flat, single-row implementation of the button layout created by the global actions dialog.
  */
 public class GlobalActionsFlatLayout extends GlobalActionsLayout {
-    private static final int MAX_ITEMS = 4;
     public GlobalActionsFlatLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
     }
@@ -54,11 +54,53 @@ public class GlobalActionsFlatLayout extends GlobalActionsLayout {
         return null;
     }
 
+    private View getOverflowButton() {
+        return findViewById(com.android.systemui.R.id.global_actions_overflow_button);
+    }
+
     @Override
     protected void addToListView(View v, boolean reverse) {
-        // only add items to the list view if we haven't hit our max yet
-        if (getListView().getChildCount() < MAX_ITEMS) {
-            super.addToListView(v, reverse);
+        super.addToListView(v, reverse);
+        View overflowButton = getOverflowButton();
+        // if there's an overflow button, make sure it stays at the end
+        if (overflowButton != null) {
+            getListView().removeView(overflowButton);
+            super.addToListView(overflowButton, reverse);
+        }
+    }
+
+    @Override
+    protected void removeAllListViews() {
+        View overflowButton = getOverflowButton();
+        super.removeAllListViews();
+        // if there's an overflow button, add it back after clearing the list views
+        if (overflowButton != null) {
+            super.addToListView(overflowButton, false);
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        boolean anyTruncated = false;
+        ViewGroup listView = getListView();
+        // Check to see if any of the GlobalActionsItems have had their messages truncated
+        for (int i = 0; i < listView.getChildCount(); i++) {
+            View child = listView.getChildAt(i);
+            if (child instanceof GlobalActionsItem) {
+                GlobalActionsItem item = (GlobalActionsItem) child;
+                anyTruncated = anyTruncated || item.isTruncated();
+            }
+        }
+        // If any of the items have been truncated, set the all to single-line marquee
+        if (anyTruncated) {
+            for (int i = 0; i < listView.getChildCount(); i++) {
+                View child = listView.getChildAt(i);
+                if (child instanceof GlobalActionsItem) {
+                    GlobalActionsItem item = (GlobalActionsItem) child;
+                    item.setMarquee(true);
+                }
+            }
         }
     }
 
@@ -74,11 +116,11 @@ public class GlobalActionsFlatLayout extends GlobalActionsLayout {
 
     @Override
     public float getAnimationOffsetX() {
-        return 0;
+        return getAnimationDistance();
     }
 
     @Override
     public float getAnimationOffsetY() {
-        return -getAnimationDistance();
+        return 0f;
     }
 }

@@ -38,6 +38,7 @@ import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
 
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -115,11 +116,49 @@ public class BtHelper {
 
     private static final int BT_HEARING_AID_GAIN_MIN = -128;
 
+    /**
+     * Returns a string representation of the scoAudioMode.
+     */
+    public static String scoAudioModeToString(int scoAudioMode) {
+        switch (scoAudioMode) {
+            case SCO_MODE_UNDEFINED:
+                return "SCO_MODE_UNDEFINED";
+            case SCO_MODE_VIRTUAL_CALL:
+                return "SCO_MODE_VIRTUAL_CALL";
+            case SCO_MODE_RAW:
+                return "SCO_MODE_RAW";
+            case SCO_MODE_VR:
+                return "SCO_MODE_VR";
+            default:
+                return "SCO_MODE_(" + scoAudioMode + ")";
+        }
+    }
+
+    /**
+     * Returns a string representation of the scoAudioState.
+     */
+    public static String scoAudioStateToString(int scoAudioState) {
+        switch (scoAudioState) {
+            case SCO_STATE_INACTIVE:
+                return "SCO_STATE_INACTIVE";
+            case SCO_STATE_ACTIVATE_REQ:
+                return "SCO_STATE_ACTIVATE_REQ";
+            case SCO_STATE_ACTIVE_EXTERNAL:
+                return "SCO_STATE_ACTIVE_EXTERNAL";
+            case SCO_STATE_ACTIVE_INTERNAL:
+                return "SCO_STATE_ACTIVE_INTERNAL";
+            case SCO_STATE_DEACTIVATING:
+                return "SCO_STATE_DEACTIVATING";
+            default:
+                return "SCO_STATE_(" + scoAudioState + ")";
+        }
+    }
+
     //----------------------------------------------------------------------
     /*package*/ static class BluetoothA2dpDeviceInfo {
         private final @NonNull BluetoothDevice mBtDevice;
         private final int mVolume;
-        private final int mCodec;
+        private final @AudioSystem.AudioFormatNativeEnumForBtCodec int mCodec;
 
         BluetoothA2dpDeviceInfo(@NonNull BluetoothDevice btDevice) {
             this(btDevice, -1, AudioSystem.AUDIO_FORMAT_DEFAULT);
@@ -139,15 +178,26 @@ public class BtHelper {
             return mVolume;
         }
 
-        public int getCodec() {
+        public @AudioSystem.AudioFormatNativeEnumForBtCodec int getCodec() {
             return mCodec;
         }
 
         // redefine equality op so we can match messages intended for this device
         @Override
         public boolean equals(Object o) {
-            return mBtDevice.equals(o);
+            if (o == null) {
+                return false;
+            }
+            if (this == o) {
+                return true;
+            }
+            if (o instanceof BluetoothA2dpDeviceInfo) {
+                return mBtDevice.equals(((BluetoothA2dpDeviceInfo) o).getBtDevice());
+            }
+            return false;
         }
+
+
     }
 
     // A2DP device events
@@ -256,7 +306,8 @@ public class BtHelper {
         mA2dp.setAvrcpAbsoluteVolume(index);
     }
 
-    /*package*/ synchronized int getA2dpCodec(@NonNull BluetoothDevice device) {
+    /*package*/ synchronized @AudioSystem.AudioFormatNativeEnumForBtCodec int getA2dpCodec(
+            @NonNull BluetoothDevice device) {
         if (mA2dp == null) {
             return AudioSystem.AUDIO_FORMAT_DEFAULT;
         }
@@ -268,7 +319,7 @@ public class BtHelper {
         if (btCodecConfig == null) {
             return AudioSystem.AUDIO_FORMAT_DEFAULT;
         }
-        return mapBluetoothCodecToAudioFormat(btCodecConfig.getCodecType());
+        return AudioSystem.bluetoothCodecToAudioFormat(btCodecConfig.getCodecType());
     }
 
      //SCO device tracking for TWSPLUS device
@@ -382,8 +433,15 @@ public class BtHelper {
                            BluetoothHeadset.STATE_AUDIO_DISCONNECTED)) {
                         mDeviceBroker.setBluetoothScoOn(false, "BtHelper.receiveBtEvent");
                         scoAudioState = AudioManager.SCO_AUDIO_STATE_DISCONNECTED;
-                        // startBluetoothSco called after stopBluetoothSco
-                        if (mScoAudioState == SCO_STATE_ACTIVATE_REQ) {
+                        // There are two cases where we want to immediately reconnect audio:
+                        // 1) If a new start request was received while disconnecting: this was
+                        // notified by requestScoState() setting state to SCO_STATE_ACTIVATE_REQ.
+                        // 2) If audio was connected then disconnected via Bluetooth APIs and
+                        // we still have pending activation requests by apps: this is indicated by
+                        // state SCO_STATE_ACTIVE_EXTERNAL and the mScoClients list not empty.
+                        if (mScoAudioState == SCO_STATE_ACTIVATE_REQ
+                                || (mScoAudioState == SCO_STATE_ACTIVE_EXTERNAL
+                                        && !mScoClients.isEmpty())) {
                             if (mBluetoothHeadset != null && mBluetoothHeadsetDevice != null
                                     && connectBluetoothScoAudioHelper(mBluetoothHeadset,
                                     mBluetoothHeadsetDevice, mScoAudioMode)) {
@@ -393,7 +451,9 @@ public class BtHelper {
                             }
                         }
                         // Tear down SCO if disconnected from external
-                        clearAllScoClients(0, mScoAudioState == SCO_STATE_ACTIVE_INTERNAL);
+                        if (mScoAudioState == SCO_STATE_DEACTIVATING) {
+                            clearAllScoClients(0, false);
+                        }
                         mScoAudioState = SCO_STATE_INACTIVE;
                         Log.i(TAG, "Audio-path brought-down");
                     }
@@ -453,14 +513,11 @@ public class BtHelper {
      * @return false if SCO isn't connected
      */
     /*package*/ synchronized boolean isBluetoothScoOn() {
-        if ((mBluetoothHeadset != null)
-                && (mBluetoothHeadset.getAudioState(mBluetoothHeadsetDevice)
-                != BluetoothHeadset.STATE_AUDIO_CONNECTED)) {
-            Log.w(TAG, "isBluetoothScoOn(true) returning false because "
-                    + mBluetoothHeadsetDevice + " is not in audio connected mode");
+        if (mBluetoothHeadset == null) {
             return false;
         }
-        return true;
+        return mBluetoothHeadset.getAudioState(mBluetoothHeadsetDevice)
+                == BluetoothHeadset.STATE_AUDIO_CONNECTED;
     }
 
     /**
@@ -1163,26 +1220,42 @@ public class BtHelper {
         return result;
     }
 
-    private int mapBluetoothCodecToAudioFormat(int btCodecType) {
+    /**
+     * Returns the String equivalent of the btCodecType.
+     *
+     * This uses an "ENCODING_" prefix for consistency with Audio;
+     * we could alternately use the "SOURCE_CODEC_TYPE_" prefix from Bluetooth.
+     */
+    public static String bluetoothCodecToEncodingString(int btCodecType) {
         switch (btCodecType) {
             case BluetoothCodecConfig.SOURCE_CODEC_TYPE_SBC:
-                return AudioSystem.AUDIO_FORMAT_SBC;
+                return "ENCODING_SBC";
             case BluetoothCodecConfig.SOURCE_CODEC_TYPE_AAC:
-                return AudioSystem.AUDIO_FORMAT_AAC;
+                return "ENCODING_AAC";
             case BluetoothCodecConfig.SOURCE_CODEC_TYPE_APTX:
-                return AudioSystem.AUDIO_FORMAT_APTX;
+                return "ENCODING_APTX";
             case BluetoothCodecConfig.SOURCE_CODEC_TYPE_APTX_HD:
-                return AudioSystem.AUDIO_FORMAT_APTX_HD;
+                return "ENCODING_APTX_HD";
             case BluetoothCodecConfig.SOURCE_CODEC_TYPE_LDAC:
-                return AudioSystem.AUDIO_FORMAT_LDAC;
-            case BluetoothCodecConfig.SOURCE_CODEC_TYPE_CELT:
-                return AudioSystem.AUDIO_FORMAT_CELT;
-            case BluetoothCodecConfig.SOURCE_CODEC_TYPE_APTX_ADAPTIVE:
-                return AudioSystem.AUDIO_FORMAT_APTX_ADAPTIVE;
-            case BluetoothCodecConfig.SOURCE_CODEC_TYPE_APTX_TWSP:
-                return AudioSystem.AUDIO_FORMAT_APTX_TWSP;
+                return "ENCODING_LDAC";
             default:
-                return AudioSystem.AUDIO_FORMAT_DEFAULT;
+                return "ENCODING_BT_CODEC_TYPE(" + btCodecType + ")";
         }
     }
+
+    //------------------------------------------------------------
+    /*package*/ void dump(PrintWriter pw, String prefix) {
+        pw.println("\n" + prefix + "mBluetoothHeadset: " + mBluetoothHeadset);
+        pw.println(prefix + "mBluetoothHeadsetDevice: " + mBluetoothHeadsetDevice);
+        pw.println(prefix + "mScoAudioState: " + scoAudioStateToString(mScoAudioState));
+        pw.println(prefix + "mScoAudioMode: " + scoAudioModeToString(mScoAudioMode));
+        pw.println(prefix + "Sco clients:");
+        mScoClients.forEach((cl) -> {
+            pw.println("  " + prefix + "pid: " + cl.getPid() + " cb: " + cl.getBinder()); });
+
+        pw.println("\n" + prefix + "mHearingAid: " + mHearingAid);
+        pw.println(prefix + "mA2dp: " + mA2dp);
+        pw.println(prefix + "mAvrcpAbsVolSupported: " + mAvrcpAbsVolSupported);
+    }
+
 }

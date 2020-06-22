@@ -273,14 +273,13 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
     private void applyFocusableFlag(State state) {
         boolean panelFocusable = state.mNotificationShadeFocusable && state.mPanelExpanded;
         if (state.mBouncerShowing && (state.mKeyguardOccluded || state.mKeyguardNeedsInput)
-                || ENABLE_REMOTE_INPUT && state.mRemoteInputActive
-                || state.mBubbleExpanded) {
+                || ENABLE_REMOTE_INPUT && state.mRemoteInputActive) {
             mLpChanged.flags &= ~LayoutParams.FLAG_NOT_FOCUSABLE;
             mLpChanged.flags &= ~LayoutParams.FLAG_ALT_FOCUSABLE_IM;
         } else if (state.isKeyguardShowingAndNotOccluded() || panelFocusable) {
             mLpChanged.flags &= ~LayoutParams.FLAG_NOT_FOCUSABLE;
             // Make sure to remove FLAG_ALT_FOCUSABLE_IM when keyguard needs input.
-            if (state.mKeyguardNeedsInput) {
+            if (state.mKeyguardNeedsInput && state.isKeyguardShowingAndNotOccluded()) {
                 mLpChanged.flags &= ~LayoutParams.FLAG_ALT_FOCUSABLE_IM;
             } else {
                 mLpChanged.flags |= LayoutParams.FLAG_ALT_FOCUSABLE_IM;
@@ -320,9 +319,10 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
     private boolean isExpanded(State state) {
         return !state.mForceCollapsed && (state.isKeyguardShowingAndNotOccluded()
                 || state.mPanelVisible || state.mKeyguardFadingAway || state.mBouncerShowing
-                || state.mHeadsUpShowing || state.mBubblesShowing
+                || state.mHeadsUpShowing
                 || state.mScrimsVisibility != ScrimController.TRANSPARENT)
-                || state.mBackgroundBlurRadius > 0;
+                || state.mBackgroundBlurRadius > 0
+                || state.mLaunchingActivity;
     }
 
     private void applyFitsSystemWindows(State state) {
@@ -486,6 +486,11 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         apply(mCurrentState);
     }
 
+    void setLaunchingActivity(boolean launching) {
+        mCurrentState.mLaunchingActivity = launching;
+        apply(mCurrentState);
+    }
+
     public void setScrimsVisibility(int scrimsVisibility) {
         mCurrentState.mScrimsVisibility = scrimsVisibility;
         apply(mCurrentState);
@@ -579,36 +584,6 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
     }
 
     /**
-     * Sets whether there are bubbles showing on the screen.
-     */
-    public void setBubblesShowing(boolean bubblesShowing) {
-        mCurrentState.mBubblesShowing = bubblesShowing;
-        apply(mCurrentState);
-    }
-
-    /**
-     * The bubbles showing state for the status bar.
-     */
-    public boolean getBubblesShowing() {
-        return mCurrentState.mBubblesShowing;
-    }
-
-    /**
-     * Sets if there is a bubble being expanded on the screen.
-     */
-    public void setBubbleExpanded(boolean bubbleExpanded) {
-        mCurrentState.mBubbleExpanded = bubbleExpanded;
-        apply(mCurrentState);
-    }
-
-    /**
-     * Whether the bubble is shown in expanded state for the status bar.
-     */
-    public boolean getBubbleExpanded() {
-        return mCurrentState.mBubbleExpanded;
-    }
-
-    /**
      * Whether the status bar panel is expanded or not.
      */
     public boolean getPanelExpanded() {
@@ -676,11 +651,10 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         boolean mForceCollapsed;
         boolean mForceDozeBrightness;
         boolean mForceUserActivity;
+        boolean mLaunchingActivity;
         boolean mBackdropShowing;
         boolean mWallpaperSupportsAmbientMode;
         boolean mNotTouchable;
-        boolean mBubblesShowing;
-        boolean mBubbleExpanded;
         boolean mForceHasTopUi;
 
         /**

@@ -25,12 +25,14 @@ import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.ConditionVariable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.util.Log;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Protocol;
 
@@ -355,6 +357,7 @@ public abstract class NetworkAgent {
         final NetworkInfo ni = new NetworkInfo(config.legacyType, config.legacyType,
                 config.legacyTypeName, "");
         ni.setIsAvailable(true);
+        ni.setExtraInfo(config.getLegacyExtraInfo());
         return ni;
     }
 
@@ -569,6 +572,37 @@ public abstract class NetworkAgent {
             mInitialConfiguration = null; // All this memory can now be GC'd
         }
         return mNetwork;
+    }
+
+    /**
+     * Register this network agent with a testing harness.
+     *
+     * The returned Messenger sends messages to the Handler. This allows a test to send
+     * this object {@code CMD_*} messages as if they came from ConnectivityService, which
+     * is useful for testing the behavior.
+     *
+     * @hide
+     */
+    public Messenger registerForTest(final Network network) {
+        log("Registering NetworkAgent for test");
+        synchronized (mRegisterLock) {
+            mNetwork = network;
+            mInitialConfiguration = null;
+        }
+        return new Messenger(mHandler);
+    }
+
+    /**
+     * Waits for the handler to be idle.
+     * This is useful for testing, and has smaller scope than an accessor to mHandler.
+     * TODO : move the implementation in common library with the tests
+     * @hide
+     */
+    @VisibleForTesting
+    public boolean waitForIdle(final long timeoutMs) {
+        final ConditionVariable cv = new ConditionVariable(false);
+        mHandler.post(cv::open);
+        return cv.block(timeoutMs);
     }
 
     /**
@@ -812,7 +846,7 @@ public abstract class NetworkAgent {
      *        this is the destination the probes are being redirected to, otherwise {@code null}.
      */
     public void onValidationStatus(@ValidationStatus int status, @Nullable Uri redirectUri) {
-        networkStatus(status, redirectUri.toString());
+        networkStatus(status, null == redirectUri ? "" : redirectUri.toString());
     }
     /** @hide TODO delete once subclasses have moved to onValidationStatus */
     protected void networkStatus(int status, String redirectUrl) {

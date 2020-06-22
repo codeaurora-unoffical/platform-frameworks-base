@@ -155,6 +155,26 @@ public class LauncherApps {
     public static final String EXTRA_PIN_ITEM_REQUEST =
             "android.content.pm.extra.PIN_ITEM_REQUEST";
 
+    /**
+     * Cache shortcuts which are used in notifications.
+     * @hide
+     */
+    public static final int FLAG_CACHE_NOTIFICATION_SHORTCUTS = 0;
+
+    /**
+     * Cache shortcuts which are used in bubbles.
+     * @hide
+     */
+    public static final int FLAG_CACHE_BUBBLE_SHORTCUTS = 1;
+
+    /** @hide */
+    @IntDef(flag = false, prefix = { "FLAG_CACHE_" }, value = {
+            FLAG_CACHE_NOTIFICATION_SHORTCUTS,
+            FLAG_CACHE_BUBBLE_SHORTCUTS,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface ShortcutCacheFlags {}
+
     private final Context mContext;
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     private final ILauncherApps mService;
@@ -507,7 +527,8 @@ public class LauncherApps {
         /**
          * Indicates that one or more shortcuts, that match the {@link ShortcutQuery} used to
          * register this callback, have been added or updated.
-         * @see LauncherApps#registerShortcutChangeCallback(ShortcutChangeCallback, ShortcutQuery)
+         * @see LauncherApps#registerShortcutChangeCallback(ShortcutChangeCallback, ShortcutQuery,
+         * Executor)
          *
          * <p>Only the applications that are allowed to access the shortcut information,
          * as defined in {@link #hasShortcutHostPermission()}, will receive it.
@@ -525,7 +546,8 @@ public class LauncherApps {
         /**
          * Indicates that one or more shortcuts, that match the {@link ShortcutQuery} used to
          * register this callback, have been removed.
-         * @see LauncherApps#registerShortcutChangeCallback(ShortcutChangeCallback, ShortcutQuery)
+         * @see LauncherApps#registerShortcutChangeCallback(ShortcutChangeCallback, ShortcutQuery,
+         * Executor)
          *
          * <p>Only the applications that are allowed to access the shortcut information,
          * as defined in {@link #hasShortcutHostPermission()}, will receive it.
@@ -1107,6 +1129,11 @@ public class LauncherApps {
      * @param packageName The target package name.
      * @param shortcutIds The IDs of the shortcut to be cached.
      * @param user The UserHandle of the profile.
+     * @param cacheFlags One of the values in:
+     * <ul>
+     *     <li>{@link #FLAG_CACHE_NOTIFICATION_SHORTCUTS}
+     *     <li>{@link #FLAG_CACHE_BUBBLE_SHORTCUTS}
+     * </ul>
      * @throws IllegalStateException when the user is locked, or when the {@code user} user
      * is locked or not running.
      *
@@ -1116,10 +1143,11 @@ public class LauncherApps {
      */
     @RequiresPermission(android.Manifest.permission.ACCESS_SHORTCUTS)
     public void cacheShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
-            @NonNull UserHandle user) {
+            @NonNull UserHandle user, @ShortcutCacheFlags int cacheFlags) {
         logErrorForInvalidProfileAccess(user);
         try {
-            mService.cacheShortcuts(mContext.getPackageName(), packageName, shortcutIds, user);
+            mService.cacheShortcuts(
+                    mContext.getPackageName(), packageName, shortcutIds, user, cacheFlags);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1131,6 +1159,11 @@ public class LauncherApps {
      * @param packageName The target package name.
      * @param shortcutIds The IDs of the shortcut to be uncached.
      * @param user The UserHandle of the profile.
+     * @param cacheFlags One of the values in:
+     * <ul>
+     *     <li>{@link #FLAG_CACHE_NOTIFICATION_SHORTCUTS}
+     *     <li>{@link #FLAG_CACHE_BUBBLE_SHORTCUTS}
+     * </ul>
      * @throws IllegalStateException when the user is locked, or when the {@code user} user
      * is locked or not running.
      *
@@ -1140,10 +1173,11 @@ public class LauncherApps {
      */
     @RequiresPermission(android.Manifest.permission.ACCESS_SHORTCUTS)
     public void uncacheShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
-            @NonNull UserHandle user) {
+            @NonNull UserHandle user, @ShortcutCacheFlags int cacheFlags) {
         logErrorForInvalidProfileAccess(user);
         try {
-            mService.uncacheShortcuts(mContext.getPackageName(), packageName, shortcutIds, user);
+            mService.uncacheShortcuts(
+                    mContext.getPackageName(), packageName, shortcutIds, user, cacheFlags);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1868,7 +1902,7 @@ public class LauncherApps {
      * an {@link #ACTION_CONFIRM_PIN_SHORTCUT} or {@link #ACTION_CONFIRM_PIN_APPWIDGET} intent
      * respectively to the default launcher app.
      *
-     * <h3>Request of the {@link #REQUEST_TYPE_SHORTCUT} type.
+     * <h3>Request of the {@link #REQUEST_TYPE_SHORTCUT} type.</h3>
      *
      * <p>A {@link #REQUEST_TYPE_SHORTCUT} request represents a request to pin a
      * {@link ShortcutInfo}.  If the launcher accepts a request, call {@link #accept()},
@@ -1885,7 +1919,7 @@ public class LauncherApps {
      *
      * <p>See also {@link ShortcutManager} for more details.
      *
-     * <h3>Request of the {@link #REQUEST_TYPE_APPWIDGET} type.
+     * <h3>Request of the {@link #REQUEST_TYPE_APPWIDGET} type.</h3>
      *
      * <p>A {@link #REQUEST_TYPE_SHORTCUT} request represents a request to pin a
      * an AppWidget.  If the launcher accepts a request, call {@link #accept(Bundle)} with

@@ -67,9 +67,9 @@ import java.util.function.Consumer;
  * <pre class="prettyprint">
  *     final long sessionId = blobStoreManager.createSession(blobHandle);
  *     try (BlobStoreManager.Session session = blobStoreManager.openSession(sessionId)) {
- *         try (ParcelFileDescriptor pfd = new ParcelFileDescriptor.AutoCloseOutputStream(
+ *         try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
  *                 session.openWrite(offsetBytes, lengthBytes))) {
- *             writeData(pfd);
+ *             writeData(out);
  *         }
  *     }
  * </pre>
@@ -100,9 +100,9 @@ import java.util.function.Consumer;
  * <p> The following code snippet shows how to specify the access mode and commit the session:
  * <pre class="prettyprint">
  *     try (BlobStoreManager.Session session = blobStoreManager.openSession(sessionId)) {
- *         try (ParcelFileDescriptor pfd = new ParcelFileDescriptor.AutoCloseOutputStream(
+ *         try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
  *                 session.openWrite(offsetBytes, lengthBytes))) {
- *             writeData(pfd);
+ *             writeData(out);
  *         }
  *         session.allowSameSignatureAccess();
  *         session.allowPackageAccess(packageName, certificate);
@@ -134,9 +134,9 @@ import java.util.function.Consumer;
  *
  * <p> The following code snippet shows how to access the data blob:
  * <pre class="prettyprint">
- *     try (ParcelFileDescriptor pfd = new ParcelFileDescriptor.AutoCloseInputStream(
+ *     try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(
  *             blobStoreManager.openBlob(blobHandle)) {
- *         useData(pfd);
+ *         useData(in);
  *     }
  * </pre>
  */
@@ -307,8 +307,8 @@ public class BlobStoreManager {
      *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
      *                                acquire a lease.
      *
-     * @see {@link #acquireLease(BlobHandle, int)}
-     * @see {@link #acquireLease(BlobHandle, CharSequence)}
+     * @see #acquireLease(BlobHandle, int)
+     * @see #acquireLease(BlobHandle, CharSequence)
      */
     public void acquireLease(@NonNull BlobHandle blobHandle, @IdRes int descriptionResId,
             @CurrentTimeMillisLong long leaseExpiryTimeMillis) throws IOException {
@@ -367,8 +367,8 @@ public class BlobStoreManager {
      *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
      *                                acquire a lease.
      *
-     * @see {@link #acquireLease(BlobHandle, int, long)}
-     * @see {@link #acquireLease(BlobHandle, CharSequence)}
+     * @see #acquireLease(BlobHandle, int, long)
+     * @see #acquireLease(BlobHandle, CharSequence)
      */
     public void acquireLease(@NonNull BlobHandle blobHandle, @NonNull CharSequence description,
             @CurrentTimeMillisLong long leaseExpiryTimeMillis) throws IOException {
@@ -420,8 +420,8 @@ public class BlobStoreManager {
      *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
      *                                acquire a lease.
      *
-     * @see {@link #acquireLease(BlobHandle, int, long)}
-     * @see {@link #acquireLease(BlobHandle, CharSequence, long)}
+     * @see #acquireLease(BlobHandle, int, long)
+     * @see #acquireLease(BlobHandle, CharSequence, long)
      */
     public void acquireLease(@NonNull BlobHandle blobHandle, @IdRes int descriptionResId)
             throws IOException {
@@ -467,8 +467,8 @@ public class BlobStoreManager {
      *                                {@link #getRemainingLeaseQuotaBytes()} before trying to
      *                                acquire a lease.
      *
-     * @see {@link #acquireLease(BlobHandle, int)}
-     * @see {@link #acquireLease(BlobHandle, CharSequence, long)}
+     * @see #acquireLease(BlobHandle, int)
+     * @see #acquireLease(BlobHandle, CharSequence, long)
      */
     public void acquireLease(@NonNull BlobHandle blobHandle, @NonNull CharSequence description)
             throws IOException {

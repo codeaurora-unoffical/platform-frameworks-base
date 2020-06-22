@@ -598,8 +598,30 @@ public class DisplayRotation {
     }
 
     void prepareNormalRotationAnimation() {
+        cancelSeamlessRotation();
         final RotationAnimationPair anim = selectRotationAnimation();
-        mService.startFreezingDisplayLocked(anim.mExit, anim.mEnter, mDisplayContent);
+        mService.startFreezingDisplay(anim.mExit, anim.mEnter, mDisplayContent);
+    }
+
+    /**
+     * This ensures that normal rotation animation is used. E.g. {@link #mRotatingSeamlessly} was
+     * set by previous {@link #updateRotationUnchecked}, but another orientation change happens
+     * before calling {@link DisplayContent#sendNewConfiguration} (remote rotation hasn't finished)
+     * and it doesn't choose seamless rotation.
+     */
+    void cancelSeamlessRotation() {
+        if (!mRotatingSeamlessly) {
+            return;
+        }
+        mDisplayContent.forAllWindows(w -> {
+            if (w.mSeamlesslyRotated) {
+                w.finishSeamlessRotation(false /* timeout */);
+                w.mSeamlesslyRotated = false;
+            }
+        }, true /* traverseTopToBottom */);
+        mSeamlessRotationCount = 0;
+        mRotatingSeamlessly = false;
+        mDisplayContent.finishFixedRotationAnimationIfPossible();
     }
 
     private void prepareSeamlessRotation() {
@@ -613,11 +635,15 @@ public class DisplayRotation {
         return mRotatingSeamlessly;
     }
 
+    boolean hasSeamlessRotatingWindow() {
+        return mSeamlessRotationCount > 0;
+    }
+
     @VisibleForTesting
     boolean shouldRotateSeamlessly(int oldRotation, int newRotation, boolean forceUpdate) {
         // Display doesn't need to be frozen because application has been started in correct
         // rotation already, so the rest of the windows can use seamless rotation.
-        if (mDisplayContent.mFixedRotationLaunchingApp != null) {
+        if (mDisplayContent.hasTopFixedRotationLaunchingApp()) {
             return true;
         }
 
@@ -686,6 +712,7 @@ public class DisplayRotation {
                     "Performing post-rotate rotation after seamless rotation");
             // Finish seamless rotation.
             mRotatingSeamlessly = false;
+            mDisplayContent.finishFixedRotationAnimationIfPossible();
 
             updateRotationAndSendNewConfigIfChanged();
         }

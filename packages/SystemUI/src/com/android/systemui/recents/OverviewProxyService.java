@@ -20,8 +20,10 @@ import static android.content.pm.PackageManager.MATCH_SYSTEM_ONLY;
 import static android.view.MotionEvent.ACTION_CANCEL;
 import static android.view.MotionEvent.ACTION_DOWN;
 import static android.view.MotionEvent.ACTION_UP;
+import static android.view.WindowManager.ScreenshotSource.SCREENSHOT_OVERVIEW;
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_3BUTTON;
 
+import static com.android.internal.accessibility.common.ShortcutConstants.CHOOSER_PACKAGE_NAME;
 import static com.android.systemui.shared.system.QuickStepContract.KEY_EXTRA_INPUT_MONITOR;
 import static com.android.systemui.shared.system.QuickStepContract.KEY_EXTRA_SUPPORTS_WINDOW_CORNERS;
 import static com.android.systemui.shared.system.QuickStepContract.KEY_EXTRA_SYSUI_PROXY;
@@ -58,16 +60,20 @@ import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.accessibility.AccessibilityManager;
 
+import com.android.internal.accessibility.dialog.AccessibilityButtonChooserActivity;
 import com.android.internal.policy.ScreenDecorationsUtils;
 import com.android.internal.util.ScreenshotHelper;
 import com.android.systemui.Dumpable;
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.pip.PipAnimationController;
 import com.android.systemui.pip.PipUI;
 import com.android.systemui.recents.OverviewProxyService.OverviewProxyListener;
+import com.android.systemui.settings.CurrentUserTracker;
 import com.android.systemui.shared.recents.IOverviewProxy;
 import com.android.systemui.shared.recents.IPinnedStackAnimationListener;
 import com.android.systemui.shared.recents.ISystemUiProxy;
+import com.android.systemui.shared.recents.model.Task;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.stackdivider.Divider;
@@ -80,8 +86,6 @@ import com.android.systemui.statusbar.phone.NotificationShadeWindowController;
 import com.android.systemui.statusbar.phone.StatusBar;
 import com.android.systemui.statusbar.phone.StatusBarWindowCallback;
 import com.android.systemui.statusbar.policy.CallbackController;
-import com.android.systemui.statusbar.policy.DeviceProvisionedController;
-import com.android.systemui.statusbar.policy.DeviceProvisionedController.DeviceProvisionedListener;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -98,8 +102,9 @@ import dagger.Lazy;
  * Class to send information from overview to launcher with a binder.
  */
 @Singleton
-public class OverviewProxyService implements CallbackController<OverviewProxyListener>,
-        NavigationModeController.ModeChangedListener, Dumpable {
+public class OverviewProxyService extends CurrentUserTracker implements
+        CallbackController<OverviewProxyListener>, NavigationModeController.ModeChangedListener,
+        Dumpable {
 
     private static final String ACTION_QUICKSTEP = "android.intent.action.QUICKSTEP_SERVICE";
 
@@ -120,7 +125,6 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
     private final NotificationShadeWindowController mStatusBarWinController;
     private final Runnable mConnectionRunnable = this::internalConnectToCurrentUser;
     private final ComponentName mRecentsComponentName;
-    private final DeviceProvisionedController mDeviceProvisionedController;
     private final List<OverviewProxyListener> mConnectionCallbacks = new ArrayList<>();
     private final Intent mQuickStepIntent;
     private final ScreenshotHelper mScreenshotHelper;
@@ -353,10 +357,11 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             }
             long token = Binder.clearCallingIdentity();
             try {
-                Intent intent = new Intent(AccessibilityManager.ACTION_CHOOSE_ACCESSIBILITY_BUTTON);
+                final Intent intent =
+                        new Intent(AccessibilityManager.ACTION_CHOOSE_ACCESSIBILITY_BUTTON);
+                final String chooserClassName = AccessibilityButtonChooserActivity.class.getName();
+                intent.setClassName(CHOOSER_PACKAGE_NAME, chooserClassName);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                intent.putExtra(AccessibilityManager.EXTRA_SHORTCUT_TYPE,
-                        AccessibilityManager.ACCESSIBILITY_BUTTON);
                 mContext.startActivityAsUser(intent, UserHandle.CURRENT);
             } finally {
                 Binder.restoreCallingIdentity(token);
@@ -379,8 +384,7 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
         @Override
         public void handleImageAsScreenshot(Bitmap screenImage, Rect locationInScreen,
                 Insets visibleInsets, int taskId) {
-            mScreenshotHelper.provideScreenshot(screenImage, locationInScreen, visibleInsets,
-                    taskId, mHandler, null);
+            // Deprecated
         }
 
         @Override
@@ -430,6 +434,21 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             }
         }
 
+        @Override
+        public void handleImageBundleAsScreenshot(Bundle screenImageBundle, Rect locationInScreen,
+                Insets visibleInsets, Task.TaskKey task) {
+            mScreenshotHelper.provideScreenshot(
+                    screenImageBundle,
+                    locationInScreen,
+                    visibleInsets,
+                    task.id,
+                    task.userId,
+                    task.sourceComponent,
+                    SCREENSHOT_OVERVIEW,
+                    mHandler,
+                    null);
+        }
+
         private boolean verifyCaller(String reason) {
             final int callerId = Binder.getCallingUserHandle().getIdentifier();
             if (callerId != mCurrentBoundedUserId) {
@@ -476,7 +495,7 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
                 return;
             }
 
-            mCurrentBoundedUserId = mDeviceProvisionedController.getCurrentUser();
+            mCurrentBoundedUserId = getCurrentUserId();
             mOverviewProxy = IOverviewProxy.Stub.asInterface(service);
 
             Bundle params = new Bundle();
@@ -491,8 +510,9 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             }
             dispatchNavButtonBounds();
 
-            // Update the systemui state flags
+            // Force-update the systemui state flags
             updateSystemUiStateFlags();
+            notifySystemUiStateFlags(mSysUiState.getFlags());
 
             notifyConnectionChanged();
         }
@@ -518,22 +538,6 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
         }
     };
 
-    private final DeviceProvisionedListener mDeviceProvisionedCallback =
-                new DeviceProvisionedListener() {
-        @Override
-        public void onUserSetupChanged() {
-            if (mDeviceProvisionedController.isCurrentUserSetup()) {
-                internalConnectToCurrentUser();
-            }
-        }
-
-        @Override
-        public void onUserSwitched() {
-            mConnectionBackoffAttempts = 0;
-            internalConnectToCurrentUser();
-        }
-    };
-
     private final StatusBarWindowCallback mStatusBarWindowCallback = this::onStatusBarStateChanged;
 
     // This is the death handler for the binder from the launcher service
@@ -543,18 +547,18 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     @Inject
     public OverviewProxyService(Context context, CommandQueue commandQueue,
-            DeviceProvisionedController provisionController,
             NavigationBarController navBarController, NavigationModeController navModeController,
             NotificationShadeWindowController statusBarWinController, SysUiState sysUiState,
             PipUI pipUI, Optional<Divider> dividerOptional,
-            Optional<Lazy<StatusBar>> statusBarOptionalLazy) {
+            Optional<Lazy<StatusBar>> statusBarOptionalLazy,
+            BroadcastDispatcher broadcastDispatcher) {
+        super(broadcastDispatcher);
         mContext = context;
         mPipUI = pipUI;
         mStatusBarOptionalLazy = statusBarOptionalLazy;
         mHandler = new Handler();
         mNavBarController = navBarController;
         mStatusBarWinController = statusBarWinController;
-        mDeviceProvisionedController = provisionController;
         mConnectionBackoffAttempts = 0;
         mDividerOptional = dividerOptional;
         mRecentsComponentName = ComponentName.unflattenFromString(context.getString(
@@ -572,10 +576,6 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
 
         // Listen for nav bar mode changes
         mNavBarMode = navModeController.addListener(this);
-
-        // Listen for device provisioned/user setup
-        updateEnabledState();
-        mDeviceProvisionedController.addCallback(mDeviceProvisionedCallback);
 
         // Listen for launcher package changes
         IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
@@ -597,6 +597,19 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
                         .commitUpdate(mContext.getDisplayId());
             }
         });
+
+        // Listen for user setup
+        startTracking();
+
+        // Connect to the service
+        updateEnabledState();
+        startConnectionToCurrentUser();
+    }
+
+    @Override
+    public void onUserSwitched(int newUserId) {
+        mConnectionBackoffAttempts = 0;
+        internalConnectToCurrentUser();
     }
 
     public void notifyBackAction(boolean completed, int downX, int downY, boolean isButton,
@@ -704,10 +717,8 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
         disconnectFromLauncherService();
 
         // If user has not setup yet or already connected, do not try to connect
-        if (!mDeviceProvisionedController.isCurrentUserSetup() || !isEnabled()) {
-            Log.v(TAG_OPS, "Cannot attempt connection, is setup "
-                + mDeviceProvisionedController.isCurrentUserSetup() + ", is enabled "
-                + isEnabled());
+        if (!isEnabled()) {
+            Log.v(TAG_OPS, "Cannot attempt connection, is enabled " + isEnabled());
             return;
         }
         mHandler.removeCallbacks(mConnectionRunnable);
@@ -717,7 +728,7 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
             mBound = mContext.bindServiceAsUser(launcherServiceIntent,
                     mOverviewServiceConnection,
                     Context.BIND_AUTO_CREATE | Context.BIND_FOREGROUND_SERVICE_WHILE_AWAKE,
-                    UserHandle.of(mDeviceProvisionedController.getCurrentUser()));
+                    UserHandle.of(getCurrentUserId()));
         } catch (SecurityException e) {
             Log.e(TAG_OPS, "Unable to bind because of security error", e);
         }
@@ -837,7 +848,26 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
                 Log.e(TAG_OPS, "Failed to get overview proxy for assistant visibility.");
             }
         } catch (RemoteException e) {
-            Log.e(TAG_OPS, "Failed to call onAssistantVisibilityChanged()", e);
+            Log.e(TAG_OPS, "Failed to call notifyAssistantVisibilityChanged()", e);
+        }
+    }
+
+    /**
+     * Notifies the Launcher of split screen size changes
+     * @param secondaryWindowBounds Bounds of the secondary window including the insets
+     * @param secondaryWindowInsets stable insets received by the secondary window
+     */
+    public void notifySplitScreenBoundsChanged(
+            Rect secondaryWindowBounds, Rect secondaryWindowInsets) {
+        try {
+            if (mOverviewProxy != null) {
+                mOverviewProxy.onSplitScreenSecondaryBoundsChanged(
+                        secondaryWindowBounds, secondaryWindowInsets);
+            } else {
+                Log.e(TAG_OPS, "Failed to get overview proxy for split screen bounds.");
+            }
+        } catch (RemoteException e) {
+            Log.e(TAG_OPS, "Failed to call onSplitScreenSecondaryBoundsChanged()", e);
         }
     }
 
@@ -857,8 +887,6 @@ public class OverviewProxyService implements CallbackController<OverviewProxyLis
         pw.println(TAG_OPS + " state:");
         pw.print("  recentsComponentName="); pw.println(mRecentsComponentName);
         pw.print("  isConnected="); pw.println(mOverviewProxy != null);
-        pw.print("  isCurrentUserSetup="); pw.println(mDeviceProvisionedController
-                .isCurrentUserSetup());
         pw.print("  connectionBackoffAttempts="); pw.println(mConnectionBackoffAttempts);
 
         pw.print("  quickStepIntent="); pw.println(mQuickStepIntent);

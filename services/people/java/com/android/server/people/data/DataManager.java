@@ -56,10 +56,13 @@ import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.telecom.TelecomManager;
 import android.text.format.DateUtils;
+import android.util.ArrayMap;
 import android.util.ArraySet;
+import android.util.Pair;
 import android.util.Slog;
 import android.util.SparseArray;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.ChooserActivity;
 import com.android.internal.content.PackageMonitor;
@@ -67,6 +70,7 @@ import com.android.internal.os.BackgroundThread;
 import com.android.internal.telephony.SmsApplication;
 import com.android.server.LocalServices;
 import com.android.server.notification.NotificationManagerInternal;
+import com.android.server.notification.ShortcutHelper;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -102,8 +106,7 @@ public class DataManager {
     private final SparseArray<BroadcastReceiver> mBroadcastReceivers = new SparseArray<>();
     private final SparseArray<ContentObserver> mContactsContentObservers = new SparseArray<>();
     private final SparseArray<ScheduledFuture<?>> mUsageStatsQueryFutures = new SparseArray<>();
-    private final SparseArray<NotificationListenerService> mNotificationListeners =
-            new SparseArray<>();
+    private final SparseArray<NotificationListener> mNotificationListeners = new SparseArray<>();
     private final SparseArray<PackageMonitor> mPackageMonitors = new SparseArray<>();
     private ContentObserver mCallLogContentObserver;
     private ContentObserver mMmsSmsContentObserver;
@@ -207,7 +210,7 @@ public class DataManager {
 
     /** Reports the sharing related {@link AppTargetEvent} from App Prediction Manager. */
     public void reportShareTargetEvent(@NonNull AppTargetEvent event,
-            @Nullable IntentFilter intentFilter) {
+            @NonNull IntentFilter intentFilter) {
         AppTarget appTarget = event.getTarget();
         if (appTarget == null || event.getAction() != AppTargetEvent.ACTION_LAUNCH) {
             return;
@@ -217,8 +220,7 @@ public class DataManager {
             return;
         }
         PackageData packageData = userData.getOrCreatePackageData(appTarget.getPackageName());
-        String mimeType = intentFilter != null ? intentFilter.getDataType(0) : null;
-        @Event.EventType int eventType = mimeTypeToShareEventType(mimeType);
+        @Event.EventType int eventType = mimeTypeToShareEventType(intentFilter.getDataType(0));
         EventHistoryImpl eventHistory;
         if (ChooserActivity.LAUNCH_LOCATION_DIRECT_SHARE.equals(event.getLaunchLocation())) {
             // Direct share event
@@ -226,6 +228,10 @@ public class DataManager {
                 return;
             }
             String shortcutId = appTarget.getShortcutInfo().getId();
+            // Skip storing chooserTargets sharing events
+            if (ChooserActivity.CHOOSER_TARGET.equals(shortcutId)) {
+                return;
+            }
             if (packageData.getConversationStore().getConversation(shortcutId) == null) {
                 addOrUpdateConversationInfo(appTarget.getShortcutInfo());
             }
@@ -250,13 +256,16 @@ public class DataManager {
     }
 
     /**
-     * Queries launch counts of apps within {@code packageNameFilter} between {@code startTime}
-     * and {@code endTime}.
+     * Queries usage stats of apps within {@code packageNameFilter} between {@code startTime} and
+     * {@code endTime}.
+     *
+     * @return a map which keys are package names and values are {@link AppUsageStatsData}.
      */
     @NonNull
-    public Map<String, Integer> queryAppLaunchCount(@UserIdInt int callingUserId, long startTime,
+    public Map<String, AppUsageStatsData> queryAppUsageStats(
+            @UserIdInt int callingUserId, long startTime,
             long endTime, Set<String> packageNameFilter) {
-        return UsageStatsQueryHelper.queryAppLaunchCount(callingUserId, startTime, endTime,
+        return UsageStatsQueryHelper.queryAppUsageStats(callingUserId, startTime, endTime,
                 packageNameFilter);
     }
 
@@ -268,6 +277,7 @@ public class DataManager {
         }
         pruneUninstalledPackageData(userData);
 
+        final NotificationListener notificationListener = mNotificationListeners.get(userId);
         userData.forAllPackages(packageData -> {
             if (signal.isCanceled()) {
                 return;
@@ -280,6 +290,20 @@ public class DataManager {
                 packageData.getEventStore().deleteEventHistories(EventStore.CATEGORY_SMS);
             }
             packageData.pruneOrphanEvents();
+            if (notificationListener != null) {
+                String packageName = packageData.getPackageName();
+                packageData.forAllConversations(conversationInfo -> {
+                    if (conversationInfo.isShortcutCachedForNotification()
+                            && conversationInfo.getNotificationChannelId() == null
+                            && !notificationListener.hasActiveNotifications(
+                                    packageName, conversationInfo.getShortcutId())) {
+                        mShortcutServiceInternal.uncacheShortcuts(userId,
+                                mContext.getPackageName(), packageName,
+                                Collections.singletonList(conversationInfo.getShortcutId()),
+                                userId, ShortcutInfo.FLAG_CACHED_NOTIFICATIONS);
+                    }
+                });
+            }
         });
     }
 
@@ -333,7 +357,7 @@ public class DataManager {
                     Contacts.CONTENT_URI, /* notifyForDescendants= */ true,
                     contactsContentObserver, userId);
 
-            NotificationListener notificationListener = new NotificationListener();
+            NotificationListener notificationListener = new NotificationListener(userId);
             mNotificationListeners.put(userId, notificationListener);
             try {
                 notificationListener.registerAsSystemService(mContext,
@@ -481,7 +505,8 @@ public class DataManager {
     }
 
     @Nullable
-    private EventHistoryImpl getEventHistoryIfEligible(StatusBarNotification sbn) {
+    private PackageData getPackageIfConversationExists(StatusBarNotification sbn,
+            Consumer<ConversationInfo> conversationConsumer) {
         Notification notification = sbn.getNotification();
         String shortcutId = notification.getShortcutId();
         if (shortcutId == null) {
@@ -489,16 +514,16 @@ public class DataManager {
         }
         PackageData packageData = getPackage(sbn.getPackageName(),
                 sbn.getUser().getIdentifier());
-        if (packageData == null
-                || packageData.getConversationStore().getConversation(shortcutId) == null) {
+        if (packageData == null) {
             return null;
         }
-        return packageData.getEventStore().getOrCreateEventHistory(
-                EventStore.CATEGORY_SHORTCUT_BASED, shortcutId);
-    }
-
-    private boolean isPersonShortcut(@NonNull ShortcutInfo shortcutInfo) {
-        return shortcutInfo.getPersons() != null && shortcutInfo.getPersons().length != 0;
+        ConversationInfo conversationInfo =
+                packageData.getConversationStore().getConversation(shortcutId);
+        if (conversationInfo == null) {
+            return null;
+        }
+        conversationConsumer.accept(conversationInfo);
+        return packageData;
     }
 
     @VisibleForTesting
@@ -712,7 +737,8 @@ public class DataManager {
                 @NonNull List<ShortcutInfo> shortcuts, @NonNull UserHandle user) {
             mInjector.getBackgroundExecutor().execute(() -> {
                 for (ShortcutInfo shortcut : shortcuts) {
-                    if (isPersonShortcut(shortcut)) {
+                    if (ShortcutHelper.isConversationShortcut(
+                            shortcut, mShortcutServiceInternal, user.getIdentifier())) {
                         addOrUpdateConversationInfo(shortcut);
                     }
                 }
@@ -747,24 +773,71 @@ public class DataManager {
     /** Listener for the notifications and their settings changes. */
     private class NotificationListener extends NotificationListenerService {
 
+        private final int mUserId;
+
+        // Conversation package name + shortcut ID -> Number of active notifications
+        @GuardedBy("this")
+        private final Map<Pair<String, String>, Integer> mActiveNotifCounts = new ArrayMap<>();
+
+        private NotificationListener(int userId) {
+            mUserId = userId;
+        }
+
         @Override
         public void onNotificationPosted(StatusBarNotification sbn) {
-            EventHistoryImpl eventHistory = getEventHistoryIfEligible(sbn);
-            if (eventHistory != null) {
+            if (sbn.getUser().getIdentifier() != mUserId) {
+                return;
+            }
+            String shortcutId = sbn.getNotification().getShortcutId();
+            PackageData packageData = getPackageIfConversationExists(sbn, conversationInfo -> {
+                synchronized (this) {
+                    mActiveNotifCounts.merge(
+                            Pair.create(sbn.getPackageName(), shortcutId), 1, Integer::sum);
+                }
+            });
+
+            if (packageData != null) {
+                EventHistoryImpl eventHistory = packageData.getEventStore().getOrCreateEventHistory(
+                        EventStore.CATEGORY_SHORTCUT_BASED, shortcutId);
                 eventHistory.addEvent(new Event(sbn.getPostTime(), Event.TYPE_NOTIFICATION_POSTED));
             }
         }
 
         @Override
-        public void onNotificationRemoved(StatusBarNotification sbn, RankingMap rankingMap,
-                int reason) {
-            if (reason != REASON_CLICK) {
+        public synchronized void onNotificationRemoved(StatusBarNotification sbn,
+                RankingMap rankingMap, int reason) {
+            if (sbn.getUser().getIdentifier() != mUserId) {
                 return;
             }
-            EventHistoryImpl eventHistory = getEventHistoryIfEligible(sbn);
-            if (eventHistory == null) {
+            String shortcutId = sbn.getNotification().getShortcutId();
+            PackageData packageData = getPackageIfConversationExists(sbn, conversationInfo -> {
+                Pair<String, String> conversationKey =
+                        Pair.create(sbn.getPackageName(), shortcutId);
+                synchronized (this) {
+                    int count = mActiveNotifCounts.getOrDefault(conversationKey, 0) - 1;
+                    if (count <= 0) {
+                        mActiveNotifCounts.remove(conversationKey);
+                        // The shortcut was cached by Notification Manager synchronously when the
+                        // associated notification was posted. Uncache it here when all the
+                        // associated notifications are removed.
+                        if (conversationInfo.isShortcutCachedForNotification()
+                                && conversationInfo.getNotificationChannelId() == null) {
+                            mShortcutServiceInternal.uncacheShortcuts(mUserId,
+                                    mContext.getPackageName(), sbn.getPackageName(),
+                                    Collections.singletonList(conversationInfo.getShortcutId()),
+                                    mUserId, ShortcutInfo.FLAG_CACHED_NOTIFICATIONS);
+                        }
+                    } else {
+                        mActiveNotifCounts.put(conversationKey, count);
+                    }
+                }
+            });
+
+            if (reason != REASON_CLICK || packageData == null) {
                 return;
             }
+            EventHistoryImpl eventHistory = packageData.getEventStore().getOrCreateEventHistory(
+                    EventStore.CATEGORY_SHORTCUT_BASED, shortcutId);
             long currentTime = System.currentTimeMillis();
             eventHistory.addEvent(new Event(currentTime, Event.TYPE_NOTIFICATION_OPENED));
         }
@@ -772,6 +845,9 @@ public class DataManager {
         @Override
         public void onNotificationChannelModified(String pkg, UserHandle user,
                 NotificationChannel channel, int modificationType) {
+            if (user.getIdentifier() != mUserId) {
+                return;
+            }
             PackageData packageData = getPackage(pkg, user.getIdentifier());
             String shortcutId = channel.getConversationId();
             if (packageData == null || shortcutId == null) {
@@ -804,15 +880,28 @@ public class DataManager {
                     break;
             }
             conversationStore.addOrUpdate(builder.build());
+        }
 
-            if (modificationType == NOTIFICATION_CHANNEL_OR_GROUP_UPDATED
-                    && conversationInfo.isShortcutLongLived()
-                    && !conversationInfo.isShortcutCached()) {
-                mShortcutServiceInternal.cacheShortcuts(user.getIdentifier(),
-                        mContext.getPackageName(), pkg,
-                        Collections.singletonList(conversationInfo.getShortcutId()),
-                        user.getIdentifier());
+        synchronized void cleanupCachedShortcuts() {
+            for (Pair<String, String> conversationKey : mActiveNotifCounts.keySet()) {
+                String packageName = conversationKey.first;
+                String shortcutId = conversationKey.second;
+                PackageData packageData = getPackage(packageName, mUserId);
+                ConversationInfo conversationInfo =
+                        packageData != null ? packageData.getConversationInfo(shortcutId) : null;
+                if (conversationInfo != null
+                        && conversationInfo.isShortcutCachedForNotification()
+                        && conversationInfo.getNotificationChannelId() == null) {
+                    mShortcutServiceInternal.uncacheShortcuts(mUserId,
+                            mContext.getPackageName(), packageName,
+                            Collections.singletonList(shortcutId),
+                            mUserId, ShortcutInfo.FLAG_CACHED_NOTIFICATIONS);
+                }
             }
+        }
+
+        synchronized boolean hasActiveNotifications(String packageName, String shortcutId) {
+            return mActiveNotifCounts.containsKey(Pair.create(packageName, shortcutId));
         }
     }
 
@@ -883,7 +972,16 @@ public class DataManager {
 
         @Override
         public void onReceive(Context context, Intent intent) {
-            forAllUnlockedUsers(userData -> userData.forAllPackages(PackageData::saveToDisk));
+            forAllUnlockedUsers(userData -> {
+                NotificationListener listener = mNotificationListeners.get(userData.getUserId());
+                // Clean up the cached shortcuts because all the notifications are cleared after
+                // system shutdown. The associated shortcuts need to be uncached to keep in sync
+                // unless the settings are changed by the user.
+                if (listener != null) {
+                    listener.cleanupCachedShortcuts();
+                }
+                userData.forAllPackages(PackageData::saveToDisk);
+            });
         }
     }
 

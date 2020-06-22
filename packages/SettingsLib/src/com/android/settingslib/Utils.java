@@ -29,8 +29,6 @@ import android.telephony.AccessNetworkConstants;
 import android.telephony.NetworkRegistrationInfo;
 import android.telephony.ServiceState;
 
-import androidx.annotation.NonNull;
-
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.UserIcons;
 import com.android.launcher3.icons.IconFactory;
@@ -303,8 +301,12 @@ public class Utils {
     }
 
     public static int getThemeAttr(Context context, int attr) {
+        return getThemeAttr(context, attr, 0);
+    }
+
+    public static int getThemeAttr(Context context, int attr, int defaultValue) {
         TypedArray ta = context.obtainStyledAttributes(new int[]{attr});
-        int theme = ta.getResourceId(0, 0);
+        int theme = ta.getResourceId(0, defaultValue);
         ta.recycle();
         return theme;
     }
@@ -375,7 +377,7 @@ public class Utils {
      * @throws IllegalArgumentException if an invalid RSSI level is given.
      */
     public static int getWifiIconResource(int level) {
-        return getWifiIconResource(level, 0 /* generation */, false /* isReady */);
+        return getWifiIconResource(level, 0 /* standard */, false /* isReady */);
     }
 
     /**
@@ -384,12 +386,12 @@ public class Utils {
      * @param level The number of bars to show (0-4)
      * @throws IllegalArgumentException if an invalid RSSI level is given.
      */
-    public static int getWifiIconResource(int level, int generation, boolean isReady) {
+    public static int getWifiIconResource(int level, int standard, boolean isReady) {
         if (level < 0 || level >= WIFI_PIE.length) {
             throw new IllegalArgumentException("No Wifi icon found for level: " + level);
         }
 
-        switch (generation) {
+        switch (standard) {
             case 4:
                 return WIFI_4_PIE[level];
             case 5:
@@ -501,17 +503,19 @@ public class Utils {
         return state;
     }
 
-    /**
-     * Get the {@link Drawable} that represents the app icon
-     */
-    public static @NonNull Drawable getBadgedIcon(
-            @NonNull Context context, @NonNull ApplicationInfo appInfo) {
-        final UserHandle user = UserHandle.getUserHandleForUid(appInfo.uid);
+    /** Get the corresponding adaptive icon drawable. */
+    public static Drawable getBadgedIcon(Context context, Drawable icon, UserHandle user) {
         try (IconFactory iconFactory = IconFactory.obtain(context)) {
-            final Bitmap iconBmp = iconFactory.createBadgedIconBitmap(
-                    appInfo.loadUnbadgedIcon(context.getPackageManager()), user, false).icon;
+            final Bitmap iconBmp = iconFactory.createBadgedIconBitmap(icon, user,
+                    true /* shrinkNonAdaptiveIcons */).icon;
             return new BitmapDrawable(context.getResources(), iconBmp);
         }
+    }
+
+    /** Get the {@link Drawable} that represents the app icon */
+    public static Drawable getBadgedIcon(Context context, ApplicationInfo appInfo) {
+        return getBadgedIcon(context, appInfo.loadUnbadgedIcon(context.getPackageManager()),
+                UserHandle.getUserHandleForUid(appInfo.uid));
     }
 
     private static boolean isNotInIwlan(ServiceState serviceState) {

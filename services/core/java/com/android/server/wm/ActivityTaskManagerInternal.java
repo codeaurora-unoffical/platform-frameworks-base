@@ -152,17 +152,6 @@ public abstract class ActivityTaskManagerInternal {
             IVoiceInteractor mInteractor);
 
     /**
-     * Callback for window manager to let activity manager know that the app transition was
-     * cancelled.
-     */
-    public abstract void notifyAppTransitionCancelled();
-
-    /**
-     * Callback for window manager to let activity manager know that the app transition is finished.
-     */
-    public abstract void notifyAppTransitionFinished();
-
-    /**
      * Returns the top activity from each of the currently visible stacks. The first entry will be
      * the focused activity.
      */
@@ -306,11 +295,9 @@ public abstract class ActivityTaskManagerInternal {
     public abstract void setAllowAppSwitches(@NonNull String type, int uid, int userId);
 
     /**
-     * Called when a user has been deleted. This can happen during normal device usage
-     * or just at startup, when partially removed users are purged. Any state persisted by the
-     * ActivityManager should be purged now.
+     * Called when a user has been stopped.
      *
-     * @param userId The user being cleaned up.
+     * @param userId The user being stopped.
      */
     public abstract void onUserStopped(int userId);
     public abstract boolean isGetTasksAllowed(String caller, int callingPid, int callingUid);

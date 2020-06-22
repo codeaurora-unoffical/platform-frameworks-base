@@ -19,16 +19,20 @@ package com.android.systemui.car.notification;
 import android.car.hardware.power.CarPowerManager;
 import android.content.res.Configuration;
 
+import androidx.annotation.CallSuper;
+
 import com.android.systemui.car.CarDeviceProvisionedController;
-import com.android.systemui.navigationbar.car.CarNavigationBarController;
-import com.android.systemui.statusbar.car.PowerManagerHelper;
+import com.android.systemui.car.navigationbar.CarNavigationBarController;
+import com.android.systemui.car.window.OverlayViewMediator;
 import com.android.systemui.statusbar.policy.ConfigurationController;
-import com.android.systemui.window.OverlayViewMediator;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
-/** The view mediator which attaches the view controller to other elements of the system ui. */
+/**
+ * The view mediator which attaches the view controller to other elements of the system ui. Disables
+ * drag open behavior of the notification panel from any navigation bar.
+ */
 @Singleton
 public class NotificationPanelViewMediator implements OverlayViewMediator,
         ConfigurationController.ConfigurationListener {
@@ -57,15 +61,16 @@ public class NotificationPanelViewMediator implements OverlayViewMediator,
     }
 
     @Override
+    @CallSuper
     public void registerListeners() {
         mCarNavigationBarController.registerTopBarTouchListener(
-                mNotificationPanelViewController.getTopNavBarNotificationTouchListener());
+                mNotificationPanelViewController.getDragCloseTouchListener());
         mCarNavigationBarController.registerBottomBarTouchListener(
-                mNotificationPanelViewController.getNavBarNotificationTouchListener());
+                mNotificationPanelViewController.getDragCloseTouchListener());
         mCarNavigationBarController.registerLeftBarTouchListener(
-                mNotificationPanelViewController.getNavBarNotificationTouchListener());
+                mNotificationPanelViewController.getDragCloseTouchListener());
         mCarNavigationBarController.registerRightBarTouchListener(
-                mNotificationPanelViewController.getNavBarNotificationTouchListener());
+                mNotificationPanelViewController.getDragCloseTouchListener());
 
         mCarNavigationBarController.registerNotificationController(
                 new CarNavigationBarController.NotificationsShadeController() {
@@ -128,5 +133,13 @@ public class NotificationPanelViewMediator implements OverlayViewMediator,
     public void onLocaleListChanged() {
         mNotificationPanelViewController.reinflate();
         registerListeners();
+    }
+
+    protected final CarNavigationBarController getCarNavigationBarController() {
+        return mCarNavigationBarController;
+    }
+
+    protected final NotificationPanelViewController getNotificationPanelViewController() {
+        return mNotificationPanelViewController;
     }
 }

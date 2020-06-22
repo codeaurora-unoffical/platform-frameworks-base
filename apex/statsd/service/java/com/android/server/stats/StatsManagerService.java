@@ -172,6 +172,10 @@ public class StatsManagerService extends IStatsManagerService.Stub {
     public void registerPullAtomCallback(int atomTag, long coolDownMillis, long timeoutMillis,
             int[] additiveFields, IPullAtomCallback pullerCallback) {
         enforceRegisterStatsPullAtomPermission();
+        if (pullerCallback == null) {
+            Log.w(TAG, "Puller callback is null for atom " + atomTag);
+            return;
+        }
         int callingUid = Binder.getCallingUid();
         PullerKey key = new PullerKey(callingUid, atomTag);
         PullerValue val =
@@ -600,6 +604,7 @@ public class StatsManagerService extends IStatsManagerService.Stub {
             statsd.registerPullAtomCallback(key.getUid(), key.getAtom(), value.getCoolDownMillis(),
                     value.getTimeoutMillis(), value.getAdditiveFields(), value.getCallback());
         }
+        statsd.allPullersFromBootRegistered();
     }
 
     // Pre-condition: the Binder calling identity has already been cleared

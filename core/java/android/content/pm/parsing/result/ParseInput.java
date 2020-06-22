@@ -16,6 +16,7 @@
 
 package android.content.pm.parsing.result;
 
+import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.compat.annotation.ChangeId;
@@ -59,6 +60,35 @@ public interface ParseInput {
         @ChangeId
         @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
         public static final long EMPTY_INTENT_ACTION_CATEGORY = 151163173;
+
+        /**
+         * The {@code resources.arsc} of one of the APKs being installed is compressed or not
+         * aligned on a 4-byte boundary. Resource tables that cannot be memory mapped exert excess
+         * memory pressure on the system and drastically slow down construction of
+         * {@link android.content.res.Resources} objects.
+         */
+        @ChangeId
+        @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
+        public static final long RESOURCES_ARSC_COMPRESSED = 132742131;
+
+        /**
+         * TODO(chiuwinson): This is required because PackageManager#getPackageArchiveInfo
+         *   cannot read the targetSdk info from the changeId because it requires the
+         *   READ_COMPAT_CHANGE_CONFIG which cannot be obtained automatically without entering the
+         *   server process. This should be removed once an alternative is found, or if the API
+         *   is removed.
+         * @return the targetSdk that this change is gated on (> check), or -1 if disabled
+         */
+        @IntRange(from = -1, to = Integer.MAX_VALUE)
+        public static int getTargetSdkForChange(long changeId) {
+            if (changeId == MISSING_APP_TAG
+                    || changeId == EMPTY_INTENT_ACTION_CATEGORY
+                    || changeId == RESOURCES_ARSC_COMPRESSED) {
+                return Build.VERSION_CODES.Q;
+            }
+
+            return -1;
+        }
     }
 
     <ResultType> ParseResult<ResultType> success(ResultType result);
@@ -77,6 +107,14 @@ public interface ParseInput {
      * error was registered. The result contains null and should not be unwrapped.
      */
     ParseResult<?> enableDeferredError(String packageName, int targetSdkVersion);
+
+    /**
+     * This will assign errorCode to {@link PackageManager#INSTALL_PARSE_FAILED_SKIPPED, used for
+     * packages which should be ignored by the caller.
+     *
+     * @see #error(int, String, Exception)
+     */
+    <ResultType> ParseResult<ResultType> skip(@NonNull String parseError);
 
     /** @see #error(int, String, Exception) */
     <ResultType> ParseResult<ResultType> error(int parseError);

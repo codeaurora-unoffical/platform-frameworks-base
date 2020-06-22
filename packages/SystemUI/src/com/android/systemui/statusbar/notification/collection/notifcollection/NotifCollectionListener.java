@@ -16,7 +16,9 @@
 
 package com.android.systemui.statusbar.notification.collection.notifcollection;
 
+import android.annotation.NonNull;
 import android.service.notification.NotificationListenerService;
+import android.service.notification.StatusBarNotification;
 
 import com.android.systemui.statusbar.notification.collection.NotifCollection.CancellationReason;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
@@ -25,6 +27,15 @@ import com.android.systemui.statusbar.notification.collection.NotificationEntry;
  * Listener interface for {@link NotificationEntry} events.
  */
 public interface NotifCollectionListener {
+
+    /**
+     * Called when the entry is having a new status bar notification bound to it. This should
+     * be used to initialize any derivative state on the entry that needs to update when the
+     * notification is updated.
+     */
+    default void onEntryBind(NotificationEntry entry, StatusBarNotification sbn) {
+    }
+
     /**
      * Called whenever a new {@link NotificationEntry} is initialized. This should be used for
      * initializing any decorated state tied to the notification.
@@ -33,13 +44,13 @@ public interface NotifCollectionListener {
      * there is no guarantee of order and they may not have had a chance to initialize yet. Instead,
      * use {@link #onEntryAdded} which is called after all initialization.
      */
-    default void onEntryInit(NotificationEntry entry) {
+    default void onEntryInit(@NonNull NotificationEntry entry) {
     }
 
     /**
      * Called whenever a notification with a new key is posted.
      */
-    default void onEntryAdded(NotificationEntry entry) {
+    default void onEntryAdded(@NonNull NotificationEntry entry) {
     }
 
     /**
@@ -54,7 +65,7 @@ public interface NotifCollectionListener {
      * immediately after a user dismisses a notification: we wait until we receive confirmation from
      * system server before considering the notification removed.
      */
-    default void onEntryRemoved(NotificationEntry entry, @CancellationReason int reason) {
+    default void onEntryRemoved(@NonNull NotificationEntry entry, @CancellationReason int reason) {
     }
 
     /**
@@ -66,7 +77,7 @@ public interface NotifCollectionListener {
      * the entry during this call. Instead, use {@link #onEntryRemoved} which will be called before
      * deletion.
      */
-    default void onEntryCleanUp(NotificationEntry entry) {
+    default void onEntryCleanUp(@NonNull NotificationEntry entry) {
     }
 
     /**

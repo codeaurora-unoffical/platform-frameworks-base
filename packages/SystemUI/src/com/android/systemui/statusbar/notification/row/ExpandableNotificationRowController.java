@@ -60,7 +60,6 @@ public class ExpandableNotificationRowController {
     private final HeadsUpManager mHeadsUpManager;
     private final ExpandableNotificationRow.OnExpandClickListener mOnExpandClickListener;
     private final StatusBarStateController mStatusBarStateController;
-    private final NotificationRowContentBinder.InflationCallback mInflationCallback;
 
     private final ExpandableNotificationRow.ExpansionLogger mExpansionLogger =
             this::logNotificationExpansion;
@@ -82,7 +81,6 @@ public class ExpandableNotificationRowController {
             NotificationLogger notificationLogger, HeadsUpManager headsUpManager,
             ExpandableNotificationRow.OnExpandClickListener onExpandClickListener,
             StatusBarStateController statusBarStateController,
-            NotificationRowContentBinder.InflationCallback inflationCallback,
             NotificationGutsManager notificationGutsManager,
             @Named(ALLOW_NOTIFICATION_LONG_PRESS_NAME) boolean allowLongPress,
             @DismissRunnable Runnable onDismissRunnable, FalsingManager falsingManager,
@@ -101,7 +99,6 @@ public class ExpandableNotificationRowController {
         mHeadsUpManager = headsUpManager;
         mOnExpandClickListener = onExpandClickListener;
         mStatusBarStateController = statusBarStateController;
-        mInflationCallback = inflationCallback;
         mNotificationGutsManager = notificationGutsManager;
         mOnDismissRunnable = onDismissRunnable;
         mOnAppOpsClickListener = mNotificationGutsManager::openGuts;
@@ -133,7 +130,13 @@ public class ExpandableNotificationRowController {
         mView.setOnDismissRunnable(mOnDismissRunnable);
         mView.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         if (mAllowLongPress) {
-            mView.setLongPressListener(mNotificationGutsManager::openGuts);
+            mView.setLongPressListener((v, x, y, item) -> {
+                if (mView.isSummaryWithChildren()) {
+                    mView.expandNotification();
+                    return true;
+                }
+                return mNotificationGutsManager.openGuts(v, x, y, item);
+            });
         }
         if (ENABLE_REMOTE_INPUT) {
             mView.setDescendantFocusability(ViewGroup.FOCUS_BEFORE_DESCENDANTS);

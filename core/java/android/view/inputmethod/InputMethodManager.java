@@ -616,12 +616,19 @@ public final class InputMethodManager {
                 // For some reason we didn't do a startInput + windowFocusGain, so
                 // we'll just do a window focus gain and call it a day.
                 try {
-                    if (DEBUG) Log.v(TAG, "Reporting focus gain, without startInput");
+                    View servedView = controller.getServedView();
+                    boolean nextFocusIsServedView = servedView != null && servedView == focusedView;
+                    if (DEBUG) {
+                        Log.v(TAG, "Reporting focus gain, without startInput"
+                                + ", nextFocusIsServedView=" + nextFocusIsServedView);
+                    }
                     mService.startInputOrWindowGainedFocus(
                             StartInputReason.WINDOW_FOCUS_GAIN_REPORT_ONLY, mClient,
                             focusedView.getWindowToken(), startInputFlags, softInputMode,
                             windowFlags,
-                            null, null, 0 /* missingMethodFlags */,
+                            nextFocusIsServedView ? mCurrentTextBoxAttribute : null,
+                            nextFocusIsServedView ? mServedInputConnectionWrapper : null,
+                            0 /* missingMethodFlags */,
                             mCurRootView.mContext.getApplicationInfo().targetSdkVersion);
                 } catch (RemoteException e) {
                     throw e.rethrowFromSystemServer();
@@ -646,8 +653,7 @@ public final class InputMethodManager {
         public void setCurrentRootView(ViewRootImpl rootView) {
             synchronized (mH) {
                 if (mCurRootView != null) {
-                    // Reset the last served view and restart window focus state of the root view.
-                    mCurRootView.getImeFocusController().setServedView(null);
+                    // Restart the input when the next window focus state of the root view changed.
                     mRestartOnNextWindowFocus = true;
                 }
                 mCurRootView = rootView;
@@ -676,6 +682,18 @@ public final class InputMethodManager {
                 mRestartOnNextWindowFocus = false;
             }
             return result;
+        }
+
+        /**
+         * For {@link ImeFocusController} to check if the currently served view is accepting full
+         * text edits.
+         */
+        @Override
+        public boolean isAcceptingText() {
+            synchronized (mH) {
+                return mServedInputConnectionWrapper != null
+                        && mServedInputConnectionWrapper.getInputConnection() != null;
+            }
         }
     }
 
@@ -1966,6 +1984,38 @@ public final class InputMethodManager {
         }
 
         return true;
+    }
+
+    /**
+     * An empty method only to avoid crashes of apps that call this method via reflection and do not
+     * handle {@link NoSuchMethodException} in a graceful manner.
+     *
+     * @deprecated This is an empty method.  No framework method must call this method.
+     * @hide
+     */
+    @Deprecated
+    @UnsupportedAppUsage(trackingBug = 37122102, maxTargetSdk = Build.VERSION_CODES.Q,
+            publicAlternatives = "{@code androidx.activity.ComponentActivity}")
+    public void windowDismissed(IBinder appWindowToken) {
+        // Intentionally empty.
+        //
+        // It seems that some applications call this method via reflection to null clear the
+        // following fields that used to exist in InputMethodManager:
+        //  * InputMethodManager#mCurRootView
+        //  * InputMethodManager#mServedView
+        //  * InputMethodManager#mNextServedView
+        // so that these objects can be garbage-collected when an Activity gets dismissed.
+        //
+        // It is indeed true that older versions of InputMethodManager had issues that prevented
+        // these fields from being null-cleared when it should have been, but the understanding of
+        // the engineering team is that all known issues have already been fixed as of Android 10.
+        //
+        // For older devices, developers can work around the object leaks by using
+        // androidx.activity.ComponentActivity.
+        // See https://issuetracker.google.com/u/1/issues/37122102 for details.
+        //
+        // If you believe InputMethodManager is leaking objects in API 24 or any later version,
+        // please file a bug at https://issuetracker.google.com/issues/new?component=192705.
     }
 
     private int getStartInputFlags(View focusedView, int startInputFlags) {

@@ -17,7 +17,6 @@
 package com.android.systemui.statusbar.notification.init
 
 import android.service.notification.StatusBarNotification
-import com.android.systemui.bubbles.BubbleController
 import com.android.systemui.plugins.statusbar.NotificationSwipeActionHelper.SnoozeOption
 import com.android.systemui.statusbar.FeatureFlags
 import com.android.systemui.statusbar.NotificationListener
@@ -26,9 +25,11 @@ import com.android.systemui.statusbar.notification.NotificationActivityStarter
 import com.android.systemui.statusbar.notification.NotificationClicker
 import com.android.systemui.statusbar.notification.NotificationEntryManager
 import com.android.systemui.statusbar.notification.NotificationListController
+import com.android.systemui.statusbar.notification.collection.NotifPipeline
 import com.android.systemui.statusbar.notification.collection.inflation.NotificationRowBinderImpl
 import com.android.systemui.statusbar.notification.collection.init.NotifPipelineInitializer
-import com.android.systemui.statusbar.notification.headsup.HeadsUpBindController
+import com.android.systemui.statusbar.notification.collection.TargetSdkResolver
+import com.android.systemui.statusbar.notification.interruption.HeadsUpController
 import com.android.systemui.statusbar.notification.row.NotifBindPipelineInitializer
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer
 import com.android.systemui.statusbar.phone.NotificationGroupAlertTransferHelper
@@ -36,7 +37,7 @@ import com.android.systemui.statusbar.phone.NotificationGroupManager
 import com.android.systemui.statusbar.phone.StatusBar
 import com.android.systemui.statusbar.policy.DeviceProvisionedController
 import com.android.systemui.statusbar.policy.HeadsUpManager
-import com.android.systemui.statusbar.notification.headsup.HeadsUpViewBinder
+import com.android.systemui.statusbar.notification.interruption.HeadsUpViewBinder
 import com.android.systemui.statusbar.policy.RemoteInputUriController
 import dagger.Lazy
 import java.io.FileDescriptor
@@ -57,17 +58,19 @@ class NotificationsControllerImpl @Inject constructor(
     private val featureFlags: FeatureFlags,
     private val notificationListener: NotificationListener,
     private val entryManager: NotificationEntryManager,
+    private val notifPipeline: Lazy<NotifPipeline>,
+    private val targetSdkResolver: TargetSdkResolver,
     private val newNotifPipeline: Lazy<NotifPipelineInitializer>,
     private val notifBindPipelineInitializer: NotifBindPipelineInitializer,
     private val deviceProvisionedController: DeviceProvisionedController,
     private val notificationRowBinder: NotificationRowBinderImpl,
     private val remoteInputUriController: RemoteInputUriController,
-    private val bubbleController: BubbleController,
     private val groupManager: NotificationGroupManager,
     private val groupAlertTransferHelper: NotificationGroupAlertTransferHelper,
     private val headsUpManager: HeadsUpManager,
-    private val headsUpBindController: HeadsUpBindController,
-    private val headsUpViewBinder: HeadsUpViewBinder
+    private val headsUpController: HeadsUpController,
+    private val headsUpViewBinder: HeadsUpViewBinder,
+    private val clickerBuilder: NotificationClicker.Builder
 ) : NotificationsController {
 
     override fun initialize(
@@ -87,10 +90,7 @@ class NotificationsControllerImpl @Inject constructor(
         listController.bind()
 
         notificationRowBinder.setNotificationClicker(
-                NotificationClicker(
-                        Optional.of(statusBar),
-                        bubbleController,
-                        notificationActivityStarter))
+                clickerBuilder.build(Optional.of(statusBar), notificationActivityStarter))
         notificationRowBinder.setUpWithPresenter(
                 presenter,
                 listContainer,
@@ -106,15 +106,15 @@ class NotificationsControllerImpl @Inject constructor(
         }
 
         if (featureFlags.isNewNotifPipelineRenderingEnabled) {
+            targetSdkResolver.initialize(notifPipeline.get())
             // TODO
         } else {
-            notificationRowBinder.setInflationCallback(entryManager)
-
+            targetSdkResolver.initialize(entryManager)
             remoteInputUriController.attach(entryManager)
             groupAlertTransferHelper.bind(entryManager, groupManager)
             headsUpManager.addListener(groupManager)
             headsUpManager.addListener(groupAlertTransferHelper)
-            headsUpBindController.attach(entryManager, headsUpManager)
+            headsUpController.attach(entryManager, headsUpManager)
             groupManager.setHeadsUpManager(headsUpManager)
             groupAlertTransferHelper.setHeadsUpManager(headsUpManager)
 

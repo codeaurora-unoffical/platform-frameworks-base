@@ -16,7 +16,10 @@
 
 package com.android.server.notification;
 
+import static android.app.AppOpsManager.OP_SYSTEM_ALERT_WINDOW;
 import static android.app.NotificationChannel.PLACEHOLDER_CONVERSATION_ID;
+import static android.app.NotificationManager.BUBBLE_PREFERENCE_ALL;
+import static android.app.NotificationManager.BUBBLE_PREFERENCE_NONE;
 import static android.app.NotificationManager.IMPORTANCE_NONE;
 import static android.app.NotificationManager.IMPORTANCE_UNSPECIFIED;
 
@@ -29,6 +32,7 @@ import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UserIdInt;
+import android.app.AppOpsManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationChannelGroup;
@@ -78,8 +82,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class PreferencesHelper implements RankingConfig {
     private static final String TAG = "NotificationPrefHelper";
-    private static final int XML_VERSION = 1;
-    private static final int UNKNOWN_UID = UserHandle.USER_NULL;
+    private static final int XML_VERSION = 2;
+    /** What version to check to do the upgrade for bubbles. */
+    private static final int XML_VERSION_BUBBLES_UPGRADE = 1;
+    @VisibleForTesting
+    static final int UNKNOWN_UID = UserHandle.USER_NULL;
     private static final String NON_BLOCKABLE_CHANNEL_DELIM = ":";
 
     @VisibleForTesting
@@ -110,6 +117,9 @@ public class PreferencesHelper implements RankingConfig {
     private static final String ATT_ENABLED = "enabled";
     private static final String ATT_USER_ALLOWED = "allowed";
     private static final String ATT_HIDE_SILENT = "hide_gentle";
+    private static final String ATT_SENT_INVALID_MESSAGE = "sent_invalid_msg";
+    private static final String ATT_SENT_VALID_MESSAGE = "sent_valid_msg";
+    private static final String ATT_USER_DEMOTED_INVALID_MSG_APP = "user_demote_msg_app";
 
     private static final int DEFAULT_PRIORITY = Notification.PRIORITY_DEFAULT;
     private static final int DEFAULT_VISIBILITY = NotificationManager.VISIBILITY_NO_OVERRIDE;
@@ -117,15 +127,20 @@ public class PreferencesHelper implements RankingConfig {
     @VisibleForTesting
     static final boolean DEFAULT_HIDE_SILENT_STATUS_BAR_ICONS = false;
     private static final boolean DEFAULT_SHOW_BADGE = true;
-    static final boolean DEFAULT_ALLOW_BUBBLE = true;
+
     private static final boolean DEFAULT_OEM_LOCKED_IMPORTANCE  = false;
     private static final boolean DEFAULT_APP_LOCKED_IMPORTANCE  = false;
+
+    static final boolean DEFAULT_GLOBAL_ALLOW_BUBBLE = true;
+    @VisibleForTesting
+    static final int DEFAULT_BUBBLE_PREFERENCE = BUBBLE_PREFERENCE_NONE;
 
     /**
      * Default value for what fields are user locked. See {@link LockableAppFields} for all lockable
      * fields.
      */
     private static final int DEFAULT_LOCKED_APP_FIELDS = 0;
+    private final SysUiStatsEvent.BuilderFactory mStatsEventBuilderFactory;
 
     /**
      * All user-lockable fields for a given application.
@@ -146,42 +161,30 @@ public class PreferencesHelper implements RankingConfig {
     private final RankingHandler mRankingHandler;
     private final ZenModeHelper mZenModeHelper;
     private final NotificationChannelLogger mNotificationChannelLogger;
+    private final AppOpsManager mAppOps;
 
     private SparseBooleanArray mBadgingEnabled;
-    private boolean mBubblesEnabled = DEFAULT_ALLOW_BUBBLE;
+    private boolean mBubblesEnabledGlobally = DEFAULT_GLOBAL_ALLOW_BUBBLE;
     private boolean mAreChannelsBypassingDnd;
     private boolean mHideSilentStatusBarIcons = DEFAULT_HIDE_SILENT_STATUS_BAR_ICONS;
 
     private boolean mAllowInvalidShortcuts = false;
 
-    private static final String BADGING_FORCED_TRUE = "force_badging_true_for_bug";
-
-    // STOPSHIP (b/142218092) this should be removed before ship
-    static boolean wasBadgingForcedTrue(Context context) {
-        return Settings.Secure.getInt(context.getContentResolver(), BADGING_FORCED_TRUE, 0) != 0;
-    }
-
     public PreferencesHelper(Context context, PackageManager pm, RankingHandler rankingHandler,
-            ZenModeHelper zenHelper, NotificationChannelLogger notificationChannelLogger) {
+            ZenModeHelper zenHelper, NotificationChannelLogger notificationChannelLogger,
+            AppOpsManager appOpsManager,
+            SysUiStatsEvent.BuilderFactory statsEventBuilderFactory) {
         mContext = context;
         mZenModeHelper = zenHelper;
         mRankingHandler = rankingHandler;
         mPm = pm;
         mNotificationChannelLogger = notificationChannelLogger;
-
-        // STOPSHIP (b/142218092) this should be removed before ship
-        if (!wasBadgingForcedTrue(context)) {
-            Settings.Secure.putInt(mContext.getContentResolver(),
-                    Settings.Secure.NOTIFICATION_BADGING,
-                    DEFAULT_SHOW_BADGE ? 1 : 0);
-            Settings.Secure.putInt(context.getContentResolver(), BADGING_FORCED_TRUE, 1);
-        }
+        mAppOps = appOpsManager;
+        mStatsEventBuilderFactory = statsEventBuilderFactory;
 
         updateBadgingEnabled();
         updateBubblesEnabled();
         syncChannelsBypassingDnd(mContext.getUserId());
-        mAllowInvalidShortcuts = Settings.Global.getInt(mContext.getContentResolver(),
-                Settings.Global.REQUIRE_SHORTCUTS_FOR_CONVERSATIONS, 0) == 0;
     }
 
     public void readXml(XmlPullParser parser, boolean forRestore, int userId)
@@ -190,6 +193,15 @@ public class PreferencesHelper implements RankingConfig {
         if (type != XmlPullParser.START_TAG) return;
         String tag = parser.getName();
         if (!TAG_RANKING.equals(tag)) return;
+
+        boolean upgradeForBubbles = false;
+        if (parser.getAttributeCount() > 0) {
+            String attribute = parser.getAttributeName(0);
+            if (ATT_VERSION.equals(attribute)) {
+                int xmlVersion = Integer.parseInt(parser.getAttributeValue(0));
+                upgradeForBubbles = xmlVersion == XML_VERSION_BUBBLES_UPGRADE;
+            }
+        }
         synchronized (mPackagePreferences) {
             while ((type = parser.next()) != XmlPullParser.END_DOCUMENT) {
                 tag = parser.getName();
@@ -215,6 +227,16 @@ public class PreferencesHelper implements RankingConfig {
                                 }
                             }
                             boolean skipWarningLogged = false;
+                            boolean hasSAWPermission = false;
+                            if (upgradeForBubbles && uid != UNKNOWN_UID) {
+                                hasSAWPermission = mAppOps.noteOpNoThrow(
+                                        OP_SYSTEM_ALERT_WINDOW, uid, name, null,
+                                        "check-notif-bubble") == AppOpsManager.MODE_ALLOWED;
+                            }
+                            int bubblePref = hasSAWPermission
+                                    ? BUBBLE_PREFERENCE_ALL
+                                    : XmlUtils.readIntAttribute(parser, ATT_ALLOW_BUBBLE,
+                                            DEFAULT_BUBBLE_PREFERENCE);
 
                             PackagePreferences r = getOrCreatePackagePreferencesLocked(
                                     name, userId, uid,
@@ -226,8 +248,7 @@ public class PreferencesHelper implements RankingConfig {
                                             parser, ATT_VISIBILITY, DEFAULT_VISIBILITY),
                                     XmlUtils.readBooleanAttribute(
                                             parser, ATT_SHOW_BADGE, DEFAULT_SHOW_BADGE),
-                                    XmlUtils.readBooleanAttribute(
-                                            parser, ATT_ALLOW_BUBBLE, DEFAULT_ALLOW_BUBBLE));
+                                    bubblePref);
                             r.importance = XmlUtils.readIntAttribute(
                                     parser, ATT_IMPORTANCE, DEFAULT_IMPORTANCE);
                             r.priority = XmlUtils.readIntAttribute(
@@ -238,6 +259,12 @@ public class PreferencesHelper implements RankingConfig {
                                     parser, ATT_SHOW_BADGE, DEFAULT_SHOW_BADGE);
                             r.lockedAppFields = XmlUtils.readIntAttribute(parser,
                                     ATT_APP_USER_LOCKED_FIELDS, DEFAULT_LOCKED_APP_FIELDS);
+                            r.hasSentInvalidMessage = XmlUtils.readBooleanAttribute(
+                                    parser, ATT_SENT_INVALID_MESSAGE, false);
+                            r.hasSentValidMessage = XmlUtils.readBooleanAttribute(
+                                    parser, ATT_SENT_VALID_MESSAGE, false);
+                            r.userDemotedMsgApp = XmlUtils.readBooleanAttribute(
+                                    parser, ATT_USER_DEMOTED_INVALID_MSG_APP, false);
 
                             final int innerDepth = parser.getDepth();
                             while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
@@ -339,19 +366,19 @@ public class PreferencesHelper implements RankingConfig {
             int uid) {
         return getOrCreatePackagePreferencesLocked(pkg, UserHandle.getUserId(uid), uid,
                 DEFAULT_IMPORTANCE, DEFAULT_PRIORITY, DEFAULT_VISIBILITY, DEFAULT_SHOW_BADGE,
-                DEFAULT_ALLOW_BUBBLE);
+                DEFAULT_BUBBLE_PREFERENCE);
     }
 
     private PackagePreferences getOrCreatePackagePreferencesLocked(String pkg,
             @UserIdInt int userId, int uid) {
         return getOrCreatePackagePreferencesLocked(pkg, userId, uid,
                 DEFAULT_IMPORTANCE, DEFAULT_PRIORITY, DEFAULT_VISIBILITY, DEFAULT_SHOW_BADGE,
-                DEFAULT_ALLOW_BUBBLE);
+                DEFAULT_BUBBLE_PREFERENCE);
     }
 
     private PackagePreferences getOrCreatePackagePreferencesLocked(String pkg,
             @UserIdInt int userId, int uid, int importance, int priority, int visibility,
-            boolean showBadge, boolean allowBubble) {
+            boolean showBadge, int bubblePreference) {
         final String key = packagePreferencesKey(pkg, uid);
         PackagePreferences
                 r = (uid == UNKNOWN_UID)
@@ -365,7 +392,7 @@ public class PreferencesHelper implements RankingConfig {
             r.priority = priority;
             r.visibility = visibility;
             r.showBadge = showBadge;
-            r.allowBubble = allowBubble;
+            r.bubblePreference = bubblePreference;
 
             try {
                 createDefaultChannelIfNeededLocked(r);
@@ -479,7 +506,10 @@ public class PreferencesHelper implements RankingConfig {
                                 || r.channels.size() > 0
                                 || r.groups.size() > 0
                                 || r.delegate != null
-                                || r.allowBubble != DEFAULT_ALLOW_BUBBLE;
+                                || r.bubblePreference != DEFAULT_BUBBLE_PREFERENCE
+                                || r.hasSentInvalidMessage
+                                || r.userDemotedMsgApp
+                                || r.hasSentValidMessage;
                 if (hasNonDefaultSettings) {
                     out.startTag(null, TAG_PACKAGE);
                     out.attribute(null, ATT_NAME, r.pkg);
@@ -492,12 +522,18 @@ public class PreferencesHelper implements RankingConfig {
                     if (r.visibility != DEFAULT_VISIBILITY) {
                         out.attribute(null, ATT_VISIBILITY, Integer.toString(r.visibility));
                     }
-                    if (r.allowBubble != DEFAULT_ALLOW_BUBBLE) {
-                        out.attribute(null, ATT_ALLOW_BUBBLE, Boolean.toString(r.allowBubble));
+                    if (r.bubblePreference != DEFAULT_BUBBLE_PREFERENCE) {
+                        out.attribute(null, ATT_ALLOW_BUBBLE, Integer.toString(r.bubblePreference));
                     }
                     out.attribute(null, ATT_SHOW_BADGE, Boolean.toString(r.showBadge));
                     out.attribute(null, ATT_APP_USER_LOCKED_FIELDS,
                             Integer.toString(r.lockedAppFields));
+                    out.attribute(null, ATT_SENT_INVALID_MESSAGE,
+                            Boolean.toString(r.hasSentInvalidMessage));
+                    out.attribute(null, ATT_SENT_VALID_MESSAGE,
+                            Boolean.toString(r.hasSentValidMessage));
+                    out.attribute(null, ATT_USER_DEMOTED_INVALID_MSG_APP,
+                            Boolean.toString(r.userDemotedMsgApp));
 
                     if (!forBackup) {
                         out.attribute(null, ATT_UID, Integer.toString(r.uid));
@@ -544,14 +580,14 @@ public class PreferencesHelper implements RankingConfig {
      *
      * @param pkg the package to allow or not allow bubbles for.
      * @param uid the uid to allow or not allow bubbles for.
-     * @param allowed whether bubbles are allowed.
+     * @param bubblePreference whether bubbles are allowed.
      */
-    public void setBubblesAllowed(String pkg, int uid, boolean allowed) {
+    public void setBubblesAllowed(String pkg, int uid, int bubblePreference) {
         boolean changed = false;
         synchronized (mPackagePreferences) {
             PackagePreferences p = getOrCreatePackagePreferencesLocked(pkg, uid);
-            changed = p.allowBubble != allowed;
-            p.allowBubble = allowed;
+            changed = p.bubblePreference != bubblePreference;
+            p.bubblePreference = bubblePreference;
             p.lockedAppFields = p.lockedAppFields | LockableAppFields.USER_LOCKED_BUBBLE;
         }
         if (changed) {
@@ -567,9 +603,9 @@ public class PreferencesHelper implements RankingConfig {
      * @return whether bubbles are allowed.
      */
     @Override
-    public boolean areBubblesAllowed(String pkg, int uid) {
+    public int getBubblePreference(String pkg, int uid) {
         synchronized (mPackagePreferences) {
-            return getOrCreatePackagePreferencesLocked(pkg, uid).allowBubble;
+            return getOrCreatePackagePreferencesLocked(pkg, uid).bubblePreference;
         }
     }
 
@@ -614,6 +650,71 @@ public class PreferencesHelper implements RankingConfig {
             getOrCreatePackagePreferencesLocked(packageName, uid).showBadge = showBadge;
         }
         updateConfig();
+    }
+
+    public boolean isInInvalidMsgState(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            return r.hasSentInvalidMessage && !r.hasSentValidMessage;
+        }
+    }
+
+    public boolean hasUserDemotedInvalidMsgApp(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            return isInInvalidMsgState(packageName, uid) ? r.userDemotedMsgApp : false;
+        }
+    }
+
+    public void setInvalidMsgAppDemoted(String packageName, int uid, boolean isDemoted) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            r.userDemotedMsgApp = isDemoted;
+        }
+    }
+
+    public boolean setInvalidMessageSent(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            boolean valueChanged = r.hasSentInvalidMessage == false;
+            r.hasSentInvalidMessage = true;
+
+            return valueChanged;
+        }
+    }
+
+    public boolean setValidMessageSent(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            boolean valueChanged = r.hasSentValidMessage == false;
+            r.hasSentValidMessage = true;
+
+            return valueChanged;
+        }
+    }
+
+    @VisibleForTesting
+    boolean hasSentInvalidMsg(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            return r.hasSentInvalidMessage;
+        }
+    }
+
+    @VisibleForTesting
+    boolean hasSentValidMsg(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            return r.hasSentValidMessage;
+        }
+    }
+
+    @VisibleForTesting
+    boolean didUserEverDemoteInvalidMsgApp(String packageName, int uid) {
+        synchronized (mPackagePreferences) {
+            PackagePreferences r = getOrCreatePackagePreferencesLocked(packageName, uid);
+            return r.userDemotedMsgApp;
+        }
     }
 
     @Override
@@ -788,6 +889,9 @@ public class PreferencesHelper implements RankingConfig {
             }
             if (fromTargetApp) {
                 channel.setLockscreenVisibility(r.visibility);
+                channel.setAllowBubbles(existing != null
+                        ? existing.getAllowBubbles()
+                        : NotificationChannel.DEFAULT_ALLOW_BUBBLE);
             }
             clearLockedFieldsLocked(channel);
             channel.setImportanceLockedByOEM(r.oemLockedImportance);
@@ -1221,6 +1325,7 @@ public class PreferencesHelper implements RankingConfig {
                 for (int i = 0; i < N; i++) {
                     final NotificationChannel nc = p.channels.valueAt(i);
                     if (!TextUtils.isEmpty(nc.getConversationId()) && !nc.isDeleted()
+                            && !nc.isDemoted()
                             && (nc.isImportantConversation() || !onlyImportant)) {
                         ConversationChannelWrapper conversation = new ConversationChannelWrapper();
                         conversation.setPkg(p.pkg);
@@ -1261,7 +1366,9 @@ public class PreferencesHelper implements RankingConfig {
             int N = r.channels.size();
             for (int i = 0; i < N; i++) {
                 final NotificationChannel nc = r.channels.valueAt(i);
-                if (!TextUtils.isEmpty(nc.getConversationId()) && !nc.isDeleted()) {
+                if (!TextUtils.isEmpty(nc.getConversationId())
+                        && !nc.isDeleted()
+                        && !nc.isDemoted()) {
                     ConversationChannelWrapper conversation = new ConversationChannelWrapper();
                     conversation.setPkg(r.pkg);
                     conversation.setUid(r.uid);
@@ -1672,7 +1779,7 @@ public class PreferencesHelper implements RankingConfig {
         if (original.canShowBadge() != update.canShowBadge()) {
             update.lockFields(NotificationChannel.USER_LOCKED_SHOW_BADGE);
         }
-        if (original.canBubble() != update.canBubble()) {
+        if (original.getAllowBubbles() != update.getAllowBubbles()) {
             update.lockFields(NotificationChannel.USER_LOCKED_ALLOW_BUBBLE);
         }
     }
@@ -1794,7 +1901,7 @@ public class PreferencesHelper implements RankingConfig {
                 if (i > NOTIFICATION_PREFERENCES_PULL_LIMIT) {
                     break;
                 }
-                StatsEvent.Builder event = StatsEvent.newBuilder()
+                SysUiStatsEvent.Builder event = mStatsEventBuilderFactory.newBuilder()
                         .setAtomId(PACKAGE_NOTIFICATION_PREFERENCES);
                 final PackagePreferences r = mPackagePreferences.valueAt(i);
                 event.writeInt(r.uid);
@@ -1823,7 +1930,7 @@ public class PreferencesHelper implements RankingConfig {
                     if (++totalChannelsPulled > NOTIFICATION_CHANNEL_PULL_LIMIT) {
                         break;
                     }
-                    StatsEvent.Builder event = StatsEvent.newBuilder()
+                    SysUiStatsEvent.Builder event = mStatsEventBuilderFactory.newBuilder()
                             .setAtomId(PACKAGE_NOTIFICATION_CHANNEL_PREFERENCES);
                     event.writeInt(r.uid);
                     event.addBooleanAnnotation(ANNOTATION_ID_IS_UID, true);
@@ -1833,6 +1940,9 @@ public class PreferencesHelper implements RankingConfig {
                     event.writeInt(channel.getImportance());
                     event.writeInt(channel.getUserLockedFields());
                     event.writeBoolean(channel.isDeleted());
+                    event.writeBoolean(channel.getConversationId() != null);
+                    event.writeBoolean(channel.isDemoted());
+                    event.writeBoolean(channel.isImportantConversation());
                     events.add(event.build());
                 }
             }
@@ -1855,7 +1965,7 @@ public class PreferencesHelper implements RankingConfig {
                     if (++totalGroupsPulled > NOTIFICATION_CHANNEL_GROUP_PULL_LIMIT) {
                         break;
                     }
-                    StatsEvent.Builder event = StatsEvent.newBuilder()
+                    SysUiStatsEvent.Builder event = mStatsEventBuilderFactory.newBuilder()
                             .setAtomId(PACKAGE_NOTIFICATION_CHANNEL_GROUP_PREFERENCES);
                     event.writeInt(r.uid);
                     event.addBooleanAnnotation(ANNOTATION_ID_IS_UID, true);
@@ -2125,7 +2235,7 @@ public class PreferencesHelper implements RankingConfig {
                 p.groups = new ArrayMap<>();
                 p.delegate = null;
                 p.lockedAppFields = DEFAULT_LOCKED_APP_FIELDS;
-                p.allowBubble = DEFAULT_ALLOW_BUBBLE;
+                p.bubblePreference = DEFAULT_BUBBLE_PREFERENCE;
                 p.importance = DEFAULT_IMPORTANCE;
                 p.priority = DEFAULT_PRIORITY;
                 p.visibility = DEFAULT_VISIBILITY;
@@ -2165,15 +2275,15 @@ public class PreferencesHelper implements RankingConfig {
     public void updateBubblesEnabled() {
         final boolean newValue = Settings.Global.getInt(mContext.getContentResolver(),
                 Settings.Global.NOTIFICATION_BUBBLES,
-                DEFAULT_ALLOW_BUBBLE ? 1 : 0) == 1;
-        if (newValue != mBubblesEnabled) {
-            mBubblesEnabled = newValue;
+                DEFAULT_GLOBAL_ALLOW_BUBBLE ? 1 : 0) == 1;
+        if (newValue != mBubblesEnabledGlobally) {
+            mBubblesEnabledGlobally = newValue;
             updateConfig();
         }
     }
 
     public boolean bubblesEnabled() {
-        return mBubblesEnabled;
+        return mBubblesEnabledGlobally;
     }
 
     public void updateBadgingEnabled() {
@@ -2229,13 +2339,18 @@ public class PreferencesHelper implements RankingConfig {
         int priority = DEFAULT_PRIORITY;
         int visibility = DEFAULT_VISIBILITY;
         boolean showBadge = DEFAULT_SHOW_BADGE;
-        boolean allowBubble = DEFAULT_ALLOW_BUBBLE;
+        int bubblePreference = DEFAULT_BUBBLE_PREFERENCE;
         int lockedAppFields = DEFAULT_LOCKED_APP_FIELDS;
         // these fields are loaded on boot from a different source of truth and so are not
         // written to notification policy xml
         boolean oemLockedImportance = DEFAULT_OEM_LOCKED_IMPORTANCE;
         List<String> oemLockedChannels = new ArrayList<>();
         boolean defaultAppLockedImportance = DEFAULT_APP_LOCKED_IMPORTANCE;
+
+        boolean hasSentInvalidMessage = false;
+        boolean hasSentValidMessage = false;
+        // notE: only valid while hasSentMessage is false and hasSentInvalidMessage is true
+        boolean userDemotedMsgApp = false;
 
         Delegate delegate = null;
         ArrayMap<String, NotificationChannel> channels = new ArrayMap<>();

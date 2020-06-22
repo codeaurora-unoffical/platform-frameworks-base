@@ -21,7 +21,6 @@ import com.android.systemui.appops.AppOpsController;
 import com.android.systemui.appops.AppOpsControllerImpl;
 import com.android.systemui.classifier.FalsingManagerProxy;
 import com.android.systemui.controls.dagger.ControlsModule;
-import com.android.systemui.doze.DozeHost;
 import com.android.systemui.globalactions.GlobalActionsComponent;
 import com.android.systemui.globalactions.GlobalActionsImpl;
 import com.android.systemui.plugins.ActivityStarter;
@@ -38,7 +37,6 @@ import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.StatusBarStateControllerImpl;
 import com.android.systemui.statusbar.SysuiStatusBarStateController;
 import com.android.systemui.statusbar.phone.DarkIconDispatcherImpl;
-import com.android.systemui.statusbar.phone.DozeServiceHost;
 import com.android.systemui.statusbar.phone.ManagedProfileController;
 import com.android.systemui.statusbar.phone.ManagedProfileControllerImpl;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
@@ -74,6 +72,8 @@ import com.android.systemui.statusbar.policy.ZenModeController;
 import com.android.systemui.statusbar.policy.ZenModeControllerImpl;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerServiceImpl;
+import com.android.systemui.util.RingerModeTracker;
+import com.android.systemui.util.RingerModeTrackerImpl;
 import com.android.systemui.volume.VolumeComponent;
 import com.android.systemui.volume.VolumeDialogComponent;
 import com.android.systemui.volume.VolumeDialogControllerImpl;
@@ -257,11 +257,12 @@ public abstract class DependencyBinder {
     /**
      */
     @Binds
-    public abstract DozeHost provideDozeHost(DozeServiceHost dozeServiceHost);
+    public abstract VolumeComponent provideVolumeComponent(
+            VolumeDialogComponent volumeDialogComponent);
 
     /**
      */
     @Binds
-    public abstract VolumeComponent provideVolumeComponent(
-            VolumeDialogComponent volumeDialogComponent);
+    public abstract RingerModeTracker provideRingerModeTracker(
+            RingerModeTrackerImpl ringerModeTrackerImpl);
 }

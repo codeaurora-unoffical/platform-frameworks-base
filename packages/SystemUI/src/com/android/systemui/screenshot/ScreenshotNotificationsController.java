@@ -32,7 +32,6 @@ import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Picture;
-import android.net.Uri;
 import android.os.UserHandle;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
@@ -41,8 +40,6 @@ import com.android.internal.messages.nano.SystemMessageProto;
 import com.android.systemui.R;
 import com.android.systemui.SystemUI;
 import com.android.systemui.util.NotificationChannels;
-
-import java.util.List;
 
 import javax.inject.Inject;
 
@@ -185,23 +182,20 @@ public class ScreenshotNotificationsController {
     /**
      * Shows a notification with the saved screenshot and actions that can be taken with it.
      *
-     * @param imageUri URI for the saved image
-     * @param actions  a list of notification actions which can be taken
+     * @param actionData SavedImageData struct with image URI and actions
      */
     public void showScreenshotActionsNotification(
-            Uri imageUri,
-            List<Notification.Action> smartActions,
-            List<Notification.Action> actions) {
-        for (Notification.Action action : actions) {
-            mNotificationBuilder.addAction(action);
-        }
-        for (Notification.Action smartAction : smartActions) {
+            GlobalScreenshot.SavedImageData actionData) {
+        mNotificationBuilder.addAction(actionData.shareAction);
+        mNotificationBuilder.addAction(actionData.editAction);
+        mNotificationBuilder.addAction(actionData.deleteAction);
+        for (Notification.Action smartAction : actionData.smartActions) {
             mNotificationBuilder.addAction(smartAction);
         }
 
         // Create the intent to show the screenshot in gallery
         Intent launchIntent = new Intent(Intent.ACTION_VIEW);
-        launchIntent.setDataAndType(imageUri, "image/png");
+        launchIntent.setDataAndType(actionData.uri, "image/png");
         launchIntent.setFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
@@ -226,6 +220,66 @@ public class ScreenshotNotificationsController {
                         com.android.internal.R.color.system_notification_accent_color))
                 .setPublicVersion(mPublicNotificationBuilder.build())
                 .setFlag(Notification.FLAG_NO_CLEAR, false);
+
+        mNotificationManager.notify(SystemMessageProto.SystemMessage.NOTE_GLOBAL_SCREENSHOT,
+                mNotificationBuilder.build());
+    }
+
+    /**
+     * Shows a silent notification with the saved screenshot and actions that can be taken with it.
+     *
+     * @param actionData SavedImageData struct with image URI and actions
+     */
+    public void showSilentScreenshotNotification(
+            GlobalScreenshot.SavedImageData actionData) {
+        mNotificationBuilder.addAction(actionData.shareAction);
+        mNotificationBuilder.addAction(actionData.editAction);
+        mNotificationBuilder.addAction(actionData.deleteAction);
+        for (Notification.Action smartAction : actionData.smartActions) {
+            mNotificationBuilder.addAction(smartAction);
+        }
+
+        // Create the intent to show the screenshot in gallery
+        Intent launchIntent = new Intent(Intent.ACTION_VIEW);
+        launchIntent.setDataAndType(actionData.uri, "image/png");
+        launchIntent.setFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        final long now = System.currentTimeMillis();
+
+        // Update the text and the icon for the existing notification
+        mPublicNotificationBuilder
+                .setContentTitle(mResources.getString(R.string.screenshot_saved_title))
+                .setContentText(mResources.getString(R.string.screenshot_saved_text))
+                .setContentIntent(PendingIntent.getActivity(mContext, 0, launchIntent, 0))
+                .setSmallIcon(R.drawable.stat_notify_image)
+                .setCategory(Notification.CATEGORY_PROGRESS)
+                .setWhen(now)
+                .setShowWhen(true)
+                .setAutoCancel(true)
+                .setColor(mContext.getColor(
+                        com.android.internal.R.color.system_notification_accent_color))
+                .setGroup("silent")
+                .setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY);
+        mNotificationBuilder
+                .setContentTitle(mResources.getString(R.string.screenshot_saved_title))
+                .setContentText(mResources.getString(R.string.screenshot_saved_text))
+                .setContentIntent(PendingIntent.getActivity(mContext, 0, launchIntent, 0))
+                .setSmallIcon(R.drawable.stat_notify_image)
+                .setCategory(Notification.CATEGORY_PROGRESS)
+                .setWhen(now)
+                .setShowWhen(true)
+                .setAutoCancel(true)
+                .setColor(mContext.getColor(
+                        com.android.internal.R.color.system_notification_accent_color))
+                .setPublicVersion(mPublicNotificationBuilder.build())
+                .setStyle(mNotificationStyle)
+                .setFlag(Notification.FLAG_NO_CLEAR, false)
+                .setGroup("silent")
+                .setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY);
+
+        SystemUI.overrideNotificationAppName(mContext, mPublicNotificationBuilder, true);
+        SystemUI.overrideNotificationAppName(mContext, mNotificationBuilder, true);
 
         mNotificationManager.notify(SystemMessageProto.SystemMessage.NOTE_GLOBAL_SCREENSHOT,
                 mNotificationBuilder.build());

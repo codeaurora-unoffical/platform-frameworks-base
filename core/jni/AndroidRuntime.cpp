@@ -18,38 +18,36 @@
 #define LOG_TAG "AndroidRuntime"
 #define LOG_NDEBUG 1
 
-#include <android_runtime/AndroidRuntime.h>
-
 #include <android-base/macros.h>
 #include <android-base/properties.h>
 #include <android/graphics/jni_runtime.h>
+#include <android_runtime/AndroidRuntime.h>
+#include <assert.h>
 #include <binder/IBinder.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
-#include <utils/Log.h>
-#include <utils/misc.h>
-#include <utils/Trace.h>
 #include <binder/Parcel.h>
-#include <utils/threads.h>
+#include <bionic/malloc.h>
 #include <cutils/properties.h>
-#include <server_configurable_flags/get_flags.h>
-
-#include "jni.h"
+#include <dirent.h>
+#include <dlfcn.h>
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/JniInvocation.h>
-#include "android_util_Binder.h"
-
-#include <stdio.h>
+#include <server_configurable_flags/get_flags.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <signal.h>
-#include <dirent.h>
-#include <assert.h>
-#include <bionic/malloc.h>
+#include <utils/Log.h>
+#include <utils/Trace.h>
+#include <utils/misc.h>
+#include <utils/threads.h>
 
 #include <string>
 #include <vector>
+
+#include "android_util_Binder.h"
+#include "jni.h"
 
 using namespace android;
 using android::base::GetProperty;
@@ -78,6 +76,7 @@ extern int register_android_hardware_camera2_CameraMetadata(JNIEnv *env);
 extern int register_android_hardware_camera2_legacy_LegacyCameraDevice(JNIEnv *env);
 extern int register_android_hardware_camera2_legacy_PerfMeasurement(JNIEnv *env);
 extern int register_android_hardware_camera2_DngCreator(JNIEnv *env);
+extern int register_android_hardware_display_DisplayManagerGlobal(JNIEnv* env);
 extern int register_android_hardware_HardwareBuffer(JNIEnv *env);
 extern int register_android_hardware_SensorManager(JNIEnv *env);
 extern int register_android_hardware_SerialPort(JNIEnv *env);
@@ -137,6 +136,7 @@ extern int register_android_os_HwBlob(JNIEnv *env);
 extern int register_android_os_HwParcel(JNIEnv *env);
 extern int register_android_os_HwRemoteBinder(JNIEnv *env);
 extern int register_android_os_NativeHandle(JNIEnv *env);
+extern int register_android_os_ServiceManager(JNIEnv *env);
 extern int register_android_os_MessageQueue(JNIEnv* env);
 extern int register_android_os_Parcel(JNIEnv* env);
 extern int register_android_os_SELinux(JNIEnv* env);
@@ -303,6 +303,8 @@ AndroidRuntime::~AndroidRuntime()
 }
 
 void AndroidRuntime::setArgv0(const char* argv0, bool setProcName) {
+    // Set the kernel's task name, for as much of the name as we can fit.
+    // The kernel's TASK_COMM_LEN minus one for the terminating NUL == 15.
     if (setProcName) {
         int len = strlen(argv0);
         if (len < 15) {
@@ -311,8 +313,14 @@ void AndroidRuntime::setArgv0(const char* argv0, bool setProcName) {
             pthread_setname_np(pthread_self(), argv0 + len - 15);
         }
     }
+
+    // Directly change the memory pointed to by argv[0].
     memset(mArgBlockStart, 0, mArgBlockLength);
     strlcpy(mArgBlockStart, argv0, mArgBlockLength);
+
+    // Let bionic know that we just did that, because __progname points
+    // into argv[0] (https://issuetracker.google.com/152893281).
+    setprogname(mArgBlockStart);
 }
 
 status_t AndroidRuntime::callMain(const String8& className, jclass clazz,
@@ -646,6 +654,7 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     char dex2oatImageFlagsBuf[PROPERTY_VALUE_MAX];
     char extraOptsBuf[PROPERTY_VALUE_MAX];
     char voldDecryptBuf[PROPERTY_VALUE_MAX];
+    char perfettoHprofOptBuf[sizeof("-XX:PerfettoHprof=") + PROPERTY_VALUE_MAX];
     enum {
       kEMDefault,
       kEMIntPortable,
@@ -759,6 +768,16 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     //addOption("-verbose:jni");
     addOption("-verbose:gc");
     //addOption("-verbose:class");
+
+    // On Android, we always want to allow loading the PerfettoHprof plugin.
+    // Even with this option set, we will still only actually load the plugin
+    // if we are on a userdebug build or the app is debuggable or profileable.
+    // This is enforced in art/runtime/runtime.cc.
+    //
+    // We want to be able to disable this, because this does not work on host,
+    // and we do not want to enable it in tests.
+    parseRuntimeOption("dalvik.vm.perfetto_hprof", perfettoHprofOptBuf, "-XX:PerfettoHprof=",
+                       "true");
 
     if (primary_zygote) {
         addOption("-Xprimaryzygote");
@@ -1246,12 +1265,11 @@ void AndroidRuntime::exit(int code)
 {
     if (mExitWithoutCleanup) {
         ALOGI("VM exiting with result code %d, cleanup skipped.", code);
-        ::_exit(code);
     } else {
         ALOGI("VM exiting with result code %d.", code);
         onExit(code);
-        ::exit(code);
     }
+    ::_exit(code);
 }
 
 void AndroidRuntime::onVmCreated(JNIEnv* env)
@@ -1457,6 +1475,7 @@ static const RegJNIRec gRegJNI[] = {
         REG_JNI(register_android_os_HwParcel),
         REG_JNI(register_android_os_HwRemoteBinder),
         REG_JNI(register_android_os_NativeHandle),
+        REG_JNI(register_android_os_ServiceManager),
         REG_JNI(register_android_os_storage_StorageManager),
         REG_JNI(register_android_os_VintfObject),
         REG_JNI(register_android_os_VintfRuntimeInfo),
@@ -1513,6 +1532,7 @@ static const RegJNIRec gRegJNI[] = {
         REG_JNI(register_android_hardware_camera2_legacy_LegacyCameraDevice),
         REG_JNI(register_android_hardware_camera2_legacy_PerfMeasurement),
         REG_JNI(register_android_hardware_camera2_DngCreator),
+        REG_JNI(register_android_hardware_display_DisplayManagerGlobal),
         REG_JNI(register_android_hardware_HardwareBuffer),
         REG_JNI(register_android_hardware_SensorManager),
         REG_JNI(register_android_hardware_SerialPort),

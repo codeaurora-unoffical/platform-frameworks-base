@@ -118,8 +118,10 @@ StatsService::StatsService(const sp<Looper>& handlerLooper, shared_ptr<LogEventQ
                   }
               })),
       mEventQueue(queue),
-      mStatsCompanionServiceDeathRecipient(AIBinder_DeathRecipient_new(
-              StatsService::statsCompanionServiceDied)) {
+      mBootCompleteTrigger({kBootCompleteTag, kUidMapReceivedTag, kAllPullersRegisteredTag},
+                           [this]() { mProcessor->onStatsdInitCompleted(getElapsedRealtimeNs()); }),
+      mStatsCompanionServiceDeathRecipient(
+              AIBinder_DeathRecipient_new(StatsService::statsCompanionServiceDied)) {
     mUidMap = UidMap::getInstance();
     mPullerManager = new StatsPullerManager();
     StatsPuller::SetUidMap(mUidMap);
@@ -341,9 +343,11 @@ status_t StatsService::handleShellCommand(int in, int out, int err, const char**
         if (!utf8Args[0].compare(String8("print-logs"))) {
             return cmd_print_logs(out, utf8Args);
         }
+
         if (!utf8Args[0].compare(String8("send-active-configs"))) {
             return cmd_trigger_active_config_broadcast(out, utf8Args);
         }
+
         if (!utf8Args[0].compare(String8("data-subscribe"))) {
             {
                 std::lock_guard<std::mutex> lock(mShellSubscriberMutex);
@@ -822,7 +826,7 @@ status_t StatsService::cmd_print_pulled_metrics(int out, const Vector<String8>& 
         uids.push_back(AID_SYSTEM);
     }
     vector<shared_ptr<LogEvent>> stats;
-    if (mPullerManager->Pull(s, uids, &stats)) {
+    if (mPullerManager->Pull(s, uids, getElapsedRealtimeNs(), &stats)) {
         for (const auto& it : stats) {
             dprintf(out, "Pull from %d: %s\n", s, it->ToString().c_str());
         }
@@ -939,6 +943,7 @@ Status StatsService::informAllUidData(const ScopedFileDescriptor& fd) {
                        packageNames,
                        installers);
 
+    mBootCompleteTrigger.markComplete(kUidMapReceivedTag);
     VLOG("StatsService::informAllUidData UidData proto parsed successfully.");
     return Status::ok();
 }
@@ -1051,6 +1056,14 @@ Status StatsService::statsCompanionReady() {
     mPullerManager->SetStatsCompanionService(statsCompanion);
     mAnomalyAlarmMonitor->setStatsCompanionService(statsCompanion);
     mPeriodicAlarmMonitor->setStatsCompanionService(statsCompanion);
+    return Status::ok();
+}
+
+Status StatsService::bootCompleted() {
+    ENFORCE_UID(AID_SYSTEM);
+
+    VLOG("StatsService::bootCompleted was called");
+    mBootCompleteTrigger.markComplete(kBootCompleteTag);
     return Status::ok();
 }
 
@@ -1206,12 +1219,11 @@ Status StatsService::unsetBroadcastSubscriber(int64_t configId,
     return Status::ok();
 }
 
-Status StatsService::sendAppBreadcrumbAtom(int32_t label, int32_t state) {
-    // Permission check not necessary as it's meant for applications to write to
-    // statsd.
-    android::os::statsd::util::stats_write(android::os::statsd::util::APP_BREADCRUMB_REPORTED,
-                               (int32_t) AIBinder_getCallingUid(), label,
-                               state);
+Status StatsService::allPullersFromBootRegistered() {
+    ENFORCE_UID(AID_SYSTEM);
+
+    VLOG("StatsService::allPullersFromBootRegistered was called");
+    mBootCompleteTrigger.markComplete(kAllPullersRegisteredTag);
     return Status::ok();
 }
 
@@ -1285,7 +1297,6 @@ Status StatsService::getRegisteredExperimentIds(std::vector<int64_t>* experiment
     }
     return Status::ok();
 }
-
 
 void StatsService::statsCompanionServiceDied(void* cookie) {
     auto thiz = static_cast<StatsService*>(cookie);

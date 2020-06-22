@@ -100,7 +100,6 @@ public class SystemServicesTestRule implements TestRule {
     static int sNextDisplayId = DEFAULT_DISPLAY + 100;
     static int sNextTaskId = 100;
 
-    private final AtomicBoolean mCurrentMessagesProcessed = new AtomicBoolean(false);
     private static final int[] TEST_USER_PROFILE_IDS = {};
 
     private Context mContext;
@@ -335,7 +334,11 @@ public class SystemServicesTestRule implements TestRule {
         mWmService.mConstants.dispose();
         mWmService.mHighRefreshRateBlacklist.dispose();
 
+        // This makes sure the posted messages without delay are processed, e.g.
+        // DisplayPolicy#release, WindowManagerService#setAnimationScale.
         waitUntilWindowManagerHandlersIdle();
+        // Clear all posted messages with delay, so they don't be executed at unexpected times.
+        cleanupWindowManagerHandlers();
         // Needs to explicitly dispose current static threads because there could be messages
         // scheduled at a later time, and all mocks are invalid when it's executed.
         DisplayThread.dispose();
@@ -399,8 +402,6 @@ public class SystemServicesTestRule implements TestRule {
         if (wm == null) {
             return;
         }
-        // Removing delayed FORCE_GC message decreases time for waiting idle.
-        wm.mH.removeMessages(WindowManagerService.H.FORCE_GC);
         waitHandlerIdle(wm.mH);
         waitHandlerIdle(wm.mAnimationHandler);
         // This is a different handler object than the wm.mAnimationHandler above.
@@ -408,21 +409,29 @@ public class SystemServicesTestRule implements TestRule {
         waitHandlerIdle(SurfaceAnimationThread.getHandler());
     }
 
-    private void waitHandlerIdle(Handler handler) {
-        synchronized (mCurrentMessagesProcessed) {
-            // Add a message to the handler queue and make sure it is fully processed before we move
-            // on. This makes sure all previous messages in the handler are fully processed vs. just
-            // popping them from the message queue.
-            mCurrentMessagesProcessed.set(false);
-            handler.post(() -> {
-                synchronized (mCurrentMessagesProcessed) {
-                    mCurrentMessagesProcessed.set(true);
-                    mCurrentMessagesProcessed.notifyAll();
-                }
-            });
-            while (!mCurrentMessagesProcessed.get()) {
+    static void waitHandlerIdle(Handler handler) {
+        handler.runWithScissors(() -> { }, 0 /* timeout */);
+    }
+
+    void waitUntilWindowAnimatorIdle() {
+        final WindowManagerService wm = getWindowManagerService();
+        if (wm == null) {
+            return;
+        }
+        // Add a message to the handler queue and make sure it is fully processed before we move on.
+        // This makes sure all previous messages in the handler are fully processed vs. just popping
+        // them from the message queue.
+        final AtomicBoolean currentMessagesProcessed = new AtomicBoolean(false);
+        wm.mAnimator.getChoreographer().postFrameCallback(time -> {
+            synchronized (currentMessagesProcessed) {
+                currentMessagesProcessed.set(true);
+                currentMessagesProcessed.notifyAll();
+            }
+        });
+        while (!currentMessagesProcessed.get()) {
+            synchronized (currentMessagesProcessed) {
                 try {
-                    mCurrentMessagesProcessed.wait();
+                    currentMessagesProcessed.wait();
                 } catch (InterruptedException e) {
                 }
             }

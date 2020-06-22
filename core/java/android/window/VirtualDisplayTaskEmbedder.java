@@ -16,13 +16,11 @@
 
 package android.window;
 
-import static android.app.WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
 import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL;
 import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY;
 import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC;
 import static android.view.Display.INVALID_DISPLAY;
 
-import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.ActivityTaskManager;
@@ -41,7 +39,6 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
-import android.view.IWindow;
 import android.view.IWindowManager;
 import android.view.IWindowSession;
 import android.view.InputDevice;
@@ -65,9 +62,11 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
     // For Virtual Displays
     private int mDisplayDensityDpi;
     private final boolean mSingleTaskInstance;
+    private final boolean mUsePublicVirtualDisplay;
     private VirtualDisplay mVirtualDisplay;
     private Insets mForwardedInsets;
     private DisplayMetrics mTmpDisplayMetrics;
+    private TaskStackListener mTaskStackListener;
 
     /**
      * Constructs a new TaskEmbedder.
@@ -78,14 +77,10 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
      *                           only applicable if virtual displays are used
      */
     public VirtualDisplayTaskEmbedder(Context context, VirtualDisplayTaskEmbedder.Host host,
-            boolean singleTaskInstance) {
+            boolean singleTaskInstance, boolean usePublicVirtualDisplay) {
         super(context, host);
         mSingleTaskInstance = singleTaskInstance;
-    }
-
-    @Override
-    public TaskStackListener createTaskStackListener() {
-        return new TaskStackListenerImpl();
+        mUsePublicVirtualDisplay = usePublicVirtualDisplay;
     }
 
     /**
@@ -102,11 +97,16 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
     public boolean onInitialize() {
         final DisplayManager displayManager = mContext.getSystemService(DisplayManager.class);
         mDisplayDensityDpi = getBaseDisplayDensity();
+
+        int virtualDisplayFlags = VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                | VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL;
+        if (mUsePublicVirtualDisplay) {
+            virtualDisplayFlags |= VIRTUAL_DISPLAY_FLAG_PUBLIC;
+        }
+
         mVirtualDisplay = displayManager.createVirtualDisplay(
                 DISPLAY_NAME + "@" + System.identityHashCode(this), mHost.getWidth(),
-                mHost.getHeight(), mDisplayDensityDpi, null,
-                VIRTUAL_DISPLAY_FLAG_PUBLIC | VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
-                        | VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL);
+                mHost.getHeight(), mDisplayDensityDpi, null, virtualDisplayFlags);
 
         if (mVirtualDisplay == null) {
             Log.e(TAG, "Failed to initialize TaskEmbedder");
@@ -125,23 +125,30 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
                         .setDisplayToSingleTaskInstance(displayId);
             }
             setForwardedInsets(mForwardedInsets);
+
+            mTaskStackListener = new TaskStackListenerImpl();
+            mActivityTaskManager.registerTaskStackListener(mTaskStackListener);
         } catch (RemoteException e) {
             e.rethrowAsRuntimeException();
         }
 
-        if (mHost.getWindow() != null) {
-            updateLocationAndTapExcludeRegion();
-        }
-        return true;
+        return super.onInitialize();
     }
 
     @Override
     protected boolean onRelease() {
+        super.onRelease();
         // Clear activity view geometry for IME on this display
         clearActivityViewGeometryForIme();
 
-        // Clear tap-exclude region (if any) for this window.
-        clearTapExcludeRegion();
+        if (mTaskStackListener != null) {
+            try {
+                mActivityTaskManager.unregisterTaskStackListener(mTaskStackListener);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Failed to unregister task stack listener", e);
+            }
+            mTaskStackListener = null;
+        }
 
         if (isInitialized()) {
             mVirtualDisplay.release();
@@ -156,9 +163,9 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
      */
     @Override
     public void start() {
+        super.start();
         if (isInitialized()) {
             mVirtualDisplay.setDisplayState(true);
-            updateLocationAndTapExcludeRegion();
         }
     }
 
@@ -167,20 +174,11 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
      */
     @Override
     public void stop() {
+        super.stop();
         if (isInitialized()) {
             mVirtualDisplay.setDisplayState(false);
             clearActivityViewGeometryForIme();
-            clearTapExcludeRegion();
         }
-    }
-
-    /**
-     * This should be called whenever the position or size of the surface changes
-     * or if touchable areas above the surface are added or removed.
-     */
-    @Override
-    public void notifyBoundsChanged() {
-        updateLocationAndTapExcludeRegion();
     }
 
     /**
@@ -237,6 +235,14 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
         return INVALID_DISPLAY;
     }
 
+    @Override
+    public VirtualDisplay getVirtualDisplay() {
+        if (isInitialized()) {
+            return mVirtualDisplay;
+        }
+        return null;
+    }
+
     /**
      * Check if container is ready to launch and create {@link ActivityOptions} to target the
      * virtual display.
@@ -247,7 +253,6 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
     protected ActivityOptions prepareActivityOptions(ActivityOptions options) {
         options = super.prepareActivityOptions(options);
         options.setLaunchDisplayId(getDisplayId());
-        options.setLaunchWindowingMode(WINDOWING_MODE_MULTI_WINDOW);
         return options;
     }
 
@@ -277,12 +282,13 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
      * This should be called whenever the position or size of the surface changes
      * or if touchable areas above the surface are added or removed.
      */
-    private void updateLocationAndTapExcludeRegion() {
+    @Override
+    protected void updateLocationAndTapExcludeRegion() {
+        super.updateLocationAndTapExcludeRegion();
         if (!isInitialized() || mHost.getWindow() == null) {
             return;
         }
         reportLocation(mHost.getScreenToTaskMatrix(), mHost.getPositionInWindow());
-        applyTapExcludeRegion(mHost.getWindow(), mHost.getTapExcludeRegion());
     }
 
     /**
@@ -311,40 +317,11 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
     }
 
     /**
-     * Call to update the tap exclude region for the window.
-     * <p>
-     * This should not normally be called directly, but through
-     * {@link #updateLocationAndTapExcludeRegion()}. This method
-     * is provided as an optimization when managing multiple TaskSurfaces within a view.
-     *
-     * @see IWindowSession#updateTapExcludeRegion(IWindow, Region)
-     */
-    private void applyTapExcludeRegion(IWindow window, @Nullable Region tapExcludeRegion) {
-        try {
-            IWindowSession session = WindowManagerGlobal.getWindowSession();
-            session.updateTapExcludeRegion(window, tapExcludeRegion);
-        } catch (RemoteException e) {
-            e.rethrowAsRuntimeException();
-        }
-    }
-
-    /**
      * @see InputMethodManager#reportActivityView(int, Matrix)
      */
     private void clearActivityViewGeometryForIme() {
         final int displayId = getDisplayId();
         mContext.getSystemService(InputMethodManager.class).reportActivityView(displayId, null);
-    }
-
-    /**
-     * Removes the tap exclude region set by {@link #updateLocationAndTapExcludeRegion()}.
-     */
-    private void clearTapExcludeRegion() {
-        if (mHost.getWindow() == null) {
-            Log.w(TAG, "clearTapExcludeRegion: not attached to window!");
-            return;
-        }
-        applyTapExcludeRegion(mHost.getWindow(), null);
     }
 
     private static KeyEvent createKeyEvent(int action, int code, int displayId) {
@@ -359,11 +336,7 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
 
     /** Get density of the hosting display. */
     private int getBaseDisplayDensity() {
-        if (mTmpDisplayMetrics == null) {
-            mTmpDisplayMetrics = new DisplayMetrics();
-        }
-        mContext.getDisplayNoVerify().getRealMetrics(mTmpDisplayMetrics);
-        return mTmpDisplayMetrics.densityDpi;
+        return mContext.getResources().getConfiguration().densityDpi;
     }
 
     /**
@@ -392,8 +365,8 @@ public class VirtualDisplayTaskEmbedder extends TaskEmbedder {
             // Found the topmost stack on target display. Now check if the topmost task's
             // description changed.
             if (taskInfo.taskId == stackInfo.taskIds[stackInfo.taskIds.length - 1]) {
-                mHost.onTaskBackgroundColorChanged(VirtualDisplayTaskEmbedder.this,
-                        taskInfo.taskDescription.getBackgroundColor());
+                mHost.post(()-> mHost.onTaskBackgroundColorChanged(VirtualDisplayTaskEmbedder.this,
+                        taskInfo.taskDescription.getBackgroundColor()));
             }
         }
 

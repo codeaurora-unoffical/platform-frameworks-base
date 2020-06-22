@@ -57,6 +57,7 @@ import static com.android.server.wm.WindowStateAnimatorProto.SURFACE;
 import static com.android.server.wm.WindowStateAnimatorProto.SYSTEM_DECOR_RECT;
 import static com.android.server.wm.WindowSurfacePlacer.SET_ORIENTATION_CHANGE_COMPLETE;
 
+import android.app.WindowConfiguration;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.PixelFormat;
@@ -417,25 +418,25 @@ class WindowStateAnimator {
         if (!mDestroyPreservedSurfaceUponRedraw) {
             return;
         }
-        if (mSurfaceController != null) {
-            if (mPendingDestroySurface != null) {
-                // If we are preserving a surface but we aren't relaunching that means
-                // we are just doing an in-place switch. In that case any SurfaceFlinger side
-                // child layers need to be reparented to the new surface to make this
-                // transparent to the app.
-                if (mWin.mActivityRecord == null || mWin.mActivityRecord.isRelaunching() == false) {
-                    mPostDrawTransaction.reparentChildren(
-                        mPendingDestroySurface.getClientViewRootSurface(),
-                        mSurfaceController.mSurfaceControl).apply();
-                }
-            }
+
+        // If we are preserving a surface but we aren't relaunching that means
+        // we are just doing an in-place switch. In that case any SurfaceFlinger side
+        // child layers need to be reparented to the new surface to make this
+        // transparent to the app.
+        // If the children are detached, we don't want to reparent them to the new surface.
+        // Instead let the children get removed when the old surface is deleted.
+        if (mSurfaceController != null && mPendingDestroySurface != null && !mChildrenDetached
+                && (mWin.mActivityRecord == null || !mWin.mActivityRecord.isRelaunching())) {
+            mPostDrawTransaction.reparentChildren(
+                    mPendingDestroySurface.getClientViewRootSurface(),
+                    mSurfaceController.mSurfaceControl).apply();
         }
 
         destroyDeferredSurfaceLocked();
         mDestroyPreservedSurfaceUponRedraw = false;
     }
 
-    void markPreservedSurfaceForDestroy() {
+    private void markPreservedSurfaceForDestroy() {
         if (mDestroyPreservedSurfaceUponRedraw
                 && !mService.mDestroyPreservedSurface.contains(mWin)) {
             mService.mDestroyPreservedSurface.add(mWin);
@@ -787,7 +788,8 @@ class WindowStateAnimator {
             return false;
         }
 
-        if (w.getWindowConfiguration().tasksAreFloating()) {
+        if (w.getWindowConfiguration().tasksAreFloating()
+                || WindowConfiguration.isSplitScreenWindowingMode(w.getWindowingMode())) {
             return false;
         }
 
@@ -844,6 +846,23 @@ class WindowStateAnimator {
         }
     }
 
+    private boolean shouldConsumeMainWindowSizeTransaction() {
+      // We only consume the transaction when the client is calling relayout
+      // because this is the only time we know the frameNumber will be valid
+      // due to the client renderer being paused. Put otherwise, only when
+      // mInRelayout is true can we guarantee the next frame will contain
+      // the most recent configuration.
+      if (!mWin.mInRelayout) return false;
+      // Since we can only do this for one window, we focus on the main application window
+      if (mAttrType != TYPE_BASE_APPLICATION) return false;
+      final Task task = mWin.getTask();
+      if (task == null) return false;
+      if (task.getMainWindowSizeChangeTransaction() == null) return false;
+      // Likewise we only focus on the task root, since we can only use one window
+      if (!mWin.mActivityRecord.isRootOfTask()) return false;
+      return true;
+    }
+
     void setSurfaceBoundariesLocked(final boolean recoveringMemory) {
         if (mSurfaceController == null) {
             return;
@@ -884,8 +903,9 @@ class WindowStateAnimator {
             clipRect = mTmpClipRect;
         }
 
-        if (mSurfaceResized && (mAttrType == TYPE_BASE_APPLICATION) &&
-            (task != null) && (task.getMainWindowSizeChangeTransaction() != null)) {
+        if (shouldConsumeMainWindowSizeTransaction()) {
+            task.getMainWindowSizeChangeTask().getSurfaceControl().deferTransactionUntil(
+                    mWin.getClientViewRootSurface(), mWin.getFrameNumber());
             mSurfaceController.deferTransactionUntil(mWin.getClientViewRootSurface(),
                     mWin.getFrameNumber());
             SurfaceControl.mergeToGlobalTransaction(task.getMainWindowSizeChangeTransaction());
@@ -1030,7 +1050,7 @@ class WindowStateAnimator {
                         mTmpPos.x = 0;
                         mTmpPos.y = 0;
                         if (stack != null) {
-                            stack.getRelativeDisplayedPosition(mTmpPos);
+                            stack.getRelativePosition(mTmpPos);
                         }
 
                         xOffset = -mTmpPos.x;
@@ -1237,19 +1257,25 @@ class WindowStateAnimator {
         mYOffset = dy;
         mWallpaperScale = scale;
 
-        try {
-            if (SHOW_LIGHT_TRANSACTIONS) Slog.i(TAG, ">>> OPEN TRANSACTION setWallpaperOffset");
-            mService.openSurfaceTransaction();
-            setWallpaperPositionAndScale(dx, dy, scale, false);
-        } catch (RuntimeException e) {
-            Slog.w(TAG, "Error positioning surface of " + mWin
-                    + " pos=(" + dx + "," + dy + ")", e);
-        } finally {
-            mService.closeSurfaceTransaction("setWallpaperOffset");
-            if (SHOW_LIGHT_TRANSACTIONS) Slog.i(TAG,
-                    "<<< CLOSE TRANSACTION setWallpaperOffset");
-            return true;
+        if (mSurfaceController != null) {
+            try {
+                if (SHOW_LIGHT_TRANSACTIONS) {
+                    Slog.i(TAG, ">>> OPEN TRANSACTION setWallpaperOffset");
+                }
+                mService.openSurfaceTransaction();
+                setWallpaperPositionAndScale(dx, dy, scale, false);
+            } catch (RuntimeException e) {
+                Slog.w(TAG, "Error positioning surface of " + mWin
+                        + " pos=(" + dx + "," + dy + ")", e);
+            } finally {
+                mService.closeSurfaceTransaction("setWallpaperOffset");
+                if (SHOW_LIGHT_TRANSACTIONS) {
+                    Slog.i(TAG, "<<< CLOSE TRANSACTION setWallpaperOffset");
+                }
+            }
         }
+
+        return true;
     }
 
     private void setWallpaperPositionAndScale(int dx, int dy, float scale,
@@ -1337,9 +1363,13 @@ class WindowStateAnimator {
         if (mPendingDestroySurface != null && mDestroyPreservedSurfaceUponRedraw) {
             final SurfaceControl pendingSurfaceControl = mPendingDestroySurface.mSurfaceControl;
             mPostDrawTransaction.reparent(pendingSurfaceControl, null);
-            mPostDrawTransaction.reparentChildren(
-                mPendingDestroySurface.getClientViewRootSurface(),
-                mSurfaceController.mSurfaceControl);
+            // If the children are detached, we don't want to reparent them to the new surface.
+            // Instead let the children get removed when the old surface is deleted.
+            if (!mChildrenDetached) {
+                mPostDrawTransaction.reparentChildren(
+                        mPendingDestroySurface.getClientViewRootSurface(),
+                        mSurfaceController.mSurfaceControl);
+            }
         }
 
         SurfaceControl.mergeToGlobalTransaction(mPostDrawTransaction);
@@ -1476,6 +1506,7 @@ class WindowStateAnimator {
         if (dumpAll) {
             pw.print(prefix); pw.print("mDrawState="); pw.print(drawStateToString());
             pw.print(prefix); pw.print(" mLastHidden="); pw.println(mLastHidden);
+            pw.print(prefix); pw.print("mEnterAnimationPending=" + mEnterAnimationPending);
             pw.print(prefix); pw.print("mSystemDecorRect="); mSystemDecorRect.printShortString(pw);
             pw.print(" mLastClipRect="); mLastClipRect.printShortString(pw);
 
@@ -1566,6 +1597,12 @@ class WindowStateAnimator {
             mSurfaceController.detachChildren();
         }
         mChildrenDetached = true;
+        // If the children are detached, it means the app is exiting. We don't want to tear the
+        // content down too early, otherwise we could end up with a flicker. By preserving the
+        // current surface, we ensure the content remains on screen until the window is completely
+        // removed. It also ensures that the old surface is cleaned up when started again since it
+        // forces mSurfaceController to be set to null.
+        preserveSurfaceLocked();
     }
 
     void setOffsetPositionForStackResize(boolean offsetPositionForStackResize) {

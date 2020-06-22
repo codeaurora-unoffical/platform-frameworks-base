@@ -29,7 +29,6 @@ import android.graphics.Rect;
 import android.testing.AndroidTestingRunner;
 import android.testing.TestableLooper;
 import android.util.Size;
-import android.view.DisplayInfo;
 
 import androidx.test.filters.SmallTest;
 
@@ -59,18 +58,11 @@ import org.mockito.MockitoAnnotations;
 @SmallTest
 @TestableLooper.RunWithLooper(setAsMainLooper = true)
 public class PipTouchHandlerTest extends SysuiTestCase {
-    private static final int ROUNDING_ERROR_MARGIN = 10;
-    private static final float DEFAULT_ASPECT_RATIO = 1f;
-    private static final Rect EMPTY_CURRENT_BOUNDS = null;
 
     private PipTouchHandler mPipTouchHandler;
-    private DisplayInfo mDefaultDisplayInfo;
 
     @Mock
     private IActivityManager mActivityManager;
-
-    @Mock
-    private IActivityTaskManager mIActivityTaskManager;
 
     @Mock
     private PipMenuActivityController mPipMenuActivityController;
@@ -90,24 +82,23 @@ public class PipTouchHandlerTest extends SysuiTestCase {
     @Mock
     private DeviceConfigProxy mDeviceConfigProxy;
 
-
     private PipSnapAlgorithm mPipSnapAlgorithm;
     private PipMotionHelper mMotionHelper;
     private PipResizeGestureHandler mPipResizeGestureHandler;
 
-    Rect mInsetBounds;
-    Rect mMinBounds;
-    Rect mCurBounds;
-    boolean mFromImeAdjustment;
-    boolean mFromShelfAdjustment;
-    int mDisplayRotation;
-
+    private Rect mInsetBounds;
+    private Rect mMinBounds;
+    private Rect mCurBounds;
+    private boolean mFromImeAdjustment;
+    private boolean mFromShelfAdjustment;
+    private int mDisplayRotation;
+    private int mImeHeight;
 
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
         mPipSnapAlgorithm = new PipSnapAlgorithm(mContext);
-        mPipTouchHandler = new PipTouchHandler(mContext, mActivityManager, mIActivityTaskManager,
+        mPipTouchHandler = new PipTouchHandler(mContext, mActivityManager,
                 mPipMenuActivityController, mInputConsumerController, mPipBoundsHandler,
                 mPipTaskOrganizer, mFloatingContentCoordinator, mDeviceConfigProxy,
                 mPipSnapAlgorithm);
@@ -121,10 +112,11 @@ public class PipTouchHandlerTest extends SysuiTestCase {
         mInsetBounds = new Rect(10, 10, 990, 990);
         // minBounds of 100x100 bottom right corner
         mMinBounds = new Rect(890, 890, 990, 990);
-        mCurBounds = new Rect();
+        mCurBounds = new Rect(mMinBounds);
         mFromImeAdjustment = false;
         mFromShelfAdjustment = false;
         mDisplayRotation = 0;
+        mImeHeight = 100;
     }
 
     @Test
@@ -162,6 +154,8 @@ public class PipTouchHandlerTest extends SysuiTestCase {
     @Test
     public void updateMovementBounds_withImeAdjustment_movesPip() {
         mFromImeAdjustment = true;
+        mPipTouchHandler.onImeVisibilityChanged(true /* imeVisible */, mImeHeight);
+
         mPipTouchHandler.onMovementBoundsChanged(mInsetBounds, mMinBounds, mCurBounds,
                 mFromImeAdjustment, mFromShelfAdjustment, mDisplayRotation);
 

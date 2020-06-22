@@ -47,8 +47,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
-import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.dex.ArtManager;
+import android.content.pm.parsing.PackageInfoWithoutStateUtils;
+import android.content.pm.parsing.ParsingPackage;
+import android.content.pm.parsing.ParsingPackageUtils;
+import android.content.pm.parsing.result.ParseInput;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.Rect;
@@ -180,6 +185,7 @@ public abstract class PackageManager {
             GET_DISABLED_UNTIL_USED_COMPONENTS,
             GET_UNINSTALLED_PACKAGES,
             MATCH_HIDDEN_UNTIL_INSTALLED_COMPONENTS,
+            MATCH_APEX,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ApplicationInfoFlags {}
@@ -379,6 +385,9 @@ public abstract class PackageManager {
      * <p>
      * Note: this flag may cause less information about currently installed
      * applications to be returned.
+     * <p>
+     * Note: use of this flag requires the android.permission.QUERY_ALL_PACKAGES
+     * permission to see uninstalled packages.
      */
     public static final int MATCH_UNINSTALLED_PACKAGES = 0x00002000;
 
@@ -1550,6 +1559,24 @@ public abstract class PackageManager {
      */
     public static final int INSTALL_PARSE_FAILED_ONLY_COREAPP_ALLOWED = -123;
 
+    /**
+     * Installation failed return code: the {@code resources.arsc} of one of the APKs being
+     * installed is compressed or not aligned on a 4-byte boundary. Resource tables that cannot be
+     * memory mapped exert excess memory pressure on the system and drastically slow down
+     * construction of {@link Resources} objects.
+     *
+     * @hide
+     */
+    public static final int INSTALL_PARSE_FAILED_RESOURCES_ARSC_COMPRESSED = -124;
+
+    /**
+     * Installation failed return code: the package was skipped and should be ignored.
+     *
+     * The reason for the skip is undefined.
+     * @hide
+     */
+    public static final int INSTALL_PARSE_FAILED_SKIPPED = -125;
+
     /** @hide */
     @IntDef(flag = true, prefix = { "DELETE_" }, value = {
             DELETE_KEEP_DATA,
@@ -2005,8 +2032,16 @@ public abstract class PackageManager {
     /**
      * Feature for {@link #getSystemAvailableFeatures} and
      * {@link #hasSystemFeature}: The device's main front and back cameras can stream
-     * concurrently as described in  {@link
-     * android.hardware.camera2.CameraManager#getConcurrentCameraIds()}
+     * concurrently as described in {@link
+     * android.hardware.camera2.CameraManager#getConcurrentCameraIds()}.
+     * </p>
+     * <p>While {@link android.hardware.camera2.CameraManager#getConcurrentCameraIds()} and
+     * associated APIs are only available on API level 30 or newer, this feature flag may be
+     * advertised by devices on API levels below 30. If present on such a device, the same
+     * guarantees hold: The main front and main back camera can be used at the same time, with
+     * guaranteed stream configurations as defined in the table for concurrent streaming at
+     * {@link android.hardware.camera2.CameraDevice#createCaptureSession(android.hardware.camera2.params.SessionConfiguration)}.
+     * </p>
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_CAMERA_CONCURRENT = "android.hardware.camera.concurrent";
@@ -3027,6 +3062,16 @@ public abstract class PackageManager {
     public static final String FEATURE_IPSEC_TUNNELS = "android.software.ipsec_tunnels";
 
     /**
+     * Feature for {@link #getSystemAvailableFeatures} and
+     * {@link #hasSystemFeature}: The device supports a system interface for the user to select
+     * and bind device control services provided by applications.
+     *
+     * @see android.service.controls.ControlsProviderService
+     */
+    @SdkConstant(SdkConstantType.FEATURE)
+    public static final String FEATURE_CONTROLS = "android.software.controls";
+
+    /**
      * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}: The device has
      * the requisite hardware support to support reboot escrow of synthetic password for updates.
      *
@@ -3146,6 +3191,23 @@ public abstract class PackageManager {
      */
     public static final String EXTRA_VERIFICATION_LONG_VERSION_CODE =
             "android.content.pm.extra.VERIFICATION_LONG_VERSION_CODE";
+
+    /**
+     * Extra field name for the Merkle tree root hash of a package.
+     * <p>Passed to a package verifier both prior to verification and as a result
+     * of verification.
+     * <p>The value of the extra is a specially formatted list:
+     * {@code filename1:HASH_1;filename2:HASH_2;...;filenameN:HASH_N}
+     * <p>The extra must include an entry for every APK within an installation. If
+     * a hash is not physically present, a hash value of {@code 0} will be used.
+     * <p>The root hash is generated using SHA-256, no salt with a 4096 byte block
+     * size. See the description of the
+     * <a href="https://www.kernel.org/doc/html/latest/filesystems/fsverity.html#merkle-tree">fs-verity merkle-tree</a>
+     * for more details.
+     * @hide
+     */
+    public static final String EXTRA_VERIFICATION_ROOT_HASH =
+            "android.content.pm.extra.EXTRA_VERIFICATION_ROOT_HASH";
 
     /**
      * Extra field name for the ID of a intent filter pending verification.
@@ -5924,9 +5986,9 @@ public abstract class PackageManager {
     /**
      * Return the label to use for this application.
      *
-     * @return Returns the label associated with this application, or null if
-     * it could not be found for any reason.
-     * @param info The application to get the label of.
+     * @return Returns a {@link CharSequence} containing the label associated with
+     * this application, or its name the  item does not have a label.
+     * @param info The {@link ApplicationInfo} of the application to get the label of.
      */
     @NonNull
     public abstract CharSequence getApplicationLabel(@NonNull ApplicationInfo info);
@@ -6001,28 +6063,25 @@ public abstract class PackageManager {
     @Nullable
     public PackageInfo getPackageArchiveInfo(@NonNull String archiveFilePath,
             @PackageInfoFlags int flags) {
-        final PackageParser parser = new PackageParser();
-        parser.setCallback(new PackageParser.CallbackImpl(this));
-        final File apkFile = new File(archiveFilePath);
-        try {
-            if ((flags & (MATCH_DIRECT_BOOT_UNAWARE | MATCH_DIRECT_BOOT_AWARE)) != 0) {
-                // Caller expressed an explicit opinion about what encryption
-                // aware/unaware components they want to see, so fall through and
-                // give them what they want
-            } else {
-                // Caller expressed no opinion, so match everything
-                flags |= MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE;
-            }
+        if ((flags & (PackageManager.MATCH_DIRECT_BOOT_UNAWARE
+                | PackageManager.MATCH_DIRECT_BOOT_AWARE)) == 0) {
+            // Caller expressed no opinion about what encryption
+            // aware/unaware components they want to see, so match both
+            flags |= PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        }
 
-            PackageParser.Package pkg = parser.parseMonolithicPackage(apkFile, 0);
-            if ((flags & GET_SIGNATURES) != 0) {
-                PackageParser.collectCertificates(pkg, false /* skipVerify */);
-            }
-            PackageUserState state = new PackageUserState();
-            return PackageParser.generatePackageInfo(pkg, null, flags, 0, 0, null, state);
-        } catch (PackageParserException e) {
+        boolean collectCertificates = (flags & PackageManager.GET_SIGNATURES) != 0
+                || (flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0;
+
+        ParseInput input = ParseTypeImpl.forParsingWithoutPlatformCompat().reset();
+        ParseResult<ParsingPackage> result = ParsingPackageUtils.parseDefault(input,
+                new File(archiveFilePath), 0, collectCertificates);
+        if (result.isError()) {
             return null;
         }
+        return PackageInfoWithoutStateUtils.generate(result.getResult(), null, flags, 0, 0, null,
+                new PackageUserState(), UserHandle.getCallingUserId());
     }
 
     /**
@@ -7912,7 +7971,6 @@ public abstract class PackageManager {
      *
      * @return true if the drawable represents the default activity icon, false otherwise
      * @see #getDefaultActivityIcon()
-     * @see PackageItemInfo#loadDefaultIcon(PackageManager)
      * @see #getActivityIcon
      * @see LauncherActivityInfo#getIcon(int)
      */
@@ -8044,13 +8102,16 @@ public abstract class PackageManager {
         sApplicationInfoCache.disableLocal();
     }
 
+    private static final PropertyInvalidatedCache.AutoCorker sCacheAutoCorker =
+            new PropertyInvalidatedCache.AutoCorker(PermissionManager.CACHE_KEY_PACKAGE_INFO);
+
     /**
      * Invalidate caches of package and permission information system-wide.
      *
      * @hide
      */
     public static void invalidatePackageInfoCache() {
-        PropertyInvalidatedCache.invalidateCache(PermissionManager.CACHE_KEY_PACKAGE_INFO);
+        sCacheAutoCorker.autoCork();
     }
 
     // Some of the flags don't affect the query result, but let's be conservative and cache
@@ -8140,4 +8201,19 @@ public abstract class PackageManager {
         sPackageInfoCache.disableLocal();
     }
 
+    /**
+     * Inhibit package info cache invalidations when correct.
+     *
+     * @hide */
+    public static void corkPackageInfoCache() {
+        PropertyInvalidatedCache.corkInvalidations(PermissionManager.CACHE_KEY_PACKAGE_INFO);
+    }
+
+    /**
+     * Enable package info cache invalidations.
+     *
+     * @hide */
+    public static void uncorkPackageInfoCache() {
+        PropertyInvalidatedCache.uncorkInvalidations(PermissionManager.CACHE_KEY_PACKAGE_INFO);
+    }
 }

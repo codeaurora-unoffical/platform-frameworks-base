@@ -16,15 +16,10 @@
 
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android"
             android:paddingMode="stack"
-            android:paddingStart="0dp"
+            android:paddingStart="40dp"
             android:paddingEnd="40dp"
             android:paddingLeft="0dp"
             android:paddingRight="0dp">
-    <item
-        android:gravity="end|fill_vertical"
-        android:width="40dp"
-        android:drawable="@*android:drawable/control_background_40dp_material" />
-
     <item
         android:drawable="@drawable/ic_ksh_key_down"
         android:gravity="end|bottom"

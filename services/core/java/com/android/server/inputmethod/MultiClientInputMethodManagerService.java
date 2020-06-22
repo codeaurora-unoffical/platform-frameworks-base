@@ -171,6 +171,11 @@ public final class MultiClientInputMethodManagerService {
             LocalServices.addService(InputMethodManagerInternal.class,
                     new InputMethodManagerInternal() {
                         @Override
+                        public void setInteractive(boolean interactive) {
+                            reportNotSupported();
+                        }
+
+                        @Override
                         public void hideCurrentInputMethod(@SoftInputShowHideReason int reason) {
                             reportNotSupported();
                         }
@@ -192,7 +197,6 @@ public final class MultiClientInputMethodManagerService {
                                 InlineSuggestionsRequestInfo requestInfo,
                                 IInlineSuggestionsRequestCallback cb) {
                             try {
-                                //TODO(b/137800469): support multi client IMEs.
                                 cb.onInlineSuggestionsUnsupported();
                             } catch (RemoteException e) {
                                 Slog.w(TAG, "Failed to call onInlineSuggestionsUnsupported.", e);

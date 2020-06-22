@@ -55,7 +55,6 @@ import android.service.notification.SnoozeCriterion;
 import android.service.notification.StatusBarNotification;
 import android.text.TextUtils;
 import android.util.ArraySet;
-import android.util.FeatureFlagUtils;
 import android.util.Log;
 import android.util.TimeUtils;
 import android.util.proto.ProtoOutputStream;
@@ -189,6 +188,9 @@ public final class NotificationRecord {
     private boolean mHasSeenSmartReplies;
     private boolean mFlagBubbleRemoved;
     private boolean mPostSilently;
+    private boolean mHasSentValidMsg;
+    private boolean mAppDemotedFromConvo;
+    private boolean mPkgAllowedAsConvo;
     /**
      * Whether this notification (and its channels) should be considered user locked. Used in
      * conjunction with user sentiment calculation.
@@ -581,6 +583,8 @@ public final class NotificationRecord {
         pw.println(prefix + "mLight= " + mLight);
         pw.println(prefix + "mShowBadge=" + mShowBadge);
         pw.println(prefix + "mColorized=" + notification.isColorized());
+        pw.println(prefix + "mAllowBubble=" + mAllowBubble);
+        pw.println(prefix + "isBubble=" + notification.isBubbleNotification());
         pw.println(prefix + "mIsInterruptive=" + mIsInterruptive);
         pw.println(prefix + "effectiveNotificationChannel=" + getChannel());
         if (getPeopleOverride() != null) {
@@ -590,6 +594,8 @@ public final class NotificationRecord {
             pw.println(prefix + "snoozeCriteria=" + TextUtils.join(",", getSnoozeCriteria()));
         }
         pw.println(prefix + "mAdjustments=" + mAdjustments);
+        pw.println(prefix + "shortcut=" + notification.getShortcutId()
+                + " found valid? " + (mShortcutInfo != null));
     }
 
     @Override
@@ -1374,20 +1380,47 @@ public final class NotificationRecord {
         return mShortcutInfo;
     }
 
+    public void setHasSentValidMsg(boolean hasSentValidMsg) {
+        mHasSentValidMsg = hasSentValidMsg;
+    }
+
+    public void userDemotedAppFromConvoSpace(boolean userDemoted) {
+        mAppDemotedFromConvo = userDemoted;
+    }
+
+    public void setPkgAllowedAsConvo(boolean allowedAsConvo) {
+        mPkgAllowedAsConvo = allowedAsConvo;
+    }
+
     /**
      * Whether this notification is a conversation notification.
      */
     public boolean isConversation() {
         Notification notification = getNotification();
-        if (mChannel.isDemoted()
-                || !Notification.MessagingStyle.class.equals(notification.getNotificationStyle())) {
+        // user kicked it out of convo space
+        if (mChannel.isDemoted() || mAppDemotedFromConvo) {
             return false;
         }
-        if (mShortcutInfo == null && Settings.Global.getInt(mContext.getContentResolver(),
-                Settings.Global.REQUIRE_SHORTCUTS_FOR_CONVERSATIONS, 0) == 1) {
-            return false;
-        }
+        // NAS kicked it out of notification space
         if (mIsNotConversationOverride) {
+            return false;
+        }
+        if (!Notification.MessagingStyle.class.equals(notification.getNotificationStyle())) {
+            // some non-msgStyle notifs can temporarily appear in the conversation space if category
+            // is right
+            if (mPkgAllowedAsConvo && mTargetSdkVersion < Build.VERSION_CODES.R
+                && Notification.CATEGORY_MESSAGE.equals(getNotification().category)) {
+                return true;
+            }
+            return false;
+        }
+
+        if (mTargetSdkVersion >= Build.VERSION_CODES.R
+            && Notification.MessagingStyle.class.equals(notification.getNotificationStyle())
+            && mShortcutInfo == null) {
+            return false;
+        }
+        if (mHasSentValidMsg && mShortcutInfo == null) {
             return false;
         }
         return true;

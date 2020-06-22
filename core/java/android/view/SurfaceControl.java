@@ -220,6 +220,8 @@ public final class SurfaceControl implements Parcelable {
 
     private static native long nativeAcquireFrameRateFlexibilityToken();
     private static native void nativeReleaseFrameRateFlexibilityToken(long token);
+    private static native void nativeSetFixedTransformHint(long transactionObj, long nativeObject,
+            int transformHint);
 
     private final CloseGuard mCloseGuard = CloseGuard.get();
     private String mName;
@@ -228,6 +230,7 @@ public final class SurfaceControl implements Parcelable {
      */
     public long mNativeObject;
     private long mNativeHandle;
+    private Throwable mReleaseStack = null;
 
     // TODO: Move this to native.
     private final Object mSizeLock = new Object();
@@ -318,6 +321,14 @@ public final class SurfaceControl implements Parcelable {
      * @hide
      */
     public static final int CURSOR_WINDOW = 0x00002000;
+
+    /**
+     * Surface creation flag: Indicates the effect layer will not have a color fill on
+     * creation.
+     *
+     * @hide
+     */
+    public static final int NO_COLOR_FILL = 0x00004000;
 
     /**
      * Surface creation flag: Creates a normal surface.
@@ -429,11 +440,18 @@ public final class SurfaceControl implements Parcelable {
         if (mNativeObject != 0) {
             release();
         }
-      	if (nativeObject != 0) {
+        if (nativeObject != 0) {
             mCloseGuard.open("release");
         }
         mNativeObject = nativeObject;
         mNativeHandle = mNativeObject != 0 ? nativeGetHandle(nativeObject) : 0;
+        if (mNativeObject == 0) {
+            if (Build.IS_DEBUGGABLE) {
+                mReleaseStack = new Throwable("assigned zero nativeObject here");
+            }
+        } else {
+            mReleaseStack = null;
+        }
     }
 
     /**
@@ -570,7 +588,7 @@ public final class SurfaceControl implements Parcelable {
                 throw new IllegalStateException(
                         "width and height must be positive or unset");
             }
-            if ((mWidth > 0 || mHeight > 0) && (isColorLayerSet() || isContainerLayerSet())) {
+            if ((mWidth > 0 || mHeight > 0) && (isEffectLayer() || isContainerLayer())) {
                 throw new IllegalStateException(
                         "Only buffer layers can set a valid buffer size.");
             }
@@ -742,10 +760,27 @@ public final class SurfaceControl implements Parcelable {
         }
 
         /**
-         * Indicate whether a 'ColorLayer' is to be constructed.
+         * Indicate whether an 'EffectLayer' is to be constructed.
          *
-         * Color layers will not have an associated BufferQueue and will instead always render a
-         * solid color (that is, solid before plane alpha). Currently that color is black.
+         * An effect layer behaves like a container layer by default but it can support
+         * color fill, shadows and/or blur. These layers will not have an associated buffer.
+         * When created, this layer has no effects set and will be transparent but the caller
+         * can render an effect by calling:
+         *  - {@link Transaction#setColor(SurfaceControl, float[])}
+         *  - {@link Transaction#setBackgroundBlurRadius(SurfaceControl, int)}
+         *  - {@link Transaction#setShadowRadius(SurfaceControl, float)}
+         *
+         * @hide
+         */
+        public Builder setEffectLayer() {
+            mFlags |= NO_COLOR_FILL;
+            unsetBufferSize();
+            return setFlags(FX_SURFACE_EFFECT, FX_SURFACE_MASK);
+        }
+
+        /**
+         * A convenience function to create an effect layer with a default color fill
+         * applied to it. Currently that color is black.
          *
          * @hide
          */
@@ -754,7 +789,7 @@ public final class SurfaceControl implements Parcelable {
             return setFlags(FX_SURFACE_EFFECT, FX_SURFACE_MASK);
         }
 
-        private boolean isColorLayerSet() {
+        private boolean isEffectLayer() {
             return  (mFlags & FX_SURFACE_EFFECT) == FX_SURFACE_EFFECT;
         }
 
@@ -779,7 +814,7 @@ public final class SurfaceControl implements Parcelable {
             return setFlags(FX_SURFACE_CONTAINER, FX_SURFACE_MASK);
         }
 
-        private boolean isContainerLayerSet() {
+        private boolean isContainerLayer() {
             return  (mFlags & FX_SURFACE_CONTAINER) == FX_SURFACE_CONTAINER;
         }
 
@@ -889,7 +924,7 @@ public final class SurfaceControl implements Parcelable {
             throw new IllegalArgumentException("source must not be null");
         }
 
-        mName = in.readString();
+        mName = in.readString8();
         mWidth = in.readInt();
         mHeight = in.readInt();
 
@@ -907,7 +942,7 @@ public final class SurfaceControl implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel dest, int flags) {
-        dest.writeString(mName);
+        dest.writeString8(mName);
         dest.writeInt(mWidth);
         dest.writeInt(mHeight);
         if (mNativeObject == 0) {
@@ -992,8 +1027,19 @@ public final class SurfaceControl implements Parcelable {
             nativeRelease(mNativeObject);
             mNativeObject = 0;
             mNativeHandle = 0;
+            if (Build.IS_DEBUGGABLE) {
+                mReleaseStack = new Throwable("released here");
+            }
             mCloseGuard.close();
         }
+    }
+
+    /**
+     * Returns the call stack that assigned mNativeObject to zero.
+     * @hide
+     */
+    public Throwable getReleaseStack() {
+        return mReleaseStack;
     }
 
     /**
@@ -1007,8 +1053,11 @@ public final class SurfaceControl implements Parcelable {
     }
 
     private void checkNotReleased() {
-        if (mNativeObject == 0) throw new NullPointerException(
-                "mNativeObject is null. Have you called release() already?");
+        if (mNativeObject == 0) {
+            Log.wtf(TAG, "Invalid " + this + " caused by:", mReleaseStack);
+            throw new NullPointerException(
+                "mNativeObject of " + this + " is null. Have you called release() already?");
+        }
     }
 
     /**
@@ -1445,8 +1494,23 @@ public final class SurfaceControl implements Parcelable {
      */
     public static final class DesiredDisplayConfigSpecs {
         public int defaultConfig;
-        public float minRefreshRate;
-        public float maxRefreshRate;
+        /**
+         * The primary refresh rate range represents display manager's general guidance on the
+         * display configs surface flinger will consider when switching refresh rates. Unless
+         * surface flinger has a specific reason to do otherwise, it will stay within this range.
+         */
+        public float primaryRefreshRateMin;
+        public float primaryRefreshRateMax;
+        /**
+         * The app request refresh rate range allows surface flinger to consider more display
+         * configs when switching refresh rates. Although surface flinger will generally stay within
+         * the primary range, specific considerations, such as layer frame rate settings specified
+         * via the setFrameRate() api, may cause surface flinger to go outside the primary
+         * range. Surface flinger never goes outside the app request range. The app request range
+         * will be greater than or equal to the primary refresh rate range, never smaller.
+         */
+        public float appRequestRefreshRateMin;
+        public float appRequestRefreshRateMax;
 
         public DesiredDisplayConfigSpecs() {}
 
@@ -1454,11 +1518,14 @@ public final class SurfaceControl implements Parcelable {
             copyFrom(other);
         }
 
-        public DesiredDisplayConfigSpecs(
-                int defaultConfig, float minRefreshRate, float maxRefreshRate) {
+        public DesiredDisplayConfigSpecs(int defaultConfig, float primaryRefreshRateMin,
+                float primaryRefreshRateMax, float appRequestRefreshRateMin,
+                float appRequestRefreshRateMax) {
             this.defaultConfig = defaultConfig;
-            this.minRefreshRate = minRefreshRate;
-            this.maxRefreshRate = maxRefreshRate;
+            this.primaryRefreshRateMin = primaryRefreshRateMin;
+            this.primaryRefreshRateMax = primaryRefreshRateMax;
+            this.appRequestRefreshRateMin = appRequestRefreshRateMin;
+            this.appRequestRefreshRateMax = appRequestRefreshRateMax;
         }
 
         @Override
@@ -1471,8 +1538,10 @@ public final class SurfaceControl implements Parcelable {
          */
         public boolean equals(DesiredDisplayConfigSpecs other) {
             return other != null && defaultConfig == other.defaultConfig
-                    && minRefreshRate == other.minRefreshRate
-                    && maxRefreshRate == other.maxRefreshRate;
+                    && primaryRefreshRateMin == other.primaryRefreshRateMin
+                    && primaryRefreshRateMax == other.primaryRefreshRateMax
+                    && appRequestRefreshRateMin == other.appRequestRefreshRateMin
+                    && appRequestRefreshRateMax == other.appRequestRefreshRateMax;
         }
 
         @Override
@@ -1485,14 +1554,18 @@ public final class SurfaceControl implements Parcelable {
          */
         public void copyFrom(DesiredDisplayConfigSpecs other) {
             defaultConfig = other.defaultConfig;
-            minRefreshRate = other.minRefreshRate;
-            maxRefreshRate = other.maxRefreshRate;
+            primaryRefreshRateMin = other.primaryRefreshRateMin;
+            primaryRefreshRateMax = other.primaryRefreshRateMax;
+            appRequestRefreshRateMin = other.appRequestRefreshRateMin;
+            appRequestRefreshRateMax = other.appRequestRefreshRateMax;
         }
 
         @Override
         public String toString() {
-            return String.format("defaultConfig=%d min=%.0f max=%.0f", defaultConfig,
-                    minRefreshRate, maxRefreshRate);
+            return String.format("defaultConfig=%d primaryRefreshRateRange=[%.0f %.0f]"
+                            + " appRequestRefreshRateRange=[%.0f %.0f]",
+                    defaultConfig, primaryRefreshRateMin, primaryRefreshRateMax,
+                    appRequestRefreshRateMin, appRequestRefreshRateMax);
         }
     }
 
@@ -2264,6 +2337,39 @@ public final class SurfaceControl implements Parcelable {
         }
 
         /**
+         * Provide the graphic producer a transform hint if the layer and its children are
+         * in an orientation different from the display's orientation. The caller is responsible
+         * for clearing this transform hint if the layer is no longer in a fixed orientation.
+         *
+         * The transform hint is used to prevent allocating a buffer of different size when a
+         * layer is rotated. The producer can choose to consume the hint and allocate the buffer
+         * with the same size.
+         *
+         * @return This Transaction.
+         * @hide
+         */
+        @NonNull
+        public Transaction setFixedTransformHint(@NonNull SurfaceControl sc,
+                       @Surface.Rotation int transformHint) {
+            checkPreconditions(sc);
+            nativeSetFixedTransformHint(mNativeObject, sc.mNativeObject, transformHint);
+            return this;
+        }
+
+        /**
+         * Clearing any transform hint if set on this layer.
+         *
+         * @return This Transaction.
+         * @hide
+         */
+        @NonNull
+        public Transaction unsetFixedTransformHint(@NonNull SurfaceControl sc) {
+            checkPreconditions(sc);
+            nativeSetFixedTransformHint(mNativeObject, sc.mNativeObject, -1/* INVALID_ROTATION */);
+            return this;
+        }
+
+        /**
          * Set the Z-order for a given SurfaceControl, relative to it's siblings.
          * If two siblings share the same Z order the ordering is undefined. Surfaces
          * with a negative Z will be placed below the parent surface.
@@ -2891,7 +2997,8 @@ public final class SurfaceControl implements Parcelable {
     /**
      * Acquire a frame rate flexibility token, which allows surface flinger to freely switch display
      * frame rates. This is used by CTS tests to put the device in a consistent state. See
-     * ISurfaceComposer::acquireFrameRateFlexibilityToken().
+     * ISurfaceComposer::acquireFrameRateFlexibilityToken(). The caller must have the
+     * ACCESS_SURFACE_FLINGER permission, or else the call will fail, returning 0.
      * @hide
      */
     @TestApi

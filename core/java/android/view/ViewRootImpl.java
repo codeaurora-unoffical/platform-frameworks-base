@@ -111,6 +111,7 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.os.Trace;
+import android.os.UserHandle;
 import android.sysprop.DisplayProperties;
 import android.util.AndroidRuntimeException;
 import android.util.DisplayMetrics;
@@ -205,6 +206,7 @@ public final class ViewRootImpl implements ViewParent,
     private static final boolean DEBUG_INPUT_STAGES = false || LOCAL_LOGV;
     private static final boolean DEBUG_KEEP_SCREEN_ON = false || LOCAL_LOGV;
     private static final boolean DEBUG_CONTENT_CAPTURE = false || LOCAL_LOGV;
+    private static final boolean DEBUG_SCROLL_CAPTURE = false || LOCAL_LOGV;
 
     /**
      * Set to false if we do not want to use the multi threaded renderer even though
@@ -325,6 +327,8 @@ public final class ViewRootImpl implements ViewParent,
     private boolean mForceNextConfigUpdate;
 
     private boolean mUseBLASTAdapter;
+    private boolean mForceDisableBLAST;
+    private boolean mEnableTripleBuffering;
 
     /**
      * Signals that compatibility booleans have been initialized according to
@@ -652,6 +656,8 @@ public final class ViewRootImpl implements ViewParent,
     private final InsetsController mInsetsController;
     private final ImeFocusController mImeFocusController;
 
+    private ScrollCaptureClient mScrollCaptureClient;
+
     /**
      * @return {@link ImeFocusController} for this instance.
      */
@@ -660,6 +666,11 @@ public final class ViewRootImpl implements ViewParent,
         return mImeFocusController;
     }
 
+    /** @return The current {@link ScrollCaptureClient} for this instance, if any is active. */
+    @Nullable
+    public ScrollCaptureClient getScrollCaptureClient() {
+        return mScrollCaptureClient;
+    }
 
     private final GestureExclusionTracker mGestureExclusionTracker = new GestureExclusionTracker();
 
@@ -692,6 +703,13 @@ public final class ViewRootImpl implements ViewParent,
     // the UI thread is paused and then applied and cleared from the UI thread right after
     // draw returns.
     private SurfaceControl.Transaction mRtBLASTSyncTransaction = new SurfaceControl.Transaction();
+
+    // Keeps track of whether the WM requested us to use BLAST Sync when calling relayout.
+    //  We use this to make sure we don't send the WM transactions from an internal BLAST sync
+    // (e.g. SurfaceView)
+    private boolean mSendNextFrameToWm = false;
+
+    private HashSet<ScrollCaptureCallback> mRootScrollCaptureCallbacks;
 
     private String mTag = TAG;
     boolean mHaveMoveEvent = false;
@@ -745,7 +763,7 @@ public final class ViewRootImpl implements ViewParent,
         mChoreographer = useSfChoreographer
                 ? Choreographer.getSfInstance() : Choreographer.getInstance();
         mDisplayManager = (DisplayManager)context.getSystemService(Context.DISPLAY_SERVICE);
-        mInsetsController = new InsetsController(this);
+        mInsetsController = new InsetsController(new ViewRootInsetsControllerHost(this));
 
         String processorOverrideName = context.getResources().getString(
                                     R.string.config_inputEventCompatProcessorOverrideClassName);
@@ -774,7 +792,6 @@ public final class ViewRootImpl implements ViewParent,
 
         loadSystemProperties();
         mImeFocusController = new ImeFocusController(this);
-        mUseBLASTAdapter = WindowManagerGlobal.useBLAST();
     }
 
     public static void addFirstDrawHandler(Runnable callback) {
@@ -894,6 +911,14 @@ public final class ViewRootImpl implements ViewParent,
      * We have one child
      */
     public void setView(View view, WindowManager.LayoutParams attrs, View panelParentView) {
+        setView(view, attrs, panelParentView, UserHandle.myUserId());
+    }
+
+    /**
+     * We have one child
+     */
+    public void setView(View view, WindowManager.LayoutParams attrs, View panelParentView,
+            int userId) {
         synchronized (this) {
             if (mView == null) {
                 mView = view;
@@ -907,10 +932,9 @@ public final class ViewRootImpl implements ViewParent,
                 if (mWindowAttributes.packageName == null) {
                     mWindowAttributes.packageName = mBasePackageName;
                 }
-                if (mUseBLASTAdapter) {
-                    mWindowAttributes.privateFlags |=
+                mWindowAttributes.privateFlags |=
                         WindowManager.LayoutParams.PRIVATE_FLAG_USE_BLAST;
-                }
+
                 attrs = mWindowAttributes;
                 setTag();
 
@@ -1002,8 +1026,8 @@ public final class ViewRootImpl implements ViewParent,
                     mAttachInfo.mRecomputeGlobalAttributes = true;
                     collectViewAttributes();
                     adjustLayoutParamsForCompatibility(mWindowAttributes);
-                    res = mWindowSession.addToDisplay(mWindow, mSeq, mWindowAttributes,
-                            getHostVisibility(), mDisplay.getDisplayId(), mTmpFrame,
+                    res = mWindowSession.addToDisplayAsUser(mWindow, mSeq, mWindowAttributes,
+                            getHostVisibility(), mDisplay.getDisplayId(), userId, mTmpFrame,
                             mAttachInfo.mContentInsets, mAttachInfo.mStableInsets,
                             mAttachInfo.mDisplayCutout, inputChannel,
                             mTempInsets, mTempControls);
@@ -1076,9 +1100,19 @@ public final class ViewRootImpl implements ViewParent,
                             throw new WindowManager.InvalidDisplayException("Unable to add window "
                                     + mWindow + " -- the specified window type "
                                     + mWindowAttributes.type + " is not valid");
+                        case WindowManagerGlobal.ADD_INVALID_USER:
+                            throw new WindowManager.BadTokenException("Unable to add Window "
+                                    + mWindow + " -- requested userId is not valid");
                     }
                     throw new RuntimeException(
                             "Unable to add window -- unknown error code " + res);
+                }
+
+                if ((res & WindowManagerGlobal.ADD_FLAG_USE_BLAST) != 0) {
+                    mUseBLASTAdapter = true;
+                }
+                if ((res & WindowManagerGlobal.ADD_FLAG_USE_TRIPLE_BUFFERING) != 0) {
+                    mEnableTripleBuffering = true;
                 }
 
                 if (view instanceof RootViewSurfaceTaker) {
@@ -1393,10 +1427,8 @@ public final class ViewRootImpl implements ViewParent,
             }
             mWindowAttributes.privateFlags |= compatibleWindowFlag;
 
-            if (mUseBLASTAdapter) {
-                mWindowAttributes.privateFlags |=
+            mWindowAttributes.privateFlags |=
                     WindowManager.LayoutParams.PRIVATE_FLAG_USE_BLAST;
-            }
 
             if (mWindowAttributes.preservePreviousSurfaceInsets) {
                 // Restore old surface insets.
@@ -1465,7 +1497,6 @@ public final class ViewRootImpl implements ViewParent,
                         final int newScreenState = toViewScreenState(newDisplayState);
                         if (oldScreenState != newScreenState) {
                             mView.dispatchScreenStateChanged(newScreenState);
-                            mImeFocusController.onScreenStateChanged(newScreenState);
                         }
                         if (oldDisplayState == Display.STATE_OFF) {
                             // Draw was suppressed so we need to for it to happen here.
@@ -1557,6 +1588,11 @@ public final class ViewRootImpl implements ViewParent,
         }
         mApplyInsetsRequested = true;
         requestLayout();
+
+        // See comment for View.sForceLayoutWhenInsetsChanged
+        if (View.sForceLayoutWhenInsetsChanged && mView != null) {
+            forceLayout(mView);
+        }
 
         // If this changes during traversal, no need to schedule another one as it will dispatch it
         // during the current traversal.
@@ -1763,12 +1799,13 @@ public final class ViewRootImpl implements ViewParent,
         Surface ret = null;
         if (mBlastBufferQueue == null) {
             mBlastBufferQueue = new BLASTBufferQueue(
-                mBlastSurfaceControl, width, height);
+                mBlastSurfaceControl, width, height, mEnableTripleBuffering);
             // We only return the Surface the first time, as otherwise
             // it hasn't changed and there is no need to update.
             ret = mBlastBufferQueue.getSurface();
+        } else {
+            mBlastBufferQueue.update(mBlastSurfaceControl, width, height);
         }
-        mBlastBufferQueue.update(mBlastSurfaceControl, width, height);
 
         return ret;
     }
@@ -1940,6 +1977,11 @@ public final class ViewRootImpl implements ViewParent,
             mCompatibleVisibilityInfo.globalVisibility =
                     (mCompatibleVisibilityInfo.globalVisibility & ~View.SYSTEM_UI_FLAG_LOW_PROFILE)
                             | (mAttachInfo.mSystemUiVisibility & View.SYSTEM_UI_FLAG_LOW_PROFILE);
+            if (mDispatchedSystemUiVisibility != mCompatibleVisibilityInfo.globalVisibility) {
+                mHandler.removeMessages(MSG_DISPATCH_SYSTEM_UI_VISIBILITY);
+                mHandler.sendMessage(mHandler.obtainMessage(
+                        MSG_DISPATCH_SYSTEM_UI_VISIBILITY, mCompatibleVisibilityInfo));
+            }
             if (mAttachInfo.mKeepScreenOn != oldScreenOn
                     || mAttachInfo.mSystemUiVisibility != params.subtreeSystemUiVisibility
                     || mAttachInfo.mHasSystemUiListeners != params.hasSystemUiListeners) {
@@ -1991,9 +2033,11 @@ public final class ViewRootImpl implements ViewParent,
             }
         } else {
             info.globalVisibility |= systemUiFlag;
+            info.localChanges &= ~systemUiFlag;
         }
         if (mDispatchedSystemUiVisibility != info.globalVisibility) {
-            scheduleTraversals();
+            mHandler.removeMessages(MSG_DISPATCH_SYSTEM_UI_VISIBILITY);
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_DISPATCH_SYSTEM_UI_VISIBILITY, info));
         }
     }
 
@@ -2440,9 +2484,6 @@ public final class ViewRootImpl implements ViewParent,
         if (mAttachInfo.mForceReportNewAttributes) {
             mAttachInfo.mForceReportNewAttributes = false;
             params = lp;
-        }
-        if (sNewInsetsMode == NEW_INSETS_MODE_FULL) {
-            handleDispatchSystemUiVisibilityChanged(mCompatibleVisibilityInfo);
         }
 
         if (mFirst || mAttachInfo.mViewVisibilityChanged) {
@@ -3017,6 +3058,11 @@ public final class ViewRootImpl implements ViewParent,
         // Remember if we must report the next draw.
         if ((relayoutResult & WindowManagerGlobal.RELAYOUT_RES_FIRST_TIME) != 0) {
             reportNextDraw();
+        }
+        if ((relayoutResult & WindowManagerGlobal.RELAYOUT_RES_BLAST_SYNC) != 0) {
+            reportNextDraw();
+            setUseBLASTSyncTransaction();
+            mSendNextFrameToWm = true;
         }
 
         boolean cancelDraw = mAttachInfo.mTreeObserver.dispatchOnPreDraw() || !isViewVisible;
@@ -3726,7 +3772,7 @@ public final class ViewRootImpl implements ViewParent,
             if (needFrameCompleteCallback) {
                 final Handler handler = mAttachInfo.mHandler;
                 mAttachInfo.mThreadedRenderer.setFrameCompleteCallback((long frameNr) -> {
-                        finishBLASTSync();
+                        finishBLASTSync(!mSendNextFrameToWm);
                         handler.postAtFrontOfQueue(() -> {
                             if (reportNextDraw) {
                                 // TODO: Use the frame number
@@ -3748,19 +3794,21 @@ public final class ViewRootImpl implements ViewParent,
                 // so if we are BLAST syncing we make sure the previous draw has
                 // totally finished.
                 if (mAttachInfo.mThreadedRenderer != null) {
-                    mAttachInfo.mThreadedRenderer.fence();
+                    mAttachInfo.mThreadedRenderer.pause();
                 }
 
                 mNextReportConsumeBLAST = true;
                 mNextDrawUseBLASTSyncTransaction = false;
 
-                mBlastBufferQueue.setNextTransaction(mRtBLASTSyncTransaction);
+                if (mBlastBufferQueue != null) {
+                    mBlastBufferQueue.setNextTransaction(mRtBLASTSyncTransaction);
+                }
             }
             boolean canUseAsync = draw(fullRedrawNeeded);
             if (usingAsyncReport && !canUseAsync) {
                 mAttachInfo.mThreadedRenderer.setFrameCompleteCallback(null);
                 usingAsyncReport = false;
-                finishBLASTSync();
+                finishBLASTSync(true /* apply */);
             }
         } finally {
             mIsDrawing = false;
@@ -4586,6 +4634,8 @@ public final class ViewRootImpl implements ViewParent,
 
         setAccessibilityFocus(null, null);
 
+        mInsetsController.cancelExistingAnimations();
+
         mView.assignParent(null);
         mView = null;
         mAttachInfo.mRootView = null;
@@ -4598,13 +4648,16 @@ public final class ViewRootImpl implements ViewParent,
             mInputQueueCallback = null;
             mInputQueue = null;
         }
-        if (mInputEventReceiver != null) {
-            mInputEventReceiver.dispose();
-            mInputEventReceiver = null;
-        }
         try {
             mWindowSession.remove(mWindow);
         } catch (RemoteException e) {
+        }
+        // Dispose receiver would dispose client InputChannel, too. That could send out a socket
+        // broken event, so we need to unregister the server InputChannel when removing window to
+        // prevent server side receive the event and prompt error.
+        if (mInputEventReceiver != null) {
+            mInputEventReceiver.dispose();
+            mInputEventReceiver = null;
         }
 
         mDisplayManager.unregisterDisplayListener(mDisplayListener);
@@ -4763,6 +4816,7 @@ public final class ViewRootImpl implements ViewParent,
     private static final int MSG_LOCATION_IN_PARENT_DISPLAY_CHANGED = 33;
     private static final int MSG_SHOW_INSETS = 34;
     private static final int MSG_HIDE_INSETS = 35;
+    private static final int MSG_REQUEST_SCROLL_CAPTURE = 36;
 
 
     final class ViewRootHandler extends Handler {
@@ -4937,6 +4991,11 @@ public final class ViewRootImpl implements ViewParent,
                     break;
                 }
                 case MSG_SHOW_INSETS: {
+                    if (mView == null) {
+                        Log.e(TAG,
+                                String.format("Calling showInsets(%d,%b) on window that no longer"
+                                        + " has views.", msg.arg1, msg.arg2 == 1));
+                    }
                     mInsetsController.show(msg.arg1, msg.arg2 == 1);
                     break;
                 }
@@ -5065,6 +5124,9 @@ public final class ViewRootImpl implements ViewParent,
                 case MSG_LOCATION_IN_PARENT_DISPLAY_CHANGED: {
                     updateLocationInParentDisplay(msg.arg1, msg.arg2);
                 } break;
+                case MSG_REQUEST_SCROLL_CAPTURE:
+                    handleScrollCaptureRequest((IScrollCaptureController) msg.obj);
+                    break;
             }
         }
     }
@@ -7368,7 +7430,7 @@ public final class ViewRootImpl implements ViewParent,
                 mPendingDisplayCutout, mPendingMergedConfiguration, mSurfaceControl, mTempInsets,
                 mTempControls, mSurfaceSize, mBlastSurfaceControl);
         if (mSurfaceControl.isValid()) {
-            if (!mUseBLASTAdapter) {
+            if (!useBLAST()) {
                 mSurface.copyFrom(mSurfaceControl);
             } else {
                 final Surface blastSurface = getOrCreateBLASTSurface(mSurfaceSize.x,
@@ -8780,6 +8842,131 @@ public final class ViewRootImpl implements ViewParent,
         return false;
     }
 
+    /**
+     * Adds a scroll capture callback to this window.
+     *
+     * @param callback the callback to add
+     */
+    public void addScrollCaptureCallback(ScrollCaptureCallback callback) {
+        if (mRootScrollCaptureCallbacks == null) {
+            mRootScrollCaptureCallbacks = new HashSet<>();
+        }
+        mRootScrollCaptureCallbacks.add(callback);
+    }
+
+    /**
+     * Removes a scroll capture callback from this window.
+     *
+     * @param callback the callback to remove
+     */
+    public void removeScrollCaptureCallback(ScrollCaptureCallback callback) {
+        if (mRootScrollCaptureCallbacks != null) {
+            mRootScrollCaptureCallbacks.remove(callback);
+            if (mRootScrollCaptureCallbacks.isEmpty()) {
+                mRootScrollCaptureCallbacks = null;
+            }
+        }
+    }
+
+    /**
+     * Dispatches a scroll capture request to the view hierarchy on the ui thread.
+     *
+     * @param controller the controller to receive replies
+     */
+    public void dispatchScrollCaptureRequest(@NonNull IScrollCaptureController controller) {
+        mHandler.obtainMessage(MSG_REQUEST_SCROLL_CAPTURE, controller).sendToTarget();
+    }
+
+    /**
+     * Collect and include any ScrollCaptureCallback instances registered with the window.
+     *
+     * @see #addScrollCaptureCallback(ScrollCaptureCallback)
+     * @param targets the search queue for targets
+     */
+    private void collectRootScrollCaptureTargets(Queue<ScrollCaptureTarget> targets) {
+        for (ScrollCaptureCallback cb : mRootScrollCaptureCallbacks) {
+            // Add to the list for consideration
+            Point offset = new Point(mView.getLeft(), mView.getTop());
+            Rect rect = new Rect(0, 0, mView.getWidth(), mView.getHeight());
+            targets.add(new ScrollCaptureTarget(mView, rect, offset, cb));
+        }
+    }
+
+    /**
+     * Handles an inbound request for scroll capture from the system. If a client is not already
+     * active, a search will be dispatched through the view tree to locate scrolling content.
+     * <p>
+     * Either {@link IScrollCaptureController#onClientConnected(IScrollCaptureClient, Rect,
+     * Point)} or {@link IScrollCaptureController#onClientUnavailable()} will be returned
+     * depending on the results of the search.
+     *
+     * @param controller the interface to the system controller
+     * @see ScrollCaptureTargetResolver
+     */
+    private void handleScrollCaptureRequest(@NonNull IScrollCaptureController controller) {
+        LinkedList<ScrollCaptureTarget> targetList = new LinkedList<>();
+
+        // Window (root) level callbacks
+        collectRootScrollCaptureTargets(targetList);
+
+        // Search through View-tree
+        View rootView = getView();
+        Point point = new Point();
+        Rect rect = new Rect(0, 0, rootView.getWidth(), rootView.getHeight());
+        getChildVisibleRect(rootView, rect, point);
+        rootView.dispatchScrollCaptureSearch(rect, point, targetList);
+
+        // No-op path. Scroll capture not offered for this window.
+        if (targetList.isEmpty()) {
+            dispatchScrollCaptureSearchResult(controller, null);
+            return;
+        }
+
+        // Request scrollBounds from each of the targets.
+        // Continues with the consumer once all responses are consumed, or the timeout expires.
+        ScrollCaptureTargetResolver resolver = new ScrollCaptureTargetResolver(targetList);
+        resolver.start(mHandler, 1000,
+                (selected) -> dispatchScrollCaptureSearchResult(controller, selected));
+    }
+
+    /** Called by {@link #handleScrollCaptureRequest} when a result is returned */
+    private void dispatchScrollCaptureSearchResult(
+            @NonNull IScrollCaptureController controller,
+            @Nullable ScrollCaptureTarget selectedTarget) {
+
+        // If timeout or no eligible targets found.
+        if (selectedTarget == null) {
+            try {
+                if (DEBUG_SCROLL_CAPTURE) {
+                    Log.d(TAG, "scrollCaptureSearch returned no targets available.");
+                }
+                controller.onClientUnavailable();
+            } catch (RemoteException e) {
+                if (DEBUG_SCROLL_CAPTURE) {
+                    Log.w(TAG, "Failed to notify controller of scroll capture search result.", e);
+                }
+            }
+            return;
+        }
+
+        // Create a client instance and return it to the caller
+        mScrollCaptureClient = new ScrollCaptureClient(selectedTarget, controller);
+        try {
+            if (DEBUG_SCROLL_CAPTURE) {
+                Log.d(TAG, "scrollCaptureSearch returning client: " + getScrollCaptureClient());
+            }
+            controller.onClientConnected(
+                    mScrollCaptureClient,
+                    selectedTarget.getScrollBounds(),
+                    selectedTarget.getPositionInWindow());
+        } catch (RemoteException e) {
+            if (DEBUG_SCROLL_CAPTURE) {
+                Log.w(TAG, "Failed to notify controller of scroll capture search result.", e);
+            }
+            mScrollCaptureClient.disconnect();
+            mScrollCaptureClient = null;
+        }
+    }
 
     private void reportNextDraw() {
         if (mReportNextDraw == false) {
@@ -9082,6 +9269,13 @@ public final class ViewRootImpl implements ViewParent,
             }
         }
 
+        @Override
+        public void requestScrollCapture(IScrollCaptureController controller) {
+            final ViewRootImpl viewAncestor = mViewAncestor.get();
+            if (viewAncestor != null) {
+                viewAncestor.dispatchScrollCaptureRequest(controller);
+            }
+        }
     }
 
     public static final class CalledFromWrongThreadException extends AndroidRuntimeException {
@@ -9583,10 +9777,16 @@ public final class ViewRootImpl implements ViewParent,
         mNextDrawUseBLASTSyncTransaction = true;
     }
 
-    private void finishBLASTSync() {
+    private void finishBLASTSync(boolean apply) {
+        mSendNextFrameToWm = false;
         if (mNextReportConsumeBLAST) {
             mNextReportConsumeBLAST = false;
-            mRtBLASTSyncTransaction.apply();
+
+            if (apply) {
+                mRtBLASTSyncTransaction.apply();
+            } else {
+                mSurfaceChangedTransaction.merge(mRtBLASTSyncTransaction);
+            }
         }
     }
 
@@ -9598,7 +9798,7 @@ public final class ViewRootImpl implements ViewParent,
      * @hide
      */
     public SurfaceControl getRenderSurfaceControl() {
-        if (mUseBLASTAdapter) {
+        if (useBLAST()) {
             return mBlastSurfaceControl;
         } else {
             return mSurfaceControl;
@@ -9615,11 +9815,11 @@ public final class ViewRootImpl implements ViewParent,
      * flag. Needs to be called before addView.
      */
     void forceDisableBLAST() {
-        mUseBLASTAdapter = false;
+        mForceDisableBLAST = true;
     }
 
     boolean useBLAST() {
-        return mUseBLASTAdapter;
+        return mUseBLASTAdapter && !mForceDisableBLAST;
     }
 
     /**

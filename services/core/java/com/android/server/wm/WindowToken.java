@@ -16,8 +16,10 @@
 
 package com.android.server.wm;
 
+import static android.os.Process.INVALID_UID;
 import static android.view.Display.INVALID_DISPLAY;
 import static android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER;
+import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_STARTING;
 import static android.view.WindowManager.LayoutParams.TYPE_DOCK_DIVIDER;
 import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR;
 
@@ -39,12 +41,15 @@ import static com.android.server.wm.WindowTokenProto.WINDOW_CONTAINER;
 
 import android.annotation.CallSuper;
 import android.app.IWindowToken;
+import android.app.servertransaction.FixedRotationAdjustmentsItem;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Debug;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.util.Slog;
 import android.util.proto.ProtoOutputStream;
+import android.view.DisplayAdjustments.FixedRotationAdjustments;
 import android.view.DisplayInfo;
 import android.view.InsetsState;
 import android.view.SurfaceControl;
@@ -106,37 +111,40 @@ class WindowToken extends WindowContainer<WindowState> {
     @VisibleForTesting
     final boolean mFromClientToken;
 
+    private DeathRecipient mDeathRecipient;
+    private boolean mBinderDied = false;
+
+    private final int mOwnerUid;
+
     /**
      * Used to fix the transform of the token to be rotated to a rotation different than it's
      * display. The window frames and surfaces corresponding to this token will be layouted and
      * rotated by the given rotated display info, frames and insets.
      */
     private static class FixedRotationTransformState {
-        final WindowToken mOwner;
         final DisplayInfo mDisplayInfo;
         final DisplayFrames mDisplayFrames;
         final InsetsState mInsetsState;
         final Configuration mRotatedOverrideConfiguration;
         final SeamlessRotator mRotator;
         /**
-         * The tokens that share the same transform. Their end time of transform are the same as
-         * {@link #mOwner}.
+         * The tokens that share the same transform. Their end time of transform are the same. The
+         * list should at least contain the token who creates this state.
          */
-        final ArrayList<WindowToken> mAssociatedTokens = new ArrayList<>(1);
+        final ArrayList<WindowToken> mAssociatedTokens = new ArrayList<>(3);
         final ArrayList<WindowContainer<?>> mRotatedContainers = new ArrayList<>(3);
         boolean mIsTransforming = true;
 
-        FixedRotationTransformState(WindowToken owner, DisplayInfo rotatedDisplayInfo,
+        FixedRotationTransformState(DisplayInfo rotatedDisplayInfo,
                 DisplayFrames rotatedDisplayFrames, InsetsState rotatedInsetsState,
                 Configuration rotatedConfig, int currentRotation) {
-            mOwner = owner;
             mDisplayInfo = rotatedDisplayInfo;
             mDisplayFrames = rotatedDisplayFrames;
             mInsetsState = rotatedInsetsState;
             mRotatedOverrideConfiguration = rotatedConfig;
             // This will use unrotate as rotate, so the new and old rotation are inverted.
             mRotator = new SeamlessRotator(rotatedDisplayInfo.rotation, currentRotation,
-                    rotatedDisplayInfo);
+                    rotatedDisplayInfo, true /* applyFixedTransformationHint */);
         }
 
         /**
@@ -162,6 +170,30 @@ class WindowToken extends WindowContainer<WindowState> {
                     mRotator.finish(c.getPendingTransaction(), c);
                 }
             }
+        }
+    }
+
+    private class DeathRecipient implements IBinder.DeathRecipient {
+        private boolean mHasUnlinkToDeath = false;
+
+        @Override
+        public void binderDied() {
+            synchronized (mWmService.mGlobalLock) {
+                mBinderDied = true;
+                removeImmediately();
+            }
+        }
+
+        void linkToDeath() throws RemoteException {
+            token.linkToDeath(DeathRecipient.this, 0);
+        }
+
+        void unlinkToDeath() {
+            if (mHasUnlinkToDeath) {
+                return;
+            }
+            token.unlinkToDeath(DeathRecipient.this, 0);
+            mHasUnlinkToDeath = true;
         }
     }
 
@@ -193,22 +225,34 @@ class WindowToken extends WindowContainer<WindowState> {
 
     WindowToken(WindowManagerService service, IBinder _token, int type, boolean persistOnEmpty,
             DisplayContent dc, boolean ownerCanManageAppTokens, boolean roundedCornerOverlay) {
-        this(service, _token, type, persistOnEmpty, dc, ownerCanManageAppTokens,
+        this(service, _token, type, persistOnEmpty, dc, ownerCanManageAppTokens, INVALID_UID,
                 roundedCornerOverlay, false /* fromClientToken */);
     }
 
     WindowToken(WindowManagerService service, IBinder _token, int type, boolean persistOnEmpty,
-            DisplayContent dc, boolean ownerCanManageAppTokens, boolean roundedCornerOverlay,
-            boolean fromClientToken) {
+            DisplayContent dc, boolean ownerCanManageAppTokens, int ownerUid,
+            boolean roundedCornerOverlay, boolean fromClientToken) {
         super(service);
         token = _token;
         windowType = type;
         mPersistOnEmpty = persistOnEmpty;
         mOwnerCanManageAppTokens = ownerCanManageAppTokens;
+        mOwnerUid = ownerUid;
         mRoundedCornerOverlay = roundedCornerOverlay;
         mFromClientToken = fromClientToken;
         if (dc != null) {
             dc.addWindowToken(token, this);
+        }
+        if (shouldReportToClient()) {
+            try {
+                mDeathRecipient = new DeathRecipient();
+                mDeathRecipient.linkToDeath();
+            } catch (RemoteException e) {
+                Slog.e(TAG, "Unable to add window token with type " + windowType + " on "
+                        + "display " + dc.getDisplayId(), e);
+                mDeathRecipient = null;
+                return;
+            }
         }
     }
 
@@ -222,7 +266,7 @@ class WindowToken extends WindowContainer<WindowState> {
     }
 
     void setExiting() {
-        if (mChildren.size() == 0) {
+        if (isEmpty()) {
             super.removeImmediately();
             return;
         }
@@ -340,6 +384,21 @@ class WindowToken extends WindowContainer<WindowState> {
         // Needs to occur after the token is removed from the display above to avoid attempt at
         // duplicate removal of this window container from it's parent.
         super.removeImmediately();
+
+        reportWindowTokenRemovedToClient();
+    }
+
+    private void reportWindowTokenRemovedToClient() {
+        if (!shouldReportToClient()) {
+            return;
+        }
+        mDeathRecipient.unlinkToDeath();
+        IWindowToken windowTokenClient = IWindowToken.Stub.asInterface(token);
+        try {
+            windowTokenClient.onWindowTokenRemoved();
+        } catch (RemoteException e) {
+            ProtoLog.w(WM_ERROR, "Could not report token removal to the window token client.");
+        }
     }
 
     @Override
@@ -361,36 +420,41 @@ class WindowToken extends WindowContainer<WindowState> {
     }
 
     void reportConfigToWindowTokenClient() {
-        if (asActivityRecord() != null) {
-            // Activities are updated through ATM callbacks.
+        if (!shouldReportToClient()) {
             return;
         }
-
-        // Unfortunately, this WindowToken is not from WindowContext so it cannot handle
-        // its own configuration changes.
-        if (!mFromClientToken) {
-            return;
+        if (mLastReportedConfig == null) {
+            mLastReportedConfig = new Configuration();
         }
-
         final Configuration config = getConfiguration();
         final int displayId = getDisplayContent().getDisplayId();
-        if (config.equals(mLastReportedConfig) && displayId == mLastReportedDisplay) {
+        if (config.diff(mLastReportedConfig) == 0 && displayId == mLastReportedDisplay) {
             // No changes since last reported time.
             return;
         }
 
-        mLastReportedConfig = config;
+        mLastReportedConfig.setTo(config);
         mLastReportedDisplay = displayId;
 
         IWindowToken windowTokenClient = IWindowToken.Stub.asInterface(token);
-        if (windowTokenClient != null) {
-            try {
-                windowTokenClient.onConfigurationChanged(config, displayId);
-            } catch (RemoteException e) {
-                ProtoLog.w(WM_ERROR,
-                        "Could not report config changes to the window token client.");
-            }
+        try {
+            windowTokenClient.onConfigurationChanged(config, displayId);
+        } catch (RemoteException e) {
+            ProtoLog.w(WM_ERROR,
+                    "Could not report config changes to the window token client.");
         }
+    }
+
+    /**
+     * @return {@code true} if this {@link WindowToken} is not an {@link ActivityRecord} and
+     * registered from client side.
+     */
+    private boolean shouldReportToClient() {
+        // Only report to client for WindowToken because Activities are updated through ATM
+        // callbacks.
+        return asActivityRecord() == null
+        // Report to {@link android.view.WindowTokenClient} if this token was registered from it.
+                && mFromClientToken && !mBinderDied;
     }
 
     @Override
@@ -417,6 +481,14 @@ class WindowToken extends WindowContainer<WindowState> {
 
     boolean hasFixedRotationTransform() {
         return mFixedRotationTransformState != null;
+    }
+
+    /** Returns {@code true} if the given token shares the same transform. */
+    boolean hasFixedRotationTransform(WindowToken token) {
+        if (mFixedRotationTransformState == null || token == null) {
+            return false;
+        }
+        return this == token || mFixedRotationTransformState == token.mFixedRotationTransformState;
     }
 
     boolean isFinishingFixedRotationTransform() {
@@ -457,15 +529,16 @@ class WindowToken extends WindowContainer<WindowState> {
         final InsetsState insetsState = new InsetsState();
         mDisplayContent.getDisplayPolicy().simulateLayoutDisplay(displayFrames, insetsState,
                 mDisplayContent.getConfiguration().uiMode);
-        mFixedRotationTransformState = new FixedRotationTransformState(this, info, displayFrames,
+        mFixedRotationTransformState = new FixedRotationTransformState(info, displayFrames,
                 insetsState, new Configuration(config), mDisplayContent.getRotation());
+        mFixedRotationTransformState.mAssociatedTokens.add(this);
         onConfigurationChanged(getParent().getConfiguration());
+        notifyFixedRotationTransform(true /* enabled */);
     }
 
     /**
      * Reuses the {@link FixedRotationTransformState} (if any) from the other WindowToken to this
-     * one. This takes the same effect as {@link #applyFixedRotationTransform}, but the linked state
-     * can only be cleared by the state owner.
+     * one. This takes the same effect as {@link #applyFixedRotationTransform}.
      */
     void linkFixedRotationTransform(WindowToken other) {
         if (mFixedRotationTransformState != null) {
@@ -478,31 +551,18 @@ class WindowToken extends WindowContainer<WindowState> {
         mFixedRotationTransformState = fixedRotationState;
         fixedRotationState.mAssociatedTokens.add(this);
         onConfigurationChanged(getParent().getConfiguration());
+        notifyFixedRotationTransform(true /* enabled */);
     }
 
-    /**
-     * Finishes the transform and continue updating the orientation change of display. Only the
-     * state owner can finish the transform state.
-     */
     void finishFixedRotationTransform() {
-        if (mFixedRotationTransformState == null || mFixedRotationTransformState.mOwner != this) {
-            return;
-        }
-        final boolean changed =
-                mDisplayContent.continueUpdateOrientationForDiffOrienLaunchingApp(this);
-        // If it is not the launching app or the display is not rotated, make sure the transform is
-        // cleared and the configuration is restored from parent.
-        if (!changed) {
-            clearFixedRotationTransform(null /* applyDisplayRotation */);
-            onConfigurationChanged(getParent().getConfiguration());
-        }
+        finishFixedRotationTransform(null /* applyDisplayRotation */);
     }
 
     /**
-     * Clears the transform and apply display rotation if the action is given. The caller needs to
-     * refresh the configuration of this container after this method call.
+     * Finishes the transform and apply display rotation if the action is given. If the display will
+     * not rotate, the transformed containers are restored to their original states.
      */
-    void clearFixedRotationTransform(Runnable applyDisplayRotation) {
+    void finishFixedRotationTransform(Runnable applyDisplayRotation) {
         final FixedRotationTransformState state = mFixedRotationTransformState;
         if (state == null) {
             return;
@@ -514,13 +574,89 @@ class WindowToken extends WindowContainer<WindowState> {
         state.mIsTransforming = false;
         if (applyDisplayRotation != null) {
             applyDisplayRotation.run();
+        } else {
+            // The display will not rotate to the rotation of this container, let's cancel them.
+            for (int i = state.mAssociatedTokens.size() - 1; i >= 0; i--) {
+                state.mAssociatedTokens.get(i).cancelFixedRotationTransform();
+            }
         }
         // The state is cleared at the end, because it is used to indicate that other windows can
         // use seamless rotation when applying rotation to display.
         for (int i = state.mAssociatedTokens.size() - 1; i >= 0; i--) {
-            state.mAssociatedTokens.get(i).mFixedRotationTransformState = null;
+            state.mAssociatedTokens.get(i).cleanUpFixedRotationTransformState();
         }
+    }
+
+    private void cleanUpFixedRotationTransformState() {
         mFixedRotationTransformState = null;
+        notifyFixedRotationTransform(false /* enabled */);
+    }
+
+    /** Notifies application side to enable or disable the rotation adjustment of display info. */
+    private void notifyFixedRotationTransform(boolean enabled) {
+        FixedRotationAdjustments adjustments = null;
+        // A token may contain windows of the same processes or different processes. The list is
+        // used to avoid sending the same adjustments to a process multiple times.
+        ArrayList<WindowProcessController> notifiedProcesses = null;
+        for (int i = mChildren.size() - 1; i >= 0; i--) {
+            final WindowState w = mChildren.get(i);
+            final WindowProcessController app;
+            if (w.mAttrs.type == TYPE_APPLICATION_STARTING) {
+                // Use the host activity because starting window is controlled by window manager.
+                final ActivityRecord r = asActivityRecord();
+                if (r == null) {
+                    continue;
+                }
+                app = r.app;
+            } else {
+                app = mWmService.mAtmService.mProcessMap.getProcess(w.mSession.mPid);
+            }
+            if (app == null || !app.hasThread()) {
+                continue;
+            }
+            if (notifiedProcesses == null) {
+                notifiedProcesses = new ArrayList<>(2);
+                adjustments = enabled ? createFixedRotationAdjustmentsIfNeeded() : null;
+            } else if (notifiedProcesses.contains(app)) {
+                continue;
+            }
+            notifiedProcesses.add(app);
+            try {
+                mWmService.mAtmService.getLifecycleManager().scheduleTransaction(
+                        app.getThread(), FixedRotationAdjustmentsItem.obtain(token, adjustments));
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Failed to schedule DisplayAdjustmentsItem to " + app, e);
+            }
+        }
+    }
+
+    /** Restores the changes that applies to this container. */
+    private void cancelFixedRotationTransform() {
+        final WindowContainer<?> parent = getParent();
+        if (parent == null) {
+            // The window may be detached or detaching.
+            return;
+        }
+        notifyFixedRotationTransform(false /* enabled */);
+        final int originalRotation = getWindowConfiguration().getRotation();
+        onConfigurationChanged(parent.getConfiguration());
+        onCancelFixedRotationTransform(originalRotation);
+    }
+
+    /**
+     * It is called when the window is using fixed rotation transform, and before display applies
+     * the same rotation, the rotation change for display is canceled, e.g. the orientation from
+     * sensor is updated to previous direction.
+     */
+    void onCancelFixedRotationTransform(int originalDisplayRotation) {
+    }
+
+    FixedRotationAdjustments createFixedRotationAdjustmentsIfNeeded() {
+        if (!isFixedRotationTransforming()) {
+            return null;
+        }
+        return new FixedRotationAdjustments(mFixedRotationTransformState.mDisplayInfo.rotation,
+                mFixedRotationTransformState.mDisplayInfo.displayCutout);
     }
 
     @Override
@@ -541,6 +677,15 @@ class WindowToken extends WindowContainer<WindowState> {
             // The window is layouted in a simulated rotated display but the real display hasn't
             // rotated, so here transforms its surface to fit in the real display.
             mFixedRotationTransformState.transform(this);
+        }
+    }
+
+    @Override
+    void resetSurfacePositionForAnimationLeash(SurfaceControl.Transaction t) {
+        // Keep the transformed position to animate because the surface will show in different
+        // rotation than the animator of leash.
+        if (!isFixedRotationTransforming()) {
+            super.resetSurfacePositionForAnimationLeash(t);
         }
     }
 
@@ -582,6 +727,11 @@ class WindowToken extends WindowContainer<WindowState> {
             pw.print(" waitingToShow=true");
         }
         pw.println();
+        if (hasFixedRotationTransform()) {
+            pw.print(prefix);
+            pw.print("fixedRotationConfig=");
+            pw.println(mFixedRotationTransformState.mRotatedOverrideConfiguration);
+        }
     }
 
     @Override
@@ -615,5 +765,9 @@ class WindowToken extends WindowContainer<WindowState> {
 
     int getWindowLayerFromType() {
         return mWmService.mPolicy.getWindowLayerFromTypeLw(windowType, mOwnerCanManageAppTokens);
+    }
+
+    int getOwnerUid() {
+        return mOwnerUid;
     }
 }

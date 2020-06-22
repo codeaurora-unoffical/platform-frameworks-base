@@ -16,7 +16,6 @@
 #pragma once
 
 #include "config/ConfigKey.h"
-#include "atoms_info.h"
 
 #include <gtest/gtest_prod.h>
 #include <log/log_time.h>
@@ -161,10 +160,14 @@ public:
     static const long kPullerCacheClearIntervalSec = 1;
 
     // Max time to do a pull.
-    static const int64_t kPullMaxDelayNs = 10 * NS_PER_SEC;
+    static const int64_t kPullMaxDelayNs = 30 * NS_PER_SEC;
 
     // Maximum number of pushed atoms statsd stats will track above kMaxPushedAtomId.
     static const int kMaxNonPlatformPushedAtoms = 100;
+
+    // Maximum atom id value that we consider a platform pushed atom.
+    // This should be updated once highest pushed atom id in atoms.proto approaches this value.
+    static const int kMaxPushedAtomId = 500;
 
     // Atom id that is the start of the pulled atoms.
     static const int kPullAtomStartTag = 10000;
@@ -368,21 +371,30 @@ public:
                      int32_t lastAtomTag, int32_t uid, int32_t pid);
 
     /**
-     * Records that the pull of an atom has failed
+     * Records that the pull of an atom has failed. Eg, if the client indicated the pull failed, if
+     * the pull timed out, or if the outgoing binder call failed.
+     * This count will only increment if the puller was actually invoked.
+     *
+     * It does not include a pull not occurring due to not finding the appropriate
+     * puller. These cases are covered in other counts.
      */
     void notePullFailed(int atomId);
 
     /**
-     * Records that the pull of StatsCompanionService atom has failed
+     * Records that the pull of an atom has failed due to not having a uid provider.
      */
-    void noteStatsCompanionPullFailed(int atomId);
+    void notePullUidProviderNotFound(int atomId);
 
     /**
-     * Records that the pull of a StatsCompanionService atom has failed due to a failed binder
-     * transaction. This can happen when StatsCompanionService returns too
-     * much data (the max Binder parcel size is 1MB)
+     * Records that the pull of an atom has failed due not finding a puller registered by a
+     * trusted uid.
      */
-    void noteStatsCompanionPullBinderTransactionFailed(int atomId);
+    void notePullerNotFound(int atomId);
+
+    /**
+     * Records that the pull has failed due to the outgoing binder call failing.
+     */
+    void notePullBinderCallFailed(int atomId);
 
     /**
      * A pull with no data occurred
@@ -457,6 +469,16 @@ public:
      */
      void noteActivationBroadcastGuardrailHit(const int uid);
 
+     /**
+      * Reports that an atom is erroneous or cannot be parsed successfully by
+      * statsd. An atom tag of 0 indicates that the client did not supply the
+      * atom id within the encoding.
+      *
+      * For pushed atoms only, this call should be preceded by a call to
+      * noteAtomLogged.
+      */
+     void noteAtomError(int atomTag, bool pull=false);
+
     /**
      * Reset the historical stats. Including all stats in icebox, and the tracked stats about
      * metrics, matchers, and atoms. The active configs will be kept and StatsdStats will continue
@@ -490,11 +512,13 @@ public:
         long pullTimeout = 0;
         long pullExceedMaxDelay = 0;
         long pullFailed = 0;
-        long statsCompanionPullFailed = 0;
-        long statsCompanionPullBinderTransactionFailed = 0;
+        long pullUidProviderNotFound = 0;
+        long pullerNotFound = 0;
         long emptyData = 0;
         long registeredCount = 0;
         long unregisteredCount = 0;
+        int32_t atomErrorCount = 0;
+        long binderCallFailCount = 0;
     } PulledAtomStats;
 
     typedef struct {
@@ -541,6 +565,12 @@ private:
 
     // Maps PullAtomId to its stats. The size is capped by the puller atom counts.
     std::map<int, PulledAtomStats> mPulledAtomStats;
+
+    // Stores the number of times a pushed atom was logged erroneously. The
+    // corresponding counts for pulled atoms are stored in PulledAtomStats.
+    // The max size of this map is kMaxAtomErrorsStatsSize.
+    std::map<int, int> mPushedAtomErrorStats;
+    int kMaxPushedAtomErrorStatsSize = 100;
 
     // Maps metric ID to its stats. The size is capped by the number of metrics.
     std::map<int64_t, AtomMetricStats> mAtomMetricStats;
@@ -609,6 +639,8 @@ private:
 
     void addToIceBoxLocked(std::shared_ptr<ConfigStats>& stats);
 
+    int getPushedAtomErrors(int atomId) const;
+
     /**
      * Get a reference to AtomMetricStats for a metric. If none exists, create it. The reference
      * will live as long as `this`.
@@ -627,6 +659,7 @@ private:
     FRIEND_TEST(StatsdStatsTest, TestPullAtomStats);
     FRIEND_TEST(StatsdStatsTest, TestAtomMetricsStats);
     FRIEND_TEST(StatsdStatsTest, TestActivationBroadcastGuardrailHit);
+    FRIEND_TEST(StatsdStatsTest, TestAtomErrorStats);
 };
 
 }  // namespace statsd

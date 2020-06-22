@@ -62,6 +62,8 @@ import static android.view.WindowManager.LayoutParams.TYPE_TOAST;
 import static android.view.WindowManager.LayoutParams.TYPE_VOICE_INTERACTION;
 import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
 import static android.view.WindowManager.LayoutParams.isSystemAlertWindowType;
+import static android.view.WindowManager.ScreenshotSource.SCREENSHOT_KEY_CHORD;
+import static android.view.WindowManager.ScreenshotSource.SCREENSHOT_KEY_OTHER;
 import static android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN;
 import static android.view.WindowManager.TAKE_SCREENSHOT_SELECTED_REGION;
 import static android.view.WindowManagerGlobal.ADD_OKAY;
@@ -691,7 +693,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                     accessibilityShortcutActivated();
                     break;
                 case MSG_BUGREPORT_TV:
-                    requestFullBugreportOrLaunchHandlerApp();
+                    requestBugreportForTv();
                     break;
                 case MSG_ACCESSIBILITY_TV:
                     if (mAccessibilityShortcutController.isAccessibilityShortcutAvailable(false)) {
@@ -1337,6 +1339,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 mScreenshotChordVolumeDownKeyConsumed = true;
                 cancelPendingPowerKeyAction();
                 mScreenshotRunnable.setScreenshotType(TAKE_SCREENSHOT_FULLSCREEN);
+                mScreenshotRunnable.setScreenshotSource(SCREENSHOT_KEY_CHORD);
                 mHandler.postDelayed(mScreenshotRunnable, getScreenshotChordLongPressDelay());
             }
         }
@@ -1420,14 +1423,19 @@ public class PhoneWindowManager implements WindowManagerPolicy {
 
     private class ScreenshotRunnable implements Runnable {
         private int mScreenshotType = TAKE_SCREENSHOT_FULLSCREEN;
+        private int mScreenshotSource = SCREENSHOT_KEY_OTHER;
 
         public void setScreenshotType(int screenshotType) {
             mScreenshotType = screenshotType;
         }
 
+        public void setScreenshotSource(int screenshotSource) {
+            mScreenshotSource = screenshotSource;
+        }
+
         @Override
         public void run() {
-            mDefaultDisplayPolicy.takeScreenshot(mScreenshotType);
+            mDefaultDisplayPolicy.takeScreenshot(mScreenshotType, mScreenshotSource);
         }
     }
 
@@ -2702,6 +2710,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 int type = event.isShiftPressed() ? TAKE_SCREENSHOT_SELECTED_REGION
                         : TAKE_SCREENSHOT_FULLSCREEN;
                 mScreenshotRunnable.setScreenshotType(type);
+                mScreenshotRunnable.setScreenshotSource(SCREENSHOT_KEY_OTHER);
                 mHandler.post(mScreenshotRunnable);
                 return -1;
             }
@@ -2718,6 +2727,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         } else if (keyCode == KeyEvent.KEYCODE_SYSRQ) {
             if (down && repeatCount == 0) {
                 mScreenshotRunnable.setScreenshotType(TAKE_SCREENSHOT_FULLSCREEN);
+                mScreenshotRunnable.setScreenshotSource(SCREENSHOT_KEY_OTHER);
                 mHandler.post(mScreenshotRunnable);
             }
             return -1;
@@ -3036,13 +3046,13 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         return mAccessibilityTvScheduled;
     }
 
-    private void requestFullBugreportOrLaunchHandlerApp() {
+    private void requestBugreportForTv() {
         if ("1".equals(SystemProperties.get("ro.debuggable"))
                 || Settings.Global.getInt(mContext.getContentResolver(),
                         Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1) {
             try {
                 if (!ActivityManager.getService().launchBugReportHandlerApp()) {
-                    ActivityManager.getService().requestFullBugReport();
+                    ActivityManager.getService().requestInteractiveBugReport();
                 }
             } catch (RemoteException e) {
                 Slog.e(TAG, "Error taking bugreport", e);
@@ -4200,6 +4210,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         return false;
     }
 
+    // pre-condition: event.getKeyCode() is one of KeyEvent.KEYCODE_VOLUME_UP,
+    //                                   KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE
     private void dispatchDirectAudioEvent(KeyEvent event) {
         // When System Audio Mode is off, volume keys received by AVR can be either consumed by AVR
         // or forwarded to the TV. It's up to Amplifier manufacturer’s implementation.
@@ -4214,42 +4226,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 return;
             }
         }
-        if (event.getAction() != KeyEvent.ACTION_DOWN) {
-            return;
-        }
-        int keyCode = event.getKeyCode();
-        int flags = AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND
-                | AudioManager.FLAG_FROM_KEY;
-        String pkgName = mContext.getOpPackageName();
-
-        switch (keyCode) {
-            case KeyEvent.KEYCODE_VOLUME_UP:
-                try {
-                    getAudioService().adjustSuggestedStreamVolume(AudioManager.ADJUST_RAISE,
-                            AudioManager.USE_DEFAULT_STREAM_TYPE, flags, pkgName, TAG);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error dispatching volume up in dispatchTvAudioEvent.", e);
-                }
-                break;
-            case KeyEvent.KEYCODE_VOLUME_DOWN:
-                try {
-                    getAudioService().adjustSuggestedStreamVolume(AudioManager.ADJUST_LOWER,
-                            AudioManager.USE_DEFAULT_STREAM_TYPE, flags, pkgName, TAG);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error dispatching volume down in dispatchTvAudioEvent.", e);
-                }
-                break;
-            case KeyEvent.KEYCODE_VOLUME_MUTE:
-                try {
-                    if (event.getRepeatCount() == 0) {
-                        getAudioService().adjustSuggestedStreamVolume(
-                                AudioManager.ADJUST_TOGGLE_MUTE,
-                                AudioManager.USE_DEFAULT_STREAM_TYPE, flags, pkgName, TAG);
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "Error dispatching mute in dispatchTvAudioEvent.", e);
-                }
-                break;
+        try {
+            getAudioService().handleVolumeKey(event, mUseTvRouting,
+                    mContext.getOpPackageName(), TAG);
+        } catch (Exception e) {
+            Log.e(TAG, "Error dispatching volume key in handleVolumeKey for event:"
+                    + event, e);
         }
     }
 
@@ -4478,12 +4460,6 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private void wakeUpFromPowerKey(long eventTime) {
         wakeUp(eventTime, mAllowTheaterModeWakeFromPowerKey,
                 PowerManager.WAKE_REASON_POWER_BUTTON, "android.policy:POWER");
-
-        // Turn on the connected TV and switch HDMI input if we're a HDMI playback device.
-        final HdmiControl hdmiControl = getHdmiControl();
-        if (hdmiControl != null) {
-            hdmiControl.turnOnTv();
-        }
     }
 
     private boolean wakeUp(long wakeTime, boolean wakeInTheaterMode, @WakeReason int reason,
@@ -4499,6 +4475,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
 
         mPowerManager.wakeUp(wakeTime, reason, details);
+
+        // Turn on the connected TV and switch HDMI input if we're a HDMI playback device.
+        final HdmiControl hdmiControl = getHdmiControl();
+        if (hdmiControl != null) {
+            hdmiControl.turnOnTv();
+        }
         return true;
     }
 

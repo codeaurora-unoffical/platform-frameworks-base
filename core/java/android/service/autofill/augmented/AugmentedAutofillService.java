@@ -30,7 +30,9 @@ import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.Rect;
+import android.os.BaseBundle;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.IBinder;
@@ -131,6 +133,7 @@ public abstract class AugmentedAutofillService extends Service {
     public void onCreate() {
         super.onCreate();
         mHandler = new Handler(Looper.getMainLooper(), null, true);
+        BaseBundle.setShouldDefuse(true);
     }
 
     /** @hide */
@@ -160,14 +163,18 @@ public abstract class AugmentedAutofillService extends Service {
     }
 
     /**
-     * The child class of the service can call this method to initiate an Autofill flow.
+     * The child class of the service can call this method to initiate a new Autofill flow. If all
+     * conditions are met, it will make a request to the client app process to explicitly cancel
+     * the current autofill session and create a new session. For example, an augmented autofill
+     * service may notice some events which make it think a good time to provide updated
+     * augmented autofill suggestions.
      *
      * <p> The request would be respected only if the previous augmented autofill request was
      * made for the same {@code activityComponent} and {@code autofillId}, and the field is
      * currently on focus.
      *
-     * <p> The request would start a new autofill flow. It doesn't guarantee that the
-     * {@link AutofillManager} will proceed with the request.
+     * <p> The request would cancel the current session and start a new autofill flow.
+     * It doesn't guarantee that the {@link AutofillManager} will proceed with the request.
      *
      * @param activityComponent the client component for which the autofill is requested for
      * @param autofillId        the client field id for which the autofill is requested for
@@ -176,8 +183,6 @@ public abstract class AugmentedAutofillService extends Service {
      */
     public final boolean requestAutofill(@NonNull ComponentName activityComponent,
             @NonNull AutofillId autofillId) {
-        // TODO(b/149531989): revisit this. The request should start a new autofill session
-        //  rather than reusing the existing session.
         final AutofillProxy proxy = mAutofillProxyForLastRequest;
         if (proxy == null || !proxy.mComponentName.equals(activityComponent)
                 || !proxy.mFocusedId.equals(autofillId)) {
@@ -558,9 +563,10 @@ public abstract class AugmentedAutofillService extends Service {
             }
         }
 
-        void reportResult(@Nullable List<Dataset> inlineSuggestionsData) {
+        void reportResult(@Nullable List<Dataset> inlineSuggestionsData,
+                @Nullable Bundle clientState) {
             try {
-                mCallback.onSuccess(inlineSuggestionsData);
+                mCallback.onSuccess(inlineSuggestionsData, clientState);
             } catch (RemoteException e) {
                 Log.e(TAG, "Error calling back with the inline suggestions data: " + e);
             }

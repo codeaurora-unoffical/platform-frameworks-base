@@ -35,6 +35,7 @@ import android.animation.PropertyValuesHolder;
 import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.annotation.DrawableRes;
+import android.annotation.Nullable;
 import android.app.StatusBarManager;
 import android.content.Context;
 import android.content.res.Configuration;
@@ -123,7 +124,7 @@ public class NavigationBarView extends FrameLayout implements
     private KeyButtonDrawable mRecentIcon;
     private KeyButtonDrawable mDockedIcon;
 
-    private final EdgeBackGestureHandler mEdgeBackGestureHandler;
+    private EdgeBackGestureHandler mEdgeBackGestureHandler;
     private final DeadZone mDeadZone;
     private boolean mDeadZoneConsuming = false;
     private final NavigationBarTransitions mBarTransitions;
@@ -158,6 +159,14 @@ public class NavigationBarView extends FrameLayout implements
      */
     private ScreenPinningNotify mScreenPinningNotify;
     private Rect mSamplingBounds = new Rect();
+    /**
+     * When quickswitching between apps of different orientations, we draw a secondary home handle
+     * in the position of the first app's orientation. This rect represents the region of that
+     * home handle so we can apply the correct light/dark luma on that.
+     * @see {@link NavigationBarFragment#mOrientationHandle}
+     */
+    @Nullable
+    private Rect mOrientedHandleSamplingRegion;
 
     private class NavTransitionListener implements TransitionListener {
         private boolean mBackTransitioning;
@@ -244,7 +253,7 @@ public class NavigationBarView extends FrameLayout implements
     private final OnComputeInternalInsetsListener mOnComputeInternalInsetsListener = info -> {
         // When the nav bar is in 2-button or 3-button mode, or when IME is visible in fully
         // gestural mode, the entire nav bar should be touchable.
-        if (!isGesturalMode(mNavBarMode) || mImeVisible) {
+        if (!mEdgeBackGestureHandler.isHandlingGestures() || mImeVisible) {
             info.setTouchableInsets(InternalInsetsInfo.TOUCHABLE_INSETS_FRAME);
             return;
         }
@@ -296,8 +305,6 @@ public class NavigationBarView extends FrameLayout implements
                 R.style.RotateButtonCCWStart90,
                 isGesturalMode ? mFloatingRotationButton : rotateSuggestionButton);
 
-        final ContextualButton backButton = new ContextualButton(R.id.back, 0);
-
         mConfiguration = new Configuration();
         mTmpLastConfiguration = new Configuration();
         mConfiguration.updateFrom(context.getResources().getConfiguration());
@@ -305,7 +312,7 @@ public class NavigationBarView extends FrameLayout implements
         mScreenPinningNotify = new ScreenPinningNotify(mContext);
         mBarTransitions = new NavigationBarTransitions(this, Dependency.get(CommandQueue.class));
 
-        mButtonDispatchers.put(R.id.back, backButton);
+        mButtonDispatchers.put(R.id.back, new ButtonDispatcher(R.id.back));
         mButtonDispatchers.put(R.id.home, new ButtonDispatcher(R.id.home));
         mButtonDispatchers.put(R.id.home_handle, new ButtonDispatcher(R.id.home_handle));
         mButtonDispatchers.put(R.id.recent_apps, new ButtonDispatcher(R.id.recent_apps));
@@ -329,6 +336,10 @@ public class NavigationBarView extends FrameLayout implements
 
                     @Override
                     public Rect getSampledRegion(View sampledView) {
+                        if (mOrientedHandleSamplingRegion != null) {
+                            return mOrientedHandleSamplingRegion;
+                        }
+
                         updateSamplingRect();
                         return mSamplingBounds;
                     }
@@ -659,7 +670,7 @@ public class NavigationBarView extends FrameLayout implements
         boolean disableHomeHandle = disableRecent
                 && ((mDisabledFlags & View.STATUS_BAR_DISABLE_HOME) != 0);
 
-        boolean disableBack = !useAltBack && (isGesturalMode(mNavBarMode)
+        boolean disableBack = !useAltBack && (mEdgeBackGestureHandler.isHandlingGestures()
                 || ((mDisabledFlags & View.STATUS_BAR_DISABLE_BACK) != 0));
 
         // When screen pinning, don't hide back and home when connected service or back and
@@ -686,9 +697,9 @@ public class NavigationBarView extends FrameLayout implements
             }
         }
 
-        getBackButton().setVisibility(disableBack      ? View.INVISIBLE : View.VISIBLE);
-        getHomeButton().setVisibility(disableHome      ? View.INVISIBLE : View.VISIBLE);
-        getRecentsButton().setVisibility(disableRecent ? View.INVISIBLE : View.VISIBLE);
+        getBackButton().setVisibility(disableBack       ? View.INVISIBLE : View.VISIBLE);
+        getHomeButton().setVisibility(disableHome       ? View.INVISIBLE : View.VISIBLE);
+        getRecentsButton().setVisibility(disableRecent  ? View.INVISIBLE : View.VISIBLE);
         getHomeHandle().setVisibility(disableHomeHandle ? View.INVISIBLE : View.VISIBLE);
     }
 
@@ -838,10 +849,9 @@ public class NavigationBarView extends FrameLayout implements
 
     @Override
     public void onNavigationModeChanged(int mode) {
-        Context curUserCtx = Dependency.get(NavigationModeController.class).getCurrentUserContext();
         mNavBarMode = mode;
         mBarTransitions.onNavigationModeChanged(mNavBarMode);
-        mEdgeBackGestureHandler.onNavigationModeChanged(mNavBarMode, curUserCtx);
+        mEdgeBackGestureHandler.onNavigationModeChanged(mNavBarMode);
         mRecentsOnboarding.onNavigationModeChanged(mNavBarMode);
         getRotateSuggestionButton().onNavigationModeChanged(mNavBarMode);
 
@@ -864,6 +874,7 @@ public class NavigationBarView extends FrameLayout implements
 
     @Override
     public void onFinishInflate() {
+        super.onFinishInflate();
         mNavigationInflaterView = findViewById(R.id.navigation_inflater);
         mNavigationInflaterView.setButtonDispatchers(mButtonDispatchers);
 
@@ -897,6 +908,11 @@ public class NavigationBarView extends FrameLayout implements
                     displaySize.y);
             mSamplingBounds.set(samplingBounds);
         }
+    }
+
+    void setOrientedHandleSamplingRegion(Rect orientedHandleSamplingRegion) {
+        mOrientedHandleSamplingRegion = orientedHandleSamplingRegion;
+        mRegionSamplingHelper.updateSamplingRect();
     }
 
     @Override
@@ -1192,6 +1208,8 @@ public class NavigationBarView extends FrameLayout implements
                         mIsVertical ? "true" : "false",
                         getLightTransitionsController().getCurrentDarkIntensity()));
 
+        pw.println("      mOrientedHandleSamplingRegion: " + mOrientedHandleSamplingRegion);
+
         dumpButton(pw, "back", getBackButton());
         dumpButton(pw, "home", getHomeButton());
         dumpButton(pw, "rcnt", getRecentsButton());
@@ -1200,6 +1218,9 @@ public class NavigationBarView extends FrameLayout implements
 
         pw.println("    }");
 
+        if (mNavigationInflaterView != null) {
+            mNavigationInflaterView.dump(pw);
+        }
         mContextualButtonGroup.dump(pw);
         mRecentsOnboarding.dump(pw);
         mRegionSamplingHelper.dump(pw);

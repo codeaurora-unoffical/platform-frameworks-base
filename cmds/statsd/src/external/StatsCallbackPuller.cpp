@@ -67,8 +67,14 @@ bool StatsCallbackPuller::PullInternal(vector<shared_ptr<LogEvent>>* data) {
                     lock_guard<mutex> lk(*cv_mutex);
                     for (const StatsEventParcel& parcel: output) {
                         shared_ptr<LogEvent> event = make_shared<LogEvent>(/*uid=*/-1, /*pid=*/-1);
-                        event->parseBuffer((uint8_t*)parcel.buffer.data(), parcel.buffer.size());
-                        sharedData->push_back(event);
+                        bool valid = event->parseBuffer((uint8_t*)parcel.buffer.data(),
+                                                        parcel.buffer.size());
+                        if (valid) {
+                            sharedData->push_back(event);
+                        } else {
+                            StatsdStats::getInstance().noteAtomError(event->GetTagId(),
+                                                                     /*pull=*/true);
+                        }
                     }
                     *pullSuccess = success;
                     *pullFinish = true;
@@ -80,6 +86,7 @@ bool StatsCallbackPuller::PullInternal(vector<shared_ptr<LogEvent>>* data) {
     // in unit tests. In process calls are not oneway.
     Status status = mCallback->onPullAtom(mTagId, resultReceiver);
     if (!status.isOk()) {
+        StatsdStats::getInstance().notePullBinderCallFailed(mTagId);
         return false;
     }
 

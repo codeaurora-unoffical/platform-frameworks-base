@@ -100,7 +100,9 @@ Result<std::string> ReadString(std::istream& stream) {
   return buf;
 }
 
-Result<uint32_t> GetCrc(const ZipFile& zip) {
+}  // namespace
+
+Result<uint32_t> GetPackageCrc(const ZipFile& zip) {
   const Result<uint32_t> a = zip.Crc("resources.arsc");
   const Result<uint32_t> b = zip.Crc("AndroidManifest.xml");
   return a && b
@@ -108,17 +110,18 @@ Result<uint32_t> GetCrc(const ZipFile& zip) {
              : Error("failed to get CRC for \"%s\"", a ? "AndroidManifest.xml" : "resources.arsc");
 }
 
-}  // namespace
-
 std::unique_ptr<const IdmapHeader> IdmapHeader::FromBinaryStream(std::istream& stream) {
   std::unique_ptr<IdmapHeader> idmap_header(new IdmapHeader());
-
+  uint8_t enforce_overlayable;
   if (!Read32(stream, &idmap_header->magic_) || !Read32(stream, &idmap_header->version_) ||
       !Read32(stream, &idmap_header->target_crc_) || !Read32(stream, &idmap_header->overlay_crc_) ||
+      !Read32(stream, &idmap_header->fulfilled_policies_) || !Read8(stream, &enforce_overlayable) ||
       !ReadString256(stream, idmap_header->target_path_) ||
       !ReadString256(stream, idmap_header->overlay_path_)) {
     return nullptr;
   }
+
+  idmap_header->enforce_overlayable_ = static_cast<bool>(enforce_overlayable);
 
   auto debug_str = ReadString(stream);
   if (!debug_str) {
@@ -129,7 +132,37 @@ std::unique_ptr<const IdmapHeader> IdmapHeader::FromBinaryStream(std::istream& s
   return std::move(idmap_header);
 }
 
-Result<Unit> IdmapHeader::IsUpToDate() const {
+Result<Unit> IdmapHeader::IsUpToDate(const char* target_path, const char* overlay_path,
+                                     PolicyBitmask fulfilled_policies,
+                                     bool enforce_overlayable) const {
+  const std::unique_ptr<const ZipFile> target_zip = ZipFile::Open(target_path);
+  if (!target_zip) {
+    return Error("failed to open target %s", target_path);
+  }
+
+  const Result<uint32_t> target_crc = GetPackageCrc(*target_zip);
+  if (!target_crc) {
+    return Error("failed to get target crc");
+  }
+
+  const std::unique_ptr<const ZipFile> overlay_zip = ZipFile::Open(overlay_path);
+  if (!overlay_zip) {
+    return Error("failed to overlay target %s", overlay_path);
+  }
+
+  const Result<uint32_t> overlay_crc = GetPackageCrc(*overlay_zip);
+  if (!overlay_crc) {
+    return Error("failed to get overlay crc");
+  }
+
+  return IsUpToDate(target_path, overlay_path, *target_crc, *overlay_crc, fulfilled_policies,
+                    enforce_overlayable);
+}
+
+Result<Unit> IdmapHeader::IsUpToDate(const char* target_path, const char* overlay_path,
+                                     uint32_t target_crc, uint32_t overlay_crc,
+                                     PolicyBitmask fulfilled_policies,
+                                     bool enforce_overlayable) const {
   if (magic_ != kIdmapMagic) {
     return Error("bad magic: actual 0x%08x, expected 0x%08x", magic_, kIdmapMagic);
   }
@@ -138,34 +171,34 @@ Result<Unit> IdmapHeader::IsUpToDate() const {
     return Error("bad version: actual 0x%08x, expected 0x%08x", version_, kIdmapCurrentVersion);
   }
 
-  const std::unique_ptr<const ZipFile> target_zip = ZipFile::Open(target_path_);
-  if (!target_zip) {
-    return Error("failed to open target %s", GetTargetPath().to_string().c_str());
-  }
-
-  Result<uint32_t> target_crc = GetCrc(*target_zip);
-  if (!target_crc) {
-    return Error("failed to get target crc");
-  }
-
-  if (target_crc_ != *target_crc) {
+  if (target_crc_ != target_crc) {
     return Error("bad target crc: idmap version 0x%08x, file system version 0x%08x", target_crc_,
-                 *target_crc);
+                 target_crc);
   }
 
-  const std::unique_ptr<const ZipFile> overlay_zip = ZipFile::Open(overlay_path_);
-  if (!overlay_zip) {
-    return Error("failed to open overlay %s", GetOverlayPath().to_string().c_str());
-  }
-
-  Result<uint32_t> overlay_crc = GetCrc(*overlay_zip);
-  if (!overlay_crc) {
-    return Error("failed to get overlay crc");
-  }
-
-  if (overlay_crc_ != *overlay_crc) {
+  if (overlay_crc_ != overlay_crc) {
     return Error("bad overlay crc: idmap version 0x%08x, file system version 0x%08x", overlay_crc_,
-                 *overlay_crc);
+                 overlay_crc);
+  }
+
+  if (fulfilled_policies_ != fulfilled_policies) {
+    return Error("bad fulfilled policies: idmap version 0x%08x, file system version 0x%08x",
+                 fulfilled_policies, fulfilled_policies_);
+  }
+
+  if (enforce_overlayable != enforce_overlayable_) {
+    return Error("bad enforce overlayable: idmap version %s, file system version %s",
+                 enforce_overlayable ? "true" : "false", enforce_overlayable_ ? "true" : "false");
+  }
+
+  if (strcmp(target_path, target_path_) != 0) {
+    return Error("bad target path: idmap version %s, file system version %s", target_path,
+                 target_path_);
+  }
+
+  if (strcmp(overlay_path, overlay_path_) != 0) {
+    return Error("bad overlay path: idmap version %s, file system version %s", overlay_path,
+                 overlay_path_);
   }
 
   return Unit{};
@@ -304,17 +337,20 @@ Result<std::unique_ptr<const Idmap>> Idmap::FromApkAssets(const ApkAssets& targe
   header->magic_ = kIdmapMagic;
   header->version_ = kIdmapCurrentVersion;
 
-  Result<uint32_t> crc = GetCrc(*target_zip);
+  Result<uint32_t> crc = GetPackageCrc(*target_zip);
   if (!crc) {
     return Error(crc.GetError(), "failed to get zip CRC for target");
   }
   header->target_crc_ = *crc;
 
-  crc = GetCrc(*overlay_zip);
+  crc = GetPackageCrc(*overlay_zip);
   if (!crc) {
     return Error(crc.GetError(), "failed to get zip CRC for overlay");
   }
   header->overlay_crc_ = *crc;
+
+  header->fulfilled_policies_ = fulfilled_policies;
+  header->enforce_overlayable_ = enforce_overlayable;
 
   if (target_apk_path.size() > sizeof(header->target_path_)) {
     return Error("target apk path \"%s\" longer than maximum size %zu", target_apk_path.c_str(),

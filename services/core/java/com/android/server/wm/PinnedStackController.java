@@ -23,8 +23,6 @@ import android.app.RemoteAction;
 import android.content.ComponentName;
 import android.content.pm.ParceledListSlice;
 import android.content.res.Resources;
-import android.graphics.Rect;
-import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.DisplayMetrics;
@@ -33,8 +31,6 @@ import android.util.Slog;
 import android.view.DisplayInfo;
 import android.view.IPinnedStackController;
 import android.view.IPinnedStackListener;
-
-import com.android.server.UiThread;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -62,13 +58,15 @@ class PinnedStackController {
 
     private final WindowManagerService mService;
     private final DisplayContent mDisplayContent;
-    private final Handler mHandler = UiThread.getHandler();
 
     private IPinnedStackListener mPinnedStackListener;
     private final PinnedStackListenerDeathHandler mPinnedStackListenerDeathHandler =
             new PinnedStackListenerDeathHandler();
 
     private final PinnedStackControllerCallback mCallbacks = new PinnedStackControllerCallback();
+
+    /** Whether the PiP is entering or leaving. */
+    private boolean mIsPipWindowingModeChanging;
 
     private boolean mIsImeShowing;
     private int mImeHeight;
@@ -160,6 +158,20 @@ class PinnedStackController {
     public boolean isValidPictureInPictureAspectRatio(float aspectRatio) {
         return Float.compare(mMinAspectRatio, aspectRatio) <= 0 &&
                 Float.compare(aspectRatio, mMaxAspectRatio) <= 0;
+    }
+
+    /** Returns {@code true} if the PiP is on screen or is changing windowing mode. */
+    boolean isPipActiveOrWindowingModeChanging() {
+        if (mIsPipWindowingModeChanging) {
+            return true;
+        }
+        final Task pinnedTask = mDisplayContent.getDefaultTaskDisplayArea().getRootPinnedTask();
+        return pinnedTask != null && pinnedTask.hasChild();
+    }
+
+    /** Sets whether a visible stack is changing from or to pinned mode. */
+    void setPipWindowingModeChanging(boolean isPipWindowingModeChanging) {
+        mIsPipWindowingModeChanging = isPipWindowingModeChanging;
     }
 
     /**
@@ -285,13 +297,7 @@ class PinnedStackController {
                 return;
             }
             try {
-                final Rect animatingBounds = new Rect();
-                final ActivityStack pinnedStack = mDisplayContent.getDefaultTaskDisplayArea()
-                        .getRootPinnedTask();
-                if (pinnedStack != null) {
-                    pinnedStack.getAnimationOrCurrentBounds(animatingBounds);
-                }
-                mPinnedStackListener.onMovementBoundsChanged(animatingBounds, fromImeAdjustment);
+                mPinnedStackListener.onMovementBoundsChanged(fromImeAdjustment);
             } catch (RemoteException e) {
                 Slog.e(TAG_WM, "Error delivering actions changed event.", e);
             }

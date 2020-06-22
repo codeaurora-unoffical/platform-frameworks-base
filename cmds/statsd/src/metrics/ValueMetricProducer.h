@@ -52,6 +52,7 @@ class ValueMetricProducer : public virtual MetricProducer, public virtual PullDa
 public:
     ValueMetricProducer(
             const ConfigKey& key, const ValueMetric& valueMetric, const int conditionIndex,
+            const vector<ConditionState>& initialConditionCache,
             const sp<ConditionWizard>& conditionWizard, const int whatMatcherIndex,
             const sp<EventMatcherWizard>& matcherWizard, const int pullTagId,
             const int64_t timeBaseNs, const int64_t startTimeNs,
@@ -69,20 +70,28 @@ public:
                       bool pullSuccess, int64_t originalPullTimeNs) override;
 
     // ValueMetric needs special logic if it's a pulled atom.
-    void notifyAppUpgrade(const int64_t& eventTimeNs, const string& apk, const int uid,
-                          const int64_t version) override {
+    void notifyAppUpgrade(const int64_t& eventTimeNs) override {
         std::lock_guard<std::mutex> lock(mMutex);
         if (!mSplitBucketForAppUpgrade) {
             return;
         }
-        if (mIsPulled && mCondition) {
+        if (mIsPulled && mCondition == ConditionState::kTrue) {
+            pullAndMatchEventsLocked(eventTimeNs);
+        }
+        flushCurrentBucketLocked(eventTimeNs, eventTimeNs);
+    };
+
+    // ValueMetric needs special logic if it's a pulled atom.
+    void onStatsdInitCompleted(const int64_t& eventTimeNs) override {
+        std::lock_guard<std::mutex> lock(mMutex);
+        if (mIsPulled && mCondition == ConditionState::kTrue) {
             pullAndMatchEventsLocked(eventTimeNs);
         }
         flushCurrentBucketLocked(eventTimeNs, eventTimeNs);
     };
 
     void onStateChanged(int64_t eventTimeNs, int32_t atomId, const HashableDimensionKey& primaryKey,
-                        int oldState, int newState) override;
+                        const FieldValue& oldState, const FieldValue& newState) override;
 
 protected:
     void onMatchedLogEventInternalLocked(
@@ -134,8 +143,14 @@ private:
 
     // Mark the data as invalid.
     void invalidateCurrentBucket(const int64_t dropTimeNs, const BucketDropReason reason);
+
     void invalidateCurrentBucketWithoutResetBase(const int64_t dropTimeNs,
                                                  const BucketDropReason reason);
+
+    // Skips the current bucket without notifying StatsdStats of the skipped bucket.
+    // This should only be called from #flushCurrentBucketLocked. Otherwise, a future event that
+    // causes the bucket to be invalidated will not notify StatsdStats.
+    void skipCurrentBucket(const int64_t dropTimeNs, const BucketDropReason reason);
 
     const int mWhatMatcherIndex;
 
@@ -197,6 +212,7 @@ private:
 
     // Util function to check whether the specified dimension hits the guardrail.
     bool hitGuardRailLocked(const MetricDimensionKey& newKey);
+
     bool hasReachedGuardRailLimit() const;
 
     bool hitFullBucketGuardRailLocked(const MetricDimensionKey& newKey);
@@ -208,8 +224,10 @@ private:
 
     ValueBucket buildPartialBucket(int64_t bucketEndTime,
                                    const std::vector<Interval>& intervals);
+
     void initCurrentSlicedBucket(int64_t nextBucketStartTimeNs);
-    void appendToFullBucket(int64_t eventTimeNs, int64_t fullBucketEndTimeNs);
+
+    void appendToFullBucket(const bool isFullBucketReached);
 
     // Reset diff base and mHasGlobalBase
     void resetBase();
@@ -242,11 +260,9 @@ private:
     // diff against.
     bool mHasGlobalBase;
 
-    // Invalid bucket. There was a problem in collecting data in the current bucket so we cannot
-    // trust any of the data in this bucket.
-    //
-    // For instance, one pull failed.
-    bool mCurrentBucketIsInvalid;
+    // This is to track whether or not the bucket is skipped for any of the reasons listed in
+    // BucketDropReason, many of which make the bucket potentially invalid.
+    bool mCurrentBucketIsSkipped;
 
     const int64_t mMaxPullDelayNs;
 
@@ -256,7 +272,6 @@ private:
 
     FRIEND_TEST(ValueMetricProducerTest, TestAnomalyDetection);
     FRIEND_TEST(ValueMetricProducerTest, TestBaseSetOnConditionChange);
-    FRIEND_TEST(ValueMetricProducerTest, TestBucketBoundariesOnAppUpgrade);
     FRIEND_TEST(ValueMetricProducerTest, TestBucketBoundariesOnConditionChange);
     FRIEND_TEST(ValueMetricProducerTest, TestBucketBoundaryNoCondition);
     FRIEND_TEST(ValueMetricProducerTest, TestBucketBoundaryWithCondition);
@@ -269,10 +284,8 @@ private:
     FRIEND_TEST(ValueMetricProducerTest, TestEmptyDataResetsBase_onDataPulled);
     FRIEND_TEST(ValueMetricProducerTest, TestEventsWithNonSlicedCondition);
     FRIEND_TEST(ValueMetricProducerTest, TestFirstBucket);
-    FRIEND_TEST(ValueMetricProducerTest, TestFullBucketResetWhenLastBucketInvalid);
     FRIEND_TEST(ValueMetricProducerTest, TestLateOnDataPulledWithDiff);
     FRIEND_TEST(ValueMetricProducerTest, TestLateOnDataPulledWithoutDiff);
-    FRIEND_TEST(ValueMetricProducerTest, TestPartialBucketCreated);
     FRIEND_TEST(ValueMetricProducerTest, TestPartialResetOnBucketBoundaries);
     FRIEND_TEST(ValueMetricProducerTest, TestPulledData_noDiff_bucketBoundaryFalse);
     FRIEND_TEST(ValueMetricProducerTest, TestPulledData_noDiff_bucketBoundaryTrue);
@@ -283,15 +296,12 @@ private:
     FRIEND_TEST(ValueMetricProducerTest, TestPulledEventsTakeAbsoluteValueOnReset);
     FRIEND_TEST(ValueMetricProducerTest, TestPulledEventsTakeZeroOnReset);
     FRIEND_TEST(ValueMetricProducerTest, TestPulledEventsWithFiltering);
-    FRIEND_TEST(ValueMetricProducerTest, TestPulledValueWithUpgrade);
-    FRIEND_TEST(ValueMetricProducerTest, TestPulledValueWithUpgradeWhileConditionFalse);
     FRIEND_TEST(ValueMetricProducerTest, TestPulledWithAppUpgradeDisabled);
     FRIEND_TEST(ValueMetricProducerTest, TestPushedAggregateAvg);
     FRIEND_TEST(ValueMetricProducerTest, TestPushedAggregateMax);
     FRIEND_TEST(ValueMetricProducerTest, TestPushedAggregateMin);
     FRIEND_TEST(ValueMetricProducerTest, TestPushedAggregateSum);
     FRIEND_TEST(ValueMetricProducerTest, TestPushedEventsWithCondition);
-    FRIEND_TEST(ValueMetricProducerTest, TestPushedEventsWithUpgrade);
     FRIEND_TEST(ValueMetricProducerTest, TestPushedEventsWithoutCondition);
     FRIEND_TEST(ValueMetricProducerTest, TestResetBaseOnPullDelayExceeded);
     FRIEND_TEST(ValueMetricProducerTest, TestResetBaseOnPullFailAfterConditionChange);
@@ -303,6 +313,7 @@ private:
     FRIEND_TEST(ValueMetricProducerTest, TestSlicedState);
     FRIEND_TEST(ValueMetricProducerTest, TestSlicedStateWithMap);
     FRIEND_TEST(ValueMetricProducerTest, TestSlicedStateWithPrimaryField_WithDimensions);
+    FRIEND_TEST(ValueMetricProducerTest, TestSlicedStateWithCondition);
     FRIEND_TEST(ValueMetricProducerTest, TestTrimUnusedDimensionKey);
     FRIEND_TEST(ValueMetricProducerTest, TestUseZeroDefaultBase);
     FRIEND_TEST(ValueMetricProducerTest, TestUseZeroDefaultBaseWithPullFailures);
@@ -313,6 +324,14 @@ private:
     FRIEND_TEST(ValueMetricProducerTest_BucketDrop, TestInvalidBucketWhenGuardRailHit);
     FRIEND_TEST(ValueMetricProducerTest_BucketDrop,
                 TestInvalidBucketWhenAccumulateEventWrongBucket);
+
+    FRIEND_TEST(ValueMetricProducerTest_PartialBucket, TestBucketBoundariesOnPartialBucket);
+    FRIEND_TEST(ValueMetricProducerTest_PartialBucket, TestFullBucketResetWhenLastBucketInvalid);
+    FRIEND_TEST(ValueMetricProducerTest_PartialBucket, TestPartialBucketCreated);
+    FRIEND_TEST(ValueMetricProducerTest_PartialBucket, TestPushedEvents);
+    FRIEND_TEST(ValueMetricProducerTest_PartialBucket, TestPulledValue);
+    FRIEND_TEST(ValueMetricProducerTest_PartialBucket, TestPulledValueWhileConditionFalse);
+
     friend class ValueMetricProducerTestHelper;
 };
 

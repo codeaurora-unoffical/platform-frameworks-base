@@ -20,6 +20,7 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.WallpaperManager
+import android.os.SystemClock
 import android.util.Log
 import android.util.MathUtils
 import android.view.Choreographer
@@ -36,6 +37,7 @@ import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.statusbar.notification.ActivityLaunchAnimator
 import com.android.systemui.statusbar.phone.BiometricUnlockController
 import com.android.systemui.statusbar.phone.BiometricUnlockController.MODE_WAKE_AND_UNLOCK
+import com.android.systemui.statusbar.phone.DozeParameters
 import com.android.systemui.statusbar.phone.NotificationShadeWindowController
 import com.android.systemui.statusbar.phone.PanelExpansionListener
 import com.android.systemui.statusbar.phone.ScrimController
@@ -45,6 +47,7 @@ import java.io.PrintWriter
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.max
+import kotlin.math.sign
 
 /**
  * Controller responsible for statusbar window blur.
@@ -58,10 +61,16 @@ class NotificationShadeDepthController @Inject constructor(
     private val choreographer: Choreographer,
     private val wallpaperManager: WallpaperManager,
     private val notificationShadeWindowController: NotificationShadeWindowController,
+    private val dozeParameters: DozeParameters,
     dumpManager: DumpManager
 ) : PanelExpansionListener, Dumpable {
     companion object {
         private const val WAKE_UP_ANIMATION_ENABLED = true
+        private const val VELOCITY_SCALE = 100f
+        private const val MAX_VELOCITY = 3000f
+        private const val MIN_VELOCITY = -MAX_VELOCITY
+        private const val INTERACTION_BLUR_FRACTION = 0.4f
+        private const val ANIMATION_BLUR_FRACTION = 1f - INTERACTION_BLUR_FRACTION
         private const val TAG = "DepthController"
     }
 
@@ -72,8 +81,19 @@ class NotificationShadeDepthController @Inject constructor(
     private var updateScheduled: Boolean = false
     private var shadeExpansion = 0f
     private var ignoreShadeBlurUntilHidden: Boolean = false
+    private var isClosed: Boolean = true
+    private var isOpen: Boolean = false
+    private var isBlurred: Boolean = false
+
+    private var prevTracking: Boolean = false
+    private var prevTimestamp: Long = -1
+    private var prevShadeDirection = 0
+    private var prevShadeVelocity = 0f
+
     @VisibleForTesting
     var shadeSpring = DepthAnimation()
+    var shadeAnimation = DepthAnimation()
+
     @VisibleForTesting
     var globalActionsSpring = DepthAnimation()
     var showingHomeControls: Boolean = false
@@ -99,12 +119,15 @@ class NotificationShadeDepthController @Inject constructor(
                 return
             }
 
-            if (shadeSpring.radius == 0) {
+            if (shadeSpring.radius == 0 && shadeAnimation.radius == 0) {
                 return
             }
             ignoreShadeBlurUntilHidden = true
             shadeSpring.animateTo(0)
             shadeSpring.finishIfRunning()
+
+            shadeAnimation.animateTo(0)
+            shadeAnimation.finishIfRunning()
         }
 
     /**
@@ -133,8 +156,11 @@ class NotificationShadeDepthController @Inject constructor(
     @VisibleForTesting
     val updateBlurCallback = Choreographer.FrameCallback {
         updateScheduled = false
-
-        var shadeRadius = max(shadeSpring.radius, wakeAndUnlockBlurRadius).toFloat()
+        val normalizedBlurRadius = MathUtils.constrain(shadeAnimation.radius,
+                blurUtils.minBlurRadius, blurUtils.maxBlurRadius)
+        val combinedBlur = (shadeSpring.radius * INTERACTION_BLUR_FRACTION +
+                normalizedBlurRadius * ANIMATION_BLUR_FRACTION).toInt()
+        var shadeRadius = max(combinedBlur, wakeAndUnlockBlurRadius).toFloat()
         shadeRadius *= 1f - brightnessMirrorSpring.ratio
         val launchProgress = notificationLaunchAnimationParams?.linearProgress ?: 0f
         shadeRadius *= (1f - launchProgress) * (1f - launchProgress)
@@ -182,9 +208,12 @@ class NotificationShadeDepthController @Inject constructor(
 
             keyguardAnimator?.cancel()
             keyguardAnimator = ValueAnimator.ofFloat(1f, 0f).apply {
-                duration = keyguardStateController.keyguardFadingAwayDuration
+                // keyguardStateController.keyguardFadingAwayDuration might be zero when unlock by
+                // fingerprint due to there is no window container, see AppTransition#goodToGo.
+                // We use DozeParameters.wallpaperFadeOutDuration as an alternative.
+                duration = dozeParameters.wallpaperFadeOutDuration
                 startDelay = keyguardStateController.keyguardFadingAwayDelay
-                interpolator = Interpolators.DECELERATE_QUINT
+                interpolator = Interpolators.FAST_OUT_SLOW_IN
                 addUpdateListener { animation: ValueAnimator ->
                     wakeAndUnlockBlurRadius =
                             blurUtils.blurRadiusOfRatio(animation.animatedValue as Float)
@@ -209,12 +238,15 @@ class NotificationShadeDepthController @Inject constructor(
 
     private val statusBarStateCallback = object : StatusBarStateController.StateListener {
         override fun onStateChanged(newState: Int) {
+            updateShadeAnimationBlur(
+                    shadeExpansion, prevTracking, prevShadeVelocity, prevShadeDirection)
             updateShadeBlur()
         }
 
         override fun onDozingChanged(isDozing: Boolean) {
             if (isDozing) {
                 shadeSpring.finishIfRunning()
+                shadeAnimation.finishIfRunning()
                 globalActionsSpring.finishIfRunning()
                 brightnessMirrorSpring.finishIfRunning()
             }
@@ -235,27 +267,111 @@ class NotificationShadeDepthController @Inject constructor(
             // Stop blur effect when scrims is opaque to avoid unnecessary GPU composition.
             visibility -> scrimsVisible = visibility == ScrimController.OPAQUE
         }
+        shadeAnimation.setStiffness(SpringForce.STIFFNESS_LOW)
+        shadeAnimation.setDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY)
     }
 
     /**
      * Update blurs when pulling down the shade
      */
     override fun onPanelExpansionChanged(expansion: Float, tracking: Boolean) {
-        if (expansion == shadeExpansion) {
+        val timestamp = SystemClock.elapsedRealtimeNanos()
+
+        if (shadeExpansion == expansion && prevTracking == tracking) {
+            prevTimestamp = timestamp
             return
         }
+
+        var deltaTime = 1f
+        if (prevTimestamp < 0) {
+            prevTimestamp = timestamp
+        } else {
+            deltaTime = MathUtils.constrain(
+                    ((timestamp - prevTimestamp) / 1E9).toFloat(), 0.00001f, 1f)
+        }
+
+        val diff = expansion - shadeExpansion
+        val shadeDirection = sign(diff).toInt()
+        val shadeVelocity = MathUtils.constrain(
+            VELOCITY_SCALE * diff / deltaTime, MIN_VELOCITY, MAX_VELOCITY)
+        updateShadeAnimationBlur(expansion, tracking, shadeVelocity, shadeDirection)
+
+        prevShadeDirection = shadeDirection
+        prevShadeVelocity = shadeVelocity
         shadeExpansion = expansion
+        prevTracking = tracking
+        prevTimestamp = timestamp
+
         updateShadeBlur()
+    }
+
+    private fun updateShadeAnimationBlur(
+        expansion: Float,
+        tracking: Boolean,
+        velocity: Float,
+        direction: Int
+    ) {
+        if (isOnKeyguardNotDismissing()) {
+            if (expansion > 0f) {
+                // Blur view if user starts animating in the shade.
+                if (isClosed) {
+                    animateBlur(true, velocity)
+                    isClosed = false
+                }
+
+                // If we were blurring out and the user stopped the animation, blur view.
+                if (tracking && !isBlurred) {
+                    animateBlur(true, 0f)
+                }
+
+                // If shade is being closed and the user isn't interacting with it, un-blur.
+                if (!tracking && direction < 0 && isBlurred) {
+                    animateBlur(false, velocity)
+                }
+
+                if (expansion == 1f) {
+                    if (!isOpen) {
+                        isOpen = true
+                        // If shade is open and view is not blurred, blur.
+                        if (!isBlurred) {
+                            animateBlur(true, velocity)
+                        }
+                    }
+                } else {
+                    isOpen = false
+                }
+                // Automatic animation when the user closes the shade.
+            } else if (!isClosed) {
+                isClosed = true
+                // If shade is closed and view is not blurred, blur.
+                if (isBlurred) {
+                    animateBlur(false, velocity)
+                }
+            }
+        } else {
+            animateBlur(false, 0f)
+            isClosed = true
+            isOpen = false
+        }
+    }
+
+    private fun animateBlur(blur: Boolean, velocity: Float) {
+        isBlurred = blur
+
+        val targetBlurNormalized = if (blur && isOnKeyguardNotDismissing()) {
+            1f
+        } else {
+            0f
+        }
+
+        shadeAnimation.setStartVelocity(velocity)
+        shadeAnimation.animateTo(blurUtils.blurRadiusOfRatio(targetBlurNormalized))
     }
 
     private fun updateShadeBlur() {
         var newBlur = 0
-        val state = statusBarStateController.state
-        if (state == StatusBarState.SHADE || state == StatusBarState.SHADE_LOCKED) {
-            val animatedBlur =
-                    Interpolators.SHADE_ANIMATION.getInterpolation(
-                            MathUtils.constrain(shadeExpansion / 0.15f, 0f, 1f))
-            newBlur = blurUtils.blurRadiusOfRatio(0.35f * animatedBlur + 0.65f * shadeExpansion)
+        if (isOnKeyguardNotDismissing()) {
+            newBlur = blurUtils.blurRadiusOfRatio(shadeExpansion)
         }
         shadeSpring.animateTo(newBlur)
     }
@@ -269,6 +385,12 @@ class NotificationShadeDepthController @Inject constructor(
         choreographer.postFrameCallback(updateBlurCallback)
     }
 
+    private fun isOnKeyguardNotDismissing(): Boolean {
+        val state = statusBarStateController.state
+        return (state == StatusBarState.SHADE || state == StatusBarState.SHADE_LOCKED) &&
+                !keyguardStateController.isKeyguardFadingAway
+    }
+
     fun updateGlobalDialogVisibility(visibility: Float, dialogView: View?) {
         globalActionsSpring.animateTo(blurUtils.blurRadiusOfRatio(visibility), dialogView)
     }
@@ -278,6 +400,7 @@ class NotificationShadeDepthController @Inject constructor(
             it.println("StatusBarWindowBlurController:")
             it.increaseIndent()
             it.println("shadeRadius: ${shadeSpring.radius}")
+            it.println("shadeAnimation: ${shadeAnimation.radius}")
             it.println("globalActionsRadius: ${globalActionsSpring.radius}")
             it.println("brightnessMirrorRadius: ${brightnessMirrorSpring.radius}")
             it.println("wakeAndUnlockBlur: $wakeAndUnlockBlurRadius")
@@ -314,7 +437,7 @@ class NotificationShadeDepthController @Inject constructor(
         private var view: View? = null
 
         private var springAnimation = SpringAnimation(this, object :
-            FloatPropertyCompat<DepthAnimation>("blurRadius") {
+                FloatPropertyCompat<DepthAnimation>("blurRadius") {
             override fun setValue(rect: DepthAnimation?, value: Float) {
                 radius = value.toInt()
                 scheduleUpdate(view)
@@ -345,6 +468,18 @@ class NotificationShadeDepthController @Inject constructor(
             if (springAnimation.isRunning) {
                 springAnimation.skipToEnd()
             }
+        }
+
+        fun setStiffness(stiffness: Float) {
+            springAnimation.spring.stiffness = stiffness
+        }
+
+        fun setDampingRatio(dampingRation: Float) {
+            springAnimation.spring.dampingRatio = dampingRation
+        }
+
+        fun setStartVelocity(velocity: Float) {
+            springAnimation.setStartVelocity(velocity)
         }
     }
 }

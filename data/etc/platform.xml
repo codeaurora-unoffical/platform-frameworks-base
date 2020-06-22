@@ -197,6 +197,9 @@
     <split-permission name="android.permission.WRITE_EXTERNAL_STORAGE">
         <new-permission name="android.permission.READ_EXTERNAL_STORAGE" />
     </split-permission>
+    <split-permission name="android.permission.READ_PRIVILEGED_PHONE_STATE">
+        <new-permission name="android.permission.READ_PHONE_STATE" />
+    </split-permission>
     <split-permission name="android.permission.READ_CONTACTS"
                       targetSdk="16">
         <new-permission name="android.permission.READ_CALL_LOG" />
@@ -246,6 +249,7 @@
     <allow-in-data-usage-save package="com.android.providers.downloads" />
 
     <!-- This is a core platform component that needs to freely run in the background -->
+    <allow-in-power-save package="com.android.cellbroadcastreceiver.module" />
     <allow-in-power-save package="com.android.cellbroadcastreceiver" />
     <allow-in-power-save package="com.android.shell" />
 

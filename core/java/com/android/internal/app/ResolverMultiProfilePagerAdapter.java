@@ -18,6 +18,7 @@ package com.android.internal.app;
 
 import android.annotation.Nullable;
 import android.content.Context;
+import android.content.res.Resources;
 import android.os.UserHandle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -35,6 +36,8 @@ import com.android.internal.widget.PagerAdapter;
 public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerAdapter {
 
     private final ResolverProfileDescriptor[] mItems;
+    private final boolean mShouldShowNoCrossProfileIntentsEmptyState;
+    private boolean mUseLayoutWithDefault;
 
     ResolverMultiProfilePagerAdapter(Context context,
             ResolverListAdapter adapter,
@@ -44,6 +47,7 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
         mItems = new ResolverProfileDescriptor[] {
                 createProfileDescriptor(adapter)
         };
+        mShouldShowNoCrossProfileIntentsEmptyState = true;
     }
 
     ResolverMultiProfilePagerAdapter(Context context,
@@ -51,13 +55,33 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
             ResolverListAdapter workAdapter,
             @Profile int defaultProfile,
             UserHandle personalProfileUserHandle,
-            UserHandle workProfileUserHandle) {
+            UserHandle workProfileUserHandle,
+            boolean shouldShowNoCrossProfileIntentsEmptyState) {
         super(context, /* currentPage */ defaultProfile, personalProfileUserHandle,
                 workProfileUserHandle);
         mItems = new ResolverProfileDescriptor[] {
                 createProfileDescriptor(personalAdapter),
                 createProfileDescriptor(workAdapter)
         };
+        mShouldShowNoCrossProfileIntentsEmptyState = shouldShowNoCrossProfileIntentsEmptyState;
+    }
+
+    @Override
+    void updateAfterConfigChange() {
+        super.updateAfterConfigChange();
+        for (ResolverProfileDescriptor descriptor : mItems) {
+            View emptyStateCont =
+                    descriptor.rootView.findViewById(R.id.resolver_empty_state_container);
+            Resources resources = getContext().getResources();
+            emptyStateCont.setPadding(
+                    emptyStateCont.getPaddingLeft(),
+                    resources.getDimensionPixelSize(
+                            R.dimen.resolver_empty_state_container_padding_top),
+                    emptyStateCont.getPaddingRight(),
+                    resources.getDimensionPixelSize(
+                            R.dimen.resolver_empty_state_container_padding_bottom));
+
+        }
     }
 
     private ResolverProfileDescriptor createProfileDescriptor(
@@ -163,6 +187,11 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
     }
 
     @Override
+    boolean allowShowNoCrossProfileIntentsEmptyState() {
+        return mShouldShowNoCrossProfileIntentsEmptyState;
+    }
+
+    @Override
     protected void showWorkProfileOffEmptyState(ResolverListAdapter activeListAdapter,
             View.OnClickListener listener) {
         showEmptyState(activeListAdapter,
@@ -202,6 +231,17 @@ public class ResolverMultiProfilePagerAdapter extends AbstractMultiProfilePagerA
                 R.drawable.ic_no_apps,
                 R.string.resolver_no_work_apps_available_resolve,
                 /* subtitleRes */ 0);
+    }
+
+    void setUseLayoutWithDefault(boolean useLayoutWithDefault) {
+        mUseLayoutWithDefault = useLayoutWithDefault;
+    }
+
+    @Override
+    protected void setupContainerPadding(View container) {
+        int bottom = mUseLayoutWithDefault ? container.getPaddingBottom() : 0;
+        container.setPadding(container.getPaddingLeft(), container.getPaddingTop(),
+                container.getPaddingRight(), bottom);
     }
 
     class ResolverProfileDescriptor extends ProfileDescriptor {

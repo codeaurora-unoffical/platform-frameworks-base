@@ -21,6 +21,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
+import android.os.Bundle;
 import android.service.autofill.Dataset;
 import android.service.autofill.augmented.AugmentedAutofillService.AutofillProxy;
 import android.util.Log;
@@ -55,14 +56,16 @@ public final class FillCallback {
 
         if (response == null) {
             mProxy.logEvent(AutofillProxy.REPORT_EVENT_NO_RESPONSE);
-            mProxy.reportResult(/* inlineSuggestionsData */ null);
+            mProxy.reportResult(/* inlineSuggestionsData */ null, /* clientState */ null);
             return;
         }
 
         List<Dataset> inlineSuggestions = response.getInlineSuggestions();
+        Bundle clientState = response.getClientState();
+        // We need to report result regardless of whether inline suggestions are returned or not.
+        mProxy.reportResult(inlineSuggestions, clientState);
         if (inlineSuggestions != null && !inlineSuggestions.isEmpty()) {
             mProxy.logEvent(AutofillProxy.REPORT_EVENT_INLINE_RESPONSE);
-            mProxy.reportResult(inlineSuggestions);
             return;
         }
 

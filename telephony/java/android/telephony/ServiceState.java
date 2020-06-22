@@ -398,6 +398,7 @@ public class ServiceState implements Parcelable {
      * @hide
      */
     @NonNull
+    @UnsupportedAppUsage
     public static ServiceState newFromBundle(@NonNull Bundle m) {
         ServiceState ret;
         ret = new ServiceState();
@@ -1315,6 +1316,7 @@ public class ServiceState implements Parcelable {
      * @hide
      *
      */
+    @UnsupportedAppUsage
     public void fillInNotifierBundle(@NonNull Bundle m) {
         m.putParcelable(EXTRA_SERVICE_STATE, this);
         // serviceState already consists of below entries.
@@ -1390,15 +1392,16 @@ public class ServiceState implements Parcelable {
 
     /** @hide */
     public boolean isUsingCarrierAggregation() {
+        boolean isUsingCa = false;
         NetworkRegistrationInfo nri = getNetworkRegistrationInfo(
                 NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN);
         if (nri != null) {
             DataSpecificRegistrationInfo dsri = nri.getDataSpecificInfo();
             if (dsri != null) {
-                return dsri.isUsingCarrierAggregation();
+                isUsingCa = dsri.isUsingCarrierAggregation();
             }
         }
-        return false;
+        return isUsingCa || getCellBandwidths().length > 1;
     }
 
     /** @hide */

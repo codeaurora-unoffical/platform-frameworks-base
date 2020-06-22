@@ -182,7 +182,6 @@ public class DreamService extends Service implements Window.Callback {
     private Window mWindow;
     private Activity mActivity;
     private boolean mInteractive;
-    private boolean mLowProfile = true;
     private boolean mFullscreen;
     private boolean mScreenBright = true;
     private boolean mStarted;
@@ -530,32 +529,6 @@ public class DreamService extends Service implements Window.Callback {
     }
 
     /**
-     * Sets View.SYSTEM_UI_FLAG_LOW_PROFILE on the content view.
-     *
-     * @param lowProfile True to set View.SYSTEM_UI_FLAG_LOW_PROFILE
-     * @hide There is no reason to have this -- dreams can set this flag
-     * on their own content view, and from there can actually do the
-     * correct interactions with it (seeing when it is cleared etc).
-     */
-    public void setLowProfile(boolean lowProfile) {
-        if (mLowProfile != lowProfile) {
-            mLowProfile = lowProfile;
-            int flag = View.SYSTEM_UI_FLAG_LOW_PROFILE;
-            applySystemUiVisibilityFlags(mLowProfile ? flag : 0, flag);
-        }
-    }
-
-    /**
-     * Returns whether or not this dream is in low profile mode. Defaults to true.
-     *
-     * @see #setLowProfile(boolean)
-     * @hide
-     */
-    public boolean isLowProfile() {
-        return getSystemUiVisibilityFlagValue(View.SYSTEM_UI_FLAG_LOW_PROFILE, mLowProfile);
-    }
-
-    /**
      * Controls {@link android.view.WindowManager.LayoutParams#FLAG_FULLSCREEN}
      * on the dream's window.
      *
@@ -900,10 +873,11 @@ public class DreamService extends Service implements Window.Callback {
     public final void finish() {
         if (mDebug) Slog.v(TAG, "finish(): mFinished=" + mFinished);
 
-        if (mActivity != null) {
-            if (!mActivity.isFinishing()) {
+        Activity activity = mActivity;
+        if (activity != null) {
+            if (!activity.isFinishing()) {
                 // In case the activity is not finished yet, do it now.
-                mActivity.finishAndRemoveTask();
+                activity.finishAndRemoveTask();
             }
             return;
         }
@@ -1078,7 +1052,6 @@ public class DreamService extends Service implements Window.Callback {
         mWindow.requestFeature(Window.FEATURE_NO_TITLE);
 
         WindowManager.LayoutParams lp = mWindow.getAttributes();
-        lp.windowAnimations = com.android.internal.R.style.Animation_Dream;
         lp.flags |= (WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                     | WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR
                     | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
@@ -1093,10 +1066,6 @@ public class DreamService extends Service implements Window.Callback {
         // along well. Dreams usually don't need such bars anyways, so disable them by default.
         mWindow.clearFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
 
-        applySystemUiVisibilityFlags(
-                (mLowProfile ? View.SYSTEM_UI_FLAG_LOW_PROFILE : 0),
-                View.SYSTEM_UI_FLAG_LOW_PROFILE);
-
         mWindow.getDecorView().addOnAttachStateChangeListener(
                 new View.OnAttachStateChangeListener() {
                     @Override
@@ -1106,7 +1075,12 @@ public class DreamService extends Service implements Window.Callback {
 
                     @Override
                     public void onViewDetachedFromWindow(View v) {
-                        finish();
+                        if (mActivity == null || !mActivity.isChangingConfigurations()) {
+                            // Only stop the dream if the view is not detached by relaunching
+                            // activity for configuration changes.
+                            mActivity = null;
+                            finish();
+                        }
                     }
                 });
     }
@@ -1121,18 +1095,6 @@ public class DreamService extends Service implements Window.Callback {
             lp.flags = applyFlags(lp.flags, flags, mask);
             mWindow.setAttributes(lp);
             mWindow.getWindowManager().updateViewLayout(mWindow.getDecorView(), lp);
-        }
-    }
-
-    private boolean getSystemUiVisibilityFlagValue(int flag, boolean defaultValue) {
-        View v = mWindow == null ? null : mWindow.getDecorView();
-        return v == null ? defaultValue : (v.getSystemUiVisibility() & flag) != 0;
-    }
-
-    private void applySystemUiVisibilityFlags(int flags, int mask) {
-        View v = mWindow == null ? null : mWindow.getDecorView();
-        if (v != null) {
-            v.setSystemUiVisibility(applyFlags(v.getSystemUiVisibility(), flags, mask));
         }
     }
 
@@ -1161,7 +1123,6 @@ public class DreamService extends Service implements Window.Callback {
         pw.println("  window: " + mWindow);
         pw.print("  flags:");
         if (isInteractive()) pw.print(" interactive");
-        if (isLowProfile()) pw.print(" lowprofile");
         if (isFullscreen()) pw.print(" fullscreen");
         if (isScreenBright()) pw.print(" bright");
         if (isWindowless()) pw.print(" windowless");

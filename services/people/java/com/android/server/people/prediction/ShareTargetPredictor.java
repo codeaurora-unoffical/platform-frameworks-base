@@ -27,6 +27,8 @@ import android.app.prediction.AppTargetId;
 import android.content.IntentFilter;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager.ShareShortcutInfo;
+import android.util.Log;
+import android.util.Slog;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.ChooserActivity;
@@ -45,6 +47,8 @@ import java.util.function.Consumer;
  */
 class ShareTargetPredictor extends AppTargetPredictor {
 
+    private static final String TAG = "ShareTargetPredictor";
+    private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
     private final IntentFilter mIntentFilter;
 
     ShareTargetPredictor(@NonNull AppPredictionContext predictionContext,
@@ -59,13 +63,25 @@ class ShareTargetPredictor extends AppTargetPredictor {
     @WorkerThread
     @Override
     void reportAppTargetEvent(AppTargetEvent event) {
-        getDataManager().reportShareTargetEvent(event, mIntentFilter);
+        if (DEBUG) {
+            Slog.d(TAG, "reportAppTargetEvent");
+        }
+        if (mIntentFilter != null) {
+            getDataManager().reportShareTargetEvent(event, mIntentFilter);
+        }
     }
 
     /** Provides prediction on direct share targets */
     @WorkerThread
     @Override
     void predictTargets() {
+        if (DEBUG) {
+            Slog.d(TAG, "predictTargets");
+        }
+        if (mIntentFilter == null) {
+            updatePredictions(List.of());
+            return;
+        }
         List<ShareTarget> shareTargets = getDirectShareTargets();
         SharesheetModelScorer.computeScore(shareTargets, getShareEventType(mIntentFilter),
                 System.currentTimeMillis());
@@ -82,6 +98,13 @@ class ShareTargetPredictor extends AppTargetPredictor {
     @WorkerThread
     @Override
     void sortTargets(List<AppTarget> targets, Consumer<List<AppTarget>> callback) {
+        if (DEBUG) {
+            Slog.d(TAG, "sortTargets");
+        }
+        if (mIntentFilter == null) {
+            callback.accept(targets);
+            return;
+        }
         List<ShareTarget> shareTargets = getAppShareTargets(targets);
         SharesheetModelScorer.computeScoreForAppShare(shareTargets,
                 getShareEventType(mIntentFilter), getPredictionContext().getPredictedTargetCount(),
@@ -89,7 +112,15 @@ class ShareTargetPredictor extends AppTargetPredictor {
                 mCallingUserId);
         Collections.sort(shareTargets, (t1, t2) -> -Float.compare(t1.getScore(), t2.getScore()));
         List<AppTarget> appTargetList = new ArrayList<>();
-        shareTargets.forEach(t -> appTargetList.add(t.getAppTarget()));
+        for (ShareTarget shareTarget : shareTargets) {
+            AppTarget appTarget = shareTarget.getAppTarget();
+            appTargetList.add(new AppTarget.Builder(appTarget.getId(), appTarget.getPackageName(),
+                    appTarget.getUser())
+                    .setClassName(appTarget.getClassName())
+                    .setRank(shareTarget.getScore() > 0 ? (int) (shareTarget.getScore()
+                            * 1000) : 0)
+                    .build());
+        }
         callback.accept(appTargetList);
     }
 

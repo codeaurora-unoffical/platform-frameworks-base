@@ -200,10 +200,10 @@
     <string name="factory_reset_warning" msgid="6858705527798047809">"Η συσκευή σας θα διαγραφεί"</string>
     <string name="factory_reset_message" msgid="2657049595153992213">"Δεν είναι δυνατή η χρήση της εφαρμογής διαχειριστή. Η συσκευή σας θα διαγραφεί.\n\nΕάν έχετε ερωτήσεις, επικοινωνήστε με τον διαχειριστή του οργανισμού σας."</string>
     <string name="printing_disabled_by" msgid="3517499806528864633">"Η εκτύπωση απενεργοποιήθηκε από τον χρήστη <xliff:g id="OWNER_APP">%s</xliff:g>."</string>
-    <string name="personal_apps_suspended_title" msgid="4543693107104417750">"Κατ. αποκλ. προσ. εφαρμογών"</string>
-    <string name="personal_apps_suspended_tomorrow_title" msgid="6414440257969874914">"Αποκλεισμός εφαρμογών αύριο"</string>
-    <string name="personal_apps_suspended_text" msgid="8954038765131038226">"Ο διαχειριστής IT δεν επιτρέπει την παύση του προφίλ εργασίας σας για περισσότερες από <xliff:g id="DAYS">%1$d</xliff:g> ημέρες."</string>
-    <string name="personal_apps_suspended_turn_profile_on" msgid="4278188538997940785">"Ενεργοποίηση προφίλ εργασίας"</string>
+    <string name="personal_apps_suspension_title" msgid="7561416677884286600">"Ενεργοπ. το προφίλ εργασίας"</string>
+    <string name="personal_apps_suspension_text" msgid="6115455688932935597">"Οι προσωπικές σας εφαρμογές αποκλείονται μέχρι να ενεργοποιήσετε το προφίλ εργασίας σας."</string>
+    <string name="personal_apps_suspension_soon_text" msgid="8123898693479590">"Οι προσωπικές εφαρμογές θα αποκλειστούν στις <xliff:g id="DATE">%1$s</xliff:g> και ώρα <xliff:g id="TIME">%2$s</xliff:g>. Ο διαχειριστής IT δεν επιτρέπει το προφίλ εργασίας να παραμένει απενεργοποιημένο για περισσότερες από <xliff:g id="NUMBER">%3$d</xliff:g> ημέρες."</string>
+    <string name="personal_apps_suspended_turn_profile_on" msgid="2758012869627513689">"Ενεργοποίηση"</string>
     <string name="me" msgid="6207584824693813140">"Για εμένα"</string>
     <string name="power_dialog" product="tablet" msgid="8333207765671417261">"Επιλογές tablet"</string>
     <string name="power_dialog" product="tv" msgid="7792839006640933763">"Επιλογές Android TV"</string>
@@ -268,7 +268,7 @@
     <string name="status_bar_notification_info_overflow" msgid="3330152558746563475">"999+"</string>
     <string name="notification_hidden_text" msgid="2835519769868187223">"Νέα ειδοποίηση"</string>
     <string name="notification_channel_virtual_keyboard" msgid="6465975799223304567">"Εικονικό πληκτρολόγιο"</string>
-    <string name="notification_channel_physical_keyboard" msgid="5417306456125988096">"Φυσικό πληκτρολόγιο"</string>
+    <string name="notification_channel_physical_keyboard" msgid="5417306456125988096">"Κανονικό πληκτρολόγιο"</string>
     <string name="notification_channel_security" msgid="8516754650348238057">"Ασφάλεια"</string>
     <string name="notification_channel_car_mode" msgid="2123919247040988436">"Λειτουργία αυτοκινήτου"</string>
     <string name="notification_channel_account" msgid="6436294521740148173">"Κατάσταση λογαριασμού"</string>
@@ -536,7 +536,7 @@
     <string name="permdesc_imagesWrite" msgid="5195054463269193317">"Επιτρέπει στην εφαρμογή να τροποποιήσει τη συλλογή φωτογραφιών σας."</string>
     <string name="permlab_mediaLocation" msgid="7368098373378598066">"ανάγνωση τοποθεσιών από τη συλλογή πολυμέσων σας"</string>
     <string name="permdesc_mediaLocation" msgid="597912899423578138">"Επιτρέπει στην εφαρμογή να διαβάσει τοποθεσίες από τη συλλογή πολυμέσων σας."</string>
-    <string name="biometric_dialog_default_title" msgid="5284880398508155088">"Επαλήθευση ταυτότητας"</string>
+    <string name="biometric_dialog_default_title" msgid="55026799173208210">"Επαλήθευση ταυτότητας"</string>
     <string name="biometric_error_hw_unavailable" msgid="2494077380540615216">"Δεν υπάρχει διαθέσιμος βιομετρικός εξοπλισμός"</string>
     <string name="biometric_error_user_canceled" msgid="6732303949695293730">"Ο έλεγχος ταυτότητας ακυρώθηκε"</string>
     <string name="biometric_not_recognized" msgid="5106687642694635888">"Δεν αναγνωρίστηκε"</string>
@@ -545,7 +545,7 @@
     <string name="fingerprint_acquired_partial" msgid="8532380671091299342">"Εντοπίστηκε μόνο μέρος του δακτυλικού αποτυπώματος. Δοκιμάστε ξανά."</string>
     <string name="fingerprint_acquired_insufficient" msgid="2545149524031515411">"Δεν ήταν δυνατή η επεξεργασία του δακτυλικού αποτυπώματος. Δοκιμάστε ξανά."</string>
     <string name="fingerprint_acquired_imager_dirty" msgid="4694800187151533990">"Ο αισθητήρας δακτυλικού αποτυπώματος δεν είναι καθαρός. Καθαρίστε τον και δοκιμάστε ξανά."</string>
-    <string name="fingerprint_acquired_too_fast" msgid="5151661932298844352">"Πολύ γρήγορη κίνηση δαχτύλου. Δοκιμάστε ξανά."</string>
+    <string name="fingerprint_acquired_too_fast" msgid="5151661932298844352">"Κινηθήκατε πολύ γρήγορα. Δοκιμάστε ξανά."</string>
     <string name="fingerprint_acquired_too_slow" msgid="6683510291554497580">"Πολύ αργή κίνηση δαχτύλου. Δοκιμάστε ξανά."</string>
   <string-array name="fingerprint_acquired_vendor">
   </string-array>
@@ -1307,11 +1307,11 @@
     <string name="usb_unsupported_audio_accessory_title" msgid="2335775548086533065">"Εντοπίστηκε αναλογικό αξεσουάρ ήχου"</string>
     <string name="usb_unsupported_audio_accessory_message" msgid="1300168007129796621">"Η συνδεδεμένη συσκευή δεν είναι συμβατή με αυτό το τηλέφωνο. Πατήστε για να μάθετε περισσότερα."</string>
     <string name="adb_active_notification_title" msgid="408390247354560331">"Συνδέθηκε ο εντοπισμός σφαλμάτων USB"</string>
-    <string name="adb_active_notification_message" msgid="5617264033476778211">"Απενεργοποιήστε τον εντοπισμό/διόρθ. σφαλμάτων USB"</string>
+    <string name="adb_active_notification_message" msgid="5617264033476778211">"Πατήστε για απενεργοποίηση εντοπισμού/διόρθ. σφαλμάτων USB"</string>
     <string name="adb_active_notification_message" product="tv" msgid="6624498401272780855">"Επιλογή για απενεργοποίηση του εντοπισμού σφαλμάτων USB."</string>
-    <string name="adbwifi_active_notification_title" msgid="6147343659168302473">"Συνδέθηκε ο εντοπισμός σφαλμάτων μέσω ασύρματης σύνδεσης"</string>
-    <string name="adbwifi_active_notification_message" msgid="930987922852867972">"Πατήστε, για να απενεργοποιήσετε τον εντοπισμό σφαλμάτων μέσω ασύρματης σύνδεσης"</string>
-    <string name="adbwifi_active_notification_message" product="tv" msgid="8633421848366915478">"Επιλέξτε, για να απενεργοποιήσετε τον εντοπισμό σφαλμάτων μέσω ασύρματης σύνδεσης."</string>
+    <string name="adbwifi_active_notification_title" msgid="6147343659168302473">"Συνδέθηκε ο ασύρματος εντοπισμός σφαλμάτων"</string>
+    <string name="adbwifi_active_notification_message" msgid="930987922852867972">"Πατήστε, για να απενεργοποιήσετε τον ασύρματο εντοπισμό σφαλμάτων"</string>
+    <string name="adbwifi_active_notification_message" product="tv" msgid="8633421848366915478">"Επιλέξτε, για να απενεργοποιήσετε τον ασύρματο εντοπισμό σφαλμάτων."</string>
     <string name="test_harness_mode_notification_title" msgid="2282785860014142511">"Η λειτουργία περιβάλλοντος δοκιμών ενεργοποιήθηκε"</string>
     <string name="test_harness_mode_notification_message" msgid="3039123743127958420">"Εκτελέστε επαναφορά εργοστασιακών ρυθμίσεων για να απενεργοποιήσετε τη λειτουργία περιβάλλοντος δοκιμών."</string>
     <string name="console_running_notification_title" msgid="6087888939261635904">"Η σειριακή κονσόλα ενεργοποιήθηκε"</string>
@@ -1327,7 +1327,7 @@
     <string name="share_remote_bugreport_action" msgid="7630880678785123682">"ΚΟΙΝΟΠΟΙΗΣΗ"</string>
     <string name="decline_remote_bugreport_action" msgid="4040894777519784346">"ΑΠΟΡΡΙΨΗ"</string>
     <string name="select_input_method" msgid="3971267998568587025">"Επιλογή μεθόδου εισόδου"</string>
-    <string name="show_ime" msgid="6406112007347443383">"Να παραμένει στην οθόνη όταν είναι ενεργό το φυσικό πληκτρολόγιο"</string>
+    <string name="show_ime" msgid="6406112007347443383">"Να παραμένει στην οθόνη όταν είναι ενεργό το κανονικό πληκτρολόγιο"</string>
     <string name="hardware" msgid="1800597768237606953">"Εμφάνιση εικονικού πληκτρολ."</string>
     <string name="select_keyboard_layout_notification_title" msgid="4427643867639774118">"Διαμόρφωση φυσικού πληκτρολογίου"</string>
     <string name="select_keyboard_layout_notification_message" msgid="8835158247369158154">"Πατήστε για να επιλέξετε γλώσσα και διάταξη"</string>
@@ -1341,17 +1341,20 @@
     <string name="ext_media_checking_notification_title" msgid="8299199995416510094">"Έλεγχος <xliff:g id="NAME">%s</xliff:g>…"</string>
     <string name="ext_media_checking_notification_message" msgid="2231566971425375542">"Έλεγχος τρέχοντος περιεχομένου"</string>
     <string name="ext_media_new_notification_title" msgid="3517407571407687677">"Νέο <xliff:g id="NAME">%s</xliff:g>"</string>
+    <string name="ext_media_new_notification_title" product="automotive" msgid="9085349544984742727">"Η συσκευή <xliff:g id="NAME">%s</xliff:g> δεν λειτουργεί."</string>
     <string name="ext_media_new_notification_message" msgid="6095403121990786986">"Πατήστε για ρύθμιση"</string>
-    <string name="ext_media_new_notification_message" product="automotive" msgid="8488046026389025694"></string>
+    <string name="ext_media_new_notification_message" product="automotive" msgid="5140127881613227162">"Μπορεί να χρειαστεί να διαμορφώσετε ξανά τη συσκευή. Πατήστε για κατάργηση."</string>
     <string name="ext_media_ready_notification_message" msgid="777258143284919261">"Για μεταφορά φωτ./πολυμέσων"</string>
     <string name="ext_media_unmountable_notification_title" msgid="4895444667278979910">"Πρόβλημα με <xliff:g id="NAME">%s</xliff:g>"</string>
+    <string name="ext_media_unmountable_notification_title" product="automotive" msgid="3142723758949023280">"Η συσκευή <xliff:g id="NAME">%s</xliff:g> δεν λειτουργεί."</string>
     <string name="ext_media_unmountable_notification_message" msgid="3256290114063126205">"Πατήστε για επιδιόρθωση"</string>
     <string name="ext_media_unmountable_notification_message" product="tv" msgid="3003611129979934633">"Το μέσο <xliff:g id="NAME">%s</xliff:g> έχει καταστραφεί. Επιλέξτε να γίνει επιδιόρθωση."</string>
-    <string name="ext_media_unmountable_notification_message" product="automotive" msgid="5622514265490819212"></string>
+    <string name="ext_media_unmountable_notification_message" product="automotive" msgid="2274596120715020680">"Μπορεί να χρειαστεί να διαμορφώσετε ξανά τη συσκευή. Πατήστε για κατάργηση."</string>
     <string name="ext_media_unsupported_notification_title" msgid="4358280700537030333">"Η κάρτα <xliff:g id="NAME">%s</xliff:g> δεν υποστηρίζεται"</string>
+    <string name="ext_media_unsupported_notification_title" product="automotive" msgid="6004193172658722381">"Η συσκευή <xliff:g id="NAME">%s</xliff:g> δεν λειτουργεί."</string>
     <string name="ext_media_unsupported_notification_message" msgid="917738524888367560">"Αυτή η συσκευή δεν υποστηρίζει αυτό το μέσο <xliff:g id="NAME">%s</xliff:g>. Πατήστε για ρύθμιση σε μια υποστηριζόμενη μορφή."</string>
     <string name="ext_media_unsupported_notification_message" product="tv" msgid="7744945987775645685">"Αυτή η συσκευή δεν υποστηρίζει το μέσο <xliff:g id="NAME">%s</xliff:g>. Επιλέξτε να ρυθμιστεί σε μια υποστηριζόμενη μορφή."</string>
-    <string name="ext_media_unsupported_notification_message" product="automotive" msgid="7657357085538772913">"Αυτή η συσκευή δεν υποστηρίζει το <xliff:g id="NAME">%s</xliff:g>."</string>
+    <string name="ext_media_unsupported_notification_message" product="automotive" msgid="3412494732736336330">"Μπορεί να χρειαστεί να διαμορφώσετε ξανά τη συσκευή."</string>
     <string name="ext_media_badremoval_notification_title" msgid="4114625551266196872">"Μη αναμενόμενη αφαίρεση <xliff:g id="NAME">%s</xliff:g>"</string>
     <string name="ext_media_badremoval_notification_message" msgid="1986514704499809244">"Κάντε εξαγωγή των μέσων πριν τα καταργήσετε, για να μην χάσετε το περιεχόμενό σας"</string>
     <string name="ext_media_nomedia_notification_title" msgid="742671636376975890">"Το <xliff:g id="NAME">%s</xliff:g> καταργήθηκε"</string>
@@ -1438,7 +1441,7 @@
     <string name="car_mode_disable_notification_message" msgid="8954550232288567515">"Πατήστε για να εξέλθετε από την εφαρμογή οδήγησης."</string>
     <string name="back_button_label" msgid="4078224038025043387">"Πίσω"</string>
     <string name="next_button_label" msgid="6040209156399907780">"Επόμενο"</string>
-    <string name="skip_button_label" msgid="3566599811326688389">"Παράλειψη"</string>
+    <string name="skip_button_label" msgid="3566599811326688389">"Παράβλεψη"</string>
     <string name="no_matches" msgid="6472699895759164599">"Δεν υπάρχουν αποτελέσματα"</string>
     <string name="find_on_page" msgid="5400537367077438198">"Εύρεση στη σελίδα"</string>
     <plurals name="matches_found" formatted="false" msgid="1101758718194295554">
@@ -1457,6 +1460,9 @@
     <string name="gpsNotifMessage" msgid="7346649122793758032">"Ζητήθηκε από <xliff:g id="NAME">%1$s</xliff:g> (<xliff:g id="SERVICE">%2$s</xliff:g>)"</string>
     <string name="gpsVerifYes" msgid="3719843080744112940">"Ναι"</string>
     <string name="gpsVerifNo" msgid="1671201856091564741">"Όχι"</string>
+    <string name="gnss_nfw_notification_title" msgid="5004493772059563423">"Πρόσβαση στην τοποθεσία έκτακτης ανάγκης"</string>
+    <string name="gnss_nfw_notification_message_oem" msgid="3683958907027107969">"Ο κατασκευαστής της συσκευής σας απέκτησε πρόσβαση στην τοποθεσία σας κατά τη διάρκεια μιας πρόσφατης περιόδου λειτουργίας έκτακτης ανάγκης."</string>
+    <string name="gnss_nfw_notification_message_carrier" msgid="815888995791562151">"Η εταιρεία κινητής τηλεφωνίας σας απέκτησε πρόσβαση στην τοποθεσία σας κατά τη διάρκεια μιας πρόσφατης περιόδου λειτουργίας έκτακτης ανάγκης."</string>
     <string name="sync_too_many_deletes" msgid="6999440774578705300">"Έγινε υπέρβαση του ορίου διαγραφής"</string>
     <string name="sync_too_many_deletes_desc" msgid="7409327940303504440">"Υπάρχουν <xliff:g id="NUMBER_OF_DELETED_ITEMS">%1$d</xliff:g> διαγραμμένα στοιχεία για τον συγχρονισμό <xliff:g id="TYPE_OF_SYNC">%2$s</xliff:g>, στον λογαριασμό <xliff:g id="ACCOUNT_NAME">%3$s</xliff:g>. Τι θέλετε να κάνετε;"</string>
     <string name="sync_really_delete" msgid="5657871730315579051">"Διαγραφή των στοιχείων"</string>
@@ -1542,9 +1548,7 @@
     <string name="launchBrowserDefault" msgid="6328349989932924119">"Εκκίνηση προγράμματος περιήγησης;"</string>
     <string name="SetupCallDefault" msgid="5581740063237175247">"Αποδοχή κλήσης;"</string>
     <string name="activity_resolver_use_always" msgid="5575222334666843269">"Πάντα"</string>
-    <string name="activity_resolver_set_always" msgid="4142825808921411476">"Ορισμός ως πάντα ανοικτής"</string>
     <string name="activity_resolver_use_once" msgid="948462794469672658">"Μόνο μία φορά"</string>
-    <string name="activity_resolver_app_settings" msgid="6758823206817748026">"Ρυθμίσεις"</string>
     <string name="activity_resolver_work_profiles_support" msgid="4071345609235361269">"Το προφίλ εργασίας δεν υποστηρίζεται από %1$s"</string>
     <string name="default_audio_route_name" product="tablet" msgid="367936735632195517">"Tablet"</string>
     <string name="default_audio_route_name" product="tv" msgid="4908971385068087367">"Τηλεόραση"</string>
@@ -1622,12 +1626,12 @@
     <string name="accessibility_shortcut_multiple_service_warning_title" msgid="8417489297036013065">"Θέλετε να ενεργοποιήσετε τις λειτουργίες προσβασιμότητας;"</string>
     <string name="accessibility_shortcut_multiple_service_warning" msgid="3740723309483706911">"Για να ενεργοποιήσετε τις λειτουργίες προσβασιμότητας, πατήστε παρατεταμένα τα δύο πλήκτρα έντασης για μερικά δευτερόλεπτα. Αυτό ενδέχεται να αλλάξει τον τρόπο λειτουργίας της συσκευής σας.\n\nΤρέχουσες λειτουργίες:\n<xliff:g id="SERVICE">%1$s</xliff:g>\nΜπορείτε να αλλάξετε τις επιλεγμένες λειτουργίες στις Ρυθμίσεις &gt; Προσβασιμότητα."</string>
     <string name="accessibility_shortcut_multiple_service_list" msgid="6935581470716541531">"	• <xliff:g id="SERVICE">%1$s</xliff:g>\n"</string>
-    <string name="accessibility_shortcut_talkback_warning_title" msgid="3410100187167382427">"Θέλετε να ενεργοποιήσετε το TalkBack;"</string>
-    <string name="accessibility_shortcut_talkback_warning" msgid="8412954203626349109">"Πατώντας παρατεταμένα ταυτόχρονα τα δύο πλήκτρα έντασης ήχου, μπορείτε να ενεργοποιήσετε το TalkBack, έναν αναγνώστη οθόνης σχεδιασμένο για άτομα με χαμηλή όραση. Το TalkBack αλλάζει εντελώς τον τρόπο λειτουργίας της συσκευής σας.\n\nΜπορείτε να αλλάξετε αυτή τη συντόμευση σε μια άλλη λειτουργία στις Ρυθμίσεις &gt; Προσβασιμότητα."</string>
     <string name="accessibility_shortcut_single_service_warning_title" msgid="2819109500943271385">"Θέλετε να ενεργοποιήσετε τη λειτουργία <xliff:g id="SERVICE">%1$s</xliff:g>;"</string>
     <string name="accessibility_shortcut_single_service_warning" msgid="6363127705112844257">"Μπορείτε να ενεργοποιήσετε τη λειτουργία <xliff:g id="SERVICE">%1$s</xliff:g>, η οποία είναι μία από τις λειτουργίες προσβασιμότητας, πατώντας παρατεταμένα ταυτόχρονα τα δύο πλήκτρα έντασης ήχου για μερικά δευτερόλεπτα. Αυτό ενδέχεται να αλλάξει τον τρόπο λειτουργίας της συσκευής σας.\n\nΜπορείτε να αλλάξετε αυτή τη συντόμευση σε μια άλλη λειτουργία στις Ρυθμίσεις &gt; Προσβασιμότητα."</string>
     <string name="accessibility_shortcut_on" msgid="5463618449556111344">"Ενεργοποίηση"</string>
     <string name="accessibility_shortcut_off" msgid="3651336255403648739">"Να μην ενεργοποιηθούν"</string>
+    <string name="accessibility_shortcut_menu_item_status_on" msgid="6608392117189732543">"ΕΝΕΡΓΟ"</string>
+    <string name="accessibility_shortcut_menu_item_status_off" msgid="5531598275559472393">"ΑΝΕΝΕΡΓΟ"</string>
     <string name="accessibility_enable_service_title" msgid="3931558336268541484">"Να επιτρέπεται στην υπηρεσία <xliff:g id="SERVICE">%1$s</xliff:g> να έχει τον πλήρη έλεγχο της συσκευής σας;"</string>
     <string name="accessibility_enable_service_encryption_warning" msgid="8603532708618236909">"Εάν ενεργοποιήσετε την υπηρεσία <xliff:g id="SERVICE">%1$s</xliff:g>, η συσκευή σας δεν θα χρησιμοποιεί το κλείδωμα οθόνης για τη βελτίωση της κρυπτογράφησης δεδομένων."</string>
     <string name="accessibility_service_warning_description" msgid="291674995220940133">"Ο πλήρης έλεγχος είναι κατάλληλος για εφαρμογές που εξυπηρετούν τις ανάγκες προσβασιμότητάς σας, αλλά όχι για όλες τις εφαρμογές."</string>
@@ -1789,8 +1793,8 @@
     <string name="package_updated_device_owner" msgid="7560272363805506941">"Ενημερώθηκε από τον διαχειριστή σας"</string>
     <string name="package_deleted_device_owner" msgid="2292335928930293023">"Διαγράφηκε από τον διαχειριστή σας"</string>
     <string name="confirm_battery_saver" msgid="5247976246208245754">"OK"</string>
-    <string name="battery_saver_description_with_learn_more" msgid="1817385558636532621">"Για την επέκταση της διάρκειας ζωής της μπαταρίας σας, η Εξοικονόμηση μπαταρίας:\n·Ενεργοποιεί το Σκούρο θέμα\n·Απενεργοποιεί ή περιορίζει τη δραστηριότητα παρασκηνίου, ορισμένα οπτικά εφέ και άλλες λειτουργίες όπως την εντολή \"Hey Google\".\n\n"<annotation id="url">"Μάθετε περισσότερα"</annotation></string>
-    <string name="battery_saver_description" msgid="7618492104632328184">"Για την επέκταση της διάρκειας ζωής της μπαταρίας σας, η Εξοικονόμηση μπαταρίας:\n·Ενεργοποιεί το Σκούρο θέμα\n·Απενεργοποιεί ή περιορίζει τη δραστηριότητα παρασκηνίου, ορισμένα οπτικά εφέ και άλλες λειτουργίες όπως την εντολή \"Hey Google\"."</string>
+    <string name="battery_saver_description_with_learn_more" msgid="5997766757551917769">"Για την επέκταση της διάρκειας ζωής της μπαταρίας σας, η Εξοικονόμηση μπαταρίας:\n\n•Ενεργοποιεί το Σκούρο θέμα\n•Απενεργοποιεί ή περιορίζει τη δραστηριότητα παρασκηνίου, ορισμένα οπτικά εφέ και άλλες λειτουργίες όπως την εντολή Hey Google\n\n"<annotation id="url">"Μάθετε περισσότερα"</annotation></string>
+    <string name="battery_saver_description" msgid="8587408568232177204">"Για την επέκταση της διάρκειας ζωής της μπαταρίας, η Εξοικονόμηση μπαταρίας:\n\n•Ενεργοποιεί το Σκούρο θέμα\n•Απενεργοποιεί ή περιορίζει τη δραστηριότητα παρασκηνίου, ορισμένα οπτικά εφέ και άλλες λειτουργίες όπως την εντολή Hey Google."</string>
     <string name="data_saver_description" msgid="4995164271550590517">"Προκειμένου να μειωθεί η χρήση δεδομένων, η Εξοικονόμηση δεδομένων αποτρέπει την αποστολή ή λήψη δεδομένων από ορισμένες εφαρμογές στο παρασκήνιο. Μια εφαρμογή που χρησιμοποιείτε αυτήν τη στιγμή μπορεί να χρησιμοποιήσει δεδομένα αλλά με μικρότερη συχνότητα. Για παράδειγμα, οι εικόνες μπορεί να μην εμφανίζονται μέχρι να τις πατήσετε."</string>
     <string name="data_saver_enable_title" msgid="7080620065745260137">"Ενεργ.Εξοικονόμησης δεδομένων;"</string>
     <string name="data_saver_enable_button" msgid="4399405762586419726">"Ενεργοποίηση"</string>
@@ -2035,22 +2039,23 @@
     <string name="accessibility_system_action_notifications_label" msgid="6083767351772162010">"Ειδοποιήσεις"</string>
     <string name="accessibility_system_action_quick_settings_label" msgid="4583900123506773783">"Γρήγορες ρυθμίσεις"</string>
     <string name="accessibility_system_action_power_dialog_label" msgid="8095341821683910781">"Παράθυρο διαλόγου λειτουργίας συσκευής"</string>
-    <string name="accessibility_system_action_toggle_split_screen_label" msgid="6626177163849387748">"Εναλλαγή διαχωρισμού οθόνης"</string>
     <string name="accessibility_system_action_lock_screen_label" msgid="5484190691945563838">"Οθόνη κλειδώματος"</string>
     <string name="accessibility_system_action_screenshot_label" msgid="3581566515062741676">"Στιγμιότυπο οθόνης"</string>
-    <string name="accessibility_system_action_accessibility_menu_label" msgid="8436484650391125184">"Μενού προσβασιμότητας"</string>
+    <string name="accessibility_system_action_on_screen_a11y_shortcut_label" msgid="8488701469459210309">"Συντόμευση οθόνης για την προσβασιμότητα"</string>
+    <string name="accessibility_system_action_on_screen_a11y_shortcut_chooser_label" msgid="1057878690209817886">"Επιλογέας συντόμευσης οθόνης για την προσβασιμότητα"</string>
+    <string name="accessibility_system_action_hardware_a11y_shortcut_label" msgid="5764644187715255107">"Συντόμευση προσβασιμότητας"</string>
     <string name="accessibility_freeform_caption" msgid="8377519323496290122">"Γραμμή υποτίτλων για την εφαρμογή <xliff:g id="APP_NAME">%1$s</xliff:g>."</string>
     <string name="as_app_forced_to_restricted_bucket" msgid="8233871289353898964">"Το πακέτο <xliff:g id="PACKAGE_NAME">%1$s</xliff:g> τοποθετήθηκε στον κάδο ΠΕΡΙΟΡΙΣΜΕΝΗΣ ΠΡΟΣΒΑΣΗΣ."</string>
     <string name="conversation_single_line_name_display" msgid="8958948312915255999">"<xliff:g id="SENDER_NAME">%1$s</xliff:g>:"</string>
+    <string name="conversation_single_line_image_placeholder" msgid="6983271082911936900">"έστειλε μια εικόνα"</string>
     <string name="conversation_title_fallback_one_to_one" msgid="1980753619726908614">"Συνομιλία"</string>
     <string name="conversation_title_fallback_group_chat" msgid="456073374993104303">"Ομαδική συνομιλία"</string>
-    <!-- no translation found for unread_convo_overflow (920517615597353833) -->
-    <skip />
+    <string name="unread_convo_overflow" msgid="920517615597353833">"<xliff:g id="MAX_UNREAD_COUNT">%1$d</xliff:g>+"</string>
     <string name="resolver_personal_tab" msgid="2051260504014442073">"Προσωπικό"</string>
     <string name="resolver_work_tab" msgid="2690019516263167035">"Εργασία"</string>
     <string name="resolver_personal_tab_accessibility" msgid="5739524949153091224">"Προσωπική προβολή"</string>
     <string name="resolver_work_tab_accessibility" msgid="4753168230363802734">"Προβολή εργασίας"</string>
-    <string name="resolver_cant_share_with_work_apps" msgid="637686613606502219">"Δεν είναι δυνατή η κοινοποίηση αυτού του περιεχομένου με εφαρμογές εργασιών"</string>
+    <string name="resolver_cant_share_with_work_apps" msgid="637686613606502219">"Δεν είναι δυνατή η κοινοποίηση αυτού του περιεχομένου με εφαρμογές εργασίας"</string>
     <string name="resolver_cant_share_with_work_apps_explanation" msgid="3332302070341130545">"Ο διαχειριστής IT δεν σας επιτρέπει να κοινοποιήσετε αυτό το περιεχόμενο με εφαρμογές στο προφίλ εργασίας σας."</string>
     <string name="resolver_cant_access_work_apps" msgid="2455757966397563223">"Δεν είναι δυνατό το άνοιγμα με εφαρμογές εργασίας"</string>
     <string name="resolver_cant_access_work_apps_explanation" msgid="3626983885525445790">"Ο διαχειριστής IT δεν σας επιτρέπει να ανοίξετε αυτό το περιεχόμενο με εφαρμογές στο προφίλ εργασίας σας."</string>
@@ -2060,8 +2065,8 @@
     <string name="resolver_cant_access_personal_apps_explanation" msgid="2298773629302296519">"Ο διαχειριστής IT δεν σας επιτρέπει να ανοίξετε αυτό το περιεχόμενο με εφαρμογές στο προσωπικό προφίλ σας."</string>
     <string name="resolver_turn_on_work_apps" msgid="884910835250037247">"Το προφίλ εργασίας σας έχει τεθεί σε παύση."</string>
     <string name="resolver_switch_on_work" msgid="2873009160846966379">"Ενεργοποίηση"</string>
-    <string name="resolver_no_work_apps_available_share" msgid="7933949011797699505">"Καμία εφαρμογή εργασιών δεν μπορεί να υποστηρίξει αυτό το περιεχόμενο."</string>
-    <string name="resolver_no_work_apps_available_resolve" msgid="1244844292366099399">"Καμία εφαρμογή εργασιών δεν μπορεί να ανοίξει αυτό το περιεχόμενο."</string>
+    <string name="resolver_no_work_apps_available_share" msgid="7933949011797699505">"Καμία εφαρμογή εργασίας δεν μπορεί να υποστηρίξει αυτό το περιεχόμενο."</string>
+    <string name="resolver_no_work_apps_available_resolve" msgid="1244844292366099399">"Καμία εφαρμογή εργασίας δεν μπορεί να ανοίξει αυτό το περιεχόμενο."</string>
     <string name="resolver_no_personal_apps_available_share" msgid="5639102815174748732">"Καμία προσωπική εφαρμογή δεν μπορεί να υποστηρίξει αυτό το περιεχόμενο."</string>
     <string name="resolver_no_personal_apps_available_resolve" msgid="5120671970531446978">"Καμία προσωπική εφαρμογή δεν μπορεί να ανοίξει αυτό το περιεχόμενο."</string>
     <string name="PERSOSUBSTATE_SIM_NETWORK_ENTRY" msgid="8050953231914637819">"PIN ξεκλειδώματος δικτύου κάρτας SIM"</string>
@@ -2172,4 +2177,8 @@
     <string name="PERSOSUBSTATE_SIM_ICCID_SUCCESS" msgid="8058678548991999545">"Επιτυχία ξεκλειδώματος ICCID."</string>
     <string name="PERSOSUBSTATE_SIM_IMPI_SUCCESS" msgid="2545608067978550571">"Επιτυχία ξεκλειδώματος IMPI."</string>
     <string name="PERSOSUBSTATE_SIM_NS_SP_SUCCESS" msgid="4352382949744625007">"Επιτυχία ξεκλειδώματος παρόχου υπηρεσιών υποσυνόλου δικτύου."</string>
+    <string name="config_pdp_reject_dialog_title" msgid="4072057179246785727"></string>
+    <string name="config_pdp_reject_user_authentication_failed" msgid="4531693033885744689"></string>
+    <string name="config_pdp_reject_service_not_subscribed" msgid="8190338397128671588"></string>
+    <string name="config_pdp_reject_multi_conn_to_same_pdn_not_allowed" msgid="6024904218067254186"></string>
 </resources>

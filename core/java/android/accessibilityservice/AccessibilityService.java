@@ -494,6 +494,38 @@ public abstract class AccessibilityService extends Service {
      */
     public static final int GLOBAL_ACTION_TAKE_SCREENSHOT = 9;
 
+    /**
+     * Action to send the KEYCODE_HEADSETHOOK KeyEvent, which is used to answer/hang up calls and
+     * play/stop media
+     * @hide
+     */
+    public static final int GLOBAL_ACTION_KEYCODE_HEADSETHOOK = 10;
+
+    /**
+     * Action to trigger the Accessibility Button
+     * @hide
+     */
+    public static final int GLOBAL_ACTION_ACCESSIBILITY_BUTTON = 11;
+
+    /**
+     * Action to bring up the Accessibility Button's chooser menu
+     * @hide
+     */
+    public static final int GLOBAL_ACTION_ACCESSIBILITY_BUTTON_CHOOSER = 12;
+
+    /**
+     * Action to trigger the Accessibility Shortcut. This shortcut has a hardware trigger and can
+     * be activated by holding down the two volume keys.
+     * @hide
+     */
+    public static final int GLOBAL_ACTION_ACCESSIBILITY_SHORTCUT = 13;
+
+    /**
+     * Action to show Launcher's all apps.
+     * @hide
+     */
+    public static final int GLOBAL_ACTION_ACCESSIBILITY_ALL_APPS = 14;
+
     private static final String LOG_TAG = "AccessibilityService";
 
     /**

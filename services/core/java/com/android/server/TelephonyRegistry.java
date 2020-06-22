@@ -23,6 +23,7 @@ import static android.telephony.TelephonyRegistryManager.SIM_ACTIVATION_TYPE_VOI
 
 import static java.util.Arrays.copyOf;
 
+import android.Manifest;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
@@ -1082,7 +1083,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                         if (VDBG) log("listen: call onBarringInfoChanged=" + barringInfo);
                         try {
                             r.callback.onBarringInfoChanged(
-                                    checkFineLocationAccess(r, Build.VERSION_CODES.R)
+                                    checkFineLocationAccess(r, Build.VERSION_CODES.BASE)
                                             ? barringInfo : biNoLocation);
                         } catch (RemoteException ex) {
                             remove(r.binder);
@@ -1146,7 +1147,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                     && registrationLimit >= 1
                     && numRecordsForPid >= registrationLimit) {
                 String errorMsg = "Pid " + callingPid + " has exceeded the number of permissible"
-                        + "registered listeners. Ignoring request to add.";
+                        + " registered listeners. Ignoring request to add.";
                 loge(errorMsg);
                 if (mConfigurationProvider
                         .isRegistrationLimitEnabledInPlatformCompat(callingUid)) {
@@ -1157,7 +1158,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                 // Log the warning independently of the dynamically set limit -- apps shouldn't be
                 // doing this regardless of whether we're throwing them an exception for it.
                 Rlog.w(TAG, "Pid " + callingPid + " has exceeded half the number of permissible"
-                        + "registered listeners. Now at " + numRecordsForPid);
+                        + " registered listeners. Now at " + numRecordsForPid);
             }
 
             r = new Record();
@@ -2276,7 +2277,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                             && idMatch(r.subId, subId, phoneId)) {
                         try {
                             r.callback.onRegistrationFailed(
-                                    checkFineLocationAccess(r, Build.VERSION_CODES.R)
+                                    checkFineLocationAccess(r, Build.VERSION_CODES.BASE)
                                             ? cellIdentity : noLocationCi,
                                     chosenPlmn, domain, causeCode,
                                     additionalCauseCode);
@@ -2323,7 +2324,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                                         + barringInfo + " r=" + r);
                             }
                             r.callback.onBarringInfoChanged(
-                                    checkFineLocationAccess(r, Build.VERSION_CODES.R)
+                                    checkFineLocationAccess(r, Build.VERSION_CODES.BASE)
                                         ? barringInfo : biNoLocation);
                         } catch (RemoteException ex) {
                             mRemoveList.add(r.binder);
@@ -2459,7 +2460,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, subId);
         intent.putExtra(PHONE_CONSTANTS_SLOT_KEY, phoneId);
         intent.putExtra(SubscriptionManager.EXTRA_SLOT_INDEX, phoneId);
-        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL, Manifest.permission.READ_PHONE_STATE);
     }
 
     private void broadcastSignalStrengthChanged(SignalStrength signalStrength, int phoneId,
@@ -2584,7 +2585,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         intent.putExtra(PHONE_CONSTANTS_DATA_APN_TYPE_KEY,
                 ApnSetting.getApnTypesStringFromBitmask(apnType));
         intent.putExtra(PHONE_CONSTANTS_SUBSCRIPTION_KEY, subId);
-        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL, Manifest.permission.READ_PHONE_STATE);
     }
 
     private void enforceNotifyPermissionOrCarrierPrivilege(String method) {

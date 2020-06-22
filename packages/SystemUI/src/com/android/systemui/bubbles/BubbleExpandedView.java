@@ -16,17 +16,25 @@
 
 package com.android.systemui.bubbles;
 
+import static android.app.WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
 import static android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
+import static android.graphics.PixelFormat.TRANSPARENT;
 import static android.view.Display.INVALID_DISPLAY;
+import static android.view.InsetsState.ITYPE_IME;
+import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.ViewRootImpl.NEW_INSETS_MODE_FULL;
 import static android.view.ViewRootImpl.sNewInsetsMode;
+import static android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+import static android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+import static android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL;
 
 import static com.android.systemui.bubbles.BubbleDebugConfig.DEBUG_BUBBLE_EXPANDED_VIEW;
 import static com.android.systemui.bubbles.BubbleDebugConfig.TAG_BUBBLES;
 import static com.android.systemui.bubbles.BubbleDebugConfig.TAG_WITH_CLASS_NAME;
 
-import android.annotation.Nullable;
+import android.annotation.SuppressLint;
 import android.app.ActivityOptions;
 import android.app.ActivityTaskManager;
 import android.app.ActivityView;
@@ -34,35 +42,46 @@ import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.Outline;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.drawable.ShapeDrawable;
+import android.hardware.display.VirtualDisplay;
+import android.os.Binder;
 import android.os.RemoteException;
-import android.service.notification.StatusBarNotification;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.Gravity;
+import android.view.SurfaceControl;
+import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+
+import androidx.annotation.Nullable;
 
 import com.android.internal.policy.ScreenDecorationsUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
 import com.android.systemui.recents.TriangleShape;
-import com.android.systemui.shared.system.SysUiStatsLog;
 import com.android.systemui.statusbar.AlphaOptimizedButton;
-import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 
 /**
  * Container for the expanded bubble view, handles rendering the caret and settings icon.
  */
-public class BubbleExpandedView extends LinearLayout implements View.OnClickListener {
+public class BubbleExpandedView extends LinearLayout {
     private static final String TAG = TAG_WITH_CLASS_NAME ? "BubbleExpandedView" : TAG_BUBBLES;
+    private static final String WINDOW_TITLE = "ImeInsetsWindowWithoutContent";
 
     private enum ActivityViewStatus {
         // ActivityView is being initialized, cannot start an activity yet.
@@ -78,6 +97,7 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
     // The triangle pointing to the expanded view
     private View mPointerView;
     private int mPointerMargin;
+    @Nullable private int[] mExpandedViewContainerLocation;
 
     private AlphaOptimizedButton mSettingsIcon;
 
@@ -99,9 +119,6 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
     private int mPointerWidth;
     private int mPointerHeight;
     private ShapeDrawable mPointerDrawable;
-    private Rect mTempRect = new Rect();
-    private int[] mTempLoc = new int[2];
-    private int mExpandedViewTouchSlop;
 
     @Nullable private Bubble mBubble;
 
@@ -111,6 +128,19 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
     private WindowManager mWindowManager;
 
     private BubbleStackView mStackView;
+    private View mVirtualImeView;
+    private WindowManager mVirtualDisplayWindowManager;
+    private boolean mImeShowing = false;
+    private float mCornerRadius = 0f;
+
+    /**
+     * Container for the ActivityView that has a solid, round-rect background that shows if the
+     * ActivityView hasn't loaded.
+     */
+    private FrameLayout mActivityViewContainer = new FrameLayout(getContext());
+
+    /** The SurfaceView that the ActivityView draws to. */
+    @Nullable private SurfaceView mActivitySurface;
 
     private ActivityView.StateCallback mStateCallback = new ActivityView.StateCallback() {
         @Override
@@ -126,6 +156,7 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
                     ActivityOptions options = ActivityOptions.makeCustomAnimation(getContext(),
                             0 /* enterResId */, 0 /* exitResId */);
                     options.setTaskAlwaysOnTop(true);
+                    options.setLaunchWindowingMode(WINDOWING_MODE_MULTI_WINDOW);
                     // Post to keep the lifecycle normal
                     post(() -> {
                         if (DEBUG_BUBBLE_EXPANDED_VIEW) {
@@ -134,6 +165,7 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
                         }
                         try {
                             if (!mIsOverflow && mBubble.usingShortcutInfo()) {
+                                options.setApplyActivityFlagsForBubbles(true);
                                 mActivityView.startShortcutActivity(mBubble.getShortcutInfo(),
                                         options, null /* sourceBounds */);
                             } else {
@@ -149,7 +181,7 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
                             // the bubble again so we'll just remove it.
                             Log.w(TAG, "Exception while displaying bubble: " + getBubbleKey()
                                     + ", " + e.getMessage() + "; removing bubble");
-                            mBubbleController.removeBubble(getBubbleEntry(),
+                            mBubbleController.removeBubble(getBubbleKey(),
                                     BubbleController.DISMISS_INVALID_INTENT);
                         }
                     });
@@ -191,9 +223,9 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
                         + " mActivityViewStatus=" + mActivityViewStatus
                         + " bubble=" + getBubbleKey());
             }
-            if (mBubble != null && !mBubbleController.isUserCreatedBubble(mBubble.getKey())) {
+            if (mBubble != null) {
                 // Must post because this is called from a binder thread.
-                post(() -> mBubbleController.removeBubble(mBubble.getEntry(),
+                post(() -> mBubbleController.removeBubble(mBubble.getKey(),
                         BubbleController.DISMISS_TASK_FINISHED));
             }
         }
@@ -214,17 +246,21 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
     public BubbleExpandedView(Context context, AttributeSet attrs, int defStyleAttr,
             int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
+        updateDimensions();
+    }
+
+    void updateDimensions() {
         mDisplaySize = new Point();
-        mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        mWindowManager = (WindowManager) mContext.getSystemService(Context.WINDOW_SERVICE);
         // Get the real size -- this includes screen decorations (notches, statusbar, navbar).
         mWindowManager.getDefaultDisplay().getRealSize(mDisplaySize);
         Resources res = getResources();
         mMinHeight = res.getDimensionPixelSize(R.dimen.bubble_expanded_default_height);
         mOverflowHeight = res.getDimensionPixelSize(R.dimen.bubble_overflow_height);
         mPointerMargin = res.getDimensionPixelSize(R.dimen.bubble_pointer_margin);
-        mExpandedViewTouchSlop = res.getDimensionPixelSize(R.dimen.bubble_expanded_view_slop);
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
@@ -237,23 +273,42 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
         mPointerWidth = res.getDimensionPixelSize(R.dimen.bubble_pointer_width);
         mPointerHeight = res.getDimensionPixelSize(R.dimen.bubble_pointer_height);
 
-
         mPointerDrawable = new ShapeDrawable(TriangleShape.create(
                 mPointerWidth, mPointerHeight, true /* pointUp */));
-        mPointerView.setBackground(mPointerDrawable);
         mPointerView.setVisibility(INVISIBLE);
 
         mSettingsIconHeight = getContext().getResources().getDimensionPixelSize(
                 R.dimen.bubble_manage_button_height);
         mSettingsIcon = findViewById(R.id.settings_button);
-        mSettingsIcon.setOnClickListener(this);
 
         mActivityView = new ActivityView(mContext, null /* attrs */, 0 /* defStyle */,
-                true /* singleTaskInstance */);
+                true /* singleTaskInstance */, false /* usePublicVirtualDisplay*/,
+                true /* disableSurfaceViewBackgroundLayer */);
 
         // Set ActivityView's alpha value as zero, since there is no view content to be shown.
         setContentVisibility(false);
-        addView(mActivityView);
+
+        mActivityViewContainer.setBackgroundColor(Color.WHITE);
+        mActivityViewContainer.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), mCornerRadius);
+            }
+        });
+        mActivityViewContainer.setClipToOutline(true);
+        mActivityViewContainer.addView(mActivityView);
+        mActivityViewContainer.setLayoutParams(
+                new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
+        addView(mActivityViewContainer);
+
+        if (mActivityView != null
+                && mActivityView.getChildCount() > 0
+                && mActivityView.getChildAt(0) instanceof SurfaceView) {
+            // Retrieve the surface from the ActivityView so we can screenshot it and change its
+            // z-ordering. This should always be possible, since ActivityView's constructor adds the
+            // SurfaceView as its first child.
+            mActivitySurface = (SurfaceView) mActivityView.getChildAt(0);
+        }
 
         // Expanded stack layout, top to bottom:
         // Expanded view container
@@ -277,43 +332,130 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
             }
             return view.onApplyWindowInsets(insets);
         });
+
+        final int expandedViewPadding =
+                res.getDimensionPixelSize(R.dimen.bubble_expanded_view_padding);
+
+        setPadding(
+                expandedViewPadding, expandedViewPadding, expandedViewPadding, expandedViewPadding);
+        setOnTouchListener((view, motionEvent) -> {
+            if (!usingActivityView()) {
+                return false;
+            }
+
+            final Rect avBounds = new Rect();
+            mActivityView.getBoundsOnScreen(avBounds);
+
+            // Consume and ignore events on the expanded view padding that are within the
+            // ActivityView's vertical bounds. These events are part of a back gesture, and so they
+            // should not collapse the stack (which all other touches on areas around the AV would
+            // do).
+            if (motionEvent.getRawY() >= avBounds.top && motionEvent.getRawY() <= avBounds.bottom) {
+                return true;
+            }
+
+            return false;
+        });
+
+        // BubbleStackView is forced LTR, but we want to respect the locale for expanded view layout
+        // so the Manage button appears on the right.
+        setLayoutDirection(LAYOUT_DIRECTION_LOCALE);
     }
 
     private String getBubbleKey() {
         return mBubble != null ? mBubble.getKey() : "null";
     }
 
-    private NotificationEntry getBubbleEntry() {
-        return mBubble != null ? mBubble.getEntry() : null;
+    /**
+     * Asks the ActivityView's surface to draw on top of all other views in the window. This is
+     * useful for ordering surfaces during animations, but should otherwise be set to false so that
+     * bubbles and menus can draw over the ActivityView.
+     */
+    void setSurfaceZOrderedOnTop(boolean onTop) {
+        if (mActivitySurface == null) {
+            return;
+        }
+
+        mActivitySurface.setZOrderedOnTop(onTop, true);
+    }
+
+    /** Return a GraphicBuffer with the contents of the ActivityView's underlying surface. */
+    @Nullable SurfaceControl.ScreenshotGraphicBuffer snapshotActivitySurface() {
+        if (mActivitySurface == null) {
+            return null;
+        }
+
+        return SurfaceControl.captureLayers(
+                mActivitySurface.getSurfaceControl(),
+                new Rect(0, 0, mActivityView.getWidth(), mActivityView.getHeight()),
+                1 /* scale */);
+    }
+
+    int[] getActivityViewLocationOnScreen() {
+        if (mActivityView != null) {
+            return mActivityView.getLocationOnScreen();
+        } else {
+            return new int[]{0, 0};
+        }
+    }
+
+    void setManageClickListener(OnClickListener manageClickListener) {
+        findViewById(R.id.settings_button).setOnClickListener(manageClickListener);
+    }
+
+    /**
+     * Updates the ActivityView's obscured touchable region. This calls onLocationChanged, which
+     * results in a call to {@link BubbleStackView#subtractObscuredTouchableRegion}. This is useful
+     * if a view has been added or removed from on top of the ActivityView, such as the manage menu.
+     */
+    void updateObscuredTouchableRegion() {
+        if (mActivityView != null) {
+            mActivityView.onLocationChanged();
+        }
     }
 
     void applyThemeAttrs() {
         final TypedArray ta = mContext.obtainStyledAttributes(
-                new int[] {
-                        android.R.attr.colorBackgroundFloating,
-                        android.R.attr.dialogCornerRadius});
-        int bgColor = ta.getColor(0, Color.WHITE);
-        float cornerRadius = ta.getDimensionPixelSize(1, 0);
+                new int[] {android.R.attr.dialogCornerRadius});
+        mCornerRadius = ta.getDimensionPixelSize(0, 0);
         ta.recycle();
 
-        mPointerDrawable.setTint(bgColor);
         if (mActivityView != null && ScreenDecorationsUtils.supportsRoundedCornersOnWindows(
                 mContext.getResources())) {
-            mActivityView.setCornerRadius(cornerRadius);
+            mActivityView.setCornerRadius(mCornerRadius);
+        }
+
+        final int mode =
+                getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        switch (mode) {
+            case Configuration.UI_MODE_NIGHT_NO:
+                mPointerDrawable.setTint(getResources().getColor(R.color.bubbles_pointer_light));
+                break;
+            case Configuration.UI_MODE_NIGHT_YES:
+                mPointerDrawable.setTint(getResources().getColor(R.color.bubbles_pointer_dark));
+                break;
+        }
+        mPointerView.setBackground(mPointerDrawable);
+    }
+
+    /**
+     * Hides the IME if it's showing. This is currently done by dispatching a back press to the AV.
+     */
+    void hideImeIfVisible() {
+        if (mKeyboardVisible) {
+            performBackPressIfNeeded();
         }
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        hideImeIfVisible();
         mKeyboardVisible = false;
         mNeedsNewHeight = false;
         if (mActivityView != null) {
-            // TODO: Temporary hack to offset the view until we can properly inset Bubbles again.
             if (sNewInsetsMode == NEW_INSETS_MODE_FULL) {
-                mStackView.animate()
-                        .setDuration(100)
-                        .translationY(0);
+                setImeWindowToDisplay(0, 0);
             } else {
                 mActivityView.setForwardedInsets(Insets.of(0, 0, 0, 0));
             }
@@ -340,6 +482,7 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
         mPointerView.setAlpha(alpha);
         if (mActivityView != null) {
             mActivityView.setAlpha(alpha);
+            mActivityView.bringToFront();
         }
     }
 
@@ -357,16 +500,59 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
                             : 0);
             final int insetsBottom = Math.max(activityViewBottom - keyboardTop, 0);
 
-            // TODO: Temporary hack to offset the view until we can properly inset Bubbles again.
             if (sNewInsetsMode == NEW_INSETS_MODE_FULL) {
-                mStackView.animate()
-                        .setDuration(100)
-                        .translationY(-insetsBottom)
-                        .withEndAction(() -> mActivityView.onLocationChanged());
+                setImeWindowToDisplay(getWidth(), insetsBottom);
             } else {
                 mActivityView.setForwardedInsets(Insets.of(0, 0, 0, insetsBottom));
             }
         }
+    }
+
+    private void setImeWindowToDisplay(int w, int h) {
+        if (getVirtualDisplayId() == INVALID_DISPLAY) {
+            return;
+        }
+        if (h == 0 || w == 0) {
+            if (mImeShowing) {
+                mVirtualImeView.setVisibility(GONE);
+                mImeShowing = false;
+            }
+            return;
+        }
+        final Context virtualDisplayContext = mContext.createDisplayContext(
+                getVirtualDisplay().getDisplay());
+
+        if (mVirtualDisplayWindowManager == null) {
+            mVirtualDisplayWindowManager =
+                    (WindowManager) virtualDisplayContext.getSystemService(Context.WINDOW_SERVICE);
+        }
+        if (mVirtualImeView == null) {
+            mVirtualImeView = new View(virtualDisplayContext);
+            mVirtualImeView.setVisibility(VISIBLE);
+            mVirtualDisplayWindowManager.addView(mVirtualImeView,
+                    getVirtualImeViewAttrs(w, h));
+        } else {
+            mVirtualDisplayWindowManager.updateViewLayout(mVirtualImeView,
+                    getVirtualImeViewAttrs(w, h));
+            mVirtualImeView.setVisibility(VISIBLE);
+        }
+
+        mImeShowing = true;
+    }
+
+    private WindowManager.LayoutParams getVirtualImeViewAttrs(int w, int h) {
+        // To use TYPE_NAVIGATION_BAR_PANEL instead of TYPE_IME_BAR to bypass the IME window type
+        // token check when adding the window.
+        final WindowManager.LayoutParams attrs =
+                new WindowManager.LayoutParams(w, h, TYPE_NAVIGATION_BAR_PANEL,
+                        FLAG_LAYOUT_NO_LIMITS | FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCHABLE,
+                        TRANSPARENT);
+        attrs.gravity = Gravity.BOTTOM;
+        attrs.setTitle(WINDOW_TITLE);
+        attrs.token = new Binder();
+        attrs.providesInsetsTypes = new int[]{ITYPE_IME};
+        attrs.alpha = 0.0f;
+        return attrs;
     }
 
     void setStackView(BubbleStackView stackView) {
@@ -389,11 +575,24 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
         if (DEBUG_BUBBLE_EXPANDED_VIEW) {
             Log.d(TAG, "update: bubble=" + (bubble != null ? bubble.getKey() : "null"));
         }
-        boolean isNew = mBubble == null;
+        boolean isNew = mBubble == null || didBackingContentChange(bubble);
         if (isNew || bubble != null && bubble.getKey().equals(mBubble.getKey())) {
             mBubble = bubble;
             mSettingsIcon.setContentDescription(getResources().getString(
                     R.string.bubbles_settings_button_description, bubble.getAppName()));
+
+            mSettingsIcon.setAccessibilityDelegate(
+                    new AccessibilityDelegate() {
+                        @Override
+                        public void onInitializeAccessibilityNodeInfo(View host,
+                                AccessibilityNodeInfo info) {
+                            super.onInitializeAccessibilityNodeInfo(host, info);
+                            // On focus, have TalkBack say
+                            // "Actions available. Use swipe up then right to view."
+                            // in addition to the default "double tap to activate".
+                            mStackView.setupLocalMenu(info);
+                        }
+                    });
 
             if (isNew) {
                 mPendingIntent = mBubble.getBubbleIntent();
@@ -407,6 +606,12 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
             Log.w(TAG, "Trying to update entry with different key, new bubble: "
                     + bubble.getKey() + " old bubble: " + bubble.getKey());
         }
+    }
+
+    private boolean didBackingContentChange(Bubble newBubble) {
+        boolean prevWasIntentBased = mBubble != null && mPendingIntent != null;
+        boolean newIsIntentBased = newBubble.getBubbleIntent() != null;
+        return prevWasIntentBased != newIsIntentBased;
     }
 
     /**
@@ -437,6 +642,11 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
         if (DEBUG_BUBBLE_EXPANDED_VIEW) {
             Log.d(TAG, "updateHeight: bubble=" + getBubbleKey());
         }
+
+        if (mExpandedViewContainerLocation == null) {
+            return;
+        }
+
         if (usingActivityView()) {
             float desiredHeight = mOverflowHeight;
             if (!mIsOverflow) {
@@ -444,7 +654,7 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
             }
             float height = Math.min(desiredHeight, getMaxExpandedHeight());
             height = Math.max(height, mIsOverflow? mOverflowHeight : mMinHeight);
-            LayoutParams lp = (LayoutParams) mActivityView.getLayoutParams();
+            ViewGroup.LayoutParams lp = mActivityView.getLayoutParams();
             mNeedsNewHeight = lp.height != height;
             if (!mKeyboardVisible) {
                 // If the keyboard is visible... don't adjust the height because that will cause
@@ -454,7 +664,8 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
                 mNeedsNewHeight = false;
             }
             if (DEBUG_BUBBLE_EXPANDED_VIEW) {
-                Log.d(TAG, "updateHeight: bubble=" + getBubbleKey() + " height=" + height
+                Log.d(TAG, "updateHeight: bubble=" + getBubbleKey()
+                        + " height=" + height
                         + " mNeedsNewHeight=" + mNeedsNewHeight);
             }
         }
@@ -462,73 +673,40 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
 
     private int getMaxExpandedHeight() {
         mWindowManager.getDefaultDisplay().getRealSize(mDisplaySize);
-        int[] windowLocation = mActivityView.getLocationOnScreen();
         int bottomInset = getRootWindowInsets() != null
                 ? getRootWindowInsets().getStableInsetBottom()
                 : 0;
-        return mDisplaySize.y - windowLocation[1] - mSettingsIconHeight - mPointerHeight
+
+        return mDisplaySize.y
+                - mExpandedViewContainerLocation[1]
+                - getPaddingTop()
+                - getPaddingBottom()
+                - mSettingsIconHeight
+                - mPointerHeight
                 - mPointerMargin - bottomInset;
     }
 
     /**
-     * Whether the provided x, y values (in raw coordinates) are in a touchable area of the
-     * expanded view.
-     *
-     * The touchable areas are the ActivityView (plus some slop around it) and the manage button.
-     */
-    boolean intersectingTouchableContent(int rawX, int rawY) {
-        mTempRect.setEmpty();
-        if (mActivityView != null) {
-            mTempLoc = mActivityView.getLocationOnScreen();
-            mTempRect.set(mTempLoc[0] - mExpandedViewTouchSlop,
-                    mTempLoc[1] - mExpandedViewTouchSlop,
-                    mTempLoc[0] + mActivityView.getWidth() + mExpandedViewTouchSlop,
-                    mTempLoc[1] + mActivityView.getHeight() + mExpandedViewTouchSlop);
-        }
-        if (mTempRect.contains(rawX, rawY)) {
-            return true;
-        }
-        mTempLoc = mSettingsIcon.getLocationOnScreen();
-        mTempRect.set(mTempLoc[0],
-                mTempLoc[1],
-                mTempLoc[0] + mSettingsIcon.getWidth(),
-                mTempLoc[1] + mSettingsIcon.getHeight());
-        if (mTempRect.contains(rawX, rawY)) {
-            return true;
-        }
-        return false;
-    }
-
-    @Override
-    public void onClick(View view) {
-        if (mBubble == null) {
-            return;
-        }
-        int id = view.getId();
-        if (id == R.id.settings_button) {
-            Intent intent = mBubble.getSettingsIntent();
-            mStackView.collapseStack(() -> {
-                mContext.startActivityAsUser(intent, mBubble.getEntry().getSbn().getUser());
-                logBubbleClickEvent(mBubble,
-                        SysUiStatsLog.BUBBLE_UICHANGED__ACTION__HEADER_GO_TO_SETTINGS);
-            });
-        }
-    }
-
-    /**
      * Update appearance of the expanded view being displayed.
+     *
+     * @param containerLocationOnScreen The location on-screen of the container the expanded view is
+     *                                  added to. This allows us to calculate max height without
+     *                                  waiting for layout.
      */
-    public void updateView() {
+    public void updateView(int[] containerLocationOnScreen) {
         if (DEBUG_BUBBLE_EXPANDED_VIEW) {
             Log.d(TAG, "updateView: bubble="
                     + getBubbleKey());
         }
+
+        mExpandedViewContainerLocation = containerLocationOnScreen;
+
         if (usingActivityView()
                 && mActivityView.getVisibility() == VISIBLE
                 && mActivityView.isAttachedToWindow()) {
             mActivityView.onLocationChanged();
+            updateHeight();
         }
-        updateHeight();
     }
 
     /**
@@ -545,10 +723,8 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
      * Position of the manage button displayed in the expanded view. Used for placing user
      * education about the manage button.
      */
-    public Rect getManageButtonLocationOnScreen() {
-        mTempLoc = mSettingsIcon.getLocationOnScreen();
-        return new Rect(mTempLoc[0], mTempLoc[1], mTempLoc[0] + mSettingsIcon.getWidth(),
-                mTempLoc[1] + mSettingsIcon.getHeight());
+    public void getManageButtonBoundsOnScreen(Rect rect) {
+        mSettingsIcon.getBoundsOnScreen(rect);
     }
 
     /**
@@ -610,25 +786,10 @@ public class BubbleExpandedView extends LinearLayout implements View.OnClickList
         return INVALID_DISPLAY;
     }
 
-    /**
-     * Logs bubble UI click event.
-     *
-     * @param bubble the bubble notification entry that user is interacting with.
-     * @param action the user interaction enum.
-     */
-    private void logBubbleClickEvent(Bubble bubble, int action) {
-        StatusBarNotification notification = bubble.getEntry().getSbn();
-        SysUiStatsLog.write(SysUiStatsLog.BUBBLE_UI_CHANGED,
-                notification.getPackageName(),
-                notification.getNotification().getChannelId(),
-                notification.getId(),
-                mStackView.getBubbleIndex(mStackView.getExpandedBubble()),
-                mStackView.getBubbleCount(),
-                action,
-                mStackView.getNormalizedXPosition(),
-                mStackView.getNormalizedYPosition(),
-                bubble.showInShade(),
-                bubble.isOngoing(),
-                false /* isAppForeground (unused) */);
+    private VirtualDisplay getVirtualDisplay() {
+        if (usingActivityView()) {
+            return mActivityView.getVirtualDisplay();
+        }
+        return null;
     }
 }

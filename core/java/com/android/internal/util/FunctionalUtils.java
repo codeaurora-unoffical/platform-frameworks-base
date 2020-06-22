@@ -16,10 +16,12 @@
 
 package com.android.internal.util;
 
+import android.annotation.NonNull;
 import android.os.RemoteException;
 import android.util.ExceptionUtils;
 
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -195,6 +197,32 @@ public class FunctionalUtils {
     }
 
     /**
+     * A {@link BiFunction} that allows throwing checked exceptions from its single abstract method.
+     *
+     * Can be used together with {@link #uncheckExceptions} to effectively turn a lambda expression
+     * that throws a checked exception into a regular {@link BiFunction}
+     *
+     * @param <T> see {@link BiFunction}
+     * @param <U> see {@link BiFunction}
+     * @param <R> see {@link BiFunction}
+     */
+    @FunctionalInterface
+    @SuppressWarnings("FunctionalInterfaceMethodChanged")
+    public interface ThrowingBiFunction<T, U, R> extends BiFunction<T, U, R> {
+        /** @see ThrowingFunction */
+        R applyOrThrow(T t, U u) throws Exception;
+
+        @Override
+        default R apply(T t, U u) {
+            try {
+                return applyOrThrow(t, u);
+            } catch (Exception ex) {
+                throw ExceptionUtils.propagate(ex);
+            }
+        }
+    }
+
+    /**
      * A {@link BiConsumer} that allows throwing checked exceptions from its single abstract method.
      *
      * Can be used together with {@link #uncheckExceptions} to effectively turn a lambda expression
@@ -217,5 +245,38 @@ public class FunctionalUtils {
                 throw ExceptionUtils.propagate(ex);
             }
         }
+    }
+
+    // TODO: add unit test
+    /**
+     * Gets a user-friendly name for a lambda function.
+     */
+    @NonNull
+    public static String getLambdaName(@NonNull Object function) {
+        // Full function has one of the following formats:
+        //   package-$$Lambda$class$randomId
+        //   package-$$Lambda$randomId
+        //
+        // We just want just package.class$Lambda (or package$Lambda) respectively
+
+        final String fullFunction = function.toString();
+
+        final int endPkgIdx = fullFunction.indexOf("-$$");
+        if (endPkgIdx == -1) return fullFunction;
+
+        // firstDollarIdx could be either beginning of class or beginning of the random id
+        final int firstDollarIdx = fullFunction.indexOf('$', endPkgIdx + 3);
+        if (firstDollarIdx == -1) return fullFunction;
+
+        final int endClassIdx = fullFunction.indexOf('$', firstDollarIdx + 1);
+        if (endClassIdx == -1) {
+            // Just package
+            return fullFunction.substring(0, endPkgIdx - 1) + "$Lambda";
+        }
+
+        // Package + class
+        return fullFunction.substring(0, endPkgIdx)
+                + fullFunction.substring(firstDollarIdx + 1, endClassIdx)
+                + "$Lambda";
     }
 }

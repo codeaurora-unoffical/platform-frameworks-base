@@ -44,6 +44,7 @@ import com.android.systemui.controls.management.ControlsListingController
 import com.android.systemui.controls.ui.ControlsUiController
 import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.dump.DumpManager
+import com.android.systemui.globalactions.GlobalActionsDialog
 import com.android.systemui.util.concurrency.DelayableExecutor
 import java.io.FileDescriptor
 import java.io.PrintWriter
@@ -72,11 +73,14 @@ class ControlsControllerImpl @Inject constructor (
         private const val USER_CHANGE_RETRY_DELAY = 500L // ms
         private const val DEFAULT_ENABLED = 1
         private const val PERMISSION_SELF = "com.android.systemui.permission.SELF"
+        const val SUGGESTED_CONTROLS_PER_STRUCTURE = 6
+
+        private fun isAvailable(userId: Int, cr: ContentResolver) = Settings.Secure.getIntForUser(
+            cr, CONTROLS_AVAILABLE, DEFAULT_ENABLED, userId) != 0
     }
 
     private var userChanging: Boolean = true
-
-    private var loadCanceller: Runnable? = null
+    private var userStructure: UserStructure
 
     private var seedingInProgress = false
     private val seedingCallbacks = mutableListOf<Consumer<Boolean>>()
@@ -87,41 +91,40 @@ class ControlsControllerImpl @Inject constructor (
 
     private val contentResolver: ContentResolver
         get() = context.contentResolver
-    override var available = Settings.Secure.getIntForUser(
-            contentResolver, CONTROLS_AVAILABLE, DEFAULT_ENABLED, currentUserId) != 0
+    override var available = isAvailable(currentUserId, contentResolver)
         private set
 
-    private var file = Environment.buildPath(
-        context.filesDir,
-        ControlsFavoritePersistenceWrapper.FILE_NAME
-    )
-    private var auxiliaryFile = Environment.buildPath(
-        context.filesDir,
-        AuxiliaryPersistenceWrapper.AUXILIARY_FILE_NAME
-    )
-    private val persistenceWrapper = optionalWrapper.orElseGet {
-        ControlsFavoritePersistenceWrapper(
-            file,
-            executor,
-            BackupManager(context)
+    private val persistenceWrapper: ControlsFavoritePersistenceWrapper
+    @VisibleForTesting
+    internal var auxiliaryPersistenceWrapper: AuxiliaryPersistenceWrapper
+
+    init {
+        userStructure = UserStructure(context, currentUser)
+
+        persistenceWrapper = optionalWrapper.orElseGet {
+            ControlsFavoritePersistenceWrapper(
+                    userStructure.file,
+                    executor,
+                    BackupManager(userStructure.userContext)
+            )
+        }
+
+        auxiliaryPersistenceWrapper = AuxiliaryPersistenceWrapper(
+                userStructure.auxiliaryFile,
+                executor
         )
     }
-
-    @VisibleForTesting
-    internal var auxiliaryPersistenceWrapper = AuxiliaryPersistenceWrapper(auxiliaryFile, executor)
 
     private fun setValuesForUser(newUser: UserHandle) {
         Log.d(TAG, "Changing to user: $newUser")
         currentUser = newUser
-        val userContext = context.createContextAsUser(currentUser, 0)
-        file = Environment.buildPath(
-                userContext.filesDir, ControlsFavoritePersistenceWrapper.FILE_NAME)
-        auxiliaryFile = Environment.buildPath(
-            userContext.filesDir, AuxiliaryPersistenceWrapper.AUXILIARY_FILE_NAME)
-        persistenceWrapper.changeFileAndBackupManager(file, BackupManager(userContext))
-        auxiliaryPersistenceWrapper.changeFile(auxiliaryFile)
-        available = Settings.Secure.getIntForUser(contentResolver, CONTROLS_AVAILABLE,
-                DEFAULT_ENABLED, newUser.identifier) != 0
+        userStructure = UserStructure(context, currentUser)
+        persistenceWrapper.changeFileAndBackupManager(
+                userStructure.file,
+                BackupManager(userStructure.userContext)
+        )
+        auxiliaryPersistenceWrapper.changeFile(userStructure.auxiliaryFile)
+        available = isAvailable(newUser.identifier, contentResolver)
         resetFavorites(available)
         bindingController.changeUser(newUser)
         listingController.changeUser(newUser)
@@ -132,7 +135,6 @@ class ControlsControllerImpl @Inject constructor (
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == Intent.ACTION_USER_SWITCHED) {
                 userChanging = true
-                listingController.removeCallback(listingCallback)
                 val newUser =
                         UserHandle.of(intent.getIntExtra(Intent.EXTRA_USER_HANDLE, sendingUserId))
                 if (currentUser == newUser) {
@@ -150,8 +152,8 @@ class ControlsControllerImpl @Inject constructor (
             val user = intent.getIntExtra(Intent.EXTRA_USER_ID, UserHandle.USER_NULL)
             if (user == currentUserId) {
                 executor.execute {
+                    Log.d(TAG, "Restore finished, storing auxiliary favorites")
                     auxiliaryPersistenceWrapper.initialize()
-                    listingController.removeCallback(listingCallback)
                     persistenceWrapper.storeFavorites(auxiliaryPersistenceWrapper.favorites)
                     resetFavorites(available)
                 }
@@ -172,8 +174,7 @@ class ControlsControllerImpl @Inject constructor (
             if (userChanging || userId != currentUserId) {
                 return
             }
-            available = Settings.Secure.getIntForUser(contentResolver, CONTROLS_AVAILABLE,
-                DEFAULT_ENABLED, currentUserId) != 0
+            available = isAvailable(currentUserId, contentResolver)
             resetFavorites(available)
         }
     }
@@ -192,6 +193,16 @@ class ControlsControllerImpl @Inject constructor (
                 val favoriteComponentSet = Favorites.getAllStructures().map {
                     it.componentName
                 }.toSet()
+
+                // When a component is uninstalled, allow seeding to happen again if the user
+                // reinstalls the app
+                val prefs = userStructure.userContext.getSharedPreferences(
+                    GlobalActionsDialog.PREFS_CONTROLS_FILE, Context.MODE_PRIVATE)
+                val completedSeedingPackageSet = prefs.getStringSet(
+                    GlobalActionsDialog.PREFS_CONTROLS_SEEDING_COMPLETED, mutableSetOf<String>())
+                val favoritePackageSet = favoriteComponentSet.map { it.packageName }
+                prefs.edit().putStringSet(GlobalActionsDialog.PREFS_CONTROLS_SEEDING_COMPLETED,
+                    completedSeedingPackageSet.intersect(favoritePackageSet)).apply()
 
                 var changed = false
                 favoriteComponentSet.subtract(serviceInfoSet).forEach {
@@ -220,6 +231,7 @@ class ControlsControllerImpl @Inject constructor (
 
                 // Check if something has been added or removed, if so, store the new list
                 if (changed) {
+                    Log.d(TAG, "Detected change in available services, storing updated favorites")
                     persistenceWrapper.storeFavorites(Favorites.getAllStructures())
                 }
             }
@@ -243,6 +255,7 @@ class ControlsControllerImpl @Inject constructor (
             null
         )
         contentResolver.registerContentObserver(URI, false, settingObserver, UserHandle.USER_ALL)
+        listingController.addCallback(listingCallback)
     }
 
     fun destroy() {
@@ -257,7 +270,6 @@ class ControlsControllerImpl @Inject constructor (
 
         if (shouldLoad) {
             Favorites.load(persistenceWrapper.readFavorites())
-            listingController.addCallback(listingCallback)
         }
     }
 
@@ -275,28 +287,29 @@ class ControlsControllerImpl @Inject constructor (
 
     override fun loadForComponent(
         componentName: ComponentName,
-        dataCallback: Consumer<ControlsController.LoadData>
+        dataCallback: Consumer<ControlsController.LoadData>,
+        cancelWrapper: Consumer<Runnable>
     ) {
         if (!confirmAvailability()) {
             if (userChanging) {
                 // Try again later, userChanging should not last forever. If so, we have bigger
                 // problems. This will return a runnable that allows to cancel the delayed version,
                 // it will not be able to cancel the load if
-                loadCanceller = executor.executeDelayed(
-                        { loadForComponent(componentName, dataCallback) },
-                        USER_CHANGE_RETRY_DELAY,
-                        TimeUnit.MILLISECONDS
+                executor.executeDelayed(
+                    { loadForComponent(componentName, dataCallback, cancelWrapper) },
+                    USER_CHANGE_RETRY_DELAY,
+                    TimeUnit.MILLISECONDS
                 )
-            } else {
-                dataCallback.accept(createLoadDataObject(emptyList(), emptyList(), true))
             }
-            return
+
+            dataCallback.accept(createLoadDataObject(emptyList(), emptyList(), true))
         }
-        loadCanceller = bindingController.bindAndLoad(
+
+        cancelWrapper.accept(
+            bindingController.bindAndLoad(
                 componentName,
                 object : ControlsBindingController.LoadCallback {
                     override fun accept(controls: List<Control>) {
-                        loadCanceller = null
                         executor.execute {
                             val favoritesForComponentKeys = Favorites
                                 .getControlsForComponent(componentName).map { it.controlId }
@@ -332,7 +345,6 @@ class ControlsControllerImpl @Inject constructor (
                     }
 
                     override fun error(message: String) {
-                        loadCanceller = null
                         executor.execute {
                             val controls = Favorites.getStructuresForComponent(componentName)
                                     .flatMap { st ->
@@ -347,6 +359,7 @@ class ControlsControllerImpl @Inject constructor (
                         }
                     }
                 }
+            )
         )
     }
 
@@ -361,27 +374,47 @@ class ControlsControllerImpl @Inject constructor (
         return true
     }
 
-    override fun seedFavoritesForComponent(
-        componentName: ComponentName,
-        callback: Consumer<Boolean>
+    override fun seedFavoritesForComponents(
+        componentNames: List<ComponentName>,
+        callback: Consumer<SeedResponse>
     ) {
-        Log.i(TAG, "Beginning request to seed favorites for: $componentName")
+        if (seedingInProgress || componentNames.isEmpty()) return
+
         if (!confirmAvailability()) {
             if (userChanging) {
                 // Try again later, userChanging should not last forever. If so, we have bigger
                 // problems. This will return a runnable that allows to cancel the delayed version,
                 // it will not be able to cancel the load if
                 executor.executeDelayed(
-                    { seedFavoritesForComponent(componentName, callback) },
+                    { seedFavoritesForComponents(componentNames, callback) },
                     USER_CHANGE_RETRY_DELAY,
                     TimeUnit.MILLISECONDS
                 )
             } else {
-                callback.accept(false)
+                componentNames.forEach {
+                    callback.accept(SeedResponse(it.packageName, false))
+                }
             }
             return
         }
         seedingInProgress = true
+        startSeeding(componentNames, callback, false)
+    }
+
+    private fun startSeeding(
+        remainingComponentNames: List<ComponentName>,
+        callback: Consumer<SeedResponse>,
+        didAnyFail: Boolean
+    ) {
+        if (remainingComponentNames.isEmpty()) {
+            endSeedingCall(!didAnyFail)
+            return
+        }
+
+        val componentName = remainingComponentNames[0]
+        Log.d(TAG, "Beginning request to seed favorites for: $componentName")
+
+        val remaining = remainingComponentNames.drop(1)
         bindingController.bindAndLoadSuggested(
             componentName,
             object : ControlsBindingController.LoadCallback {
@@ -394,9 +427,11 @@ class ControlsControllerImpl @Inject constructor (
                             val structure = it.structure ?: ""
                             val list = structureToControls.get(structure)
                                 ?: mutableListOf<ControlInfo>()
-                            list.add(
-                                ControlInfo(it.controlId, it.title, it.subtitle, it.deviceType))
-                            structureToControls.put(structure, list)
+                            if (list.size < SUGGESTED_CONTROLS_PER_STRUCTURE) {
+                                list.add(
+                                    ControlInfo(it.controlId, it.title, it.subtitle, it.deviceType))
+                                structureToControls.put(structure, list)
+                            }
                         }
 
                         structureToControls.forEach {
@@ -405,16 +440,16 @@ class ControlsControllerImpl @Inject constructor (
                         }
 
                         persistenceWrapper.storeFavorites(Favorites.getAllStructures())
-                        callback.accept(true)
-                        endSeedingCall(true)
+                        callback.accept(SeedResponse(componentName.packageName, true))
+                        startSeeding(remaining, callback, didAnyFail)
                     }
                 }
 
                 override fun error(message: String) {
                     Log.e(TAG, "Unable to seed favorites: $message")
                     executor.execute {
-                        callback.accept(false)
-                        endSeedingCall(false)
+                        callback.accept(SeedResponse(componentName.packageName, false))
+                        startSeeding(remaining, callback, true)
                     }
                 }
             }
@@ -427,12 +462,6 @@ class ControlsControllerImpl @Inject constructor (
             it.accept(state)
         }
         seedingCallbacks.clear()
-    }
-
-    override fun cancelLoad() {
-        loadCanceller?.let {
-            executor.execute(it)
-        }
     }
 
     private fun createRemovedStatus(
@@ -535,6 +564,15 @@ class ControlsControllerImpl @Inject constructor (
     override fun getFavoritesForComponent(componentName: ComponentName): List<StructureInfo> =
         Favorites.getStructuresForComponent(componentName)
 
+    override fun getFavoritesForStructure(
+        componentName: ComponentName,
+        structureName: CharSequence
+    ): List<ControlInfo> {
+        return Favorites.getControlsForStructure(
+                StructureInfo(componentName, structureName, emptyList())
+        )
+    }
+
     override fun dump(fd: FileDescriptor, pw: PrintWriter, args: Array<out String>) {
         pw.println("ControlsController state:")
         pw.println("  Available: $available")
@@ -549,6 +587,20 @@ class ControlsControllerImpl @Inject constructor (
         }
         pw.println(bindingController.toString())
     }
+}
+
+class UserStructure(context: Context, user: UserHandle) {
+    val userContext = context.createContextAsUser(user, 0)
+
+    val file = Environment.buildPath(
+            userContext.filesDir,
+            ControlsFavoritePersistenceWrapper.FILE_NAME
+    )
+
+    val auxiliaryFile = Environment.buildPath(
+            userContext.filesDir,
+            AuxiliaryPersistenceWrapper.AUXILIARY_FILE_NAME
+    )
 }
 
 /**

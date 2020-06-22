@@ -210,6 +210,7 @@ public class ActivityThreadClientTest {
             info.applicationInfo = new ApplicationInfo();
             info.applicationInfo.packageName = info.packageName;
             info.applicationInfo.uid = UserHandle.myUserId();
+            info.applicationInfo.sourceDir = "/test/sourceDir";
 
             // mock the function for preventing NPE in emulator environment. The purpose of the
             // test is for activity client state changes, we don't focus on the updating for the
@@ -224,7 +225,8 @@ public class ActivityThreadClientTest {
                     CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO, null /* referrer */,
                     null /* voiceInteractor */, null /* state */, null /* persistentState */,
                     null /* pendingResults */, null /* pendingNewIntents */, true /* isForward */,
-                    null /* profilerInfo */,  mThread /* client */, null /* asssitToken */);
+                    null /* profilerInfo */,  mThread /* client */, null /* asssitToken */,
+                    null /* fixedRotationAdjustments */);
         }
 
         @Override

@@ -37,10 +37,14 @@ import android.content.pm.PackageParser;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.UserInfo;
 import android.content.pm.VersionedPackage;
+import android.content.pm.parsing.ApkLiteParseUtils;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
 import android.content.rollback.IRollbackManager;
 import android.content.rollback.RollbackInfo;
 import android.content.rollback.RollbackManager;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerExecutor;
@@ -49,12 +53,14 @@ import android.os.Process;
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.ext.SdkExtensions;
 import android.provider.DeviceConfig;
 import android.util.IntArray;
 import android.util.Log;
 import android.util.LongArrayQueue;
 import android.util.Slog;
 import android.util.SparseBooleanArray;
+import android.util.SparseIntArray;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.util.DumpUtils;
@@ -295,10 +301,7 @@ class RollbackManagerServiceImpl extends IRollbackManager.Stub {
                 }
                 if (Intent.ACTION_PACKAGE_FULLY_REMOVED.equals(action)) {
                     String packageName = intent.getData().getSchemeSpecificPart();
-                    if (LOCAL_LOGV) {
-                        Slog.v(TAG, "broadcast=ACTION_PACKAGE_FULLY_REMOVED"
-                                + " pkg=" + packageName);
-                    }
+                    Slog.i(TAG, "broadcast=ACTION_PACKAGE_FULLY_REMOVED pkg=" + packageName);
                     onPackageFullyRemoved(packageName);
                 }
             }
@@ -788,13 +791,15 @@ class RollbackManagerServiceImpl extends IRollbackManager.Stub {
         }
 
         // Get information about the package to be installed.
-        PackageParser.PackageLite newPackage;
-        try {
-            newPackage = PackageParser.parsePackageLite(new File(session.resolvedBaseCodePath), 0);
-        } catch (PackageParser.PackageParserException e) {
-            Slog.e(TAG, "Unable to parse new package", e);
+        ParseTypeImpl input = ParseTypeImpl.forDefaultParsing();
+        ParseResult<PackageParser.ApkLite> parseResult = ApkLiteParseUtils.parseApkLite(
+                input.reset(), new File(session.resolvedBaseCodePath), 0);
+        if (parseResult.isError()) {
+            Slog.e(TAG, "Unable to parse new package: " + parseResult.getErrorMessage(),
+                    parseResult.getException());
             return false;
         }
+        PackageParser.ApkLite newPackage = parseResult.getResult();
 
         String packageName = newPackage.packageName;
         Slog.i(TAG, "Enabling rollback for install of " + packageName
@@ -1274,14 +1279,27 @@ class RollbackManagerServiceImpl extends IRollbackManager.Stub {
 
         if (parentSession.isStaged()) {
             rollback = mRollbackStore.createStagedRollback(rollbackId, parentSessionId, userId,
-                    installerPackageName, packageSessionIds);
+                    installerPackageName, packageSessionIds, getExtensionVersions());
         } else {
             rollback = mRollbackStore.createNonStagedRollback(rollbackId, userId,
-                    installerPackageName, packageSessionIds);
+                    installerPackageName, packageSessionIds, getExtensionVersions());
         }
 
         mRollbacks.add(rollback);
         return rollback;
+    }
+
+    private SparseIntArray getExtensionVersions() {
+        // This list must be updated whenever the current API level is increased, or should be
+        // replaced when we have another way of determining the relevant SDK versions.
+        final int[] relevantSdkVersions = { Build.VERSION_CODES.R };
+
+        SparseIntArray result = new SparseIntArray(relevantSdkVersions.length);
+        for (int i = 0; i < relevantSdkVersions.length; i++) {
+            result.put(relevantSdkVersions[i],
+                    SdkExtensions.getExtensionVersion(relevantSdkVersions[i]));
+        }
+        return result;
     }
 
     /**

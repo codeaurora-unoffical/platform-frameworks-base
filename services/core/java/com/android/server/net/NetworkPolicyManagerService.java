@@ -799,8 +799,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                         writePolicyAL();
                     }
 
-                    enableFirewallChainUL(FIREWALL_CHAIN_STANDBY, true);
-                    setRestrictBackgroundUL(mLoadedRestrictBackground);
+                    setRestrictBackgroundUL(mLoadedRestrictBackground, "init_service");
                     updateRulesForGlobalChangeAL(false);
                     updateNotificationsNL();
                 }
@@ -871,6 +870,9 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                     new NetworkRequest.Builder().build(), mNetworkCallback);
 
             mAppStandby.addListener(new NetPolicyAppIdleStateChangeListener());
+            synchronized (mUidRulesFirstLock) {
+                updateRulesForAppIdleParoleUL();
+            }
 
             // Listen for subscriber changes
             mContext.getSystemService(SubscriptionManager.class).addOnSubscriptionsChangedListener(
@@ -2877,10 +2879,11 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         Trace.traceBegin(Trace.TRACE_TAG_NETWORK, "setRestrictBackground");
         try {
             mContext.enforceCallingOrSelfPermission(MANAGE_NETWORK_POLICY, TAG);
+            final int callingUid = Binder.getCallingUid();
             final long token = Binder.clearCallingIdentity();
             try {
                 synchronized (mUidRulesFirstLock) {
-                    setRestrictBackgroundUL(restrictBackground);
+                    setRestrictBackgroundUL(restrictBackground, "uid:" + callingUid);
                 }
             } finally {
                 Binder.restoreCallingIdentity(token);
@@ -2891,7 +2894,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     }
 
     @GuardedBy("mUidRulesFirstLock")
-    private void setRestrictBackgroundUL(boolean restrictBackground) {
+    private void setRestrictBackgroundUL(boolean restrictBackground, String reason) {
         Trace.traceBegin(Trace.TRACE_TAG_NETWORK, "setRestrictBackgroundUL");
         try {
             if (restrictBackground == mRestrictBackground) {
@@ -2899,7 +2902,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                 Slog.w(TAG, "setRestrictBackgroundUL: already " + restrictBackground);
                 return;
             }
-            Slog.d(TAG, "setRestrictBackgroundUL(): " + restrictBackground);
+            Slog.d(TAG, "setRestrictBackgroundUL(): " + restrictBackground + "; reason: " + reason);
             final boolean oldRestrictBackground = mRestrictBackground;
             mRestrictBackground = restrictBackground;
             // Must whitelist foreground apps before turning data saver mode on.
@@ -3425,7 +3428,13 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                 fout.print("Restrict background: "); fout.println(mRestrictBackground);
                 fout.print("Restrict power: "); fout.println(mRestrictPower);
                 fout.print("Device idle: "); fout.println(mDeviceIdleMode);
-                fout.print("Metered ifaces: "); fout.println(String.valueOf(mMeteredIfaces));
+                fout.print("Metered ifaces: "); fout.println(mMeteredIfaces);
+
+                fout.println();
+                fout.print("mRestrictBackgroundLowPowerMode: " + mRestrictBackgroundLowPowerMode);
+                fout.print("mRestrictBackgroundBeforeBsm: " + mRestrictBackgroundBeforeBsm);
+                fout.print("mLoadedRestrictBackground: " + mLoadedRestrictBackground);
+                fout.print("mRestrictBackgroundChangedInBsm: " + mRestrictBackgroundChangedInBsm);
 
                 fout.println();
                 fout.println("Network policies:");
@@ -3886,6 +3895,39 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     }
 
     /**
+     * Toggle the firewall standby chain and inform listeners if the uid rules have effectively
+     * changed.
+     */
+    @GuardedBy("mUidRulesFirstLock")
+    private void updateRulesForAppIdleParoleUL() {
+        final boolean paroled = mAppStandby.isInParole();
+        final boolean enableChain = !paroled;
+        enableFirewallChainUL(FIREWALL_CHAIN_STANDBY, enableChain);
+
+        int ruleCount = mUidFirewallStandbyRules.size();
+        for (int i = 0; i < ruleCount; i++) {
+            final int uid = mUidFirewallStandbyRules.keyAt(i);
+            int oldRules = mUidRules.get(uid);
+            if (enableChain) {
+                // Chain wasn't enabled before and the other power-related
+                // chains are whitelists, so we can clear the
+                // MASK_ALL_NETWORKS part of the rules and re-inform listeners if
+                // the effective rules result in blocking network access.
+                oldRules &= MASK_METERED_NETWORKS;
+            } else {
+                // Skip if it had no restrictions to begin with
+                if ((oldRules & MASK_ALL_NETWORKS) == 0) continue;
+            }
+            final int newUidRules = updateRulesForPowerRestrictionsUL(uid, oldRules, paroled);
+            if (newUidRules == RULE_NONE) {
+                mUidRules.delete(uid);
+            } else {
+                mUidRules.put(uid, newUidRules);
+            }
+        }
+    }
+
+    /**
      * Update rules that might be changed by {@link #mRestrictBackground},
      * {@link #mRestrictPower}, or {@link #mDeviceIdleMode} value.
      */
@@ -4340,7 +4382,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
     private void updateRulesForPowerRestrictionsUL(int uid) {
         final int oldUidRules = mUidRules.get(uid, RULE_NONE);
 
-        final int newUidRules = updateRulesForPowerRestrictionsUL(uid, oldUidRules);
+        final int newUidRules = updateRulesForPowerRestrictionsUL(uid, oldUidRules, false);
 
         if (newUidRules == RULE_NONE) {
             mUidRules.delete(uid);
@@ -4354,28 +4396,30 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
      *
      * @param uid the uid of the app to update rules for
      * @param oldUidRules the current rules for the uid, in order to determine if there's a change
+     * @param paroled whether to ignore idle state of apps and only look at other restrictions
      *
      * @return the new computed rules for the uid
      */
-    private int updateRulesForPowerRestrictionsUL(int uid, int oldUidRules) {
+    private int updateRulesForPowerRestrictionsUL(int uid, int oldUidRules, boolean paroled) {
         if (Trace.isTagEnabled(Trace.TRACE_TAG_NETWORK)) {
             Trace.traceBegin(Trace.TRACE_TAG_NETWORK,
-                    "updateRulesForPowerRestrictionsUL: " + uid + "/" + oldUidRules);
+                    "updateRulesForPowerRestrictionsUL: " + uid + "/" + oldUidRules + "/"
+                            + (paroled ? "P" : "-"));
         }
         try {
-            return updateRulesForPowerRestrictionsULInner(uid, oldUidRules);
+            return updateRulesForPowerRestrictionsULInner(uid, oldUidRules, paroled);
         } finally {
             Trace.traceEnd(Trace.TRACE_TAG_NETWORK);
         }
     }
 
-    private int updateRulesForPowerRestrictionsULInner(int uid, int oldUidRules) {
+    private int updateRulesForPowerRestrictionsULInner(int uid, int oldUidRules, boolean paroled) {
         if (!isUidValidForBlacklistRules(uid)) {
             if (LOGD) Slog.d(TAG, "no need to update restrict power rules for uid " + uid);
             return RULE_NONE;
         }
 
-        final boolean isIdle = isUidIdle(uid);
+        final boolean isIdle = !paroled && isUidIdle(uid);
         final boolean restrictMode = isIdle || mRestrictPower || mDeviceIdleMode;
         final boolean isForeground = isUidForegroundOnRestrictPowerUL(uid);
 
@@ -4443,6 +4487,14 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
                     updateRulesForPowerRestrictionsUL(uid);
                 }
             } catch (NameNotFoundException nnfe) {
+            }
+        }
+
+        @Override
+        public void onParoleStateChanged(boolean isParoleOn) {
+            synchronized (mUidRulesFirstLock) {
+                mLogger.paroleStateChanged(isParoleOn);
+                updateRulesForAppIdleParoleUL();
             }
         }
     }
@@ -5020,7 +5072,7 @@ public class NetworkPolicyManagerService extends INetworkPolicyManager.Stub {
         }
 
         if (shouldInvokeRestrictBackground) {
-            setRestrictBackgroundUL(restrictBackground);
+            setRestrictBackgroundUL(restrictBackground, "low_power");
         }
 
         // Change it at last so setRestrictBackground() won't affect this variable

@@ -18,11 +18,16 @@ package android.view;
 
 import static android.view.InsetsController.ANIMATION_TYPE_NONE;
 import static android.view.InsetsController.AnimationType;
+import static android.view.InsetsState.getDefaultVisibility;
+import static android.view.InsetsController.DEBUG;
 import static android.view.InsetsState.toPublicType;
+
+import static com.android.internal.annotations.VisibleForTesting.Visibility.PACKAGE;
 
 import android.annotation.IntDef;
 import android.annotation.Nullable;
 import android.graphics.Rect;
+import android.util.Log;
 import android.view.InsetsState.InternalInsetsType;
 import android.view.SurfaceControl.Transaction;
 import android.view.WindowInsets.Type.InsetsType;
@@ -63,11 +68,19 @@ public class InsetsSourceConsumer {
     protected final InsetsState mState;
     protected final @InternalInsetsType int mType;
 
+    private static final String TAG = "InsetsSourceConsumer";
     private final Supplier<Transaction> mTransactionSupplier;
     private @Nullable InsetsSourceControl mSourceControl;
     private boolean mHasWindowFocus;
     private Rect mPendingFrame;
     private Rect mPendingVisibleFrame;
+
+    /**
+     * Indicates if we have the pending animation. When we have the control, we need to play the
+     * animation if the requested visibility is different from the current state. But if we haven't
+     * had a leash yet, we will set this flag, and play the animation once we get the leash.
+     */
+    private boolean mIsAnimationPending;
 
     public InsetsSourceConsumer(@InternalInsetsType int type, InsetsState state,
             Supplier<Transaction> transactionSupplier, InsetsController controller) {
@@ -75,7 +88,7 @@ public class InsetsSourceConsumer {
         mState = state;
         mTransactionSupplier = transactionSupplier;
         mController = controller;
-        mRequestedVisible = InsetsState.getDefaultVisibility(type);
+        mRequestedVisible = getDefaultVisibility(type);
     }
 
     /**
@@ -95,7 +108,11 @@ public class InsetsSourceConsumer {
 
         final InsetsSourceControl lastControl = mSourceControl;
         mSourceControl = control;
-
+        if (control != null) {
+            if (DEBUG) Log.d(TAG, String.format("setControl -> %s on %s",
+                    InsetsState.typeToString(control.getType()),
+                    mController.getHost().getRootViewTitle()));
+        }
         // We are loosing control
         if (mSourceControl == null) {
             mController.notifyControlRevoked(this);
@@ -107,13 +124,23 @@ public class InsetsSourceConsumer {
         } else {
             // We are gaining control, and need to run an animation since previous state
             // didn't match
-            if (mRequestedVisible != mState.getSource(mType).isVisible()) {
-                if (mRequestedVisible) {
+            final boolean requestedVisible = isRequestedVisibleAwaitingControl();
+            final boolean needAnimation = requestedVisible != mState.getSource(mType).isVisible();
+            if (control.getLeash() != null && (needAnimation || mIsAnimationPending)) {
+                if (DEBUG) Log.d(TAG, String.format("Gaining control in %s, requestedVisible: %b",
+                        mController.getHost().getRootViewTitle(), requestedVisible));
+                if (requestedVisible) {
                     showTypes[0] |= toPublicType(getType());
                 } else {
                     hideTypes[0] |= toPublicType(getType());
                 }
+                mIsAnimationPending = false;
             } else {
+                if (needAnimation) {
+                    // We need animation but we haven't had a leash yet. Set this flag that when we
+                    // get the leash we can play the deferred animation.
+                    mIsAnimationPending = true;
+                }
                 // We are gaining control, but don't need to run an animation.
                 // However make sure that the leash visibility is still up to date.
                 if (applyLocalVisibilityOverride()) {
@@ -138,17 +165,31 @@ public class InsetsSourceConsumer {
         return mSourceControl;
     }
 
+    /**
+     * Determines if the consumer will be shown after control is available.
+     * Note: for system bars this method is same as {@link #isRequestedVisible()}.
+     *
+     * @return {@code true} if consumer has a pending show.
+     */
+    protected boolean isRequestedVisibleAwaitingControl() {
+        return isRequestedVisible();
+    }
+
     int getType() {
         return mType;
     }
 
     @VisibleForTesting
     public void show(boolean fromIme) {
+        if (DEBUG) Log.d(TAG, String.format("Call show() for type: %s fromIme: %b ",
+                InsetsState.typeToString(mType), fromIme));
         setRequestedVisible(true);
     }
 
     @VisibleForTesting
     public void hide() {
+        if (DEBUG) Log.d(TAG, String.format("Call hide for %s on %s",
+                InsetsState.typeToString(mType), mController.getHost().getRootViewTitle()));
         setRequestedVisible(false);
     }
 
@@ -175,8 +216,8 @@ public class InsetsSourceConsumer {
     }
 
     boolean applyLocalVisibilityOverride() {
-        InsetsSource source = mState.peekSource(mType);
-        final boolean isVisible = source != null && source.isVisible();
+        final InsetsSource source = mState.peekSource(mType);
+        final boolean isVisible = source != null ? source.isVisible() : getDefaultVisibility(mType);
         final boolean hasControl = mSourceControl != null;
 
         // We still need to let the legacy app know the visibility change even if we don't have the
@@ -186,11 +227,16 @@ public class InsetsSourceConsumer {
 
         // If we don't have control, we are not able to change the visibility.
         if (!hasControl) {
+            if (DEBUG) Log.d(TAG, "applyLocalVisibilityOverride: No control in "
+                    + mController.getHost().getRootViewTitle()
+                    + " requestedVisible " + mRequestedVisible);
             return false;
         }
         if (isVisible == mRequestedVisible) {
             return false;
         }
+        if (DEBUG) Log.d(TAG, String.format("applyLocalVisibilityOverride: %s requestedVisible: %b",
+                mController.getHost().getRootViewTitle(), mRequestedVisible));
         mState.getSource(mType).setVisible(mRequestedVisible);
         return true;
     }
@@ -227,10 +273,13 @@ public class InsetsSourceConsumer {
         // no-op for types that always return ShowResult#SHOW_IMMEDIATELY.
     }
 
-    void updateSource(InsetsSource newSource) {
+    @VisibleForTesting(visibility = PACKAGE)
+    public void updateSource(InsetsSource newSource) {
         InsetsSource source = mState.peekSource(mType);
         if (source == null || mController.getAnimationType(mType) == ANIMATION_TYPE_NONE
                 || source.getFrame().equals(newSource.getFrame())) {
+            mPendingFrame = null;
+            mPendingVisibleFrame = null;
             mState.addSource(newSource);
             return;
         }
@@ -245,9 +294,11 @@ public class InsetsSourceConsumer {
         newSource.setFrame(source.getFrame());
         newSource.setVisibleFrame(source.getVisibleFrame());
         mState.addSource(newSource);
+        if (DEBUG) Log.d(TAG, "updateSource: " + newSource);
     }
 
-    boolean notifyAnimationFinished() {
+    @VisibleForTesting(visibility = PACKAGE)
+    public boolean notifyAnimationFinished() {
         if (mPendingFrame != null) {
             InsetsSource source = mState.getSource(mType);
             source.setFrame(mPendingFrame);
@@ -263,8 +314,12 @@ public class InsetsSourceConsumer {
      * Sets requested visibility from the client, regardless of whether we are able to control it at
      * the moment.
      */
-    private void setRequestedVisible(boolean requestedVisible) {
-        mRequestedVisible = requestedVisible;
+    protected void setRequestedVisible(boolean requestedVisible) {
+        if (mRequestedVisible != requestedVisible) {
+            mRequestedVisible = requestedVisible;
+            mIsAnimationPending = false;
+            if (DEBUG) Log.d(TAG, "setRequestedVisible: " + requestedVisible);
+        }
         if (applyLocalVisibilityOverride()) {
             mController.notifyVisibilityChanged();
         }
@@ -276,6 +331,7 @@ public class InsetsSourceConsumer {
         }
 
         final Transaction t = mTransactionSupplier.get();
+        if (DEBUG) Log.d(TAG, "applyHiddenToControl: " + mRequestedVisible);
         if (mRequestedVisible) {
             t.show(mSourceControl.getLeash());
         } else {

@@ -19,6 +19,8 @@ package com.android.systemui.screenshot;
 import android.app.Notification;
 import android.content.ComponentName;
 import android.graphics.Bitmap;
+import android.net.Uri;
+import android.os.UserHandle;
 import android.util.Log;
 
 import java.util.Collections;
@@ -63,14 +65,14 @@ public class ScreenshotNotificationSmartActionsProvider {
      * @param componentName      Contains package and activity class names where the screenshot was
      *                           taken. This is used as an additional signal to generate and rank
      *                           more relevant actions.
-     * @param isManagedProfile   The screenshot was taken for a work profile app.
+     * @param userHandle         The user handle of the app where the screenshot was taken.
      */
     public CompletableFuture<List<Notification.Action>> getActions(
             String screenshotId,
-            String screenshotFileName,
+            Uri screenshotUri,
             Bitmap bitmap,
             ComponentName componentName,
-            boolean isManagedProfile) {
+            UserHandle userHandle) {
         Log.d(TAG, "Returning empty smart action list.");
         return CompletableFuture.completedFuture(Collections.emptyList());
     }

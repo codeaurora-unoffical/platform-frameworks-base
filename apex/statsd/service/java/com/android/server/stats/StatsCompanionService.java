@@ -54,11 +54,11 @@ import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Helper service for statsd (the native stats management service in cmds/statsd/).
@@ -112,6 +112,9 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
     private final HashMap<Long, String> mDeletedFiles = new HashMap<>();
     private final CompanionHandler mHandler;
 
+    // Flag that is set when PHASE_BOOT_COMPLETED is triggered in the StatsCompanion lifecycle.
+    private AtomicBoolean mBootCompleted = new AtomicBoolean(false);
+
     public StatsCompanionService(Context context) {
         super();
         mContext = context;
@@ -153,14 +156,7 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
         }
     }
 
-    private static void informAllUidsLocked(Context context) throws RemoteException {
-        UserManager um = (UserManager) context.getSystemService(Context.USER_SERVICE);
-        PackageManager pm = context.getPackageManager();
-        final List<UserHandle> users = um.getUserHandles(true);
-        if (DEBUG) {
-            Log.d(TAG, "Iterating over " + users.size() + " userHandles.");
-        }
-
+    private static void informAllUids(Context context) {
         ParcelFileDescriptor[] fds;
         try {
             fds = ParcelFileDescriptor.createPipe();
@@ -168,18 +164,32 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
             Log.e(TAG, "Failed to create a pipe to send uid map data.", e);
             return;
         }
-        sStatsd.informAllUidData(fds[0]);
-        try {
-            fds[0].close();
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to close the read side of the pipe.", e);
-        }
-        final ParcelFileDescriptor writeFd = fds[1];
         HandlerThread backgroundThread = new HandlerThread(
                 "statsCompanionService.bg", THREAD_PRIORITY_BACKGROUND);
         backgroundThread.start();
         Handler handler = new Handler(backgroundThread.getLooper());
         handler.post(() -> {
+            UserManager um = (UserManager) context.getSystemService(Context.USER_SERVICE);
+            PackageManager pm = context.getPackageManager();
+            final List<UserHandle> users = um.getUserHandles(true);
+            if (DEBUG) {
+                Log.d(TAG, "Iterating over " + users.size() + " userHandles.");
+            }
+            IStatsd statsd = getStatsdNonblocking();
+            if (statsd == null) {
+                return;
+            }
+            try {
+                statsd.informAllUidData(fds[0]);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Failed to send uid map to statsd");
+            }
+            try {
+                fds[0].close();
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to close the read side of the pipe.", e);
+            }
+            final ParcelFileDescriptor writeFd = fds[1];
             FileOutputStream fout = new ParcelFileDescriptor.AutoCloseOutputStream(writeFd);
             try {
                 ProtoOutputStream output = new ProtoOutputStream(fout);
@@ -188,7 +198,8 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
                 for (UserHandle userHandle : users) {
                     List<PackageInfo> pi =
                             pm.getInstalledPackagesAsUser(PackageManager.MATCH_UNINSTALLED_PACKAGES
-                                            | PackageManager.MATCH_ANY_USER,
+                                            | PackageManager.MATCH_ANY_USER
+                                            | PackageManager.MATCH_APEX,
                                     userHandle.getIdentifier());
                     for (int j = 0; j < pi.size(); j++) {
                         if (pi.get(j).applicationInfo != null) {
@@ -319,19 +330,9 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
     private static final class UserUpdateReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
-            synchronized (sStatsdLock) {
-                if (sStatsd == null) {
-                    Log.w(TAG, "Could not access statsd for UserUpdateReceiver");
-                    return;
-                }
-                try {
-                    // Pull the latest state of UID->app name, version mapping.
-                    // Needed since the new user basically has a version of every app.
-                    informAllUidsLocked(context);
-                } catch (RemoteException e) {
-                    Log.e(TAG, "Failed to inform statsd latest update of all apps", e);
-                }
-            }
+            // Pull the latest state of UID->app name, version mapping.
+            // Needed since the new user basically has a version of every app.
+            informAllUids(context);
         }
     }
 
@@ -589,21 +590,6 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
     }
 
     @Override // Binder call
-    public void triggerUidSnapshot() {
-        StatsCompanion.enforceStatsdCallingUid();
-        synchronized (sStatsdLock) {
-            final long token = Binder.clearCallingIdentity();
-            try {
-                informAllUidsLocked(mContext);
-            } catch (RemoteException e) {
-                Log.e(TAG, "Failed to trigger uid snapshot.", e);
-            } finally {
-                Binder.restoreCallingIdentity(token);
-            }
-        }
-    }
-
-    @Override // Binder call
     public boolean checkPermission(String permission, int pid, int uid) {
         StatsCompanion.enforceStatsdCallingUid();
         return mContext.checkPermission(permission, pid, uid) == PackageManager.PERMISSION_GRANTED;
@@ -612,27 +598,35 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
     // Statsd related code
 
     /**
-     * Fetches the statsd IBinder service. This is a blocking call.
+     * Fetches the statsd IBinder service. This is a blocking call that always refetches statsd
+     * instead of returning the cached sStatsd.
      * Note: This should only be called from {@link #sayHiToStatsd()}. All other clients should use
      * the cached sStatsd via {@link #getStatsdNonblocking()}.
      */
-    private IStatsd fetchStatsdService(StatsdDeathRecipient deathRecipient) {
-        synchronized (sStatsdLock) {
-            if (sStatsd == null) {
-                sStatsd = IStatsd.Stub.asInterface(StatsFrameworkInitializer
-                        .getStatsServiceManager()
-                        .getStatsdServiceRegisterer()
-                        .get());
-                if (sStatsd != null) {
-                    try {
-                        sStatsd.asBinder().linkToDeath(deathRecipient, /* flags */ 0);
-                    } catch (RemoteException e) {
-                        Log.e(TAG, "linkToDeath(StatsdDeathRecipient) failed");
-                        statsdNotReadyLocked();
-                    }
+    private IStatsd fetchStatsdServiceLocked() {
+        sStatsd = IStatsd.Stub.asInterface(StatsFrameworkInitializer
+                .getStatsServiceManager()
+                .getStatsdServiceRegisterer()
+                .get());
+        return sStatsd;
+    }
+
+    private void registerStatsdDeathRecipient(IStatsd statsd, List<BroadcastReceiver> receivers) {
+        StatsdDeathRecipient deathRecipient = new StatsdDeathRecipient(statsd, receivers);
+
+        try {
+            statsd.asBinder().linkToDeath(deathRecipient, /*flags=*/0);
+        } catch (RemoteException e) {
+            Log.e(TAG, "linkToDeath (StatsdDeathRecipient) failed");
+            // Statsd has already died. Unregister receivers ourselves.
+            for (BroadcastReceiver receiver : receivers) {
+                mContext.unregisterReceiver(receiver);
+            }
+            synchronized (sStatsdLock) {
+                if (statsd == sStatsd) {
+                    statsdNotReadyLocked();
                 }
             }
-            return sStatsd;
         }
     }
 
@@ -653,27 +647,33 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
      * statsd.
      */
     private void sayHiToStatsd() {
-        if (getStatsdNonblocking() != null) {
-            Log.e(TAG, "Trying to fetch statsd, but it was already fetched",
-                    new IllegalStateException(
-                            "sStatsd is not null when being fetched"));
-            return;
+        IStatsd statsd;
+        synchronized (sStatsdLock) {
+            if (sStatsd != null && sStatsd.asBinder().isBinderAlive()) {
+                Log.e(TAG, "statsd has already been fetched before",
+                        new IllegalStateException("IStatsd object should be null or dead"));
+                return;
+            }
+            statsd = fetchStatsdServiceLocked();
         }
-        StatsdDeathRecipient deathRecipient = new StatsdDeathRecipient();
-        IStatsd statsd = fetchStatsdService(deathRecipient);
+
         if (statsd == null) {
-            Log.i(TAG,
-                    "Could not yet find statsd to tell it that StatsCompanion is "
-                            + "alive.");
+            Log.i(TAG, "Could not yet find statsd to tell it that StatsCompanion is alive.");
             return;
         }
-        mStatsManagerService.statsdReady(statsd);
+
+        // Cleann up from previous statsd - cancel any alarms that had been set. Do this here
+        // instead of in binder death because statsd can come back and set different alarms, or not
+        // want to set an alarm when it had been set. This guarantees that when we get a new statsd,
+        // we cancel any alarms before it is able to set them.
+        cancelAnomalyAlarm();
+        cancelPullingAlarm();
+        cancelAlarmForSubscriberTriggering();
+
         if (DEBUG) Log.d(TAG, "Saying hi to statsd");
+        mStatsManagerService.statsdReady(statsd);
         try {
             statsd.statsCompanionReady();
-
-            cancelAnomalyAlarm();
-            cancelPullingAlarm();
 
             BroadcastReceiver appUpdateReceiver = new AppUpdateReceiver();
             BroadcastReceiver userUpdateReceiver = new UserUpdateReceiver();
@@ -687,8 +687,7 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
             mContext.registerReceiverForAllUsers(appUpdateReceiver, filter, null, null);
 
             // Setup receiver for user initialize (which happens once for a new user)
-            // and
-            // if a user is removed.
+            // and if a user is removed.
             filter = new IntentFilter(Intent.ACTION_USER_INITIALIZE);
             filter.addAction(Intent.ACTION_USER_REMOVED);
             mContext.registerReceiverForAllUsers(userUpdateReceiver, filter, null, null);
@@ -696,21 +695,22 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
             // Setup receiver for device reboots or shutdowns.
             filter = new IntentFilter(Intent.ACTION_REBOOT);
             filter.addAction(Intent.ACTION_SHUTDOWN);
-            mContext.registerReceiverForAllUsers(
-                    shutdownEventReceiver, filter, null, null);
+            mContext.registerReceiverForAllUsers(shutdownEventReceiver, filter, null, null);
 
-            // Only add the receivers if the registration is successful.
-            deathRecipient.addRegisteredBroadcastReceivers(
-                    List.of(appUpdateReceiver, userUpdateReceiver, shutdownEventReceiver));
+            // Register death recipient.
+            List<BroadcastReceiver> broadcastReceivers =
+                    List.of(appUpdateReceiver, userUpdateReceiver, shutdownEventReceiver);
+            registerStatsdDeathRecipient(statsd, broadcastReceivers);
 
-            final long token = Binder.clearCallingIdentity();
-            try {
-                // Pull the latest state of UID->app name, version mapping when
-                // statsd starts.
-                informAllUidsLocked(mContext);
-            } finally {
-                Binder.restoreCallingIdentity(token);
+            // Tell statsd that boot has completed. The signal may have already been sent, but since
+            // the signal-receiving function is idempotent, that's ok.
+            if (mBootCompleted.get()) {
+                statsd.bootCompleted();
             }
+
+            // Pull the latest state of UID->app name, version mapping when statsd starts.
+            informAllUids(mContext);
+
             Log.i(TAG, "Told statsd that StatsCompanionService is alive.");
         } catch (RemoteException e) {
             Log.e(TAG, "Failed to inform statsd that statscompanion is ready", e);
@@ -719,18 +719,16 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
 
     private class StatsdDeathRecipient implements IBinder.DeathRecipient {
 
-        private List<BroadcastReceiver> mReceiversToUnregister;
+        private final IStatsd mStatsd;
+        private final List<BroadcastReceiver> mReceiversToUnregister;
 
-        StatsdDeathRecipient() {
-            mReceiversToUnregister = new ArrayList<>();
+        StatsdDeathRecipient(IStatsd statsd, List<BroadcastReceiver> receivers) {
+            mStatsd = statsd;
+            mReceiversToUnregister = receivers;
         }
 
-        public void addRegisteredBroadcastReceivers(List<BroadcastReceiver> receivers) {
-            synchronized (sStatsdLock) {
-                mReceiversToUnregister.addAll(receivers);
-            }
-        }
-
+        // It is possible for binderDied to be called after a restarted statsd calls statsdReady,
+        // but that's alright because the code does not assume an ordering of the two calls.
         @Override
         public void binderDied() {
             Log.i(TAG, "Statsd is dead - erase all my knowledge, except pullers");
@@ -759,12 +757,19 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
                         }
                     }
                 }
-                // We only unregister in binder death becaseu receivers can only be unregistered
-                // once, or an IllegalArgumentException is thrown.
+
+                // Unregister receivers on death because receivers can only be unregistered once.
+                // Otherwise, an IllegalArgumentException is thrown.
                 for (BroadcastReceiver receiver: mReceiversToUnregister) {
                     mContext.unregisterReceiver(receiver);
                 }
-                statsdNotReadyLocked();
+
+                // It's possible for statsd to have restarted and called statsdReady, causing a new
+                // sStatsd binder object to be fetched, before the binderDied callback runs. Only
+                // call #statsdNotReadyLocked if that hasn't happened yet.
+                if (mStatsd == sStatsd) {
+                    statsdNotReadyLocked();
+                }
             }
         }
     }
@@ -772,6 +777,21 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
     private void statsdNotReadyLocked() {
         sStatsd = null;
         mStatsManagerService.statsdNotReady();
+    }
+
+    void bootCompleted() {
+        mBootCompleted.set(true);
+        IStatsd statsd = getStatsdNonblocking();
+        if (statsd == null) {
+            // Statsd is not yet ready.
+            // Delay the boot completed ping to {@link #sayHiToStatsd()}
+            return;
+        }
+        try {
+            statsd.bootCompleted();
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to notify statsd that boot completed");
+        }
     }
 
     @Override
@@ -782,8 +802,7 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
         }
 
         synchronized (sStatsdLock) {
-            writer.println(
-                    "Number of configuration files deleted: " + mDeletedFiles.size());
+            writer.println("Number of configuration files deleted: " + mDeletedFiles.size());
             if (mDeletedFiles.size() > 0) {
                 writer.println("  timestamp, deleted file name");
             }
@@ -791,8 +810,7 @@ public class StatsCompanionService extends IStatsCompanionService.Stub {
                     SystemClock.currentThreadTimeMillis() - SystemClock.elapsedRealtime();
             for (Long elapsedMillis : mDeletedFiles.keySet()) {
                 long deletionMillis = lastBootMillis + elapsedMillis;
-                writer.println(
-                        "  " + deletionMillis + ", " + mDeletedFiles.get(elapsedMillis));
+                writer.println("  " + deletionMillis + ", " + mDeletedFiles.get(elapsedMillis));
             }
         }
     }

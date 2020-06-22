@@ -82,7 +82,9 @@ enum BucketDropReason {
     DIMENSION_GUARDRAIL_REACHED = 6,
     MULTIPLE_BUCKETS_SKIPPED = 7,
     // Not an invalid bucket case, but the bucket is dropped.
-    BUCKET_TOO_SMALL = 8
+    BUCKET_TOO_SMALL = 8,
+    // Not an invalid bucket case, but the bucket is skipped.
+    NO_DATA = 9
 };
 
 struct Activation {
@@ -127,7 +129,8 @@ struct SkippedBucket {
 class MetricProducer : public virtual android::RefBase, public virtual StateListener {
 public:
     MetricProducer(const int64_t& metricId, const ConfigKey& key, const int64_t timeBaseNs,
-                   const int conditionIndex, const sp<ConditionWizard>& wizard,
+                   const int conditionIndex, const vector<ConditionState>& initialConditionCache,
+                   const sp<ConditionWizard>& wizard,
                    const std::unordered_map<int, std::shared_ptr<Activation>>& eventActivationMap,
                    const std::unordered_map<int, std::vector<std::shared_ptr<Activation>>>&
                            eventDeactivationMap,
@@ -136,35 +139,31 @@ public:
 
     virtual ~MetricProducer(){};
 
-    ConditionState initialCondition(const int conditionIndex) const {
-        return conditionIndex >= 0 ? ConditionState::kUnknown : ConditionState::kTrue;
+    ConditionState initialCondition(const int conditionIndex,
+                                    const vector<ConditionState>& initialConditionCache) const {
+        return conditionIndex >= 0 ? initialConditionCache[conditionIndex] : ConditionState::kTrue;
     }
 
     /**
-     * Forces this metric to split into a partial bucket right now. If we're past a full bucket, we
-     * first call the standard flushing code to flush up to the latest full bucket. Then we call
-     * the flush again when the end timestamp is forced to be now, and then after flushing, update
-     * the start timestamp to be now.
+     * Force a partial bucket split on app upgrade
      */
-    virtual void notifyAppUpgrade(const int64_t& eventTimeNs, const string& apk, const int uid,
-                          const int64_t version) {
+    virtual void notifyAppUpgrade(const int64_t& eventTimeNs) {
         std::lock_guard<std::mutex> lock(mMutex);
-
-        if (eventTimeNs > getCurrentBucketEndTimeNs()) {
-            // Flush full buckets on the normal path up to the latest bucket boundary.
-            flushIfNeededLocked(eventTimeNs);
-        }
-        // Now flush a partial bucket.
-        flushCurrentBucketLocked(eventTimeNs, eventTimeNs);
-        // Don't update the current bucket number so that the anomaly tracker knows this bucket
-        // is a partial bucket and can merge it with the previous bucket.
+        flushLocked(eventTimeNs);
     };
 
-    void notifyAppRemoved(const int64_t& eventTimeNs, const string& apk, const int uid) {
+    void notifyAppRemoved(const int64_t& eventTimeNs) {
         // Force buckets to split on removal also.
-        notifyAppUpgrade(eventTimeNs, apk, uid, 0);
+        notifyAppUpgrade(eventTimeNs);
     };
 
+    /**
+     * Force a partial bucket split on boot complete.
+     */
+    virtual void onStatsdInitCompleted(const int64_t& eventTimeNs) {
+        std::lock_guard<std::mutex> lock(mMutex);
+        flushLocked(eventTimeNs);
+    }
     // Consume the parsed stats log entry that already matched the "what" of the metric.
     void onMatchedLogEvent(const size_t matcherIndex, const LogEvent& event) {
         std::lock_guard<std::mutex> lock(mMutex);
@@ -187,8 +186,8 @@ public:
     };
 
     void onStateChanged(const int64_t eventTimeNs, const int32_t atomId,
-                        const HashableDimensionKey& primaryKey, const int32_t oldState,
-                        const int32_t newState){};
+                        const HashableDimensionKey& primaryKey, const FieldValue& oldState,
+                        const FieldValue& newState){};
 
     // Output the metrics data to [protoOutput]. All metrics reports end with the same timestamp.
     // This method clears all the past buckets.
@@ -292,8 +291,7 @@ public:
     // End: getters/setters
 protected:
     /**
-     * Flushes the current bucket if the eventTime is after the current bucket's end time. This will
-       also flush the current partial bucket in memory.
+     * Flushes the current bucket if the eventTime is after the current bucket's end time.
      */
     virtual void flushIfNeededLocked(const int64_t& eventTime){};
 
@@ -390,6 +388,10 @@ protected:
     // If no state map exists, keep the original state value.
     void mapStateValue(const int32_t atomId, FieldValue* value);
 
+    // Returns a HashableDimensionKey with unknown state value for each state
+    // atom.
+    HashableDimensionKey getUnknownStateKey();
+
     DropEvent buildDropEvent(const int64_t dropTimeNs, const BucketDropReason reason);
 
     // Returns true if the number of drop events in the current bucket has
@@ -448,10 +450,10 @@ protected:
     bool mIsActive;
 
     // The slice_by_state atom ids defined in statsd_config.
-    std::vector<int32_t> mSlicedStateAtoms;
+    const std::vector<int32_t> mSlicedStateAtoms;
 
     // Maps atom ids and state values to group_ids (<atom_id, <value, group_id>>).
-    std::unordered_map<int32_t, std::unordered_map<int, int64_t>> mStateGroupMap;
+    const std::unordered_map<int32_t, std::unordered_map<int, int64_t>> mStateGroupMap;
 
     // MetricStateLinks defined in statsd_config that link fields in the state
     // atom to fields in the "what" atom.
@@ -465,6 +467,7 @@ protected:
     FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithMap);
     FRIEND_TEST(CountMetricE2eTest, TestMultipleSlicedStates);
     FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithPrimaryFields);
+    FRIEND_TEST(CountMetricE2eTest, TestInitialConditionChanges);
 
     FRIEND_TEST(DurationMetricE2eTest, TestOneBucket);
     FRIEND_TEST(DurationMetricE2eTest, TestTwoBuckets);
@@ -494,6 +497,9 @@ protected:
     FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState);
     FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState_WithDimensions);
     FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState_WithIncorrectDimensions);
+    FRIEND_TEST(ValueMetricE2eTest, TestInitialConditionChanges);
+
+    FRIEND_TEST(MetricsManagerTest, TestInitialConditions);
 };
 
 }  // namespace statsd

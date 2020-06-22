@@ -260,7 +260,7 @@ final class AutofillManagerServiceImpl
         if (isEnabledLocked()) return FLAG_ADD_CLIENT_ENABLED;
 
         // Check if it's enabled for augmented autofill
-        if (isAugmentedAutofillServiceAvailableLocked()
+        if (componentName != null && isAugmentedAutofillServiceAvailableLocked()
                 && isWhitelistedForAugmentedAutofillLocked(componentName)) {
             return FLAG_ADD_CLIENT_ENABLED_FOR_AUGMENTED_AUTOFILL_ONLY;
         }
@@ -815,26 +815,27 @@ final class AutofillManagerServiceImpl
         }
     }
 
-    void logAugmentedAutofillSelected(int sessionId, @Nullable String suggestionId) {
+    void logAugmentedAutofillSelected(int sessionId, @Nullable String suggestionId,
+            @Nullable Bundle clientState) {
         synchronized (mLock) {
             if (mAugmentedAutofillEventHistory == null
                     || mAugmentedAutofillEventHistory.getSessionId() != sessionId) {
                 return;
             }
             mAugmentedAutofillEventHistory.addEvent(
-                    new Event(Event.TYPE_DATASET_SELECTED, suggestionId, null, null, null,
+                    new Event(Event.TYPE_DATASET_SELECTED, suggestionId, clientState, null, null,
                             null, null, null, null, null, null));
         }
     }
 
-    void logAugmentedAutofillShown(int sessionId) {
+    void logAugmentedAutofillShown(int sessionId, @Nullable Bundle clientState) {
         synchronized (mLock) {
             if (mAugmentedAutofillEventHistory == null
                     || mAugmentedAutofillEventHistory.getSessionId() != sessionId) {
                 return;
             }
             mAugmentedAutofillEventHistory.addEvent(
-                    new Event(Event.TYPE_DATASETS_SHOWN, null, null, null, null, null,
+                    new Event(Event.TYPE_DATASETS_SHOWN, null, clientState, null, null, null,
                             null, null, null, null, null));
 
         }
@@ -1185,15 +1186,16 @@ final class AutofillManagerServiceImpl
                         }
 
                         @Override
-                        public void logAugmentedAutofillShown(int sessionId) {
-                            AutofillManagerServiceImpl.this.logAugmentedAutofillShown(sessionId);
+                        public void logAugmentedAutofillShown(int sessionId, Bundle clientState) {
+                            AutofillManagerServiceImpl.this.logAugmentedAutofillShown(sessionId,
+                                    clientState);
                         }
 
                         @Override
                         public void logAugmentedAutofillSelected(int sessionId,
-                                String suggestionId) {
+                                String suggestionId, Bundle clientState) {
                             AutofillManagerServiceImpl.this.logAugmentedAutofillSelected(sessionId,
-                                    suggestionId);
+                                    suggestionId, clientState);
                         }
 
                         @Override
@@ -1559,6 +1561,16 @@ final class AutofillManagerServiceImpl
             // Don't do anything; eventually the system will bind to it again...
             Slog.w(TAG, "remote service died: " + service);
             mRemoteInlineSuggestionRenderService = null;
+        }
+    }
+
+    void onSwitchInputMethod() {
+        synchronized (mLock) {
+            final int sessionCount = mSessions.size();
+            for (int i = 0; i < sessionCount; i++) {
+                final Session session = mSessions.valueAt(i);
+                session.onSwitchInputMethodLocked();
+            }
         }
     }
 

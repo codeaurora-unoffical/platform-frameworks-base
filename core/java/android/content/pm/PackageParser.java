@@ -127,7 +127,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Parser for package files (APKs) on disk. This supports apps packaged either
@@ -208,6 +207,7 @@ public class PackageParser {
     public static final String TAG_USES_SPLIT = "uses-split";
 
     public static final String METADATA_MAX_ASPECT_RATIO = "android.max_aspect";
+    public static final String METADATA_SUPPORTS_SIZE_CHANGES = "android.supports_size_changes";
     public static final String METADATA_ACTIVITY_WINDOW_LAYOUT_AFFINITY =
             "android.activity_window_layout_affinity";
 
@@ -238,11 +238,6 @@ public class PackageParser {
     }
 
     public static final boolean LOG_UNSAFE_BROADCASTS = false;
-
-    /**
-     * Total number of packages that were read from the cache.  We use it only for logging.
-     */
-    public static final AtomicInteger sCachedPackageReadCount = new AtomicInteger();
 
     // Set of broadcast actions that are safe for manifest receivers
     public static final Set<String> SAFE_BROADCASTS = new ArraySet<>();
@@ -1517,6 +1512,10 @@ public class PackageParser {
                 ? null : "must have at least one '.' separator";
     }
 
+    /**
+     * @deprecated Use {@link android.content.pm.parsing.ApkLiteParseUtils#parsePackageSplitNames}
+     */
+    @Deprecated
     public static Pair<String, String> parsePackageSplitNames(XmlPullParser parser,
             AttributeSet attrs) throws IOException, XmlPullParserException,
             PackageParserException {
@@ -1695,7 +1694,7 @@ public class PackageParser {
         }
 
         // Check to see if overlay should be excluded based on system property condition
-        if (!checkRequiredSystemProperty(requiredSystemPropertyName,
+        if (!checkRequiredSystemProperties(requiredSystemPropertyName,
                 requiredSystemPropertyValue)) {
             Slog.i(TAG, "Skipping target and overlay pair " + targetPackage + " and "
                     + codePath + ": overlay ignored due to required system property: "
@@ -1997,10 +1996,11 @@ public class PackageParser {
                 }
 
                 // check to see if overlay should be excluded based on system property condition
-                if (!checkRequiredSystemProperty(propName, propValue)) {
+                if (!checkRequiredSystemProperties(propName, propValue)) {
                     Slog.i(TAG, "Skipping target and overlay pair " + pkg.mOverlayTarget + " and "
                         + pkg.baseCodePath+ ": overlay ignored due to required system property: "
                         + propName + " with value: " + propValue);
+                    mParseError = PackageManager.INSTALL_PARSE_FAILED_SKIPPED;
                     return null;
                 }
 
@@ -2427,24 +2427,42 @@ public class PackageParser {
 
     /**
      * Returns {@code true} if both the property name and value are empty or if the given system
-     * property is set to the specified value. In all other cases, returns {@code false}
+     * property is set to the specified value. Properties can be one or more, and if properties are
+     * more than one, they must be separated by comma, and count of names and values must be equal,
+     * and also every given system property must be set to the corresponding value.
+     * In all other cases, returns {@code false}
      */
-    public static boolean checkRequiredSystemProperty(String propName, String propValue) {
-        if (TextUtils.isEmpty(propName) || TextUtils.isEmpty(propValue)) {
-            if (!TextUtils.isEmpty(propName) || !TextUtils.isEmpty(propValue)) {
+    public static boolean checkRequiredSystemProperties(@Nullable String rawPropNames,
+            @Nullable String rawPropValues) {
+        if (TextUtils.isEmpty(rawPropNames) || TextUtils.isEmpty(rawPropValues)) {
+            if (!TextUtils.isEmpty(rawPropNames) || !TextUtils.isEmpty(rawPropValues)) {
                 // malformed condition - incomplete
-                Slog.w(TAG, "Disabling overlay - incomplete property :'" + propName
-                    + "=" + propValue + "' - require both requiredSystemPropertyName"
-                    + " AND requiredSystemPropertyValue to be specified.");
+                Slog.w(TAG, "Disabling overlay - incomplete property :'" + rawPropNames
+                        + "=" + rawPropValues + "' - require both requiredSystemPropertyName"
+                        + " AND requiredSystemPropertyValue to be specified.");
                 return false;
             }
             // no valid condition set - so no exclusion criteria, overlay will be included.
             return true;
         }
 
-        // check property value - make sure it is both set and equal to expected value
-        final String currValue = SystemProperties.get(propName);
-        return (currValue != null && currValue.equals(propValue));
+        final String[] propNames = rawPropNames.split(",");
+        final String[] propValues = rawPropValues.split(",");
+
+        if (propNames.length != propValues.length) {
+            Slog.w(TAG, "Disabling overlay - property :'" + rawPropNames
+                    + "=" + rawPropValues + "' - require both requiredSystemPropertyName"
+                    + " AND requiredSystemPropertyValue lists to have the same size.");
+            return false;
+        }
+        for (int i = 0; i < propNames.length; i++) {
+            // Check property value: make sure it is both set and equal to expected value
+            final String currValue = SystemProperties.get(propNames[i]);
+            if (!TextUtils.equals(currValue, propValues[i])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -3880,6 +3898,7 @@ public class PackageParser {
         // every activity info has had a chance to set it from its attributes.
         setMaxAspectRatio(owner);
         setMinAspectRatio(owner);
+        setSupportsSizeChanges(owner);
 
         if (hasDomainURLs(owner)) {
             owner.applicationInfo.privateFlags |= ApplicationInfo.PRIVATE_FLAG_HAS_DOMAIN_URLS;
@@ -4677,6 +4696,18 @@ public class PackageParser {
         }
     }
 
+    private void setSupportsSizeChanges(Package owner) {
+        final boolean supportsSizeChanges = owner.mAppMetaData != null
+                && owner.mAppMetaData.getBoolean(METADATA_SUPPORTS_SIZE_CHANGES, false);
+
+        for (Activity activity : owner.activities) {
+            if (supportsSizeChanges || (activity.metaData != null
+                    && activity.metaData.getBoolean(METADATA_SUPPORTS_SIZE_CHANGES, false))) {
+                activity.info.supportsSizeChanges = true;
+            }
+        }
+    }
+
     /**
      * @param configChanges The bit mask of configChanges fetched from AndroidManifest.xml.
      * @param recreateOnConfigChanges The bit mask recreateOnConfigChanges fetched from
@@ -4846,6 +4877,7 @@ public class PackageParser {
         info.resizeMode = target.info.resizeMode;
         info.maxAspectRatio = target.info.maxAspectRatio;
         info.minAspectRatio = target.info.minAspectRatio;
+        info.supportsSizeChanges = target.info.supportsSizeChanges;
         info.requestedVrComponent = target.info.requestedVrComponent;
 
         info.directBootAware = target.info.directBootAware;
@@ -5951,6 +5983,206 @@ public class PackageParser {
             }
         }
 
+        /**
+         * Merges the signing lineage of this instance with the lineage in the provided {@code
+         * otherSigningDetails} when one has the same or an ancestor signer of the other.
+         *
+         * <p>Merging two signing lineages will result in a new {@code SigningDetails} instance
+         * containing the longest common lineage with the most restrictive capabilities. If the two
+         * lineages contain the same signers with the same capabilities then the instance on which
+         * this was invoked is returned without any changes. Similarly if neither instance has a
+         * lineage, or if neither has the same or an ancestor signer then this instance is returned.
+         *
+         * Following are some example results of this method for lineages with signers A, B, C, D:
+         * - lineage B merged with lineage A -> B returns lineage A -> B.
+         * - lineage A -> B merged with lineage B -> C returns lineage A -> B -> C
+         * - lineage A -> B with the {@code PERMISSION} capability revoked for A merged with
+         *  lineage A -> B with the {@code SHARED_USER_ID} capability revoked for A returns
+         *  lineage A -> B with both capabilities revoked for A.
+         * - lineage A -> B -> C merged with lineage A -> B -> D would return the original lineage
+         *  A -> B -> C since the current signer of both instances is not the same or in the
+         *   lineage of the other.
+         */
+        public SigningDetails mergeLineageWith(SigningDetails otherSigningDetails) {
+            if (!hasPastSigningCertificates()) {
+                return otherSigningDetails.hasPastSigningCertificates()
+                        && otherSigningDetails.hasAncestorOrSelf(this) ? otherSigningDetails : this;
+            }
+            if (!otherSigningDetails.hasPastSigningCertificates()) {
+                return this;
+            }
+            // Use the utility method to determine which SigningDetails instance is the descendant
+            // and to confirm that the signing lineage does not diverge.
+            SigningDetails descendantSigningDetails = getDescendantOrSelf(otherSigningDetails);
+            if (descendantSigningDetails == null) {
+                return this;
+            }
+            return descendantSigningDetails == this ? mergeLineageWithAncestorOrSelf(
+                    otherSigningDetails) : otherSigningDetails.mergeLineageWithAncestorOrSelf(this);
+        }
+
+        /**
+         * Merges the signing lineage of this instance with the lineage of the ancestor (or same)
+         * signer in the provided {@code otherSigningDetails}.
+         */
+        private SigningDetails mergeLineageWithAncestorOrSelf(SigningDetails otherSigningDetails) {
+            // This method should only be called with instances that contain lineages.
+            int index = pastSigningCertificates.length - 1;
+            int otherIndex = otherSigningDetails.pastSigningCertificates.length - 1;
+            if (index < 0 || otherIndex < 0) {
+                return this;
+            }
+
+            List<Signature> mergedSignatures = new ArrayList<>();
+            boolean capabilitiesModified = false;
+            // If this is a descendant lineage then add all of the descendant signer(s) to the
+            // merged lineage until the ancestor signer is reached.
+            while (index >= 0 && !pastSigningCertificates[index].equals(
+                    otherSigningDetails.pastSigningCertificates[otherIndex])) {
+                mergedSignatures.add(new Signature(pastSigningCertificates[index--]));
+            }
+            // If the signing lineage was exhausted then the provided ancestor is not actually an
+            // ancestor of this lineage.
+            if (index < 0) {
+                return this;
+            }
+
+            do {
+                // Add the common signer to the merged lineage with the most restrictive
+                // capabilities of the two lineages.
+                Signature signature = pastSigningCertificates[index--];
+                Signature ancestorSignature =
+                        otherSigningDetails.pastSigningCertificates[otherIndex--];
+                Signature mergedSignature = new Signature(signature);
+                int mergedCapabilities = signature.getFlags() & ancestorSignature.getFlags();
+                if (signature.getFlags() != mergedCapabilities) {
+                    capabilitiesModified = true;
+                    mergedSignature.setFlags(mergedCapabilities);
+                }
+                mergedSignatures.add(mergedSignature);
+            } while (index >= 0 && otherIndex >= 0 && pastSigningCertificates[index].equals(
+                    otherSigningDetails.pastSigningCertificates[otherIndex]));
+
+            // If both lineages still have elements then their lineages have diverged; since this is
+            // not supported return the invoking instance.
+            if (index >= 0 && otherIndex >= 0) {
+                return this;
+            }
+
+            // Add any remaining elements from either lineage that is not yet exhausted to the
+            // the merged lineage.
+            while (otherIndex >= 0) {
+                mergedSignatures.add(new Signature(
+                        otherSigningDetails.pastSigningCertificates[otherIndex--]));
+            }
+            while (index >= 0) {
+                mergedSignatures.add(new Signature(pastSigningCertificates[index--]));
+            }
+
+            // if this lineage already contains all the elements in the ancestor and none of the
+            // capabilities were changed then just return this instance.
+            if (mergedSignatures.size() == pastSigningCertificates.length
+                    && !capabilitiesModified) {
+                return this;
+            }
+            // Since the signatures were added to the merged lineage from newest to oldest reverse
+            // the list to ensure the oldest signer is at index 0.
+            Collections.reverse(mergedSignatures);
+            try {
+                return new SigningDetails(new Signature[]{new Signature(signatures[0])},
+                        signatureSchemeVersion, mergedSignatures.toArray(new Signature[0]));
+            } catch (CertificateException e) {
+                Slog.e(TAG, "Caught an exception creating the merged lineage: ", e);
+                return this;
+            }
+        }
+
+        /**
+         * Returns whether this and the provided {@code otherSigningDetails} share a common
+         * ancestor.
+         *
+         * <p>The two SigningDetails have a common ancestor if any of the following conditions are
+         * met:
+         * - If neither has a lineage and their current signer(s) are equal.
+         * - If only one has a lineage and the signer of the other is the same or in the lineage.
+         * - If both have a lineage and their current signers are the same or one is in the lineage
+         * of the other, and their lineages do not diverge to different signers.
+         */
+        public boolean hasCommonAncestor(SigningDetails otherSigningDetails) {
+            if (!hasPastSigningCertificates()) {
+                // If this instance does not have a lineage then it must either be in the ancestry
+                // of or the same signer of the otherSigningDetails.
+                return otherSigningDetails.hasAncestorOrSelf(this);
+            }
+            if (!otherSigningDetails.hasPastSigningCertificates()) {
+                return hasAncestorOrSelf(otherSigningDetails);
+            }
+            // If both have a lineage then use getDescendantOrSelf to obtain the descendant signing
+            // details; a null return from that method indicates there is no common lineage between
+            // the two or that they diverge at a point in the lineage.
+            return getDescendantOrSelf(otherSigningDetails) != null;
+        }
+
+        /**
+         * Returns the SigningDetails with a descendant (or same) signer after verifying the
+         * descendant has the same, a superset, or a subset of the lineage of the ancestor.
+         *
+         * <p>If this instance and the provided {@code otherSigningDetails} do not share an
+         * ancestry, or if their lineages diverge then null is returned to indicate there is no
+         * valid descendant SigningDetails.
+         */
+        private SigningDetails getDescendantOrSelf(SigningDetails otherSigningDetails) {
+            SigningDetails descendantSigningDetails;
+            SigningDetails ancestorSigningDetails;
+            if (hasAncestorOrSelf(otherSigningDetails)) {
+                // If the otherSigningDetails has the same signer or a signer in the lineage of this
+                // instance then treat this instance as the descendant.
+                descendantSigningDetails = this;
+                ancestorSigningDetails = otherSigningDetails;
+            } else if (otherSigningDetails.hasAncestor(this)) {
+                // The above check confirmed that the two instances do not have the same signer and
+                // the signer of otherSigningDetails is not in this instance's lineage; if this
+                // signer is in the otherSigningDetails lineage then treat this as the ancestor.
+                descendantSigningDetails = otherSigningDetails;
+                ancestorSigningDetails = this;
+            } else {
+                // The signers are not the same and neither has the current signer of the other in
+                // its lineage; return null to indicate there is no descendant signer.
+                return null;
+            }
+            // Once the descent (or same) signer is identified iterate through the ancestry until
+            // the current signer of the ancestor is found.
+            int descendantIndex = descendantSigningDetails.pastSigningCertificates.length - 1;
+            int ancestorIndex = ancestorSigningDetails.pastSigningCertificates.length - 1;
+            while (descendantIndex >= 0
+                    && !descendantSigningDetails.pastSigningCertificates[descendantIndex].equals(
+                    ancestorSigningDetails.pastSigningCertificates[ancestorIndex])) {
+                descendantIndex--;
+            }
+            // Since the ancestry was verified above the descendant lineage should never be
+            // exhausted, but if for some reason the ancestor signer is not found then return null.
+            if (descendantIndex < 0) {
+                return null;
+            }
+            // Once the common ancestor (or same) signer is found iterate over the lineage of both
+            // to ensure that they are either the same or one is a subset of the other.
+            do {
+                descendantIndex--;
+                ancestorIndex--;
+            } while (descendantIndex >= 0 && ancestorIndex >= 0
+                    && descendantSigningDetails.pastSigningCertificates[descendantIndex].equals(
+                    ancestorSigningDetails.pastSigningCertificates[ancestorIndex]));
+
+            // If both lineages still have elements then they diverge and cannot be considered a
+            // valid common lineage.
+            if (descendantIndex >= 0 && ancestorIndex >= 0) {
+                return null;
+            }
+            // Since one or both of the lineages was exhausted they are either the same or one is a
+            // subset of the other; return the valid descendant.
+            return descendantSigningDetails;
+        }
+
         /** Returns true if the signing details have one or more signatures. */
         public boolean hasSignatures() {
             return signatures != null && signatures.length > 0;
@@ -5998,7 +6230,7 @@ public class PackageParser {
 
                 // the last entry in pastSigningCertificates is the current signer, ignore it
                 for (int i = 0; i < pastSigningCertificates.length - 1; i++) {
-                    if (pastSigningCertificates[i].equals(oldDetails.signatures[i])) {
+                    if (pastSigningCertificates[i].equals(oldDetails.signatures[0])) {
                         return true;
                     }
                 }
@@ -6267,7 +6499,13 @@ public class PackageParser {
             if (!Arrays.equals(pastSigningCertificates, that.pastSigningCertificates)) {
                 return false;
             }
-
+            // The capabilities for the past signing certs must match as well.
+            for (int i = 0; i < pastSigningCertificates.length; i++) {
+                if (pastSigningCertificates[i].getFlags()
+                        != that.pastSigningCertificates[i].getFlags()) {
+                    return false;
+                }
+            }
             return true;
         }
 
@@ -6855,9 +7093,9 @@ public class PackageParser {
 
         /** @hide */
         public boolean canHaveOatDir() {
-            // The following app types CANNOT have oat directory
-            // - non-updated system apps
-            return !isSystem() || isUpdatedSystemApp();
+            // Nobody should be calling this method ever, but we can't rely on this.
+            // Thus no logic here and a reasonable return value.
+            return true;
         }
 
         public boolean isMatch(int flags) {

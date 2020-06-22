@@ -16,6 +16,11 @@
 package com.android.settingslib.media;
 
 import static android.media.MediaRoute2Info.TYPE_BUILTIN_SPEAKER;
+import static android.media.MediaRoute2Info.TYPE_DOCK;
+import static android.media.MediaRoute2Info.TYPE_HDMI;
+import static android.media.MediaRoute2Info.TYPE_USB_ACCESSORY;
+import static android.media.MediaRoute2Info.TYPE_USB_DEVICE;
+import static android.media.MediaRoute2Info.TYPE_USB_HEADSET;
 import static android.media.MediaRoute2Info.TYPE_WIRED_HEADPHONES;
 import static android.media.MediaRoute2Info.TYPE_WIRED_HEADSET;
 
@@ -36,13 +41,16 @@ public class PhoneMediaDevice extends MediaDevice {
 
     private static final String TAG = "PhoneMediaDevice";
 
-    public static final String ID = "phone_media_device_id_1";
+    public static final String PHONE_ID = "phone_media_device_id";
+    // For 3.5 mm wired headset
+    public static final String WIRED_HEADSET_ID = "wired_headset_media_device_id";
+    public static final String USB_HEADSET_ID = "usb_headset_media_device_id";
 
     private String mSummary = "";
 
     PhoneMediaDevice(Context context, MediaRouter2Manager routerManager, MediaRoute2Info info,
             String packageName) {
-        super(context, MediaDeviceType.TYPE_PHONE_DEVICE, routerManager, info, packageName);
+        super(context, routerManager, info, packageName);
 
         initDeviceRecord();
     }
@@ -53,6 +61,13 @@ public class PhoneMediaDevice extends MediaDevice {
         switch (mRouteInfo.getType()) {
             case TYPE_WIRED_HEADSET:
             case TYPE_WIRED_HEADPHONES:
+            case TYPE_USB_DEVICE:
+            case TYPE_USB_HEADSET:
+            case TYPE_USB_ACCESSORY:
+                name = mContext.getString(R.string.media_transfer_wired_usb_device_name);
+                break;
+            case TYPE_DOCK:
+            case TYPE_HDMI:
                 name = mRouteInfo.getName();
                 break;
             case TYPE_BUILTIN_SPEAKER:
@@ -70,17 +85,28 @@ public class PhoneMediaDevice extends MediaDevice {
 
     @Override
     public Drawable getIcon() {
-        return BluetoothUtils.buildBtRainbowDrawable(mContext,
-                mContext.getDrawable(getDrawableResId()), getId().hashCode());
+        final Drawable drawable = getIconWithoutBackground();
+        setColorFilter(drawable);
+        return BluetoothUtils.buildAdvancedDrawable(mContext, drawable);
+    }
+
+    @Override
+    public Drawable getIconWithoutBackground() {
+        return mContext.getDrawable(getDrawableResId());
     }
 
     @VisibleForTesting
     int getDrawableResId() {
         int resId;
         switch (mRouteInfo.getType()) {
+            case TYPE_USB_DEVICE:
+            case TYPE_USB_HEADSET:
+            case TYPE_USB_ACCESSORY:
+            case TYPE_DOCK:
+            case TYPE_HDMI:
             case TYPE_WIRED_HEADSET:
             case TYPE_WIRED_HEADPHONES:
-                resId = com.android.internal.R.drawable.ic_bt_headphones_a2dp;
+                resId = R.drawable.ic_headphone;
                 break;
             case TYPE_BUILTIN_SPEAKER:
             default:
@@ -92,7 +118,25 @@ public class PhoneMediaDevice extends MediaDevice {
 
     @Override
     public String getId() {
-        return ID;
+        String id;
+        switch (mRouteInfo.getType()) {
+            case TYPE_WIRED_HEADSET:
+            case TYPE_WIRED_HEADPHONES:
+                id = WIRED_HEADSET_ID;
+                break;
+            case TYPE_USB_DEVICE:
+            case TYPE_USB_HEADSET:
+            case TYPE_USB_ACCESSORY:
+            case TYPE_DOCK:
+            case TYPE_HDMI:
+                id = USB_HEADSET_ID;
+                break;
+            case TYPE_BUILTIN_SPEAKER:
+            default:
+                id = PHONE_ID;
+                break;
+        }
+        return id;
     }
 
     @Override

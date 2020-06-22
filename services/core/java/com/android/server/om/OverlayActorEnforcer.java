@@ -23,7 +23,6 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.net.Uri;
 import android.os.Process;
-import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Pair;
 
@@ -51,8 +50,8 @@ public class OverlayActorEnforcer {
     /**
      * @return nullable actor result with {@link ActorState} failure status
      */
-    static Pair<String, ActorState> getPackageNameForActor(String actorUriString,
-            Map<String, Map<String, String>> namedActors) {
+    static Pair<String, ActorState> getPackageNameForActor(@NonNull String actorUriString,
+            @NonNull Map<String, Map<String, String>> namedActors) {
         Uri actorUri = Uri.parse(actorUriString);
 
         String actorScheme = actorUri.getScheme();
@@ -140,7 +139,7 @@ public class OverlayActorEnforcer {
                         return ActorState.MISSING_LEGACY_PERMISSION;
                     }
                 }
-            } catch (RemoteException | IOException e) {
+            } catch (IOException e) {
                 return ActorState.ERROR_READING_OVERLAYABLE;
             }
         }

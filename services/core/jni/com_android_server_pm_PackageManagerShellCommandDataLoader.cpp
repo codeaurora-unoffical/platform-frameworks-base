@@ -18,6 +18,7 @@
 #define LOG_TAG "PackageManagerShellCommandDataLoader-jni"
 #include <android-base/file.h>
 #include <android-base/logging.h>
+#include <android-base/no_destructor.h>
 #include <android-base/stringprintf.h>
 #include <android-base/unique_fd.h>
 #include <core_jni_helpers.h>
@@ -65,17 +66,13 @@ static constexpr std::string_view OKAY = "OKAY"sv;
 static constexpr MagicType INCR = 0x52434e49; // BE INCR
 
 static constexpr auto PollTimeoutMs = 5000;
+static constexpr auto TraceTagCheckInterval = 1s;
 
 struct JniIds {
     jclass packageManagerShellCommandDataLoader;
     jmethodID pmscdLookupShellCommand;
-    jmethodID pmscdGetStdInPFD;
+    jmethodID pmscdGetStdIn;
     jmethodID pmscdGetLocalFile;
-
-    jmethodID parcelFileDescriptorGetFileDescriptor;
-
-    jclass ioUtils;
-    jmethodID ioUtilsCloseQuietly;
 
     JniIds(JNIEnv* env) {
         packageManagerShellCommandDataLoader = (jclass)env->NewGlobalRef(
@@ -84,23 +81,11 @@ struct JniIds {
                 GetStaticMethodIDOrDie(env, packageManagerShellCommandDataLoader,
                                        "lookupShellCommand",
                                        "(Ljava/lang/String;)Landroid/os/ShellCommand;");
-        pmscdGetStdInPFD =
-                GetStaticMethodIDOrDie(env, packageManagerShellCommandDataLoader, "getStdInPFD",
-                                       "(Landroid/os/ShellCommand;)Landroid/os/"
-                                       "ParcelFileDescriptor;");
+        pmscdGetStdIn = GetStaticMethodIDOrDie(env, packageManagerShellCommandDataLoader,
+                                               "getStdIn", "(Landroid/os/ShellCommand;)I");
         pmscdGetLocalFile =
                 GetStaticMethodIDOrDie(env, packageManagerShellCommandDataLoader, "getLocalFile",
-                                       "(Landroid/os/ShellCommand;Ljava/lang/String;)Landroid/os/"
-                                       "ParcelFileDescriptor;");
-
-        auto parcelFileDescriptor = FindClassOrDie(env, "android/os/ParcelFileDescriptor");
-        parcelFileDescriptorGetFileDescriptor =
-                GetMethodIDOrDie(env, parcelFileDescriptor, "getFileDescriptor",
-                                 "()Ljava/io/FileDescriptor;");
-
-        ioUtils = (jclass)env->NewGlobalRef(FindClassOrDie(env, "libcore/io/IoUtils"));
-        ioUtilsCloseQuietly = GetStaticMethodIDOrDie(env, ioUtils, "closeQuietly",
-                                                     "(Ljava/lang/AutoCloseable;)V");
+                                       "(Landroid/os/ShellCommand;Ljava/lang/String;)I");
     }
 };
 
@@ -211,22 +196,6 @@ static inline IncFsSize verityTreeSizeForFile(IncFsSize fileSize) {
     return total_tree_block_count * INCFS_DATA_FILE_BLOCK_SIZE;
 }
 
-static inline unique_fd convertPfdToFdAndDup(JNIEnv* env, const JniIds& jni, jobject pfd) {
-    if (!pfd) {
-        ALOGE("Missing In ParcelFileDescriptor.");
-        return {};
-    }
-    auto managedFd = env->CallObjectMethod(pfd, jni.parcelFileDescriptorGetFileDescriptor);
-    if (!pfd) {
-        ALOGE("Missing In FileDescriptor.");
-        return {};
-    }
-    unique_fd result{dup(jniGetFDFromFileDescriptor(env, managedFd))};
-    // Can be closed after dup.
-    env->CallStaticVoidMethod(jni.ioUtils, jni.ioUtilsCloseQuietly, pfd);
-    return result;
-}
-
 enum MetadataMode : int8_t {
     STDIN = 0,
     LOCAL_FILE = 1,
@@ -263,11 +232,9 @@ static inline InputDescs openLocalFile(JNIEnv* env, const JniIds& jni, jobject s
 
     const std::string idsigPath = filePath + ".idsig";
 
-    auto idsigFd = convertPfdToFdAndDup(
-            env, jni,
-            env->CallStaticObjectMethod(jni.packageManagerShellCommandDataLoader,
-                                        jni.pmscdGetLocalFile, shellCommand,
-                                        env->NewStringUTF(idsigPath.c_str())));
+    unique_fd idsigFd{env->CallStaticIntMethod(jni.packageManagerShellCommandDataLoader,
+                                               jni.pmscdGetLocalFile, shellCommand,
+                                               env->NewStringUTF(idsigPath.c_str()))};
     if (idsigFd.ok()) {
         auto treeSize = verityTreeSizeForFile(size);
         auto actualTreeSize = skipIdSigHeaders(idsigFd);
@@ -283,11 +250,9 @@ static inline InputDescs openLocalFile(JNIEnv* env, const JniIds& jni, jobject s
         });
     }
 
-    auto fileFd = convertPfdToFdAndDup(
-            env, jni,
-            env->CallStaticObjectMethod(jni.packageManagerShellCommandDataLoader,
-                                        jni.pmscdGetLocalFile, shellCommand,
-                                        env->NewStringUTF(filePath.c_str())));
+    unique_fd fileFd{env->CallStaticIntMethod(jni.packageManagerShellCommandDataLoader,
+                                              jni.pmscdGetLocalFile, shellCommand,
+                                              env->NewStringUTF(filePath.c_str()))};
     if (fileFd.ok()) {
         result.push_back(InputDesc{
                 .fd = std::move(fileFd),
@@ -307,10 +272,8 @@ static inline InputDescs openInputs(JNIEnv* env, const JniIds& jni, jobject shel
                              std::string(metadata.data, metadata.size));
     }
 
-    auto fd = convertPfdToFdAndDup(
-            env, jni,
-            env->CallStaticObjectMethod(jni.packageManagerShellCommandDataLoader,
-                                        jni.pmscdGetStdInPFD, shellCommand));
+    unique_fd fd{env->CallStaticIntMethod(jni.packageManagerShellCommandDataLoader,
+                                          jni.pmscdGetStdIn, shellCommand)};
     if (!fd.ok()) {
         return {};
     }
@@ -376,9 +339,47 @@ static inline JNIEnv* GetOrAttachJNIEnvironment(JavaVM* jvm) {
     return env;
 }
 
-class PackageManagerShellCommandDataLoaderDataLoader : public android::dataloader::DataLoader {
+class PMSCDataLoader;
+
+struct OnTraceChanged {
+    OnTraceChanged();
+    ~OnTraceChanged() {
+        mRunning = false;
+        mChecker.join();
+    }
+
+    void registerCallback(PMSCDataLoader* callback) {
+        std::unique_lock lock(mMutex);
+        mCallbacks.insert(callback);
+    }
+
+    void unregisterCallback(PMSCDataLoader* callback) {
+        std::unique_lock lock(mMutex);
+        mCallbacks.erase(callback);
+    }
+
+private:
+    std::mutex mMutex;
+    std::unordered_set<PMSCDataLoader*> mCallbacks;
+    std::atomic<bool> mRunning{true};
+    std::thread mChecker;
+};
+
+static OnTraceChanged& onTraceChanged() {
+    static android::base::NoDestructor<OnTraceChanged> instance;
+    return *instance;
+}
+
+class PMSCDataLoader : public android::dataloader::DataLoader {
 public:
-    PackageManagerShellCommandDataLoaderDataLoader(JavaVM* jvm) : mJvm(jvm) { CHECK(mJvm); }
+    PMSCDataLoader(JavaVM* jvm) : mJvm(jvm) { CHECK(mJvm); }
+    ~PMSCDataLoader() { onTraceChanged().unregisterCallback(this); }
+
+    void updateReadLogsState(const bool enabled) {
+        if (enabled != mReadLogsEnabled.exchange(enabled)) {
+            mIfs->setParams({.readLogsEnabled = enabled});
+        }
+    }
 
 private:
     // Lifecycle.
@@ -392,7 +393,8 @@ private:
         mArgs = params.arguments();
         mIfs = ifs;
         mStatusListener = statusListener;
-        mIfs->setParams({.readLogsEnabled = true});
+        updateReadLogsState(atrace_is_tag_enabled(ATRACE_TAG));
+        onTraceChanged().registerCallback(this);
         return true;
     }
     bool onStart() final { return true; }
@@ -404,12 +406,15 @@ private:
         }
     }
     void onDestroy() final {
+        onTraceChanged().unregisterCallback(this);
         // Make sure the receiver thread stopped.
         CHECK(!mReceiverThread.joinable());
     }
 
     // Installation.
     bool onPrepareImage(dataloader::DataLoaderInstallationFiles addedFiles) final {
+        ALOGE("onPrepareImage: start.");
+
         JNIEnv* env = GetOrAttachJNIEnvironment(mJvm);
         const auto& jni = jniIds(env);
 
@@ -794,9 +799,27 @@ private:
     android::base::unique_fd mEventFd;
     std::thread mReceiverThread;
     std::atomic<bool> mStopReceiving = false;
+    std::atomic<bool> mReadLogsEnabled = false;
     /** Tracks which files have been requested */
     std::unordered_set<FileIdx> mRequestedFiles;
 };
+
+OnTraceChanged::OnTraceChanged() {
+    mChecker = std::thread([this]() {
+        bool oldTrace = atrace_is_tag_enabled(ATRACE_TAG);
+        while (mRunning) {
+            bool newTrace = atrace_is_tag_enabled(ATRACE_TAG);
+            if (oldTrace != newTrace) {
+                std::unique_lock lock(mMutex);
+                for (auto&& callback : mCallbacks) {
+                    callback->updateReadLogsState(newTrace);
+                }
+            }
+            oldTrace = newTrace;
+            std::this_thread::sleep_for(TraceTagCheckInterval);
+        }
+    });
+}
 
 BlockHeader readHeader(std::span<uint8_t>& data) {
     BlockHeader header;
@@ -831,7 +854,7 @@ int register_android_server_com_android_server_pm_PackageManagerShellCommandData
             [](auto jvm, const auto& params) -> android::dataloader::DataLoaderPtr {
                 if (params.type() == DATA_LOADER_TYPE_INCREMENTAL) {
                     // This DataLoader only supports incremental installations.
-                    return std::make_unique<PackageManagerShellCommandDataLoaderDataLoader>(jvm);
+                    return std::make_unique<PMSCDataLoader>(jvm);
                 }
                 return {};
             });

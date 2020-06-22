@@ -97,10 +97,10 @@ java_library_static {
         "android.hardware.power-V1.0-java",
         "android.hardware.tv.cec-V1.0-java",
         "android.hardware.vibrator-java",
-        "android.net.ipsec.ike.stubs.module_libs_api",
+        "android.net.ipsec.ike.stubs.module_lib",
         "app-compat-annotations",
-        "framework-tethering-stubs-module_libs_api",
-        "service-permission-stubs",
+        "framework-tethering.stubs.module_lib",
+        "service-permission.stubs.system_server",
     ],
 
     required: [
@@ -127,9 +127,10 @@ java_library_static {
         "android.hardware.soundtrigger-V2.3-java",
         "android.hidl.manager-V1.2-java",
         "capture_state_listener-aidl-java",
-        "dnsresolver_aidl_interface-V2-java",
-        "netd_event_listener_interface-java",
+        "dnsresolver_aidl_interface-java",
+        "netd_aidl_interfaces-platform-java",
         "overlayable_policy_aidl-java",
+        "SurfaceFlingerProperties",
         "vendor.qti.hardware.servicetracker-V1.0-java",
     ],
 }
@@ -149,6 +150,7 @@ java_genrule {
 
 java_library {
     name: "services.core",
+    defaults: ["services_defaults"],
     static_libs: ["services.core.priorityboosted"],
 }
 

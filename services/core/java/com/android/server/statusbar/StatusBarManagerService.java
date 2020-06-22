@@ -666,12 +666,12 @@ public class StatusBarManagerService extends IStatusBarService.Stub implements D
     @Override
     public void showAuthenticationDialog(Bundle bundle, IBiometricServiceReceiverInternal receiver,
             int biometricModality, boolean requireConfirmation, int userId, String opPackageName,
-            long operationId) {
+            long operationId, int sysUiSessionId) {
         enforceBiometricDialog();
         if (mBar != null) {
             try {
                 mBar.showAuthenticationDialog(bundle, receiver, biometricModality,
-                        requireConfirmation, userId, opPackageName, operationId);
+                        requireConfirmation, userId, opPackageName, operationId, sysUiSessionId);
             } catch (RemoteException ex) {
             }
         }
@@ -1381,11 +1381,11 @@ public class StatusBarManagerService extends IStatusBarService.Stub implements D
     }
 
     @Override
-    public void onNotificationBubbleChanged(String key, boolean isBubble) {
+    public void onNotificationBubbleChanged(String key, boolean isBubble, int flags) {
         enforceStatusBarService();
         long identity = Binder.clearCallingIdentity();
         try {
-            mNotificationDelegate.onNotificationBubbleChanged(key, isBubble);
+            mNotificationDelegate.onNotificationBubbleChanged(key, isBubble, flags);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }

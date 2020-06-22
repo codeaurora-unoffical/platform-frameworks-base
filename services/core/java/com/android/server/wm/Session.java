@@ -91,6 +91,7 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
     private float mLastReportedAnimatorScale;
     private String mPackageName;
     private String mRelayoutTag;
+    private final InsetsSourceControl[] mDummyControls =  new InsetsSourceControl[0];
 
     public Session(WindowManagerService service, IWindowSessionCallback callback) {
         mService = service;
@@ -162,7 +163,19 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
             InsetsState outInsetsState, InsetsSourceControl[] outActiveControls) {
         return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId, outFrame,
                 outContentInsets, outStableInsets, outDisplayCutout, outInputChannel,
-                outInsetsState, outActiveControls);
+                outInsetsState, outActiveControls, UserHandle.getUserId(mUid));
+    }
+
+
+    @Override
+    public int addToDisplayAsUser(IWindow window, int seq, WindowManager.LayoutParams attrs,
+            int viewVisibility, int displayId, int userId, Rect outFrame,
+            Rect outContentInsets, Rect outStableInsets,
+            DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
+            InsetsState outInsetsState, InsetsSourceControl[] outActiveControls) {
+        return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId, outFrame,
+                outContentInsets, outStableInsets, outDisplayCutout, outInputChannel,
+                outInsetsState, outActiveControls, userId);
     }
 
     @Override
@@ -172,7 +185,7 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
         return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId,
                 new Rect() /* outFrame */, outContentInsets, outStableInsets,
                 new DisplayCutout.ParcelableWrapper() /* cutout */, null /* outInputChannel */,
-                outInsetsState, null);
+                outInsetsState, mDummyControls, UserHandle.getUserId(mUid));
     }
 
     @Override
@@ -649,17 +662,23 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
 
     @Override
     public void grantInputChannel(int displayId, SurfaceControl surface,
-            IWindow window, IBinder hostInputToken, int flags, InputChannel outInputChannel) {
+            IWindow window, IBinder hostInputToken, int flags, int type,
+            InputChannel outInputChannel) {
         if (hostInputToken == null && !mCanAddInternalSystemWindow) {
             // Callers without INTERNAL_SYSTEM_WINDOW permission cannot grant input channel to
             // embedded windows without providing a host window input token
             throw new SecurityException("Requires INTERNAL_SYSTEM_WINDOW permission");
         }
 
+        if (!mCanAddInternalSystemWindow && type != 0) {
+            Slog.w(TAG_WM, "Requires INTERNAL_SYSTEM_WINDOW permission if assign type to"
+                    + " input");
+        }
+
         final long identity = Binder.clearCallingIdentity();
         try {
             mService.grantInputChannel(mUid, mPid, displayId, surface, window, hostInputToken,
-                    flags, outInputChannel);
+                    flags, mCanAddInternalSystemWindow ? type : 0, outInputChannel);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -667,10 +686,10 @@ class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
 
     @Override
     public void updateInputChannel(IBinder channelToken, int displayId, SurfaceControl surface,
-            int flags) {
+            int flags, Region region) {
         final long identity = Binder.clearCallingIdentity();
         try {
-            mService.updateInputChannel(channelToken, displayId, surface, flags);
+            mService.updateInputChannel(channelToken, displayId, surface, flags, region);
         } finally {
             Binder.restoreCallingIdentity(identity);
         }

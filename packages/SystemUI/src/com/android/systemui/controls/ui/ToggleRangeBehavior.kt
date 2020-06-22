@@ -16,11 +16,20 @@
 
 package com.android.systemui.controls.ui
 
-import android.os.Bundle
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.LayerDrawable
+import android.os.Bundle
+import android.service.controls.Control
+import android.service.controls.templates.ControlTemplate
+import android.service.controls.templates.RangeTemplate
+import android.service.controls.templates.TemperatureControlTemplate
+import android.service.controls.templates.ToggleRangeTemplate
 import android.util.Log
+import android.util.MathUtils
 import android.view.GestureDetector
 import android.view.GestureDetector.SimpleOnGestureListener
 import android.view.MotionEvent
@@ -28,29 +37,29 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.TextView
-import android.service.controls.Control
-import android.service.controls.actions.FloatAction
-import android.service.controls.templates.RangeTemplate
-import android.service.controls.templates.ToggleRangeTemplate
-import android.util.TypedValue
-
+import com.android.systemui.Interpolators
 import com.android.systemui.R
-import com.android.systemui.controls.ui.ControlActionCoordinator.MIN_LEVEL
-import com.android.systemui.controls.ui.ControlActionCoordinator.MAX_LEVEL
-
+import com.android.systemui.controls.ui.ControlViewHolder.Companion.MAX_LEVEL
+import com.android.systemui.controls.ui.ControlViewHolder.Companion.MIN_LEVEL
 import java.util.IllegalFormatException
 
+/**
+ * Supports [ToggleRangeTemplate] and [RangeTemplate], as well as when one of those templates is
+ * defined as the subtemplate in [TemperatureControlTemplate].
+ */
 class ToggleRangeBehavior : Behavior {
+    private var rangeAnimator: ValueAnimator? = null
     lateinit var clipLayer: Drawable
-    lateinit var template: ToggleRangeTemplate
+    lateinit var templateId: String
     lateinit var control: Control
     lateinit var cvh: ControlViewHolder
     lateinit var rangeTemplate: RangeTemplate
-    lateinit var status: TextView
     lateinit var context: Context
     var currentStatusText: CharSequence = ""
     var currentRangeValue: String = ""
+    var isChecked: Boolean = false
+    var isToggleable: Boolean = false
+    var colorOffset: Int = 0
 
     companion object {
         private const val DEFAULT_FORMAT = "%.1f"
@@ -58,48 +67,79 @@ class ToggleRangeBehavior : Behavior {
 
     override fun initialize(cvh: ControlViewHolder) {
         this.cvh = cvh
-        status = cvh.status
-        context = status.getContext()
-
-        cvh.applyRenderInfo(false)
+        context = cvh.context
 
         val gestureListener = ToggleRangeGestureListener(cvh.layout)
         val gestureDetector = GestureDetector(context, gestureListener)
         cvh.layout.setOnTouchListener { v: View, e: MotionEvent ->
             if (gestureDetector.onTouchEvent(e)) {
-                return@setOnTouchListener true
+                // Don't return true to let the state list change to "pressed"
+                return@setOnTouchListener false
             }
 
             if (e.getAction() == MotionEvent.ACTION_UP && gestureListener.isDragging) {
                 v.getParent().requestDisallowInterceptTouchEvent(false)
                 gestureListener.isDragging = false
                 endUpdateRange()
-                return@setOnTouchListener true
+                return@setOnTouchListener false
             }
 
             return@setOnTouchListener false
         }
     }
 
-    override fun bind(cws: ControlWithState) {
+    private fun setup(template: ToggleRangeTemplate) {
+        rangeTemplate = template.getRange()
+        isToggleable = true
+        isChecked = template.isChecked()
+    }
+
+    private fun setup(template: RangeTemplate) {
+        rangeTemplate = template
+
+        // only show disabled state when value is at the minimum
+        isChecked = rangeTemplate.currentValue != rangeTemplate.minValue
+    }
+
+    private fun setupTemplate(template: ControlTemplate): Boolean {
+        return when (template) {
+            is ToggleRangeTemplate -> {
+                setup(template)
+                true
+            }
+            is RangeTemplate -> {
+                setup(template)
+                true
+            }
+            is TemperatureControlTemplate -> setupTemplate(template.getTemplate())
+            else -> {
+                Log.e(ControlsUiController.TAG, "Unsupported template type: $template")
+                false
+            }
+        }
+    }
+
+    override fun bind(cws: ControlWithState, colorOffset: Int) {
         this.control = cws.control!!
+        this.colorOffset = colorOffset
 
         currentStatusText = control.getStatusText()
-        status.setText(currentStatusText)
+
+        // ControlViewHolder sets a long click listener, but we want to handle touch in
+        // here instead, otherwise we'll have state conflicts.
+        cvh.layout.setOnLongClickListener(null)
 
         val ld = cvh.layout.getBackground() as LayerDrawable
         clipLayer = ld.findDrawableByLayerId(R.id.clip_layer)
-        clipLayer.setLevel(MIN_LEVEL)
 
-        template = control.getControlTemplate() as ToggleRangeTemplate
-        rangeTemplate = template.getRange()
+        val template = control.getControlTemplate()
+        if (!setupTemplate(template)) return
+        templateId = template.getTemplateId()
 
-        val checked = template.isChecked()
-        val currentRatio = rangeTemplate.getCurrentValue() /
-                (rangeTemplate.getMaxValue() - rangeTemplate.getMinValue())
-        updateRange(currentRatio, checked, /* isDragging */ false)
+        updateRange(rangeToLevelValue(rangeTemplate.currentValue), isChecked,
+            /* isDragging */ false)
 
-        cvh.applyRenderInfo(checked)
+        cvh.applyRenderInfo(isChecked, colorOffset)
 
         /*
          * This is custom widget behavior, so add a new accessibility delegate to
@@ -135,8 +175,15 @@ class ToggleRangeBehavior : Behavior {
             ): Boolean {
                 val handled = when (action) {
                     AccessibilityNodeInfo.ACTION_CLICK -> {
-                        ControlActionCoordinator.toggle(cvh, template.getTemplateId(),
-                            template.isChecked())
+                        if (!isToggleable) {
+                            false
+                        } else {
+                            cvh.controlActionCoordinator.toggle(cvh, templateId, isChecked)
+                            true
+                        }
+                    }
+                    AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
+                        cvh.controlActionCoordinator.longPress(cvh)
                         true
                     }
                     AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId() -> {
@@ -146,9 +193,8 @@ class ToggleRangeBehavior : Behavior {
                         } else {
                             val value = arguments.getFloat(
                                 AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE)
-                            val ratioDiff = (value - rangeTemplate.getCurrentValue()) /
-                                (rangeTemplate.getMaxValue() - rangeTemplate.getMinValue())
-                            updateRange(ratioDiff, template.isChecked(), /* isDragging */ false)
+                            val level = rangeToLevelValue(value)
+                            updateRange(level, isChecked, /* isDragging */ true)
                             endUpdateRange()
                             true
                         }
@@ -163,38 +209,65 @@ class ToggleRangeBehavior : Behavior {
                 host: ViewGroup,
                 child: View,
                 event: AccessibilityEvent
-            ): Boolean = false
+            ): Boolean = true
         })
     }
 
     fun beginUpdateRange() {
-        status.setTextSize(TypedValue.COMPLEX_UNIT_PX, context.getResources()
+        cvh.setStatusTextSize(context.getResources()
                 .getDimensionPixelSize(R.dimen.control_status_expanded).toFloat())
     }
 
-    fun updateRange(ratioDiff: Float, checked: Boolean, isDragging: Boolean) {
-        val changeAmount = if (checked) (MAX_LEVEL * ratioDiff).toInt() else MIN_LEVEL
-        val newLevel = Math.max(MIN_LEVEL, Math.min(MAX_LEVEL, clipLayer.getLevel() + changeAmount))
-        clipLayer.setLevel(newLevel)
+    fun updateRange(level: Int, checked: Boolean, isDragging: Boolean) {
+        val newLevel = Math.max(MIN_LEVEL, Math.min(MAX_LEVEL, level))
+
+        // If the current level is at the minimum and the user is dragging, set the control to
+        // the enabled state to indicate their intention to enable the device. This will update
+        // control colors to support dragging.
+        if (clipLayer.level == MIN_LEVEL && newLevel > MIN_LEVEL) {
+            cvh.applyRenderInfo(checked, colorOffset, false /* animated */)
+        }
+
+        rangeAnimator?.cancel()
+        if (isDragging) {
+            val isEdge = newLevel == MIN_LEVEL || newLevel == MAX_LEVEL
+            if (clipLayer.level != newLevel) {
+                cvh.controlActionCoordinator.drag(isEdge)
+                clipLayer.level = newLevel
+            }
+        } else if (newLevel != clipLayer.level) {
+            rangeAnimator = ValueAnimator.ofInt(cvh.clipLayer.level, newLevel).apply {
+                addUpdateListener {
+                    cvh.clipLayer.level = it.animatedValue as Int
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator?) {
+                        rangeAnimator = null
+                    }
+                })
+                duration = ControlViewHolder.STATE_ANIMATION_DURATION
+                interpolator = Interpolators.CONTROL_STATE
+                start()
+            }
+        }
 
         if (checked) {
-            val newValue = levelToRangeValue(clipLayer.getLevel())
+            val newValue = levelToRangeValue(newLevel)
             currentRangeValue = format(rangeTemplate.getFormatString().toString(),
                     DEFAULT_FORMAT, newValue)
-            val text = if (isDragging) {
-                currentRangeValue
+            if (isDragging) {
+                cvh.setStatusText(currentRangeValue, /* immediately */ true)
             } else {
-                "$currentStatusText $currentRangeValue"
+                cvh.setStatusText("$currentStatusText $currentRangeValue")
             }
-            status.setText(text)
         } else {
-            status.setText(currentStatusText)
+            cvh.setStatusText(currentStatusText)
         }
     }
 
     private fun format(primaryFormat: String, backupFormat: String, value: Float): String {
         return try {
-            String.format(primaryFormat, value)
+            String.format(primaryFormat, findNearestStep(value))
         } catch (e: IllegalFormatException) {
             Log.w(ControlsUiController.TAG, "Illegal format in range template", e)
             if (backupFormat == "") {
@@ -206,17 +279,21 @@ class ToggleRangeBehavior : Behavior {
     }
 
     private fun levelToRangeValue(i: Int): Float {
-        val ratio = i.toFloat() / MAX_LEVEL
-        return rangeTemplate.getMinValue() +
-            (ratio * (rangeTemplate.getMaxValue() - rangeTemplate.getMinValue()))
+        return MathUtils.constrainedMap(rangeTemplate.minValue, rangeTemplate.maxValue,
+                MIN_LEVEL.toFloat(), MAX_LEVEL.toFloat(), i.toFloat())
+    }
+
+    private fun rangeToLevelValue(i: Float): Int {
+        return MathUtils.constrainedMap(MIN_LEVEL.toFloat(), MAX_LEVEL.toFloat(),
+                rangeTemplate.minValue, rangeTemplate.maxValue, i).toInt()
     }
 
     fun endUpdateRange() {
-        status.setTextSize(TypedValue.COMPLEX_UNIT_PX, context.getResources()
+        cvh.setStatusTextSize(context.getResources()
                 .getDimensionPixelSize(R.dimen.control_status_normal).toFloat())
-        status.setText("$currentStatusText $currentRangeValue")
-        cvh.action(FloatAction(rangeTemplate.getTemplateId(),
-            findNearestStep(levelToRangeValue(clipLayer.getLevel()))))
+        cvh.setStatusText("$currentStatusText $currentRangeValue", /* immediately */ true)
+        cvh.controlActionCoordinator.setValue(cvh, rangeTemplate.getTemplateId(),
+            findNearestStep(levelToRangeValue(clipLayer.getLevel())))
     }
 
     fun findNearestStep(value: Float): Float {
@@ -247,7 +324,10 @@ class ToggleRangeBehavior : Behavior {
         }
 
         override fun onLongPress(e: MotionEvent) {
-            ControlActionCoordinator.longPress(this@ToggleRangeBehavior.cvh)
+            if (isDragging) {
+                return
+            }
+            cvh.controlActionCoordinator.longPress(cvh)
         }
 
         override fun onScroll(
@@ -258,19 +338,19 @@ class ToggleRangeBehavior : Behavior {
         ): Boolean {
             if (!isDragging) {
                 v.getParent().requestDisallowInterceptTouchEvent(true)
-                this@ToggleRangeBehavior.beginUpdateRange()
+                beginUpdateRange()
                 isDragging = true
             }
 
-            this@ToggleRangeBehavior.updateRange(-xDiff / v.getWidth(),
-                /* checked */ true, /* isDragging */ true)
+            val ratioDiff = -xDiff / v.width
+            val changeAmount = ((MAX_LEVEL - MIN_LEVEL) * ratioDiff).toInt()
+            updateRange(clipLayer.level + changeAmount, checked = true, isDragging = true)
             return true
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            val th = this@ToggleRangeBehavior
-            ControlActionCoordinator.toggle(th.cvh, th.template.getTemplateId(),
-                    th.template.isChecked())
+            if (!isToggleable) return false
+            cvh.controlActionCoordinator.toggle(cvh, templateId, isChecked)
             return true
         }
     }

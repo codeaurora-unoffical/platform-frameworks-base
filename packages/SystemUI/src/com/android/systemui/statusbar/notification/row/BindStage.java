@@ -18,6 +18,7 @@ package com.android.systemui.statusbar.notification.row;
 
 import android.annotation.MainThread;
 import android.util.ArrayMap;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 
@@ -66,9 +67,14 @@ public abstract class BindStage<Params> extends BindRequester {
     public final Params getStageParams(@NonNull NotificationEntry entry) {
         Params params = mContentParams.get(entry);
         if (params == null) {
-            throw new IllegalStateException(
-                    String.format("Entry does not have any stage parameters. key: %s",
+            // TODO: This should throw an exception but there are some cases of re-entrant calls
+            // in NotificationEntryManager (e.g. b/155324756) that cause removal in update that
+            // lead to inflation after the notification is "removed". We return an empty params
+            // to avoid any NPEs for now, but we should remove this when all re-entrant calls are
+            // fixed.
+            Log.wtf(TAG, String.format("Entry does not have any stage parameters. key: %s",
                             entry.getKey()));
+            return newStageParams();
         }
         return params;
     }
@@ -91,6 +97,8 @@ public abstract class BindStage<Params> extends BindRequester {
      * Create a new, empty stage params object.
      */
     protected abstract Params newStageParams();
+
+    private static final String TAG = "BindStage";
 
     /**
      * Interface for callback.

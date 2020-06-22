@@ -242,7 +242,13 @@ public final class StorageUserConnection {
             }
 
             if (oldConnection != null) {
-                mContext.unbindService(oldConnection);
+                try {
+                    mContext.unbindService(oldConnection);
+                } catch (Exception e) {
+                    // Handle IllegalArgumentException that may be thrown if the user is already
+                    // stopped when we try to unbind
+                    Slog.w(TAG, "Failed to unbind service", e);
+                }
             }
         }
 
@@ -407,20 +413,18 @@ public final class StorageUserConnection {
                         resetUserSessions();
                     }
                 };
-            }
 
-            Slog.i(TAG, "Binding to the ExternalStorageService for user " + mUserId);
-            if (mContext.bindServiceAsUser(new Intent().setComponent(name), mServiceConnection,
-                            Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT,
-                            UserHandle.of(mUserId))) {
-                Slog.i(TAG, "Bound to the ExternalStorageService for user " + mUserId);
-                return mLatch;
-            } else {
-                synchronized (mLock) {
+                Slog.i(TAG, "Binding to the ExternalStorageService for user " + mUserId);
+                if (mContext.bindServiceAsUser(new Intent().setComponent(name), mServiceConnection,
+                        Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT,
+                        UserHandle.of(mUserId))) {
+                    Slog.i(TAG, "Bound to the ExternalStorageService for user " + mUserId);
+                    return mLatch;
+                } else {
                     mIsConnecting = false;
+                    throw new ExternalStorageServiceException(
+                            "Failed to bind to the ExternalStorageService for user " + mUserId);
                 }
-                throw new ExternalStorageServiceException(
-                        "Failed to bind to the ExternalStorageService for user " + mUserId);
             }
         }
     }

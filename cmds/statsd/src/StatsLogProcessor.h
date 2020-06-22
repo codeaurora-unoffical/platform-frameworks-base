@@ -120,6 +120,11 @@ public:
     /* Notify all MetricsManagers of uid map snapshots received */
     void onUidMapReceived(const int64_t& eventTimeNs) override;
 
+    /* Notify all metrics managers of boot completed
+     * This will force a bucket split when the boot is finished.
+     */
+    void onStatsdInitCompleted(const int64_t& elapsedTimeNs);
+
     // Reset all configs.
     void resetConfigs();
 
@@ -302,9 +307,6 @@ private:
     FRIEND_TEST(GaugeMetricE2eTest, TestRandomSamplePulledEventsWithActivation);
     FRIEND_TEST(GaugeMetricE2eTest, TestRandomSamplePulledEventsNoCondition);
     FRIEND_TEST(GaugeMetricE2eTest, TestConditionChangeToTrueSamplePulledEvents);
-    FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents);
-    FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_LateAlarm);
-    FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_WithActivation);
 
     FRIEND_TEST(AnomalyDetectionE2eTest, TestSlicedCountMetric_single_bucket);
     FRIEND_TEST(AnomalyDetectionE2eTest, TestSlicedCountMetric_multiple_buckets);
@@ -323,6 +325,7 @@ private:
     FRIEND_TEST(MetricActivationE2eTest, TestCountMetricWithSameDeactivation);
     FRIEND_TEST(MetricActivationE2eTest, TestCountMetricWithTwoMetricsTwoDeactivations);
 
+    FRIEND_TEST(CountMetricE2eTest, TestInitialConditionChanges);
     FRIEND_TEST(CountMetricE2eTest, TestSlicedState);
     FRIEND_TEST(CountMetricE2eTest, TestSlicedStateWithMap);
     FRIEND_TEST(CountMetricE2eTest, TestMultipleSlicedStates);
@@ -340,6 +343,10 @@ private:
     FRIEND_TEST(DurationMetricE2eTest, TestSlicedStatePrimaryFieldsNotSubsetDimInWhat);
     FRIEND_TEST(DurationMetricE2eTest, TestWithSlicedStatePrimaryFieldsSubset);
 
+    FRIEND_TEST(ValueMetricE2eTest, TestInitialConditionChanges);
+    FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents);
+    FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_LateAlarm);
+    FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_WithActivation);
     FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState);
     FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState_WithDimensions);
     FRIEND_TEST(ValueMetricE2eTest, TestInitWithSlicedState_WithIncorrectDimensions);

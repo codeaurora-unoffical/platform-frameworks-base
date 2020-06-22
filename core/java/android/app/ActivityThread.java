@@ -17,6 +17,8 @@
 package android.app;
 
 import static android.app.ActivityManager.PROCESS_STATE_UNKNOWN;
+import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
+import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 import static android.app.servertransaction.ActivityLifecycleItem.ON_CREATE;
 import static android.app.servertransaction.ActivityLifecycleItem.ON_DESTROY;
 import static android.app.servertransaction.ActivityLifecycleItem.ON_PAUSE;
@@ -121,6 +123,7 @@ import android.os.SystemProperties;
 import android.os.TelephonyServiceManager;
 import android.os.Trace;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.permission.IPermissionManager;
 import android.provider.BlockedNumberContract;
 import android.provider.CalendarContract;
@@ -155,6 +158,8 @@ import android.util.proto.ProtoOutputStream;
 import android.view.Choreographer;
 import android.view.ContextThemeWrapper;
 import android.view.Display;
+import android.view.DisplayAdjustments;
+import android.view.DisplayAdjustments.FixedRotationAdjustments;
 import android.view.ThreadedRenderer;
 import android.view.View;
 import android.view.ViewDebug;
@@ -214,6 +219,7 @@ import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 final class RemoteServiceException extends AndroidRuntimeException {
     public RemoteServiceException(String msg) {
@@ -376,7 +382,6 @@ public final class ActivityThread extends ClientTransactionHandler {
     String mInstrumentedLibDir = null;
     boolean mSystemThread = false;
     boolean mSomeActivitiesChanged = false;
-    boolean mUpdatingSystemConfig = false;
     /* package */ boolean mHiddenApiWarningShown = false;
 
     // These can be accessed by multiple threads; mResourcesManager is the lock.
@@ -405,9 +410,15 @@ public final class ActivityThread extends ClientTransactionHandler {
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     private final ResourcesManager mResourcesManager;
 
+    /** The active adjustments that override the {@link DisplayAdjustments} in resources. */
+    private ArrayList<Pair<IBinder, Consumer<DisplayAdjustments>>> mActiveRotationAdjustments;
+
     // Registry of remote cancellation transports pending a reply with reply handles.
     @GuardedBy("this")
     private @Nullable Map<SafeCancellationTransport, CancellationSignal> mRemoteCancellations;
+
+    private final Map<IBinder, Integer> mLastReportedWindowingMode = Collections.synchronizedMap(
+            new ArrayMap<>());
 
     private static final class ProviderKey {
         final String authority;
@@ -538,6 +549,12 @@ public final class ActivityThread extends ClientTransactionHandler {
         @UnsupportedAppUsage
         boolean mPreserveWindow;
 
+        /**
+         * If non-null, the activity is launching with a specified rotation, the adjustments should
+         * be consumed before activity creation.
+         */
+        FixedRotationAdjustments mPendingFixedRotationAdjustments;
+
         @LifecycleState
         private int mLifecycleState = PRE_ON_CREATE;
 
@@ -554,7 +571,7 @@ public final class ActivityThread extends ClientTransactionHandler {
                 PersistableBundle persistentState, List<ResultInfo> pendingResults,
                 List<ReferrerIntent> pendingNewIntents, boolean isForward,
                 ProfilerInfo profilerInfo, ClientTransactionHandler client,
-                IBinder assistToken) {
+                IBinder assistToken, FixedRotationAdjustments fixedRotationAdjustments) {
             this.token = token;
             this.assistToken = assistToken;
             this.ident = ident;
@@ -572,6 +589,7 @@ public final class ActivityThread extends ClientTransactionHandler {
             this.overrideConfig = overrideConfig;
             this.packageInfo = client.getPackageInfoNoCheck(activityInfo.applicationInfo,
                     compatInfo);
+            mPendingFixedRotationAdjustments = fixedRotationAdjustments;
             init();
         }
 
@@ -1169,6 +1187,8 @@ public final class ActivityThread extends ClientTransactionHandler {
             } catch (IOException e) {
                 Slog.e(TAG, "Failed to duplicate heap dump file descriptor", e);
                 return;
+            } finally {
+                IoUtils.closeQuietly(fd);
             }
             dhd.finishCallback = finishCallback;
             sendMessage(H.DUMP_HEAP, dhd, 0, 0, true /*async*/);
@@ -1514,6 +1534,12 @@ public final class ActivityThread extends ClientTransactionHandler {
         public void dumpGfxInfo(ParcelFileDescriptor pfd, String[] args) {
             nDumpGraphicsInfo(pfd.getFileDescriptor());
             WindowManagerGlobal.getInstance().dumpGfxInfo(pfd.getFileDescriptor(), args);
+            IoUtils.closeQuietly(pfd);
+        }
+
+        @Override
+        public void dumpCacheInfo(ParcelFileDescriptor pfd, String[] args) {
+            PropertyInvalidatedCache.dumpCacheInfo(pfd.getFileDescriptor(), args);
             IoUtils.closeQuietly(pfd);
         }
 
@@ -2030,12 +2056,7 @@ public final class ActivityThread extends ClientTransactionHandler {
                     break;
                 }
                 case APPLICATION_INFO_CHANGED:
-                    mUpdatingSystemConfig = true;
-                    try {
-                        handleApplicationInfoChanged((ApplicationInfo) msg.obj);
-                    } finally {
-                        mUpdatingSystemConfig = false;
-                    }
+                    handleApplicationInfoChanged((ApplicationInfo) msg.obj);
                     break;
                 case RUN_ISOLATED_ENTRY_POINT:
                     handleRunIsolatedEntryPoint((String) ((SomeArgs) msg.obj).arg1,
@@ -2239,7 +2260,9 @@ public final class ActivityThread extends ClientTransactionHandler {
             LoadedApk packageInfo = ref != null ? ref.get() : null;
             if (ai != null && packageInfo != null) {
                 if (!isLoadedApkResourceDirsUpToDate(packageInfo, ai)) {
-                    packageInfo.updateApplicationInfo(ai, null);
+                    List<String> oldPaths = new ArrayList<>();
+                    LoadedApk.makePaths(this, ai, oldPaths);
+                    packageInfo.updateApplicationInfo(ai, oldPaths);
                 }
 
                 if (packageInfo.isSecurityViolation()
@@ -2327,7 +2350,9 @@ public final class ActivityThread extends ClientTransactionHandler {
 
             if (packageInfo != null) {
                 if (!isLoadedApkResourceDirsUpToDate(packageInfo, aInfo)) {
-                    packageInfo.updateApplicationInfo(aInfo, null);
+                    List<String> oldPaths = new ArrayList<>();
+                    LoadedApk.makePaths(this, aInfo, oldPaths);
+                    packageInfo.updateApplicationInfo(aInfo, oldPaths);
                 }
 
                 return packageInfo;
@@ -3085,6 +3110,11 @@ public final class ActivityThread extends ClientTransactionHandler {
         return mActivities.get(token);
     }
 
+    @VisibleForTesting(visibility = PACKAGE)
+    public Configuration getConfiguration() {
+        return mConfiguration;
+    }
+
     @Override
     public void updatePendingConfiguration(Configuration config) {
         synchronized (mResourcesManager) {
@@ -3221,6 +3251,82 @@ public final class ActivityThread extends ClientTransactionHandler {
         sendMessage(H.CLEAN_UP_CONTEXT, cci);
     }
 
+    @Override
+    public void handleFixedRotationAdjustments(@NonNull IBinder token,
+            @Nullable FixedRotationAdjustments fixedRotationAdjustments) {
+        handleFixedRotationAdjustments(token, fixedRotationAdjustments, null /* overrideConfig */);
+    }
+
+    /**
+     * Applies the rotation adjustments to override display information in resources belong to the
+     * provided token. If the token is activity token, the adjustments also apply to application
+     * because the appearance of activity is usually more sensitive to the application resources.
+     *
+     * @param token The token to apply the adjustments.
+     * @param fixedRotationAdjustments The information to override the display adjustments of
+     *                                 corresponding resources. If it is null, the exiting override
+     *                                 will be cleared.
+     * @param overrideConfig The override configuration of activity. It is used to override
+     *                       application configuration. If it is non-null, it means the token is
+     *                       confirmed as activity token. Especially when launching new activity,
+     *                       {@link #mActivities} hasn't put the new token.
+     */
+    private void handleFixedRotationAdjustments(@NonNull IBinder token,
+            @Nullable FixedRotationAdjustments fixedRotationAdjustments,
+            @Nullable Configuration overrideConfig) {
+        // The element of application configuration override is set only if the application
+        // adjustments are needed, because activity already has its own override configuration.
+        final Configuration[] appConfigOverride;
+        final Consumer<DisplayAdjustments> override;
+        if (fixedRotationAdjustments != null) {
+            appConfigOverride = new Configuration[1];
+            override = displayAdjustments -> {
+                displayAdjustments.setFixedRotationAdjustments(fixedRotationAdjustments);
+                if (appConfigOverride[0] != null) {
+                    displayAdjustments.getConfiguration().updateFrom(appConfigOverride[0]);
+                }
+            };
+        } else {
+            appConfigOverride = null;
+            override = null;
+        }
+        if (!mResourcesManager.overrideTokenDisplayAdjustments(token, override)) {
+            // No resources are associated with the token.
+            return;
+        }
+        if (overrideConfig == null) {
+            final ActivityClientRecord r = mActivities.get(token);
+            if (r == null) {
+                // It is not an activity token. Nothing to do for application.
+                return;
+            }
+            overrideConfig = r.overrideConfig;
+        }
+        if (appConfigOverride != null) {
+            appConfigOverride[0] = overrideConfig;
+        }
+
+        // Apply the last override to application resources for compatibility. Because the Resources
+        // of Display can be from application, e.g.
+        //    applicationContext.getSystemService(DisplayManager.class).getDisplay(displayId)
+        // and the deprecated usage:
+        //    applicationContext.getSystemService(WindowManager.class).getDefaultDisplay();
+        final Consumer<DisplayAdjustments> appOverride;
+        if (mActiveRotationAdjustments == null) {
+            mActiveRotationAdjustments = new ArrayList<>(2);
+        }
+        if (override != null) {
+            mActiveRotationAdjustments.add(Pair.create(token, override));
+            appOverride = override;
+        } else {
+            mActiveRotationAdjustments.removeIf(adjustmentsPair -> adjustmentsPair.first == token);
+            appOverride = mActiveRotationAdjustments.isEmpty()
+                    ? null
+                    : mActiveRotationAdjustments.get(mActiveRotationAdjustments.size() - 1).second;
+        }
+        mInitialApplication.getResources().overrideDisplayAdjustments(appOverride);
+    }
+
     /**  Core implementation of activity launch. */
     private Activity performLaunchActivity(ActivityClientRecord r, Intent customIntent) {
         ActivityInfo aInfo = r.activityInfo;
@@ -3322,6 +3428,8 @@ public final class ActivityThread extends ClientTransactionHandler {
                         " did not call through to super.onCreate()");
                 }
                 r.activity = activity;
+                mLastReportedWindowingMode.put(activity.getActivityToken(),
+                        config.windowConfiguration.getWindowingMode());
             }
             r.setState(ON_CREATE);
 
@@ -3431,6 +3539,14 @@ public final class ActivityThread extends ClientTransactionHandler {
 
         ContextImpl appContext = ContextImpl.createActivityContext(
                 this, r.packageInfo, r.activityInfo, r.token, displayId, r.overrideConfig);
+
+        // The rotation adjustments must be applied before creating the activity, so the activity
+        // can get the adjusted display info during creation.
+        if (r.mPendingFixedRotationAdjustments != null) {
+            handleFixedRotationAdjustments(r.token, r.mPendingFixedRotationAdjustments,
+                    r.overrideConfig);
+            r.mPendingFixedRotationAdjustments = null;
+        }
 
         final DisplayManagerGlobal dm = DisplayManagerGlobal.getInstance();
         // For debugging purposes, if the activity's package name contains the value of
@@ -3741,32 +3857,6 @@ public final class ActivityThread extends ClientTransactionHandler {
         } finally {
             IoUtils.closeQuietly(fd);
             Binder.getTransactionTracker().clearTraces();
-        }
-    }
-
-    @Override
-    public void handleMultiWindowModeChanged(IBinder token, boolean isInMultiWindowMode,
-            Configuration overrideConfig) {
-        final ActivityClientRecord r = mActivities.get(token);
-        if (r != null) {
-            final Configuration newConfig = new Configuration(mConfiguration);
-            if (overrideConfig != null) {
-                newConfig.updateFrom(overrideConfig);
-            }
-            r.activity.dispatchMultiWindowModeChanged(isInMultiWindowMode, newConfig);
-        }
-    }
-
-    @Override
-    public void handlePictureInPictureModeChanged(IBinder token, boolean isInPipMode,
-            Configuration overrideConfig) {
-        final ActivityClientRecord r = mActivities.get(token);
-        if (r != null) {
-            final Configuration newConfig = new Configuration(mConfiguration);
-            if (overrideConfig != null) {
-                newConfig.updateFrom(overrideConfig);
-            }
-            r.activity.dispatchPictureInPictureModeChanged(isInPipMode, newConfig);
         }
     }
 
@@ -4975,8 +5065,10 @@ public final class ActivityThread extends ClientTransactionHandler {
     ActivityClientRecord performDestroyActivity(IBinder token, boolean finishing,
             int configChanges, boolean getNonConfigInstance, String reason) {
         ActivityClientRecord r = mActivities.get(token);
+        Class<? extends Activity> activityClass = null;
         if (localLOGV) Slog.v(TAG, "Performing finish of " + r);
         if (r != null) {
+            activityClass = r.activity.getClass();
             r.activity.mConfigChangeFlags |= configChanges;
             if (finishing) {
                 r.activity.mFinished = true;
@@ -5029,6 +5121,7 @@ public final class ActivityThread extends ClientTransactionHandler {
         synchronized (mResourcesManager) {
             mActivities.remove(token);
         }
+        StrictMode.decrementExpectedActivityCount(activityClass);
         return r;
     }
 
@@ -5048,7 +5141,6 @@ public final class ActivityThread extends ClientTransactionHandler {
         ActivityClientRecord r = performDestroyActivity(token, finishing,
                 configChanges, getNonConfigInstance, reason);
         if (r != null) {
-            Class<? extends Activity> activityClass = r.activity.getClass();
             cleanUpPendingRemoveWindows(r, finishing);
             WindowManager wm = r.activity.getWindowManager();
             View v = r.activity.mDecor;
@@ -5073,14 +5165,14 @@ public final class ActivityThread extends ClientTransactionHandler {
                 }
                 if (wtoken != null && r.mPendingRemoveWindow == null) {
                     WindowManagerGlobal.getInstance().closeAll(wtoken,
-                            activityClass.getName(), "Activity");
+                            r.activity.getClass().getName(), "Activity");
                 } else if (r.mPendingRemoveWindow != null) {
                     // We're preserving only one window, others should be closed so app views
                     // will be detached before the final tear down. It should be done now because
                     // some components (e.g. WebView) rely on detach callbacks to perform receiver
                     // unregister and other cleanup.
                     WindowManagerGlobal.getInstance().closeAllExceptView(token, v,
-                            activityClass.getName(), "Activity");
+                            r.activity.getClass().getName(), "Activity");
                 }
                 r.activity.mDecor = null;
             }
@@ -5092,23 +5184,18 @@ public final class ActivityThread extends ClientTransactionHandler {
                 // about leaking windows, because that is a bug, so if they are
                 // using this recreate facility then they get to live with leaks.
                 WindowManagerGlobal.getInstance().closeAll(token,
-                        activityClass.getName(), "Activity");
+                        r.activity.getClass().getName(), "Activity");
             }
 
             // Mocked out contexts won't be participating in the normal
             // process lifecycle, but if we're running with a proper
             // ApplicationContext we need to have it tear down things
             // cleanly.
-            final ContextImpl impl = ContextImpl.getImpl(r.activity);
-            if (impl != null) {
-                impl.scheduleFinalCleanup(activityClass.getName(), "Activity");
+            Context c = r.activity.getBaseContext();
+            if (c instanceof ContextImpl) {
+                ((ContextImpl) c).scheduleFinalCleanup(
+                        r.activity.getClass().getName(), "Activity");
             }
-
-            r.activity = null;
-            r.window = null;
-            r.hideForNow = false;
-            r.nextIdle = null;
-            StrictMode.decrementExpectedActivityCount(activityClass);
         }
         if (finishing) {
             try {
@@ -5268,8 +5355,15 @@ public final class ActivityThread extends ClientTransactionHandler {
             throw e.rethrowFromSystemServer();
         }
 
+        // Save the current windowing mode to be restored and compared to the new configuration's
+        // windowing mode (needed because we update the last reported windowing mode when launching
+        // an activity and we can't tell inside performLaunchActivity whether we are relaunching)
+        final int oldWindowingMode = mLastReportedWindowingMode.getOrDefault(
+                r.activity.getActivityToken(), WINDOWING_MODE_UNDEFINED);
         handleRelaunchActivityInner(r, configChanges, tmp.pendingResults, tmp.pendingIntents,
                 pendingActions, tmp.startsNotResumed, tmp.overrideConfig, "handleRelaunchActivity");
+        mLastReportedWindowingMode.put(r.activity.getActivityToken(), oldWindowingMode);
+        handleWindowingModeChangeIfNeeded(r.activity, r.activity.mCurrentConfig);
 
         if (pendingActions != null) {
             // Only report a successful relaunch to WindowManager.
@@ -5338,6 +5432,10 @@ public final class ActivityThread extends ClientTransactionHandler {
 
         handleDestroyActivity(r.token, false, configChanges, true, reason);
 
+        r.activity = null;
+        r.window = null;
+        r.hideForNow = false;
+        r.nextIdle = null;
         // Merge any pending results and pending intents; don't just replace them
         if (pendingResults != null) {
             if (r.pendingResults == null) {
@@ -5451,8 +5549,8 @@ public final class ActivityThread extends ClientTransactionHandler {
      */
     private void performConfigurationChangedForActivity(ActivityClientRecord r,
             Configuration newBaseConfig) {
-        performConfigurationChangedForActivity(r, newBaseConfig,
-                r.activity.getDisplayId(), false /* movedToDifferentDisplay */);
+        performConfigurationChangedForActivity(r, newBaseConfig, r.activity.getDisplayId(),
+                false /* movedToDifferentDisplay */);
     }
 
     /**
@@ -5543,30 +5641,30 @@ public final class ActivityThread extends ClientTransactionHandler {
             throw new IllegalArgumentException("Activity token not set. Is the activity attached?");
         }
 
-        boolean shouldChangeConfig = false;
+        // multi-window / pip mode changes, if any, should be sent before the configuration change
+        // callback, see also PinnedStackTests#testConfigurationChangeOrderDuringTransition
+        handleWindowingModeChangeIfNeeded(activity, newConfig);
+
+        boolean shouldReportChange = false;
         if (activity.mCurrentConfig == null) {
-            shouldChangeConfig = true;
+            shouldReportChange = true;
         } else {
             // If the new config is the same as the config this Activity is already running with and
             // the override config also didn't change, then don't bother calling
             // onConfigurationChanged.
             final int diff = activity.mCurrentConfig.diffPublicOnly(newConfig);
-
-            if (diff != 0 || !mResourcesManager.isSameResourcesOverrideConfig(activityToken,
+            if (diff == 0 && !movedToDifferentDisplay
+                    && mResourcesManager.isSameResourcesOverrideConfig(activityToken,
                     amOverrideConfig)) {
-                // Always send the task-level config changes. For system-level configuration, if
-                // this activity doesn't handle any of the config changes, then don't bother
-                // calling onConfigurationChanged as we're going to destroy it.
-                if (!mUpdatingSystemConfig
-                        || (~activity.mActivityInfo.getRealConfigChanged() & diff) == 0
-                        || !REPORT_TO_ACTIVITY) {
-                    shouldChangeConfig = true;
-                }
+                // Nothing significant, don't proceed with updating and reporting.
+                return null;
+            } else if ((~activity.mActivityInfo.getRealConfigChanged() & diff) == 0
+                    || !REPORT_TO_ACTIVITY) {
+                // If this activity doesn't handle any of the config changes, then don't bother
+                // calling onConfigurationChanged. Otherwise, report to the activity for the
+                // changes.
+                shouldReportChange = true;
             }
-        }
-        if (!shouldChangeConfig && !movedToDifferentDisplay) {
-            // Nothing significant, don't proceed with updating and reporting.
-            return null;
         }
 
         // Propagate the configuration change to ResourcesManager and Activity.
@@ -5604,7 +5702,7 @@ public final class ActivityThread extends ClientTransactionHandler {
             activity.dispatchMovedToDisplay(displayId, configToReport);
         }
 
-        if (shouldChangeConfig) {
+        if (shouldReportChange) {
             activity.mCalled = false;
             activity.onConfigurationChanged(configToReport);
             if (!activity.mCalled) {
@@ -5639,12 +5737,7 @@ public final class ActivityThread extends ClientTransactionHandler {
     public void handleConfigurationChanged(Configuration config) {
         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "configChanged");
         mCurDefaultDisplayDpi = config.densityDpi;
-        mUpdatingSystemConfig = true;
-        try {
-            handleConfigurationChanged(config, null /* compat */);
-        } finally {
-            mUpdatingSystemConfig = false;
-        }
+        handleConfigurationChanged(config, null /* compat */);
         Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
     }
 
@@ -5742,6 +5835,35 @@ public final class ActivityThread extends ClientTransactionHandler {
     }
 
     /**
+     * Sends windowing mode change callbacks to {@link Activity} if applicable.
+     *
+     * See also {@link Activity#onMultiWindowModeChanged(boolean, Configuration)} and
+     * {@link Activity#onPictureInPictureModeChanged(boolean, Configuration)}
+     */
+    private void handleWindowingModeChangeIfNeeded(Activity activity,
+            Configuration newConfiguration) {
+        final int newWindowingMode = newConfiguration.windowConfiguration.getWindowingMode();
+        final IBinder token = activity.getActivityToken();
+        final int oldWindowingMode = mLastReportedWindowingMode.getOrDefault(token,
+                WINDOWING_MODE_UNDEFINED);
+        if (oldWindowingMode == newWindowingMode) return;
+        // PiP callback is sent before the MW one.
+        if (newWindowingMode == WINDOWING_MODE_PINNED) {
+            activity.dispatchPictureInPictureModeChanged(true, newConfiguration);
+        } else if (oldWindowingMode == WINDOWING_MODE_PINNED) {
+            activity.dispatchPictureInPictureModeChanged(false, newConfiguration);
+        }
+        final boolean wasInMultiWindowMode = WindowConfiguration.inMultiWindowMode(
+                oldWindowingMode);
+        final boolean nowInMultiWindowMode = WindowConfiguration.inMultiWindowMode(
+                newWindowingMode);
+        if (wasInMultiWindowMode != nowInMultiWindowMode) {
+            activity.dispatchMultiWindowModeChanged(nowInMultiWindowMode, newConfiguration);
+        }
+        mLastReportedWindowingMode.put(token, newWindowingMode);
+    }
+
+    /**
      * Updates the application info.
      *
      * This only works in the system process. Must be called on the main thread.
@@ -5813,6 +5935,12 @@ public final class ActivityThread extends ClientTransactionHandler {
         }
     }
 
+    /**
+     * Sets the supplied {@code overrideConfig} as pending for the {@code activityToken}. Calling
+     * this method prevents any calls to
+     * {@link #handleActivityConfigurationChanged(IBinder, Configuration, int, boolean)} from
+     * processing any configurations older than {@code overrideConfig}.
+     */
     @Override
     public void updatePendingActivityConfiguration(IBinder activityToken,
             Configuration overrideConfig) {
@@ -5829,12 +5957,24 @@ public final class ActivityThread extends ClientTransactionHandler {
         }
 
         synchronized (r) {
+            if (r.mPendingOverrideConfig != null
+                    && !r.mPendingOverrideConfig.isOtherSeqNewer(overrideConfig)) {
+                if (DEBUG_CONFIGURATION) {
+                    Slog.v(TAG, "Activity has newer configuration pending so drop this"
+                            + " transaction. overrideConfig=" + overrideConfig
+                            + " r.mPendingOverrideConfig=" + r.mPendingOverrideConfig);
+                }
+                return;
+            }
             r.mPendingOverrideConfig = overrideConfig;
         }
     }
 
     /**
-     * Handle new activity configuration and/or move to a different display.
+     * Handle new activity configuration and/or move to a different display. This method is a noop
+     * if {@link #updatePendingActivityConfiguration(IBinder, Configuration)} has been called with
+     * a newer config than {@code overrideConfig}.
+     *
      * @param activityToken Target activity token.
      * @param overrideConfig Activity override config.
      * @param displayId Id of the display where activity was moved to, -1 if there was no move and
@@ -5842,7 +5982,7 @@ public final class ActivityThread extends ClientTransactionHandler {
      */
     @Override
     public void handleActivityConfigurationChanged(IBinder activityToken,
-            Configuration overrideConfig, int displayId) {
+            @NonNull Configuration overrideConfig, int displayId) {
         ActivityClientRecord r = mActivities.get(activityToken);
         // Check input params.
         if (r == null || r.activity == null) {
@@ -5853,9 +5993,13 @@ public final class ActivityThread extends ClientTransactionHandler {
                 && displayId != r.activity.getDisplayId();
 
         synchronized (r) {
-            if (r.mPendingOverrideConfig != null
-                    && !r.mPendingOverrideConfig.isOtherSeqNewer(overrideConfig)) {
-                overrideConfig = r.mPendingOverrideConfig;
+            if (overrideConfig.isOtherSeqNewer(r.mPendingOverrideConfig)) {
+                if (DEBUG_CONFIGURATION) {
+                    Slog.v(TAG, "Activity has newer configuration pending so drop this"
+                            + " transaction. overrideConfig=" + overrideConfig
+                            + " r.mPendingOverrideConfig=" + r.mPendingOverrideConfig);
+                }
+                return;
             }
             r.mPendingOverrideConfig = null;
         }
@@ -6099,6 +6243,12 @@ public final class ActivityThread extends ClientTransactionHandler {
     private void handleTrimMemory(int level) {
         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "trimMemory");
         if (DEBUG_MEMORY_TRIM) Slog.v(TAG, "Trimming memory to level: " + level);
+
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+            for (PropertyInvalidatedCache pic : PropertyInvalidatedCache.getActiveCaches()) {
+                pic.clear();
+            }
+        }
 
         ArrayList<ComponentCallbacks2> callbacks = collectComponentCallbacks(true, null);
 
@@ -6385,7 +6535,7 @@ public final class ActivityThread extends ClientTransactionHandler {
         // Allow binder tracing, and application-generated systrace messages if we're profileable.
         boolean isAppProfileable = data.appInfo.isProfileableByShell();
         Trace.setAppTracingAllowed(isAppProfileable);
-        if (isAppProfileable && data.enableBinderTracking) {
+        if ((isAppProfileable || Build.IS_DEBUGGABLE) && data.enableBinderTracking) {
             Binder.enableTracing();
         }
 
@@ -6708,7 +6858,11 @@ public final class ActivityThread extends ClientTransactionHandler {
             throw ex.rethrowFromSystemServer();
         }
         if (holder == null) {
-            Slog.e(TAG, "Failed to find provider info for " + auth);
+            if (UserManager.get(c).isUserUnlocked(userId)) {
+                Slog.e(TAG, "Failed to find provider info for " + auth);
+            } else {
+                Slog.w(TAG, "Failed to find provider info for " + auth + " (user not unlocked)");
+            }
             return null;
         }
 
@@ -7319,10 +7473,26 @@ public final class ActivityThread extends ClientTransactionHandler {
         }
     }
 
+    public Bundle getCoreSettings() {
+        return mCoreSettings;
+    }
+
     public int getIntCoreSetting(String key, int defaultValue) {
         synchronized (mResourcesManager) {
             if (mCoreSettings != null) {
                 return mCoreSettings.getInt(key, defaultValue);
+            }
+            return defaultValue;
+        }
+    }
+
+    /**
+     * Get the string value of the given key from core settings.
+     */
+    public String getStringCoreSetting(String key, String defaultValue) {
+        synchronized (mResourcesManager) {
+            if (mCoreSettings != null) {
+                return mCoreSettings.getString(key, defaultValue);
             }
             return defaultValue;
         }
@@ -7451,7 +7621,15 @@ public final class ActivityThread extends ClientTransactionHandler {
             try {
                 super.rename(oldPath, newPath);
             } catch (ErrnoException e) {
-                if (e.errno == OsConstants.EXDEV && oldPath.startsWith("/storage/")) {
+                // On emulated volumes, we have bind mounts for /Android/data and
+                // /Android/obb, which prevents move from working across those directories
+                // and other directories on the filesystem. To work around that, try to
+                // recover by doing a copy instead.
+                // Note that we only do this for "/storage/emulated", because public volumes
+                // don't have these bind mounts, neither do private volumes that are not
+                // the primary storage.
+                if (e.errno == OsConstants.EXDEV && oldPath.startsWith("/storage/emulated")
+                        && newPath.startsWith("/storage/emulated")) {
                     Log.v(TAG, "Recovering failed rename " + oldPath + " to " + newPath);
                     try {
                         Files.move(new File(oldPath).toPath(), new File(newPath).toPath(),

@@ -234,6 +234,10 @@ public class IntervalStats {
                     event.mTaskRootClass = getCachedStringRef(stringPool.get(
                             parser.readInt(IntervalStatsProto.Event.TASK_ROOT_CLASS_INDEX) - 1));
                     break;
+                case (int) IntervalStatsProto.Event.LOCUS_ID_INDEX:
+                    event.mLocusId = getCachedStringRef(stringPool.get(
+                            parser.readInt(IntervalStatsProto.Event.LOCUS_ID_INDEX) - 1));
+                    break;
                 case ProtoInputStream.NO_MORE_FIELDS:
                     // Handle default values for certain events types
                     switch (event.mEventType) {
@@ -252,10 +256,11 @@ public class IntervalStats {
                                 event.mNotificationChannelId = "";
                             }
                             break;
-                    }
-                    if (event.mTimeStamp == 0) {
-                        //mTimestamp not set, assume default value 0 plus beginTime
-                        event.mTimeStamp = beginTime;
+                        case LOCUS_ID_SET:
+                            if (event.mLocusId == null) {
+                                event.mLocusId = "";
+                            }
+                            break;
                     }
                     return event;
             }

@@ -171,7 +171,8 @@ public class ActivityStartController {
         mLastStarter.postStartActivityProcessing(r, result, targetStack);
     }
 
-    void startHomeActivity(Intent intent, ActivityInfo aInfo, String reason, int displayId) {
+    void startHomeActivity(Intent intent, ActivityInfo aInfo, String reason,
+            TaskDisplayArea taskDisplayArea) {
         final ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchWindowingMode(WINDOWING_MODE_FULLSCREEN);
         if (!ActivityRecord.isResolverActivity(aInfo.name)) {
@@ -180,19 +181,18 @@ public class ActivityStartController {
             // foreground instead of bring home stack to front.
             options.setLaunchActivityType(ACTIVITY_TYPE_HOME);
         }
+        final int displayId = taskDisplayArea.getDisplayId();
         options.setLaunchDisplayId(displayId);
+        options.setLaunchTaskDisplayArea(taskDisplayArea.mRemoteToken
+                .toWindowContainerToken());
 
-        final DisplayContent display =
-                mService.mRootWindowContainer.getDisplayContent(displayId);
         // The home activity will be started later, defer resuming to avoid unneccerary operations
         // (e.g. start home recursively) when creating home stack.
         mSupervisor.beginDeferResume();
         final ActivityStack homeStack;
         try {
-            // TODO(multi-display-area): Support starting home in a task display area
-            // Make sure home stack exist on display.
-            homeStack = display.getDefaultTaskDisplayArea().getOrCreateStack(
-                    WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_HOME, ON_TOP);
+            // Make sure home stack exists on display area.
+            homeStack = taskDisplayArea.getOrCreateRootHomeTask(ON_TOP);
         } finally {
             mSupervisor.endDeferResume();
         }
@@ -467,28 +467,33 @@ public class ActivityStartController {
             final ActivityRecord[] outActivity = new ActivityRecord[1];
             // Lock the loop to ensure the activities launched in a sequence.
             synchronized (mService.mGlobalLock) {
-                for (int i = 0; i < starters.length; i++) {
-                    final int startResult = starters[i].setResultTo(resultTo)
-                            .setOutActivity(outActivity).execute();
-                    if (startResult < START_SUCCESS) {
-                        // Abort by error result and recycle unused starters.
-                        for (int j = i + 1; j < starters.length; j++) {
-                            mFactory.recycle(starters[j]);
+                mService.deferWindowLayout();
+                try {
+                    for (int i = 0; i < starters.length; i++) {
+                        final int startResult = starters[i].setResultTo(resultTo)
+                                .setOutActivity(outActivity).execute();
+                        if (startResult < START_SUCCESS) {
+                            // Abort by error result and recycle unused starters.
+                            for (int j = i + 1; j < starters.length; j++) {
+                                mFactory.recycle(starters[j]);
+                            }
+                            return startResult;
                         }
-                        return startResult;
-                    }
-                    final ActivityRecord started = outActivity[0];
-                    if (started != null && started.getUid() == filterCallingUid) {
-                        // Only the started activity which has the same uid as the source caller can
-                        // be the caller of next activity.
-                        resultTo = started.appToken;
-                    } else {
-                        resultTo = sourceResultTo;
-                        // Different apps not adjacent to the caller are forced to be new task.
-                        if (i < starters.length - 1) {
-                            starters[i + 1].getIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        final ActivityRecord started = outActivity[0];
+                        if (started != null && started.getUid() == filterCallingUid) {
+                            // Only the started activity which has the same uid as the source caller
+                            // can be the caller of next activity.
+                            resultTo = started.appToken;
+                        } else {
+                            resultTo = sourceResultTo;
+                            // Different apps not adjacent to the caller are forced to be new task.
+                            if (i < starters.length - 1) {
+                                starters[i + 1].getIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            }
                         }
                     }
+                } finally {
+                    mService.continueWindowLayout();
                 }
             }
         } finally {
@@ -512,7 +517,7 @@ public class ActivityStartController {
                     "pendingActivityLaunch");
             try {
                 starter.startResolvedActivity(pal.r, pal.sourceRecord, null, null, pal.startFlags,
-                        resume, pal.r.pendingOptions, null);
+                        resume, pal.r.pendingOptions, null, pal.intentGrants);
             } catch (Exception e) {
                 Slog.e(TAG, "Exception during pending activity launch pal=" + pal, e);
                 pal.sendErrorResult(e.getMessage());
@@ -546,18 +551,27 @@ public class ActivityStartController {
         return mPendingRemoteAnimationRegistry;
     }
 
-    void dump(PrintWriter pw, String prefix, String dumpPackage) {
+    void dumpLastHomeActivityStartResult(PrintWriter pw, String prefix) {
         pw.print(prefix);
         pw.print("mLastHomeActivityStartResult=");
         pw.println(mLastHomeActivityStartResult);
+    }
 
-        if (mLastHomeActivityStartRecord != null) {
+    void dump(PrintWriter pw, String prefix, String dumpPackage) {
+        boolean dumped = false;
+
+        final boolean dumpPackagePresent = dumpPackage != null;
+
+        if (mLastHomeActivityStartRecord != null && (!dumpPackagePresent
+                || dumpPackage.equals(mLastHomeActivityStartRecord.packageName))) {
+            if (!dumped) {
+                dumped = true;
+                dumpLastHomeActivityStartResult(pw, prefix);
+            }
             pw.print(prefix);
             pw.println("mLastHomeActivityStartRecord:");
             mLastHomeActivityStartRecord.dump(pw, prefix + "  ", true /* dumpAll */);
         }
-
-        final boolean dumpPackagePresent = dumpPackage != null;
 
         if (mLastStarter != null) {
             final boolean dump = !dumpPackagePresent
@@ -566,6 +580,10 @@ public class ActivityStartController {
                             && dumpPackage.equals(mLastHomeActivityStartRecord.packageName));
 
             if (dump) {
+                if (!dumped) {
+                    dumped = true;
+                    dumpLastHomeActivityStartResult(pw, prefix);
+                }
                 pw.print(prefix);
                 mLastStarter.dump(pw, prefix + "  ");
 
@@ -575,7 +593,7 @@ public class ActivityStartController {
             }
         }
 
-        if (dumpPackagePresent) {
+        if (!dumped) {
             pw.print(prefix);
             pw.println("(nothing)");
         }

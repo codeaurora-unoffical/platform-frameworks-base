@@ -17,6 +17,7 @@
 package android.content;
 
 import android.annotation.IntDef;
+import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.net.Uri;
@@ -40,6 +41,7 @@ import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
@@ -766,16 +768,30 @@ public class IntentFilter implements Parcelable {
      * @return True if the action is listed in the filter.
      */
     public final boolean matchAction(String action) {
-        return matchAction(action, false);
+        return matchAction(action, false /*wildcardSupported*/, null /*ignoreActions*/);
     }
 
     /**
      * Variant of {@link #matchAction(String)} that allows a wildcard for the provided action.
      * @param wildcardSupported if true, will allow action to use wildcards
+     * @param ignoreActions if not null, the set of actions to should not be considered valid while
+     *                      calculating the match
      */
-    private boolean matchAction(String action, boolean wildcardSupported) {
-        if (wildcardSupported && !mActions.isEmpty() && WILDCARD.equals(action)) {
-            return true;
+    private boolean matchAction(String action, boolean wildcardSupported,
+            @Nullable Collection<String> ignoreActions) {
+        if (wildcardSupported && WILDCARD.equals(action)) {
+            if (ignoreActions == null) {
+                return !mActions.isEmpty();
+            }
+            for (int i = mActions.size() - 1; i >= 0; i--) {
+                if (!ignoreActions.contains(mActions.get(i))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (ignoreActions != null && ignoreActions.contains(action)) {
+            return false;
         }
         return hasAction(action);
     }
@@ -1167,7 +1183,8 @@ public class IntentFilter implements Parcelable {
                     return NO_MATCH_DATA;
                 }
             }
-            if (mPort >= 0) {
+            // if we're dealing with wildcard support, we ignore ports
+            if (!wildcardSupported && mPort >= 0) {
                 if (mPort != data.getPort()) {
                     return NO_MATCH_DATA;
                 }
@@ -1564,12 +1581,13 @@ public class IntentFilter implements Parcelable {
      * @param wildcardSupported if true, will allow parameters to use wildcards
      */
     private int matchData(String type, String scheme, Uri data, boolean wildcardSupported) {
-        final ArrayList<String> types = mDataTypes;
+        final boolean wildcardWithMimegroups = wildcardSupported && countMimeGroups() != 0;
+        final List<String> types = mDataTypes;
         final ArrayList<String> schemes = mDataSchemes;
 
         int match = MATCH_CATEGORY_EMPTY;
 
-        if (types == null && schemes == null) {
+        if (!wildcardWithMimegroups && types == null && schemes == null) {
             return ((type == null && data == null)
                 ? (MATCH_CATEGORY_EMPTY+MATCH_ADJUSTMENT_NORMAL) : NO_MATCH_DATA);
         }
@@ -1624,7 +1642,9 @@ public class IntentFilter implements Parcelable {
             }
         }
 
-        if (types != null) {
+        if (wildcardWithMimegroups) {
+            return MATCH_CATEGORY_TYPE;
+        } else if (types != null) {
             if (findMimeType(type)) {
                 match = MATCH_CATEGORY_TYPE;
             } else {
@@ -1779,17 +1799,24 @@ public class IntentFilter implements Parcelable {
      */
     public final int match(String action, String type, String scheme,
             Uri data, Set<String> categories, String logTag) {
-        return match(action, type, scheme, data, categories, logTag, false /*supportWildcards*/);
+        return match(action, type, scheme, data, categories, logTag, false /*supportWildcards*/,
+                null /*ignoreActions*/);
     }
 
     /**
      * Variant of {@link #match(ContentResolver, Intent, boolean, String)} that supports wildcards
      * in the action, type, scheme, host and path.
-     * @hide if true, will allow supported parameters to use wildcards to match this filter
+     * @param supportWildcards if true, will allow supported parameters to use wildcards to match
+     *                         this filter
+     * @param ignoreActions a collection of actions that, if not null should be ignored and not used
+     *                      if provided as the matching action or the set of actions defined by this
+     *                      filter
+     * @hide
      */
     public final int match(String action, String type, String scheme,
-            Uri data, Set<String> categories, String logTag, boolean supportWildcards) {
-        if (action != null && !matchAction(action, supportWildcards)) {
+            Uri data, Set<String> categories, String logTag, boolean supportWildcards,
+            @Nullable Collection<String> ignoreActions) {
+        if (action != null && !matchAction(action, supportWildcards, ignoreActions)) {
             if (false) Log.v(
                 logTag, "No matching action " + action + " for " + this);
             return NO_MATCH_ACTION;

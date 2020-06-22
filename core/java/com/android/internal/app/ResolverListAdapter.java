@@ -54,6 +54,7 @@ import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.ResolverActivity.ResolvedComponentInfo;
 import com.android.internal.app.chooser.DisplayResolveInfo;
+import com.android.internal.app.chooser.SelectableTargetInfo;
 import com.android.internal.app.chooser.TargetInfo;
 
 import java.util.ArrayList;
@@ -68,13 +69,11 @@ public class ResolverListAdapter extends BaseAdapter {
     private final PackageManager mPm;
     protected final Context mContext;
     private final ColorMatrixColorFilter mSuspendedMatrixColorFilter;
-    private final boolean mUseLayoutForBrowsables;
     private final int mIconDpi;
     protected ResolveInfo mLastChosen;
     private DisplayResolveInfo mOtherProfile;
     ResolverListController mResolverListController;
     private int mPlaceholderCount;
-    private boolean mAllTargetsAreBrowsers = false;
 
     protected final LayoutInflater mInflater;
 
@@ -84,7 +83,7 @@ public class ResolverListAdapter extends BaseAdapter {
 
     private int mLastChosenPosition = -1;
     private boolean mFilterLastUsed;
-    private final ResolverListCommunicator mResolverListCommunicator;
+    final ResolverListCommunicator mResolverListCommunicator;
     private Runnable mPostListReadyRunnable;
     private final boolean mIsAudioCaptureDevice;
     private boolean mIsTabLoaded;
@@ -93,7 +92,6 @@ public class ResolverListAdapter extends BaseAdapter {
             Intent[] initialIntents, List<ResolveInfo> rList,
             boolean filterLastUsed,
             ResolverListController resolverListController,
-            boolean useLayoutForBrowsables,
             ResolverListCommunicator resolverListCommunicator,
             boolean isAudioCaptureDevice) {
         mContext = context;
@@ -106,7 +104,6 @@ public class ResolverListAdapter extends BaseAdapter {
         mFilterLastUsed = filterLastUsed;
         mResolverListController = resolverListController;
         mSuspendedMatrixColorFilter = createSuspendedColorMatrix();
-        mUseLayoutForBrowsables = useLayoutForBrowsables;
         mResolverListCommunicator = resolverListCommunicator;
         mIsAudioCaptureDevice = isAudioCaptureDevice;
         final ActivityManager am = (ActivityManager) mContext.getSystemService(ACTIVITY_SERVICE);
@@ -154,6 +151,13 @@ public class ResolverListAdapter extends BaseAdapter {
     }
 
     /**
+     * Returns the app share score of the given {@code componentName}.
+     */
+    public float getScore(ComponentName componentName) {
+        return mResolverListController.getScore(componentName);
+    }
+
+    /**
      * Returns the list of top K component names which have highest
      * {@link #getScore(DisplayResolveInfo)}
      */
@@ -165,20 +169,13 @@ public class ResolverListAdapter extends BaseAdapter {
         mResolverListController.updateModel(componentName);
     }
 
-    public void updateChooserCounts(String packageName, int userId, String action) {
-        mResolverListController.updateChooserCounts(packageName, userId, action);
+    public void updateChooserCounts(String packageName, String action) {
+        mResolverListController.updateChooserCounts(
+                packageName, getUserHandle().getIdentifier(), action);
     }
 
     List<ResolvedComponentInfo> getUnfilteredResolveList() {
         return mUnfilteredResolveList;
-    }
-
-    /**
-     * @return true if all items in the display list are defined as browsers by
-     *         ResolveInfo.handleAllWebDataURI
-     */
-    public boolean areAllTargetsBrowsers() {
-        return mAllTargetsAreBrowsers;
     }
 
     /**
@@ -198,7 +195,6 @@ public class ResolverListAdapter extends BaseAdapter {
         mOtherProfile = null;
         mLastChosen = null;
         mLastChosenPosition = -1;
-        mAllTargetsAreBrowsers = false;
         mDisplayList.clear();
         mIsTabLoaded = false;
 
@@ -255,6 +251,7 @@ public class ResolverListAdapter extends BaseAdapter {
             }
         }
 
+        setPlaceholderCount(0);
         int n;
         if ((currentResolveList != null) && ((n = currentResolveList.size()) > 0)) {
             // We only care about fixing the unfilteredList if the current resolve list and
@@ -273,7 +270,7 @@ public class ResolverListAdapter extends BaseAdapter {
                 }
                 setPlaceholderCount(placeholderCount);
                 createSortingTask(doPostProcessing).execute(currentResolveList);
-                postListReadyRunnable(doPostProcessing);
+                postListReadyRunnable(doPostProcessing, /* rebuildCompleted */ false);
                 return false;
             } else {
                 processSortedList(currentResolveList, doPostProcessing);
@@ -312,8 +309,6 @@ public class ResolverListAdapter extends BaseAdapter {
             boolean doPostProcessing) {
         int n;
         if (sortedComponents != null && (n = sortedComponents.size()) != 0) {
-            mAllTargetsAreBrowsers = mUseLayoutForBrowsables;
-
             // First put the initial items at the top.
             if (mInitialIntents != null) {
                 for (int i = 0; i < mInitialIntents.length; i++) {
@@ -343,7 +338,6 @@ public class ResolverListAdapter extends BaseAdapter {
                         ri.noResourceId = true;
                         ri.icon = 0;
                     }
-                    mAllTargetsAreBrowsers &= ri.handleAllWebDataURI;
 
                     addResolveInfo(new DisplayResolveInfo(ii, ri,
                             ri.loadLabel(mPm), null, ii, makePresentationGetter(ri)));
@@ -354,14 +348,13 @@ public class ResolverListAdapter extends BaseAdapter {
             for (ResolvedComponentInfo rci : sortedComponents) {
                 final ResolveInfo ri = rci.getResolveInfoAt(0);
                 if (ri != null) {
-                    mAllTargetsAreBrowsers &= ri.handleAllWebDataURI;
                     addResolveInfoWithAlternates(rci);
                 }
             }
         }
 
         mResolverListCommunicator.sendVoiceChoicesIfNeeded();
-        postListReadyRunnable(doPostProcessing);
+        postListReadyRunnable(doPostProcessing, /* rebuildCompleted */ true);
         mIsTabLoaded = true;
     }
 
@@ -371,14 +364,15 @@ public class ResolverListAdapter extends BaseAdapter {
      * handler thread to update after the current task is finished.
      * @param doPostProcessing Whether to update the UI and load additional direct share targets
      *                         after the list has been rebuilt
+     * @param rebuildCompleted Whether the list has been completely rebuilt
      */
-    void postListReadyRunnable(boolean doPostProcessing) {
+    void postListReadyRunnable(boolean doPostProcessing, boolean rebuildCompleted) {
         if (mPostListReadyRunnable == null) {
             mPostListReadyRunnable = new Runnable() {
                 @Override
                 public void run() {
                     mResolverListCommunicator.onPostListReady(ResolverListAdapter.this,
-                            doPostProcessing);
+                            doPostProcessing, rebuildCompleted);
                     mPostListReadyRunnable = null;
                 }
             };
@@ -429,18 +423,24 @@ public class ResolverListAdapter extends BaseAdapter {
     // We assume that at this point we've already filtered out the only intent for a different
     // targetUserId which we're going to use.
     private void addResolveInfo(DisplayResolveInfo dri) {
-        // TODO(arangelov): Is that UserHandle.USER_CURRENT check okay?
         if (dri != null && dri.getResolveInfo() != null
                 && dri.getResolveInfo().targetUserId == UserHandle.USER_CURRENT) {
-            // Checks if this info is already listed in display.
-            for (DisplayResolveInfo existingInfo : mDisplayList) {
-                if (mResolverListCommunicator
-                        .resolveInfoMatch(dri.getResolveInfo(), existingInfo.getResolveInfo())) {
-                    return;
-                }
+            if (shouldAddResolveInfo(dri)) {
+                mDisplayList.add(dri);
             }
-            mDisplayList.add(dri);
         }
+    }
+
+    // Check whether {@code dri} should be added into mDisplayList.
+    protected boolean shouldAddResolveInfo(DisplayResolveInfo dri) {
+        // Checks if this info is already listed in display.
+        for (DisplayResolveInfo existingInfo : mDisplayList) {
+            if (mResolverListCommunicator
+                    .resolveInfoMatch(dri.getResolveInfo(), existingInfo.getResolveInfo())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Nullable
@@ -506,7 +506,7 @@ public class ResolverListAdapter extends BaseAdapter {
         if (view == null) {
             view = createView(parent);
         }
-        onBindView(view, getItem(position));
+        onBindView(view, getItem(position), position);
         return view;
     }
 
@@ -523,10 +523,10 @@ public class ResolverListAdapter extends BaseAdapter {
     }
 
     public final void bindView(int position, View view) {
-        onBindView(view, getItem(position));
+        onBindView(view, getItem(position), position);
     }
 
-    protected void onBindView(View view, TargetInfo info) {
+    protected void onBindView(View view, TargetInfo info, int position) {
         final ViewHolder holder = (ViewHolder) view.getTag();
         if (info == null) {
             holder.icon.setImageDrawable(
@@ -539,6 +539,15 @@ public class ResolverListAdapter extends BaseAdapter {
             getLoadLabelTask((DisplayResolveInfo) info, holder).execute();
         } else {
             holder.bindLabel(info.getDisplayLabel(), info.getExtendedInfo());
+            if (info instanceof SelectableTargetInfo) {
+                // direct share targets should append the application name for a better readout
+                DisplayResolveInfo rInfo = ((SelectableTargetInfo) info).getDisplayResolveInfo();
+                CharSequence appName = rInfo != null ? rInfo.getDisplayLabel() : "";
+                CharSequence extendedInfo = info.getExtendedInfo();
+                String contentDescription = String.join(" ", info.getDisplayLabel(),
+                        extendedInfo != null ? extendedInfo : "", appName);
+                holder.updateContentDescription(contentDescription);
+            }
         }
 
         if (info.isSuspended()) {
@@ -608,7 +617,8 @@ public class ResolverListAdapter extends BaseAdapter {
         }
     }
 
-    UserHandle getUserHandle() {
+    @VisibleForTesting
+    public UserHandle getUserHandle() {
         return mResolverListController.getUserHandle();
     }
 
@@ -640,7 +650,8 @@ public class ResolverListAdapter extends BaseAdapter {
 
         Intent getReplacementIntent(ActivityInfo activityInfo, Intent defIntent);
 
-        void onPostListReady(ResolverListAdapter listAdapter, boolean updateUi);
+        void onPostListReady(ResolverListAdapter listAdapter, boolean updateUi,
+                boolean rebuildCompleted);
 
         void sendVoiceChoicesIfNeeded();
 
@@ -686,6 +697,12 @@ public class ResolverListAdapter extends BaseAdapter {
                 text2.setVisibility(View.VISIBLE);
                 text2.setText(subLabel);
             }
+
+            itemView.setContentDescription(null);
+        }
+
+        public void updateContentDescription(String description) {
+            itemView.setContentDescription(description);
         }
     }
 

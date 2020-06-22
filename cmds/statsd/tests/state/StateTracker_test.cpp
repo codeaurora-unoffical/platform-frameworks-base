@@ -16,9 +16,11 @@
 #include "state/StateTracker.h"
 
 #include <gtest/gtest.h>
+#include <private/android_filesystem_config.h>
 
 #include "state/StateListener.h"
 #include "state/StateManager.h"
+#include "state/StateTracker.h"
 #include "stats_event.h"
 #include "tests/statsd_test_util.h"
 
@@ -49,8 +51,9 @@ public:
     std::vector<Update> updates;
 
     void onStateChanged(const int64_t eventTimeNs, const int32_t atomId,
-                        const HashableDimensionKey& primaryKey, int oldState, int newState) {
-        updates.emplace_back(primaryKey, newState);
+                        const HashableDimensionKey& primaryKey, const FieldValue& oldState,
+                        const FieldValue& newState) {
+        updates.emplace_back(primaryKey, newState.mValue.int_value);
     }
 };
 
@@ -112,6 +115,55 @@ TEST(StateManagerTest, TestStateManagerGetInstance) {
     EXPECT_EQ(1, StateManager::getInstance().getStateTrackersCount());
 }
 
+TEST(StateManagerTest, TestOnLogEvent) {
+    sp<MockUidMap> uidMap = makeMockUidMapForPackage("com.android.systemui", {10111});
+    sp<TestStateListener> listener1 = new TestStateListener();
+    StateManager mgr;
+    mgr.updateLogSources(uidMap);
+    // Add StateTracker by registering a listener.
+    mgr.registerListener(util::SCREEN_STATE_CHANGED, listener1);
+
+    // log event using AID_ROOT
+    std::unique_ptr<LogEvent> event = CreateScreenStateChangedEvent(
+            timestampNs, android::view::DisplayStateEnum::DISPLAY_STATE_ON);
+    mgr.onLogEvent(*event);
+
+    // check StateTracker was updated by querying for state
+    HashableDimensionKey queryKey = DEFAULT_DIMENSION_KEY;
+    EXPECT_EQ(android::view::DisplayStateEnum::DISPLAY_STATE_ON,
+              getStateInt(mgr, util::SCREEN_STATE_CHANGED, queryKey));
+
+    // log event using mocked uid
+    event = CreateScreenStateChangedEvent(
+            timestampNs, android::view::DisplayStateEnum::DISPLAY_STATE_OFF, 10111);
+    mgr.onLogEvent(*event);
+
+    // check StateTracker was updated by querying for state
+    queryKey = DEFAULT_DIMENSION_KEY;
+    EXPECT_EQ(android::view::DisplayStateEnum::DISPLAY_STATE_OFF,
+              getStateInt(mgr, util::SCREEN_STATE_CHANGED, queryKey));
+
+    // log event using non-whitelisted uid
+    event = CreateScreenStateChangedEvent(timestampNs,
+                                          android::view::DisplayStateEnum::DISPLAY_STATE_ON, 10112);
+    mgr.onLogEvent(*event);
+
+    // check StateTracker was NOT updated by querying for state
+    queryKey = DEFAULT_DIMENSION_KEY;
+    EXPECT_EQ(android::view::DisplayStateEnum::DISPLAY_STATE_OFF,
+              getStateInt(mgr, util::SCREEN_STATE_CHANGED, queryKey));
+
+    // log event using AID_SYSTEM
+    event = CreateScreenStateChangedEvent(
+            timestampNs, android::view::DisplayStateEnum::DISPLAY_STATE_ON, AID_SYSTEM);
+    mgr.onLogEvent(*event);
+
+    // check StateTracker was updated by querying for state
+    queryKey = DEFAULT_DIMENSION_KEY;
+    EXPECT_EQ(android::view::DisplayStateEnum::DISPLAY_STATE_ON,
+              getStateInt(mgr, util::SCREEN_STATE_CHANGED, queryKey));
+}
+
 /**
  * Test registering listeners to StateTrackers
  *
@@ -127,23 +179,23 @@ TEST(StateTrackerTest, TestRegisterListener) {
 
     // Register listener to non-existing StateTracker
     EXPECT_EQ(0, mgr.getStateTrackersCount());
-    EXPECT_TRUE(mgr.registerListener(util::SCREEN_STATE_CHANGED, listener1));
+    mgr.registerListener(util::SCREEN_STATE_CHANGED, listener1);
     EXPECT_EQ(1, mgr.getStateTrackersCount());
     EXPECT_EQ(1, mgr.getListenersCount(util::SCREEN_STATE_CHANGED));
 
     // Register listener to existing StateTracker
-    EXPECT_TRUE(mgr.registerListener(util::SCREEN_STATE_CHANGED, listener2));
+    mgr.registerListener(util::SCREEN_STATE_CHANGED, listener2);
     EXPECT_EQ(1, mgr.getStateTrackersCount());
     EXPECT_EQ(2, mgr.getListenersCount(util::SCREEN_STATE_CHANGED));
 
     // Register already registered listener to existing StateTracker
-    EXPECT_TRUE(mgr.registerListener(util::SCREEN_STATE_CHANGED, listener2));
+    mgr.registerListener(util::SCREEN_STATE_CHANGED, listener2);
     EXPECT_EQ(1, mgr.getStateTrackersCount());
     EXPECT_EQ(2, mgr.getListenersCount(util::SCREEN_STATE_CHANGED));
 
     // Register listener to non-state atom
-    EXPECT_FALSE(mgr.registerListener(util::BATTERY_LEVEL_CHANGED, listener2));
-    EXPECT_EQ(1, mgr.getStateTrackersCount());
+    mgr.registerListener(util::BATTERY_LEVEL_CHANGED, listener2);
+    EXPECT_EQ(2, mgr.getStateTrackersCount());
 }
 
 /**
@@ -204,7 +256,7 @@ TEST(StateTrackerTest, TestStateChangeNested) {
     std::unique_ptr<LogEvent> event1 = CreateAcquireWakelockEvent(timestampNs, attributionUids1,
                                                                   attributionTags1, "wakelockName");
     mgr.onLogEvent(*event1);
-    EXPECT_EQ(1, listener->updates.size());
+    ASSERT_EQ(1, listener->updates.size());
     EXPECT_EQ(1000, listener->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(1, listener->updates[0].mState);
     listener->updates.clear();
@@ -212,17 +264,17 @@ TEST(StateTrackerTest, TestStateChangeNested) {
     std::unique_ptr<LogEvent> event2 = CreateAcquireWakelockEvent(
             timestampNs + 1000, attributionUids1, attributionTags1, "wakelockName");
     mgr.onLogEvent(*event2);
-    EXPECT_EQ(0, listener->updates.size());
+    ASSERT_EQ(0, listener->updates.size());
 
     std::unique_ptr<LogEvent> event3 = CreateReleaseWakelockEvent(
             timestampNs + 2000, attributionUids1, attributionTags1, "wakelockName");
     mgr.onLogEvent(*event3);
-    EXPECT_EQ(0, listener->updates.size());
+    ASSERT_EQ(0, listener->updates.size());
 
     std::unique_ptr<LogEvent> event4 = CreateReleaseWakelockEvent(
             timestampNs + 3000, attributionUids1, attributionTags1, "wakelockName");
     mgr.onLogEvent(*event4);
-    EXPECT_EQ(1, listener->updates.size());
+    ASSERT_EQ(1, listener->updates.size());
     EXPECT_EQ(1000, listener->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(0, listener->updates[0].mState);
 }
@@ -246,27 +298,36 @@ TEST(StateTrackerTest, TestStateChangeReset) {
             CreateBleScanStateChangedEvent(timestampNs, attributionUids1, attributionTags1,
                                            BleScanStateChanged::ON, false, false, false);
     mgr.onLogEvent(*event1);
-    EXPECT_EQ(1, listener->updates.size());
+    ASSERT_EQ(1, listener->updates.size());
     EXPECT_EQ(1000, listener->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(BleScanStateChanged::ON, listener->updates[0].mState);
+    FieldValue stateFieldValue;
+    mgr.getStateValue(util::BLE_SCAN_STATE_CHANGED, listener->updates[0].mKey, &stateFieldValue);
+    EXPECT_EQ(BleScanStateChanged::ON, stateFieldValue.mValue.int_value);
     listener->updates.clear();
 
     std::unique_ptr<LogEvent> event2 =
             CreateBleScanStateChangedEvent(timestampNs + 1000, attributionUids2, attributionTags1,
                                            BleScanStateChanged::ON, false, false, false);
     mgr.onLogEvent(*event2);
-    EXPECT_EQ(1, listener->updates.size());
+    ASSERT_EQ(1, listener->updates.size());
     EXPECT_EQ(2000, listener->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(BleScanStateChanged::ON, listener->updates[0].mState);
+    mgr.getStateValue(util::BLE_SCAN_STATE_CHANGED, listener->updates[0].mKey, &stateFieldValue);
+    EXPECT_EQ(BleScanStateChanged::ON, stateFieldValue.mValue.int_value);
     listener->updates.clear();
 
     std::unique_ptr<LogEvent> event3 =
             CreateBleScanStateChangedEvent(timestampNs + 2000, attributionUids2, attributionTags1,
                                            BleScanStateChanged::RESET, false, false, false);
     mgr.onLogEvent(*event3);
-    EXPECT_EQ(2, listener->updates.size());
-    EXPECT_EQ(BleScanStateChanged::OFF, listener->updates[0].mState);
-    EXPECT_EQ(BleScanStateChanged::OFF, listener->updates[1].mState);
+    ASSERT_EQ(2, listener->updates.size());
+    for (const TestStateListener::Update& update : listener->updates) {
+        EXPECT_EQ(BleScanStateChanged::OFF, update.mState);
+
+        mgr.getStateValue(util::BLE_SCAN_STATE_CHANGED, update.mKey, &stateFieldValue);
+        EXPECT_EQ(BleScanStateChanged::OFF, stateFieldValue.mValue.int_value);
+    }
 }
 
 /**
@@ -284,7 +345,7 @@ TEST(StateTrackerTest, TestStateChangeNoPrimaryFields) {
     mgr.onLogEvent(*event);
 
     // check listener was updated
-    EXPECT_EQ(1, listener1->updates.size());
+    ASSERT_EQ(1, listener1->updates.size());
     EXPECT_EQ(DEFAULT_DIMENSION_KEY, listener1->updates[0].mKey);
     EXPECT_EQ(2, listener1->updates[0].mState);
 
@@ -309,7 +370,7 @@ TEST(StateTrackerTest, TestStateChangeOnePrimaryField) {
     mgr.onLogEvent(*event);
 
     // check listener was updated
-    EXPECT_EQ(1, listener1->updates.size());
+    ASSERT_EQ(1, listener1->updates.size());
     EXPECT_EQ(1000, listener1->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(1002, listener1->updates[0].mState);
 
@@ -336,8 +397,8 @@ TEST(StateTrackerTest, TestStateChangePrimaryFieldAttrChain) {
     EXPECT_EQ(1, mgr.getListenersCount(util::WAKELOCK_STATE_CHANGED));
 
     // Check listener was updated.
-    EXPECT_EQ(1, listener1->updates.size());
-    EXPECT_EQ(3, listener1->updates[0].mKey.getValues().size());
+    ASSERT_EQ(1, listener1->updates.size());
+    ASSERT_EQ(3, listener1->updates[0].mKey.getValues().size());
     EXPECT_EQ(1001, listener1->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(1, listener1->updates[0].mKey.getValues()[1].mValue.int_value);
     EXPECT_EQ("wakelockName", listener1->updates[0].mKey.getValues()[2].mValue.str_value);
@@ -352,13 +413,13 @@ TEST(StateTrackerTest, TestStateChangePrimaryFieldAttrChain) {
     // No state stored for this query key.
     HashableDimensionKey queryKey2;
     getPartialWakelockKey(1002 /* uid */, "tag1", &queryKey2);
-    EXPECT_EQ(WakelockStateChanged::RELEASE,
+    EXPECT_EQ(-1 /*StateTracker::kStateUnknown*/,
               getStateInt(mgr, util::WAKELOCK_STATE_CHANGED, queryKey2));
 
     // Partial query fails.
     HashableDimensionKey queryKey3;
     getPartialWakelockKey(1001 /* uid */, &queryKey3);
-    EXPECT_EQ(WakelockStateChanged::RELEASE,
+    EXPECT_EQ(-1 /*StateTracker::kStateUnknown*/,
               getStateInt(mgr, util::WAKELOCK_STATE_CHANGED, queryKey3));
 }
 
@@ -378,7 +439,7 @@ TEST(StateTrackerTest, TestStateChangeMultiplePrimaryFields) {
     mgr.onLogEvent(*event);
 
     // check listener was updated
-    EXPECT_EQ(1, listener1->updates.size());
+    ASSERT_EQ(1, listener1->updates.size());
     EXPECT_EQ(1000, listener1->updates[0].mKey.getValues()[0].mValue.int_value);
     EXPECT_EQ(1, listener1->updates[0].mState);
 
@@ -406,9 +467,9 @@ TEST(StateTrackerTest, TestStateChangeEventError) {
 
     // check listener was updated
     mgr.onLogEvent(*event1);
-    EXPECT_EQ(0, listener1->updates.size());
+    ASSERT_EQ(0, listener1->updates.size());
     mgr.onLogEvent(*event2);
-    EXPECT_EQ(0, listener1->updates.size());
+    ASSERT_EQ(0, listener1->updates.size());
 }
 
 TEST(StateTrackerTest, TestStateQuery) {

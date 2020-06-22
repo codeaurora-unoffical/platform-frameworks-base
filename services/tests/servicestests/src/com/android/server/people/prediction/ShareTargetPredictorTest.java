@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,12 +33,14 @@ import android.app.prediction.AppTargetId;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager.ShareShortcutInfo;
 import android.os.Bundle;
 import android.os.UserHandle;
 import android.util.Range;
 
+import com.android.internal.app.ChooserActivity;
 import com.android.server.people.data.ConversationInfo;
 import com.android.server.people.data.DataManager;
 import com.android.server.people.data.EventHistory;
@@ -100,10 +103,13 @@ public final class ShareTargetPredictorTest {
         when(mDataManager.getPackage(PACKAGE_1, USER_ID)).thenReturn(mPackageData1);
         when(mDataManager.getPackage(PACKAGE_2, USER_ID)).thenReturn(mPackageData2);
 
+        Bundle bundle = new Bundle();
+        bundle.putObject(ChooserActivity.APP_PREDICTION_INTENT_FILTER_KEY,
+                IntentFilter.create("SEND", "text/plain"));
         AppPredictionContext predictionContext = new AppPredictionContext.Builder(mContext)
                 .setUiSurface(UI_SURFACE_SHARE)
                 .setPredictedTargetCount(NUM_PREDICTED_TARGETS)
-                .setExtras(new Bundle())
+                .setExtras(bundle)
                 .build();
         mPredictor = new ShareTargetPredictor(
                 predictionContext, mUpdatePredictionsMethod, mDataManager, USER_ID);
@@ -227,6 +233,23 @@ public final class ShareTargetPredictorTest {
     }
 
     @Test
+    public void testPredictTargets_nullIntentFilter() {
+        AppPredictionContext predictionContext = new AppPredictionContext.Builder(mContext)
+                .setUiSurface(UI_SURFACE_SHARE)
+                .setPredictedTargetCount(NUM_PREDICTED_TARGETS)
+                .setExtras(new Bundle())
+                .build();
+        mPredictor = new ShareTargetPredictor(
+                predictionContext, mUpdatePredictionsMethod, mDataManager, USER_ID);
+
+        mPredictor.predictTargets();
+
+        verify(mUpdatePredictionsMethod).accept(mAppTargetCaptor.capture());
+        assertThat(mAppTargetCaptor.getValue()).isEmpty();
+        verify(mDataManager, never()).getShareShortcuts(any(), anyInt());
+    }
+
+    @Test
     public void testSortTargets() {
         AppTarget appTarget1 = new AppTarget.Builder(
                 new AppTargetId("cls1#pkg1"), PACKAGE_1, UserHandle.of(USER_ID))
@@ -274,8 +297,54 @@ public final class ShareTargetPredictorTest {
                 mUpdatePredictionsMethod);
 
         verify(mUpdatePredictionsMethod).accept(mAppTargetCaptor.capture());
-        assertThat(mAppTargetCaptor.getValue()).containsExactly(
-                appTarget4, appTarget3, appTarget2, appTarget1, appTarget5);
+        List<AppTarget> res = mAppTargetCaptor.getValue();
+        assertEquals(5, res.size());
+        checkAppTarget(appTarget4, res.get(0));
+        checkAppTarget(appTarget3, res.get(1));
+        checkAppTarget(appTarget2, res.get(2));
+        checkAppTarget(appTarget1, res.get(3));
+        checkAppTarget(appTarget5, res.get(4));
+    }
+
+    @Test
+    public void testSortTargets_nullIntentFilter() {
+        AppPredictionContext predictionContext = new AppPredictionContext.Builder(mContext)
+                .setUiSurface(UI_SURFACE_SHARE)
+                .setPredictedTargetCount(NUM_PREDICTED_TARGETS)
+                .setExtras(new Bundle())
+                .build();
+        mPredictor = new ShareTargetPredictor(
+                predictionContext, mUpdatePredictionsMethod, mDataManager, USER_ID);
+        AppTarget appTarget1 = new AppTarget.Builder(
+                new AppTargetId("cls1#pkg1"), PACKAGE_1, UserHandle.of(USER_ID))
+                .build();
+        AppTarget appTarget2 = new AppTarget.Builder(
+                new AppTargetId("cls2#pkg1"), PACKAGE_1, UserHandle.of(USER_ID))
+                .build();
+        AppTarget appTarget3 = new AppTarget.Builder(
+                new AppTargetId("cls1#pkg2"), PACKAGE_2, UserHandle.of(USER_ID))
+                .build();
+        AppTarget appTarget4 = new AppTarget.Builder(
+                new AppTargetId("cls2#pkg2"), PACKAGE_2, UserHandle.of(USER_ID))
+                .build();
+        AppTarget appTarget5 = new AppTarget.Builder(
+                new AppTargetId("cls1#pkg3"), PACKAGE_3, UserHandle.of(USER_ID))
+                .build();
+        List<AppTarget> targets = List.of(appTarget1, appTarget2, appTarget3, appTarget4,
+                appTarget5);
+
+        mPredictor.sortTargets(targets, mUpdatePredictionsMethod);
+
+        verify(mUpdatePredictionsMethod).accept(mAppTargetCaptor.capture());
+        assertThat(mAppTargetCaptor.getValue()).containsExactlyElementsIn(targets);
+        verify(mDataManager, never()).getPackage(any(), anyInt());
+    }
+
+    private static void checkAppTarget(AppTarget expected, AppTarget actual) {
+        assertEquals(expected.getId(), actual.getId());
+        assertEquals(expected.getClassName(), actual.getClassName());
+        assertEquals(expected.getPackageName(), actual.getPackageName());
+        assertEquals(expected.getUser(), actual.getUser());
     }
 
     private static ShareShortcutInfo buildShareShortcut(

@@ -18,13 +18,13 @@ package com.android.systemui.controls.ui
 
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.LayerDrawable
-import android.view.View
 import android.service.controls.Control
+import android.service.controls.templates.TemperatureControlTemplate
 import android.service.controls.templates.ToggleTemplate
-
+import android.util.Log
+import android.view.View
 import com.android.systemui.R
-import com.android.systemui.controls.ui.ControlActionCoordinator.MIN_LEVEL
-import com.android.systemui.controls.ui.ControlActionCoordinator.MAX_LEVEL
+import com.android.systemui.controls.ui.ControlViewHolder.Companion.MAX_LEVEL
 
 class ToggleBehavior : Behavior {
     lateinit var clipLayer: Drawable
@@ -34,24 +34,31 @@ class ToggleBehavior : Behavior {
 
     override fun initialize(cvh: ControlViewHolder) {
         this.cvh = cvh
-        cvh.applyRenderInfo(false)
 
         cvh.layout.setOnClickListener(View.OnClickListener() {
-            ControlActionCoordinator.toggle(cvh, template.getTemplateId(), template.isChecked())
+            cvh.controlActionCoordinator.toggle(cvh, template.getTemplateId(), template.isChecked())
         })
     }
 
-    override fun bind(cws: ControlWithState) {
+    override fun bind(cws: ControlWithState, colorOffset: Int) {
         this.control = cws.control!!
 
-        cvh.status.setText(control.getStatusText())
-        template = control.getControlTemplate() as ToggleTemplate
+        cvh.setStatusText(control.getStatusText())
+        val controlTemplate = control.getControlTemplate()
+        template = when (controlTemplate) {
+            is ToggleTemplate -> controlTemplate
+            is TemperatureControlTemplate -> controlTemplate.getTemplate() as ToggleTemplate
+            else -> {
+                Log.e(ControlsUiController.TAG, "Unsupported template type: $controlTemplate")
+                return
+            }
+        }
 
         val ld = cvh.layout.getBackground() as LayerDrawable
         clipLayer = ld.findDrawableByLayerId(R.id.clip_layer)
+        clipLayer.level = MAX_LEVEL
 
         val checked = template.isChecked()
-        clipLayer.setLevel(if (checked) MAX_LEVEL else MIN_LEVEL)
-        cvh.applyRenderInfo(checked)
+        cvh.applyRenderInfo(checked, colorOffset)
     }
 }

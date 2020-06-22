@@ -187,7 +187,7 @@ TEST(StatsLogProcessorTest, TestUidMapHasSnapshot) {
     EXPECT_TRUE(output.reports_size() > 0);
     auto uidmap = output.reports(0).uid_map();
     EXPECT_TRUE(uidmap.snapshots_size() > 0);
-    EXPECT_EQ(2, uidmap.snapshots(0).package_info_size());
+    ASSERT_EQ(2, uidmap.snapshots(0).package_info_size());
 }
 
 TEST(StatsLogProcessorTest, TestEmptyConfigHasNoUidMap) {
@@ -248,7 +248,7 @@ TEST(StatsLogProcessorTest, TestReportIncludesSubConfig) {
     output.ParseFromArray(bytes.data(), bytes.size());
     EXPECT_TRUE(output.reports_size() > 0);
     auto report = output.reports(0);
-    EXPECT_EQ(1, report.annotation_size());
+    ASSERT_EQ(1, report.annotation_size());
     EXPECT_EQ(1, report.annotation(0).field_int64());
     EXPECT_EQ(2, report.annotation(0).field_int32());
 }
@@ -281,16 +281,16 @@ TEST(StatsLogProcessorTest, TestOnDumpReportEraseData) {
     processor->onDumpReport(cfgKey, 3, true, false /* Do NOT erase data. */, ADB_DUMP, FAST,
                             &bytes);
     output.ParseFromArray(bytes.data(), bytes.size());
-    EXPECT_EQ(output.reports_size(), 1);
-    EXPECT_EQ(output.reports(0).metrics_size(), 1);
-    EXPECT_EQ(output.reports(0).metrics(0).count_metrics().data_size(), 1);
+    ASSERT_EQ(output.reports_size(), 1);
+    ASSERT_EQ(output.reports(0).metrics_size(), 1);
+    ASSERT_EQ(output.reports(0).metrics(0).count_metrics().data_size(), 1);
 
     // Dump report WITH erasing data. There should be data since we didn't previously erase it.
     processor->onDumpReport(cfgKey, 4, true, true /* DO erase data. */, ADB_DUMP, FAST, &bytes);
     output.ParseFromArray(bytes.data(), bytes.size());
-    EXPECT_EQ(output.reports_size(), 1);
-    EXPECT_EQ(output.reports(0).metrics_size(), 1);
-    EXPECT_EQ(output.reports(0).metrics(0).count_metrics().data_size(), 1);
+    ASSERT_EQ(output.reports_size(), 1);
+    ASSERT_EQ(output.reports(0).metrics_size(), 1);
+    ASSERT_EQ(output.reports(0).metrics(0).count_metrics().data_size(), 1);
 
     // Dump report again. There should be no data since we erased it.
     processor->onDumpReport(cfgKey, 5, true, true /* DO erase data. */, ADB_DUMP, FAST, &bytes);
@@ -299,6 +299,29 @@ TEST(StatsLogProcessorTest, TestOnDumpReportEraseData) {
     bool noData = output.reports_size() == 0 || output.reports(0).metrics_size() == 0 ||
                   output.reports(0).metrics(0).count_metrics().data_size() == 0;
     EXPECT_TRUE(noData);
+}
+
+TEST(StatsLogProcessorTest, TestPullUidProviderSetOnConfigUpdate) {
+    // Setup simple config key corresponding to empty config.
+    sp<UidMap> m = new UidMap();
+    sp<StatsPullerManager> pullerManager = new StatsPullerManager();
+    sp<AlarmMonitor> anomalyAlarmMonitor;
+    sp<AlarmMonitor> subscriberAlarmMonitor;
+    StatsLogProcessor p(
+            m, pullerManager, anomalyAlarmMonitor, subscriberAlarmMonitor, 0,
+            [](const ConfigKey& key) { return true; },
+            [](const int&, const vector<int64_t>&) { return true; });
+    ConfigKey key(3, 4);
+    StatsdConfig config = MakeConfig(false);
+    p.OnConfigUpdated(0, key, config);
+    EXPECT_NE(pullerManager->mPullUidProviders.find(key), pullerManager->mPullUidProviders.end());
+
+    config.add_default_pull_packages("AID_STATSD");
+    p.OnConfigUpdated(5, key, config);
+    EXPECT_NE(pullerManager->mPullUidProviders.find(key), pullerManager->mPullUidProviders.end());
+
+    p.OnConfigRemoved(key);
+    EXPECT_EQ(pullerManager->mPullUidProviders.find(key), pullerManager->mPullUidProviders.end());
 }
 
 TEST(StatsLogProcessorTest, TestActiveConfigMetricDiskWriteRead) {
@@ -415,7 +438,7 @@ TEST(StatsLogProcessorTest, TestActiveConfigMetricDiskWriteRead) {
     processor.OnConfigUpdated(2, cfgKey2, config2);
     processor.OnConfigUpdated(3, cfgKey3, config3);
 
-    EXPECT_EQ(3, processor.mMetricsManagers.size());
+    ASSERT_EQ(3, processor.mMetricsManagers.size());
 
     // Expect the first config and both metrics in it to be active.
     auto it = processor.mMetricsManagers.find(cfgKey1);
@@ -512,7 +535,7 @@ TEST(StatsLogProcessorTest, TestActiveConfigMetricDiskWriteRead) {
 
     // A broadcast should have happened, and all 3 configs should be active in the broadcast.
     EXPECT_EQ(broadcastCount, 1);
-    EXPECT_EQ(activeConfigsBroadcast.size(), 3);
+    ASSERT_EQ(activeConfigsBroadcast.size(), 3);
     EXPECT_TRUE(std::find(activeConfigsBroadcast.begin(), activeConfigsBroadcast.end(), cfgId1) !=
                 activeConfigsBroadcast.end());
     EXPECT_TRUE(std::find(activeConfigsBroadcast.begin(), activeConfigsBroadcast.end(), cfgId2) !=
@@ -537,7 +560,7 @@ TEST(StatsLogProcessorTest, TestActiveConfigMetricDiskWriteRead) {
     processor2->OnConfigUpdated(timeBase2, cfgKey2, config2);
     processor2->OnConfigUpdated(timeBase2, cfgKey3, config3);
 
-    EXPECT_EQ(3, processor2->mMetricsManagers.size());
+    ASSERT_EQ(3, processor2->mMetricsManagers.size());
 
     // First config and both metrics are active.
     it = processor2->mMetricsManagers.find(cfgKey1);
@@ -596,7 +619,7 @@ TEST(StatsLogProcessorTest, TestActiveConfigMetricDiskWriteRead) {
     EXPECT_TRUE(it != processor2->mMetricsManagers.end());
     auto& metricsManager1003 = it->second;
     EXPECT_FALSE(metricsManager1003->isActive());
-    EXPECT_EQ(2, metricsManager1003->mAllMetricProducers.size());
+    ASSERT_EQ(2, metricsManager1003->mAllMetricProducers.size());
 
     metricIt = metricsManager1003->mAllMetricProducers.begin();
     for (; metricIt != metricsManager1002->mAllMetricProducers.end(); metricIt++) {
@@ -679,7 +702,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBoot) {
     sp<StatsLogProcessor> processor =
             CreateStatsLogProcessor(timeBase1, timeBase1, config1, cfgKey1);
 
-    EXPECT_EQ(1, processor->mMetricsManagers.size());
+    ASSERT_EQ(1, processor->mMetricsManagers.size());
     auto it = processor->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor->mMetricsManagers.end());
     auto& metricsManager1 = it->second;
@@ -729,7 +752,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBoot) {
     sp<StatsLogProcessor> processor2 =
             CreateStatsLogProcessor(timeBase2, timeBase2, config1, cfgKey1);
 
-    EXPECT_EQ(1, processor2->mMetricsManagers.size());
+    ASSERT_EQ(1, processor2->mMetricsManagers.size());
     it = processor2->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor2->mMetricsManagers.end());
     auto& metricsManager1001 = it->second;
@@ -812,7 +835,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivations) {
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor->mMetricsManagers.size());
+    ASSERT_EQ(1, processor->mMetricsManagers.size());
     auto it = processor->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor->mMetricsManagers.end());
     auto& metricsManager1 = it->second;
@@ -897,7 +920,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivations) {
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor2->mMetricsManagers.size());
+    ASSERT_EQ(1, processor2->mMetricsManagers.size());
     it = processor2->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor2->mMetricsManagers.end());
     auto& metricsManager1001 = it->second;
@@ -998,7 +1021,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivations) {
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor3->mMetricsManagers.size());
+    ASSERT_EQ(1, processor3->mMetricsManagers.size());
     it = processor3->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor3->mMetricsManagers.end());
     auto& metricsManagerTimeBase3 = it->second;
@@ -1100,7 +1123,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivations) {
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor4->mMetricsManagers.size());
+    ASSERT_EQ(1, processor4->mMetricsManagers.size());
     it = processor4->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor4->mMetricsManagers.end());
     auto& metricsManagerTimeBase4 = it->second;
@@ -1214,13 +1237,13 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivationsDifferentActi
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor1->mMetricsManagers.size());
+    ASSERT_EQ(1, processor1->mMetricsManagers.size());
     auto it = processor1->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor1->mMetricsManagers.end());
     auto& metricsManager1 = it->second;
     EXPECT_TRUE(metricsManager1->isActive());
 
-    EXPECT_EQ(metricsManager1->mAllMetricProducers.size(), 2);
+    ASSERT_EQ(metricsManager1->mAllMetricProducers.size(), 2);
     // We assume that the index of a MetricProducer within the mAllMetricProducers
     // array follows the order in which metrics are added to the config.
     auto& metricProducer1_1 = metricsManager1->mAllMetricProducers[0];
@@ -1231,7 +1254,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivationsDifferentActi
     EXPECT_EQ(metricProducer1_2->getMetricId(), metricId2);
     EXPECT_TRUE(metricProducer1_2->isActive());
 
-    EXPECT_EQ(metricProducer1_1->mEventActivationMap.size(), 2);
+    ASSERT_EQ(metricProducer1_1->mEventActivationMap.size(), 2);
     // The key in mEventActivationMap is the index of the associated atom matcher. We assume
     // that matchers are indexed in the order that they are added to the config.
     const auto& activation1_1_1 = metricProducer1_1->mEventActivationMap.at(0);
@@ -1280,13 +1303,13 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivationsDifferentActi
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor2->mMetricsManagers.size());
+    ASSERT_EQ(1, processor2->mMetricsManagers.size());
     it = processor2->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor2->mMetricsManagers.end());
     auto& metricsManager2 = it->second;
     EXPECT_TRUE(metricsManager2->isActive());
 
-    EXPECT_EQ(metricsManager2->mAllMetricProducers.size(), 2);
+    ASSERT_EQ(metricsManager2->mAllMetricProducers.size(), 2);
     // We assume that the index of a MetricProducer within the mAllMetricProducers
     // array follows the order in which metrics are added to the config.
     auto& metricProducer2_1 = metricsManager2->mAllMetricProducers[0];
@@ -1297,7 +1320,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivationsDifferentActi
     EXPECT_EQ(metricProducer2_2->getMetricId(), metricId2);
     EXPECT_TRUE(metricProducer2_2->isActive());
 
-    EXPECT_EQ(metricProducer2_1->mEventActivationMap.size(), 2);
+    ASSERT_EQ(metricProducer2_1->mEventActivationMap.size(), 2);
     // The key in mEventActivationMap is the index of the associated atom matcher. We assume
     // that matchers are indexed in the order that they are added to the config.
     const auto& activation2_1_1 = metricProducer2_1->mEventActivationMap.at(0);
@@ -1364,13 +1387,13 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivationsDifferentActi
     // Metric 1 is not active.
     // Metric 2 is active.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor3->mMetricsManagers.size());
+    ASSERT_EQ(1, processor3->mMetricsManagers.size());
     it = processor3->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor3->mMetricsManagers.end());
     auto& metricsManager3 = it->second;
     EXPECT_TRUE(metricsManager3->isActive());
 
-    EXPECT_EQ(metricsManager3->mAllMetricProducers.size(), 2);
+    ASSERT_EQ(metricsManager3->mAllMetricProducers.size(), 2);
     // We assume that the index of a MetricProducer within the mAllMetricProducers
     // array follows the order in which metrics are added to the config.
     auto& metricProducer3_1 = metricsManager3->mAllMetricProducers[0];
@@ -1381,7 +1404,7 @@ TEST(StatsLogProcessorTest, TestActivationOnBootMultipleActivationsDifferentActi
     EXPECT_EQ(metricProducer3_2->getMetricId(), metricId2);
     EXPECT_TRUE(metricProducer3_2->isActive());
 
-    EXPECT_EQ(metricProducer3_1->mEventActivationMap.size(), 2);
+    ASSERT_EQ(metricProducer3_1->mEventActivationMap.size(), 2);
     // The key in mEventActivationMap is the index of the associated atom matcher. We assume
     // that matchers are indexed in the order that they are added to the config.
     const auto& activation3_1_1 = metricProducer3_1->mEventActivationMap.at(0);
@@ -1508,12 +1531,12 @@ TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart) {
     // Metric 3 is active.
     // {{{---------------------------------------------------------------------------
     sp<StatsLogProcessor> processor = service->mProcessor;
-    EXPECT_EQ(1, processor->mMetricsManagers.size());
+    ASSERT_EQ(1, processor->mMetricsManagers.size());
     auto it = processor->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor->mMetricsManagers.end());
     auto& metricsManager1 = it->second;
     EXPECT_TRUE(metricsManager1->isActive());
-    EXPECT_EQ(3, metricsManager1->mAllMetricProducers.size());
+    ASSERT_EQ(3, metricsManager1->mAllMetricProducers.size());
 
     auto& metricProducer1 = metricsManager1->mAllMetricProducers[0];
     EXPECT_EQ(metricId1, metricProducer1->getMetricId());
@@ -1528,7 +1551,7 @@ TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart) {
     EXPECT_TRUE(metricProducer3->isActive());
 
     // Check event activations.
-    EXPECT_EQ(metricsManager1->mAllAtomMatchers.size(), 4);
+    ASSERT_EQ(metricsManager1->mAllAtomMatchers.size(), 4);
     EXPECT_EQ(metricsManager1->mAllAtomMatchers[0]->getId(),
               metric1ActivationTrigger1->atom_matcher_id());
     const auto& activation1 = metricProducer1->mEventActivationMap.at(0);
@@ -1564,7 +1587,7 @@ TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart) {
 
     // Trigger Activation 1 for Metric 1. Should activate on boot.
     // Trigger Activation 4 for Metric 2. Should activate immediately.
-    long configAddedTimeNs = metricsManager1->mLastReportTimeNs;
+    int64_t configAddedTimeNs = metricsManager1->mLastReportTimeNs;
     std::vector<int> attributionUids = {111};
     std::vector<string> attributionTags = {"App1"};
     std::unique_ptr<LogEvent> event1 = CreateAcquireWakelockEvent(
@@ -1605,12 +1628,12 @@ TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart) {
 
     // We should have a new metrics manager. Lets get it and ensure activation status is restored.
     // {{{---------------------------------------------------------------------------
-    EXPECT_EQ(1, processor->mMetricsManagers.size());
+    ASSERT_EQ(1, processor->mMetricsManagers.size());
     it = processor->mMetricsManagers.find(cfgKey1);
     EXPECT_TRUE(it != processor->mMetricsManagers.end());
     auto& metricsManager2 = it->second;
     EXPECT_TRUE(metricsManager2->isActive());
-    EXPECT_EQ(3, metricsManager2->mAllMetricProducers.size());
+    ASSERT_EQ(3, metricsManager2->mAllMetricProducers.size());
 
     auto& metricProducer1001 = metricsManager2->mAllMetricProducers[0];
     EXPECT_EQ(metricId1, metricProducer1001->getMetricId());
@@ -1628,7 +1651,7 @@ TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart) {
     // Activation 1 is kActiveOnBoot.
     // Activation 2 and 3 are not active.
     // Activation 4 is active.
-    EXPECT_EQ(metricsManager2->mAllAtomMatchers.size(), 4);
+    ASSERT_EQ(metricsManager2->mAllAtomMatchers.size(), 4);
     EXPECT_EQ(metricsManager2->mAllAtomMatchers[0]->getId(),
               metric1ActivationTrigger1->atom_matcher_id());
     const auto& activation1001 = metricProducer1001->mEventActivationMap.at(0);
@@ -1666,6 +1689,111 @@ TEST(StatsLogProcessorTest, TestActivationsPersistAcrossSystemServerRestart) {
     vector<uint8_t> buffer;
     processor->onDumpReport(cfgKey1, configAddedTimeNs + NS_PER_SEC, false, true, ADB_DUMP, FAST,
                             &buffer);
+}
+
+TEST(StatsLogProcessorTest_mapIsolatedUidToHostUid, LogHostUid) {
+    int hostUid = 20;
+    int isolatedUid = 30;
+    uint64_t eventTimeNs = 12355;
+    int atomId = 89;
+    int field1 = 90;
+    int field2 = 28;
+    sp<MockUidMap> mockUidMap = makeMockUidMapForOneHost(hostUid, {isolatedUid});
+    ConfigKey cfgKey;
+    StatsdConfig config = MakeConfig(false);
+    sp<StatsLogProcessor> processor =
+            CreateStatsLogProcessor(1, 1, config, cfgKey, nullptr, 0, mockUidMap);
+
+    shared_ptr<LogEvent> logEvent = makeUidLogEvent(atomId, eventTimeNs, hostUid, field1, field2);
+
+    processor->OnLogEvent(logEvent.get());
+
+    const vector<FieldValue>* actualFieldValues = &logEvent->getValues();
+    ASSERT_EQ(3, actualFieldValues->size());
+    EXPECT_EQ(hostUid, actualFieldValues->at(0).mValue.int_value);
+    EXPECT_EQ(field1, actualFieldValues->at(1).mValue.int_value);
+    EXPECT_EQ(field2, actualFieldValues->at(2).mValue.int_value);
+}
+
+TEST(StatsLogProcessorTest_mapIsolatedUidToHostUid, LogIsolatedUid) {
+    int hostUid = 20;
+    int isolatedUid = 30;
+    uint64_t eventTimeNs = 12355;
+    int atomId = 89;
+    int field1 = 90;
+    int field2 = 28;
+    sp<MockUidMap> mockUidMap = makeMockUidMapForOneHost(hostUid, {isolatedUid});
+    ConfigKey cfgKey;
+    StatsdConfig config = MakeConfig(false);
+    sp<StatsLogProcessor> processor =
+            CreateStatsLogProcessor(1, 1, config, cfgKey, nullptr, 0, mockUidMap);
+
+    shared_ptr<LogEvent> logEvent =
+            makeUidLogEvent(atomId, eventTimeNs, isolatedUid, field1, field2);
+
+    processor->OnLogEvent(logEvent.get());
+
+    const vector<FieldValue>* actualFieldValues = &logEvent->getValues();
+    ASSERT_EQ(3, actualFieldValues->size());
+    EXPECT_EQ(hostUid, actualFieldValues->at(0).mValue.int_value);
+    EXPECT_EQ(field1, actualFieldValues->at(1).mValue.int_value);
+    EXPECT_EQ(field2, actualFieldValues->at(2).mValue.int_value);
+}
+
+TEST(StatsLogProcessorTest_mapIsolatedUidToHostUid, LogHostUidAttributionChain) {
+    int hostUid = 20;
+    int isolatedUid = 30;
+    uint64_t eventTimeNs = 12355;
+    int atomId = 89;
+    int field1 = 90;
+    int field2 = 28;
+    sp<MockUidMap> mockUidMap = makeMockUidMapForOneHost(hostUid, {isolatedUid});
+    ConfigKey cfgKey;
+    StatsdConfig config = MakeConfig(false);
+    sp<StatsLogProcessor> processor =
+            CreateStatsLogProcessor(1, 1, config, cfgKey, nullptr, 0, mockUidMap);
+
+    shared_ptr<LogEvent> logEvent = makeAttributionLogEvent(atomId, eventTimeNs, {hostUid, 200},
+                                                            {"tag1", "tag2"}, field1, field2);
+
+    processor->OnLogEvent(logEvent.get());
+
+    const vector<FieldValue>* actualFieldValues = &logEvent->getValues();
+    ASSERT_EQ(6, actualFieldValues->size());
+    EXPECT_EQ(hostUid, actualFieldValues->at(0).mValue.int_value);
+    EXPECT_EQ("tag1", actualFieldValues->at(1).mValue.str_value);
+    EXPECT_EQ(200, actualFieldValues->at(2).mValue.int_value);
+    EXPECT_EQ("tag2", actualFieldValues->at(3).mValue.str_value);
+    EXPECT_EQ(field1, actualFieldValues->at(4).mValue.int_value);
+    EXPECT_EQ(field2, actualFieldValues->at(5).mValue.int_value);
+}
+
+TEST(StatsLogProcessorTest_mapIsolatedUidToHostUid, LogIsolatedUidAttributionChain) {
+    int hostUid = 20;
+    int isolatedUid = 30;
+    uint64_t eventTimeNs = 12355;
+    int atomId = 89;
+    int field1 = 90;
+    int field2 = 28;
+    sp<MockUidMap> mockUidMap = makeMockUidMapForOneHost(hostUid, {isolatedUid});
+    ConfigKey cfgKey;
+    StatsdConfig config = MakeConfig(false);
+    sp<StatsLogProcessor> processor =
+            CreateStatsLogProcessor(1, 1, config, cfgKey, nullptr, 0, mockUidMap);
+
+    shared_ptr<LogEvent> logEvent = makeAttributionLogEvent(atomId, eventTimeNs, {isolatedUid, 200},
+                                                            {"tag1", "tag2"}, field1, field2);
+
+    processor->OnLogEvent(logEvent.get());
+
+    const vector<FieldValue>* actualFieldValues = &logEvent->getValues();
+    ASSERT_EQ(6, actualFieldValues->size());
+    EXPECT_EQ(hostUid, actualFieldValues->at(0).mValue.int_value);
+    EXPECT_EQ("tag1", actualFieldValues->at(1).mValue.str_value);
+    EXPECT_EQ(200, actualFieldValues->at(2).mValue.int_value);
+    EXPECT_EQ("tag2", actualFieldValues->at(3).mValue.str_value);
+    EXPECT_EQ(field1, actualFieldValues->at(4).mValue.int_value);
+    EXPECT_EQ(field2, actualFieldValues->at(5).mValue.int_value);
 }
 
 #else

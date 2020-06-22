@@ -20,6 +20,7 @@ import android.graphics.drawable.Drawable;
 import android.metrics.LogMaker;
 import android.service.quicksettings.Tile;
 
+import com.android.internal.logging.InstanceId;
 import com.android.systemui.plugins.annotations.DependsOn;
 import com.android.systemui.plugins.annotations.ProvidesInterface;
 import com.android.systemui.plugins.qs.QSTile.Callback;
@@ -65,14 +66,6 @@ public interface QSTile {
 
     void destroy();
 
-    /**
-      * return true if the tile supports detail views, and not
-      * only boolean states
-      */
-    default boolean supportsDetailView() {
-        return false;
-    }
-
     CharSequence getTileLabel();
 
     State getState();
@@ -80,6 +73,18 @@ public interface QSTile {
     default LogMaker populate(LogMaker logMaker) {
         return logMaker;
     }
+
+    /**
+     * Return a string to be used to identify the tile in UiEvents.
+     */
+    default String getMetricsSpec() {
+        return getClass().getSimpleName();
+    }
+
+    /**
+     * Return an {@link InstanceId} to be used to identify the tile in UiEvents.
+     */
+    InstanceId getInstanceId();
 
     @ProvidesInterface(version = Callback.VERSION)
     public interface Callback {

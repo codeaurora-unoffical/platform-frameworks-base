@@ -18,8 +18,10 @@ import static com.android.systemui.qs.tileimpl.QSIconViewImpl.QS_ANIM_LENGTH;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.Drawable;
@@ -34,7 +36,6 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.util.PathParser;
 import android.view.Gravity;
-import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityEvent;
@@ -42,7 +43,6 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.Switch;
-import android.widget.TextView;
 
 import com.android.settingslib.Utils;
 import com.android.systemui.R;
@@ -64,9 +64,10 @@ public class QSTileBaseView extends com.android.systemui.plugins.qs.QSTileView {
     private boolean mTileState;
     private boolean mCollapsedView;
     private boolean mShowRippleEffect = true;
+    private float mStrokeWidthActive;
+    private float mStrokeWidthInactive;
 
     private final ImageView mBg;
-    private final TextView mDetailText;
     private final int mColorActive;
     private final int mColorInactive;
     private final int mColorDisabled;
@@ -83,6 +84,10 @@ public class QSTileBaseView extends com.android.systemui.plugins.qs.QSTileView {
         // Default to Quick Tile padding, and QSTileView will specify its own padding.
         int padding = context.getResources().getDimensionPixelSize(R.dimen.qs_quick_tile_padding);
         mIconFrame = new FrameLayout(context);
+        mStrokeWidthActive = context.getResources()
+                .getDimension(com.android.internal.R.dimen.config_qsTileStrokeWidthActive);
+        mStrokeWidthInactive = context.getResources()
+                .getDimension(com.android.internal.R.dimen.config_qsTileStrokeWidthInactive);
         int size = context.getResources().getDimensionPixelSize(R.dimen.qs_quick_tile_size);
         addView(mIconFrame, new LayoutParams(size, size));
         mBg = new ImageView(getContext());
@@ -104,12 +109,6 @@ public class QSTileBaseView extends com.android.systemui.plugins.qs.QSTileView {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER);
         mIconFrame.addView(mIcon, params);
-
-        // "..." afforadance below icon
-        mDetailText = (TextView) LayoutInflater.from(context).inflate(R.layout.qs_tile_detail_text,
-                mIconFrame, false);
-        mIconFrame.addView(mDetailText);
-
         mIconFrame.setClipChildren(false);
         mIconFrame.setClipToPadding(false);
 
@@ -165,10 +164,6 @@ public class QSTileBaseView extends com.android.systemui.plugins.qs.QSTileView {
             tile.longClick();
             return true;
         });
-
-        if (tile.supportsDetailView()) {
-            mDetailText.setVisibility(View.VISIBLE);
-        }
     }
 
     public void init(OnClickListener click, OnClickListener secondaryClick,
@@ -206,7 +201,31 @@ public class QSTileBaseView extends com.android.systemui.plugins.qs.QSTileView {
         mHandler.obtainMessage(H.STATE_CHANGED, state).sendToTarget();
     }
 
+    private void updateStrokeShapeWidth(QSTile.State state) {
+        Resources resources = getContext().getResources();
+        if (!(mBg.getDrawable() instanceof ShapeDrawable)) {
+            return;
+        }
+        ShapeDrawable d = (ShapeDrawable) mBg.getDrawable();
+        d.getPaint().setStyle(Paint.Style.FILL);
+        switch (state.state) {
+            case Tile.STATE_INACTIVE:
+                if (mStrokeWidthInactive >= 0) {
+                    d.getPaint().setStyle(Paint.Style.STROKE);
+                    d.getPaint().setStrokeWidth(mStrokeWidthInactive);
+                }
+                break;
+            case Tile.STATE_ACTIVE:
+                if (mStrokeWidthActive >= 0) {
+                    d.getPaint().setStyle(Paint.Style.STROKE);
+                    d.getPaint().setStrokeWidth(mStrokeWidthActive);
+                }
+                break;
+        }
+    }
+
     protected void handleStateChanged(QSTile.State state) {
+        updateStrokeShapeWidth(state);
         int circleColor = getCircleColor(state.state);
         boolean allowAnimations = animationsEnabled();
         if (circleColor != mCircleColor) {
@@ -221,8 +240,6 @@ public class QSTileBaseView extends com.android.systemui.plugins.qs.QSTileView {
             }
             mCircleColor = circleColor;
         }
-
-        mDetailText.setTextColor(QSTileImpl.getColorForState(getContext(), state.state));
 
         mShowRippleEffect = state.showRippleEffect;
         setClickable(state.state != Tile.STATE_UNAVAILABLE);

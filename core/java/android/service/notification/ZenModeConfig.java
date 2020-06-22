@@ -78,6 +78,7 @@ public class ZenModeConfig implements Parcelable {
     private static final int DEFAULT_SOURCE = SOURCE_CONTACT;
     private static final int DEFAULT_CALLS_SOURCE = SOURCE_STAR;
 
+    public static final String MANUAL_RULE_ID = "MANUAL_RULE";
     public static final String EVENTS_DEFAULT_RULE_ID = "EVENTS_DEFAULT_RULE";
     public static final String EVERY_NIGHT_DEFAULT_RULE_ID = "EVERY_NIGHT_DEFAULT_RULE";
     public static final List<String> DEFAULT_RULE_IDS = Arrays.asList(EVERY_NIGHT_DEFAULT_RULE_ID,
@@ -102,8 +103,8 @@ public class ZenModeConfig implements Parcelable {
     private static final boolean DEFAULT_ALLOW_REMINDERS = false;
     private static final boolean DEFAULT_ALLOW_EVENTS = false;
     private static final boolean DEFAULT_ALLOW_REPEAT_CALLERS = true;
-    private static final boolean DEFAULT_ALLOW_CONV = true;
-    private static final int DEFAULT_ALLOW_CONV_FROM = ZenPolicy.CONVERSATION_SENDERS_IMPORTANT;
+    private static final boolean DEFAULT_ALLOW_CONV = false;
+    private static final int DEFAULT_ALLOW_CONV_FROM = ZenPolicy.CONVERSATION_SENDERS_NONE;
     private static final boolean DEFAULT_CHANNELS_BYPASSING_DND = false;
     private static final int DEFAULT_SUPPRESSED_VISUAL_EFFECTS = 0;
 
@@ -125,8 +126,8 @@ public class ZenModeConfig implements Parcelable {
     private static final String ALLOW_ATT_EVENTS = "events";
     private static final String ALLOW_ATT_SCREEN_OFF = "visualScreenOff";
     private static final String ALLOW_ATT_SCREEN_ON = "visualScreenOn";
-    private static final String ALLOW_ATT_CONV = "conv";
-    private static final String ALLOW_ATT_CONV_FROM = "convFrom";
+    private static final String ALLOW_ATT_CONV = "convos";
+    private static final String ALLOW_ATT_CONV_FROM = "convosFrom";
     private static final String DISALLOW_TAG = "disallow";
     private static final String DISALLOW_ATT_VISUAL_EFFECTS = "visualEffects";
     private static final String STATE_TAG = "state";
@@ -957,6 +958,48 @@ public class ZenModeConfig implements Parcelable {
             return new ZenModeConfig[size];
         }
     };
+
+    /**
+     * Converts a ZenModeConfig to a ZenPolicy
+     */
+    public ZenPolicy toZenPolicy() {
+        ZenPolicy.Builder builder = new ZenPolicy.Builder()
+                .allowCalls(allowCalls
+                        ? ZenModeConfig.getZenPolicySenders(allowCallsFrom)
+                        : ZenPolicy.PEOPLE_TYPE_NONE)
+                .allowRepeatCallers(allowRepeatCallers)
+                .allowMessages(allowMessages
+                        ? ZenModeConfig.getZenPolicySenders(allowMessagesFrom)
+                        : ZenPolicy.PEOPLE_TYPE_NONE)
+                .allowReminders(allowReminders)
+                .allowEvents(allowEvents)
+                .allowAlarms(allowAlarms)
+                .allowMedia(allowMedia)
+                .allowSystem(allowSystem)
+                .allowConversations(allowConversations
+                        ? ZenModeConfig.getZenPolicySenders(allowConversationsFrom)
+                        : ZenPolicy.PEOPLE_TYPE_NONE);
+        if (suppressedVisualEffects == 0) {
+            builder.showAllVisualEffects();
+        } else {
+            // configs don't have an unset state: wither true or false.
+            builder.showFullScreenIntent(
+                    (suppressedVisualEffects & Policy.SUPPRESSED_EFFECT_FULL_SCREEN_INTENT) == 0);
+            builder.showLights(
+                    (suppressedVisualEffects & SUPPRESSED_EFFECT_LIGHTS) == 0);
+            builder.showPeeking(
+                    (suppressedVisualEffects & SUPPRESSED_EFFECT_PEEK) == 0);
+            builder.showStatusBarIcons(
+                    (suppressedVisualEffects & Policy.SUPPRESSED_EFFECT_STATUS_BAR) == 0);
+            builder.showBadges(
+                    (suppressedVisualEffects & Policy.SUPPRESSED_EFFECT_BADGE) == 0);
+            builder.showInAmbientDisplay(
+                    (suppressedVisualEffects & Policy.SUPPRESSED_EFFECT_AMBIENT) == 0);
+            builder.showInNotificationList(
+                    (suppressedVisualEffects & Policy.SUPPRESSED_EFFECT_NOTIFICATION_LIST) == 0);
+        }
+        return builder.build();
+    }
 
     /**
      * Converts a zenPolicy to a notificationPolicy using this ZenModeConfig's values as its

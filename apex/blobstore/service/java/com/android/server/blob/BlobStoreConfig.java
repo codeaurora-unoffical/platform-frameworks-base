@@ -18,7 +18,6 @@ package com.android.server.blob;
 import static android.provider.DeviceConfig.NAMESPACE_BLOBSTORE;
 import static android.text.format.Formatter.FLAG_IEC_UNITS;
 import static android.text.format.Formatter.formatFileSize;
-import static android.util.TimeUtils.formatDuration;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -45,8 +44,10 @@ class BlobStoreConfig {
     // Added a string variant of lease description.
     public static final int XML_VERSION_ADD_STRING_DESC = 2;
     public static final int XML_VERSION_ADD_DESC_RES_NAME = 3;
+    public static final int XML_VERSION_ADD_COMMIT_TIME = 4;
+    public static final int XML_VERSION_ADD_SESSION_CREATION_TIME = 5;
 
-    public static final int XML_VERSION_CURRENT = XML_VERSION_ADD_DESC_RES_NAME;
+    public static final int XML_VERSION_CURRENT = XML_VERSION_ADD_SESSION_CREATION_TIME;
 
     private static final String ROOT_DIR_NAME = "blobstore";
     private static final String BLOBS_DIR_NAME = "blobs";
@@ -57,17 +58,23 @@ class BlobStoreConfig {
      * Job Id for idle maintenance job ({@link BlobStoreIdleJobService}).
      */
     public static final int IDLE_JOB_ID = 0xB70B1D7; // 191934935L
-    /**
-     * Max time period (in millis) between each idle maintenance job run.
-     */
-    public static final long IDLE_JOB_PERIOD_MILLIS = TimeUnit.DAYS.toMillis(1);
-
-    /**
-     * Timeout in millis after which sessions with no updates will be deleted.
-     */
-    public static final long SESSION_EXPIRY_TIMEOUT_MILLIS = TimeUnit.DAYS.toMillis(7);
 
     public static class DeviceConfigProperties {
+        /**
+         * Denotes the max time period (in millis) between each idle maintenance job run.
+         */
+        public static final String KEY_IDLE_JOB_PERIOD_MS = "idle_job_period_ms";
+        public static final long DEFAULT_IDLE_JOB_PERIOD_MS = TimeUnit.DAYS.toMillis(1);
+        public static long IDLE_JOB_PERIOD_MS = DEFAULT_IDLE_JOB_PERIOD_MS;
+
+        /**
+         * Denotes the timeout in millis after which sessions with no updates will be deleted.
+         */
+        public static final String KEY_SESSION_EXPIRY_TIMEOUT_MS =
+                "session_expiry_timeout_ms";
+        public static final long DEFAULT_SESSION_EXPIRY_TIMEOUT_MS = TimeUnit.DAYS.toMillis(7);
+        public static long SESSION_EXPIRY_TIMEOUT_MS = DEFAULT_SESSION_EXPIRY_TIMEOUT_MS;
+
         /**
          * Denotes how low the limit for the amount of data, that an app will be allowed to acquire
          * a lease on, can be.
@@ -100,12 +107,31 @@ class BlobStoreConfig {
         public static long LEASE_ACQUISITION_WAIT_DURATION_MS =
                 DEFAULT_LEASE_ACQUISITION_WAIT_DURATION_MS;
 
+        /**
+         * Denotes the duration from the time a blob is committed that any new commits of the same
+         * data blob from the same committer will be treated as if they occurred at the earlier
+         * commit time.
+         */
+        public static final String KEY_COMMIT_COOL_OFF_DURATION_MS =
+                "commit_cool_off_duration_ms";
+        public static final long DEFAULT_COMMIT_COOL_OFF_DURATION_MS =
+                TimeUnit.HOURS.toMillis(48);
+        public static long COMMIT_COOL_OFF_DURATION_MS =
+                DEFAULT_COMMIT_COOL_OFF_DURATION_MS;
+
         static void refresh(Properties properties) {
             if (!NAMESPACE_BLOBSTORE.equals(properties.getNamespace())) {
                 return;
             }
             properties.getKeyset().forEach(key -> {
                 switch (key) {
+                    case KEY_IDLE_JOB_PERIOD_MS:
+                        IDLE_JOB_PERIOD_MS = properties.getLong(key, DEFAULT_IDLE_JOB_PERIOD_MS);
+                        break;
+                    case KEY_SESSION_EXPIRY_TIMEOUT_MS:
+                        SESSION_EXPIRY_TIMEOUT_MS = properties.getLong(key,
+                                DEFAULT_SESSION_EXPIRY_TIMEOUT_MS);
+                        break;
                     case KEY_TOTAL_BYTES_PER_APP_LIMIT_FLOOR:
                         TOTAL_BYTES_PER_APP_LIMIT_FLOOR = properties.getLong(key,
                                 DEFAULT_TOTAL_BYTES_PER_APP_LIMIT_FLOOR);
@@ -118,6 +144,10 @@ class BlobStoreConfig {
                         LEASE_ACQUISITION_WAIT_DURATION_MS = properties.getLong(key,
                                 DEFAULT_LEASE_ACQUISITION_WAIT_DURATION_MS);
                         break;
+                    case KEY_COMMIT_COOL_OFF_DURATION_MS:
+                        COMMIT_COOL_OFF_DURATION_MS = properties.getLong(key,
+                                DEFAULT_COMMIT_COOL_OFF_DURATION_MS);
+                        break;
                     default:
                         Slog.wtf(TAG, "Unknown key in device config properties: " + key);
                 }
@@ -126,6 +156,12 @@ class BlobStoreConfig {
 
         static void dump(IndentingPrintWriter fout, Context context) {
             final String dumpFormat = "%s: [cur: %s, def: %s]";
+            fout.println(String.format(dumpFormat, KEY_IDLE_JOB_PERIOD_MS,
+                    TimeUtils.formatDuration(IDLE_JOB_PERIOD_MS),
+                    TimeUtils.formatDuration(DEFAULT_IDLE_JOB_PERIOD_MS)));
+            fout.println(String.format(dumpFormat, KEY_SESSION_EXPIRY_TIMEOUT_MS,
+                    TimeUtils.formatDuration(SESSION_EXPIRY_TIMEOUT_MS),
+                    TimeUtils.formatDuration(DEFAULT_SESSION_EXPIRY_TIMEOUT_MS)));
             fout.println(String.format(dumpFormat, KEY_TOTAL_BYTES_PER_APP_LIMIT_FLOOR,
                     formatFileSize(context, TOTAL_BYTES_PER_APP_LIMIT_FLOOR, FLAG_IEC_UNITS),
                     formatFileSize(context, DEFAULT_TOTAL_BYTES_PER_APP_LIMIT_FLOOR,
@@ -136,6 +172,9 @@ class BlobStoreConfig {
             fout.println(String.format(dumpFormat, KEY_LEASE_ACQUISITION_WAIT_DURATION_MS,
                     TimeUtils.formatDuration(LEASE_ACQUISITION_WAIT_DURATION_MS),
                     TimeUtils.formatDuration(DEFAULT_LEASE_ACQUISITION_WAIT_DURATION_MS)));
+            fout.println(String.format(dumpFormat, KEY_COMMIT_COOL_OFF_DURATION_MS,
+                    TimeUtils.formatDuration(COMMIT_COOL_OFF_DURATION_MS),
+                    TimeUtils.formatDuration(DEFAULT_COMMIT_COOL_OFF_DURATION_MS)));
         }
     }
 
@@ -144,6 +183,22 @@ class BlobStoreConfig {
                 context.getMainExecutor(),
                 properties -> DeviceConfigProperties.refresh(properties));
         DeviceConfigProperties.refresh(DeviceConfig.getProperties(NAMESPACE_BLOBSTORE));
+    }
+
+    /**
+     * Returns the max time period (in millis) between each idle maintenance job run.
+     */
+    public static long getIdleJobPeriodMs() {
+        return DeviceConfigProperties.IDLE_JOB_PERIOD_MS;
+    }
+
+    /**
+     * Returns whether a session is expired or not. A session is considered expired if the session
+     * has not been modified in a while (i.e. SESSION_EXPIRY_TIMEOUT_MS).
+     */
+    public static boolean hasSessionExpired(long sessionLastModifiedMs) {
+        return sessionLastModifiedMs
+                < System.currentTimeMillis() - DeviceConfigProperties.SESSION_EXPIRY_TIMEOUT_MS;
     }
 
     /**
@@ -160,6 +215,27 @@ class BlobStoreConfig {
      */
     public static boolean hasLeaseWaitTimeElapsed(long commitTimeMs) {
         return commitTimeMs + DeviceConfigProperties.LEASE_ACQUISITION_WAIT_DURATION_MS
+                < System.currentTimeMillis();
+    }
+
+    /**
+     * Returns an adjusted commit time depending on whether commit cool-off period has elapsed.
+     *
+     * If this is the initial commit or the earlier commit cool-off period has elapsed, then
+     * the new commit time is used. Otherwise, the earlier commit time is used.
+     */
+    public static long getAdjustedCommitTimeMs(long oldCommitTimeMs, long newCommitTimeMs) {
+        if (oldCommitTimeMs == 0 || hasCommitCoolOffPeriodElapsed(oldCommitTimeMs)) {
+            return newCommitTimeMs;
+        }
+        return oldCommitTimeMs;
+    }
+
+    /**
+     * Returns whether the commit cool-off period has elapsed.
+     */
+    private static boolean hasCommitCoolOffPeriodElapsed(long commitTimeMs) {
+        return commitTimeMs + DeviceConfigProperties.COMMIT_COOL_OFF_DURATION_MS
                 < System.currentTimeMillis();
     }
 
@@ -236,9 +312,6 @@ class BlobStoreConfig {
         fout.println("XML current version: " + XML_VERSION_CURRENT);
 
         fout.println("Idle job ID: " + IDLE_JOB_ID);
-        fout.println("Idle job period: " + formatDuration(IDLE_JOB_PERIOD_MILLIS));
-
-        fout.println("Session expiry timeout: " + formatDuration(SESSION_EXPIRY_TIMEOUT_MILLIS));
 
         fout.println("Total bytes per app limit: " + formatFileSize(context,
                 getAppDataBytesLimit(), FLAG_IEC_UNITS));

@@ -48,6 +48,7 @@ import static android.os.Process.THREAD_GROUP_RESTRICTED;
 import static android.os.Process.THREAD_GROUP_TOP_APP;
 import static android.os.Process.THREAD_PRIORITY_DISPLAY;
 import static android.os.Process.setProcessGroup;
+import static android.os.Process.setCgroupProcsProcessGroup;
 import static android.os.Process.setThreadPriority;
 import static android.os.Process.setThreadScheduler;
 
@@ -153,15 +154,6 @@ public final class OomAdjuster {
     @EnabledAfter(targetSdkVersion=android.os.Build.VERSION_CODES.Q)
     static final long CAMERA_MICROPHONE_CAPABILITY_CHANGE_ID = 136219221L;
 
-    // TODO: remove this when development is done.
-    // These are debug flags used between OomAdjuster and AppOpsService to detect and report absence
-    // of the real flags.
-    public static final int DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE_Q = 1 << 27;
-    public static final int DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA_Q = 1 << 28;
-    public static final int DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE = 1 << 29;
-    public static final int DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA = 1 << 30;
-    public static final int DEBUG_PROCESS_CAPABILITY_FOREGROUND_LOCATION = 1 << 31;
-
     /**
      * For some direct access we need to power manager.
      */
@@ -221,6 +213,9 @@ public final class OomAdjuster {
     int mBServiceAppThreshold = 5;
     // Enable B-service aging propagation on memory pressure.
     boolean mEnableBServicePropagation = false;
+    // Process in same process Group keep in same cgroup
+    boolean mEnableProcessGroupCgroupFollow = false;
+    boolean mProcessGroupCgroupFollowDex2oatOnly = false;
 
     public static BoostFramework mPerf = new BoostFramework();
 
@@ -261,17 +256,24 @@ public final class OomAdjuster {
             mMinBServiceAgingTime = Integer.valueOf(mPerf.perfGetProp("ro.vendor.qti.sys.fw.bservice_age", "5000"));
             mBServiceAppThreshold = Integer.valueOf(mPerf.perfGetProp("ro.vendor.qti.sys.fw.bservice_limit", "5"));
             mEnableBServicePropagation = Boolean.parseBoolean(mPerf.perfGetProp("ro.vendor.qti.sys.fw.bservice_enable", "false"));
+            mEnableProcessGroupCgroupFollow = Boolean.parseBoolean(mPerf.perfGetProp("ro.vendor.qti.cgroup_follow.enable", "false"));
+            mProcessGroupCgroupFollowDex2oatOnly = Boolean.parseBoolean(mPerf.perfGetProp("ro.vendor.qti.cgroup_follow.dex2oat_only", "false"));
         }
 
         mProcessGroupHandler = new Handler(adjusterThread.getLooper(), msg -> {
             final int pid = msg.arg1;
             final int group = msg.arg2;
+            final ProcessRecord app = (ProcessRecord)msg.obj;
             if (Trace.isTagEnabled(Trace.TRACE_TAG_ACTIVITY_MANAGER)) {
                 Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "setProcessGroup "
-                        + msg.obj + " to " + group);
+                        + app.processName + " to " + group);
             }
             try {
-                setProcessGroup(pid, group);
+                if (mEnableProcessGroupCgroupFollow) {
+                    setCgroupProcsProcessGroup(app.info.uid, pid, group, mProcessGroupCgroupFollowDex2oatOnly);
+                } else {
+                    setProcessGroup(pid, group);
+                }
             } catch (Exception e) {
                 if (DEBUG_ALL) {
                     Slog.w(TAG, "Failed setting process group of " + pid + " to " + group, e);
@@ -350,8 +352,21 @@ public final class OomAdjuster {
         boolean success = applyOomAdjLocked(app, doingAll, now, SystemClock.elapsedRealtime());
 
         if (uidRec != null) {
-            updateAppUidRecLocked(app);
-            // If this proc state is changed, need to update its uid record here
+            // After uidRec.reset() above, for UidRecord that has multiple processes (ProcessRecord)
+            // , We need to apply all ProcessRecord into UidRecord.
+            final ArraySet<ProcessRecord> procRecords = app.uidRecord.procRecords;
+            for (int i = procRecords.size() - 1; i >= 0; i--) {
+                final ProcessRecord pr = procRecords.valueAt(i);
+                if (!pr.killedByAm && pr.thread != null) {
+                    if (pr.isolated && pr.numberOfRunningServices() <= 0
+                            && pr.isolatedEntryPoint == null) {
+                        // No op.
+                    } else {
+                        // Keeping this process, update its uid.
+                        updateAppUidRecLocked(pr);
+                    }
+                }
+            }
             if (uidRec.getCurProcState() != PROCESS_STATE_NONEXISTENT
                     && (uidRec.setProcState != uidRec.getCurProcState()
                     || uidRec.setCapability != uidRec.curCapability
@@ -803,8 +818,8 @@ public final class OomAdjuster {
             if (mEnableBServicePropagation && app.serviceb
                     && (app.curAdj == ProcessList.SERVICE_B_ADJ)) {
                 numBServices++;
-                for (int s = app.services.size() - 1; s >= 0; s--) {
-                    ServiceRecord sr = app.services.valueAt(s);
+                for (int s = app.numberOfRunningServices() - 1; s >= 0; s--) {
+                    ServiceRecord sr = app.getRunningServiceAt(s);
                     if (DEBUG_OOM_ADJ) Slog.d(TAG,"app.processName = " + app.processName
                             + " serviceb = " + app.serviceb + " s = " + s + " sr.lastActivity = "
                             + sr.lastActivity + " packageName = " + sr.packageName
@@ -885,7 +900,8 @@ public final class OomAdjuster {
                         break;
                 }
 
-                if (app.isolated && app.services.size() <= 0 && app.isolatedEntryPoint == null) {
+                if (app.isolated && app.numberOfRunningServices() <= 0
+                        && app.isolatedEntryPoint == null) {
                     // If this is an isolated process, there are no services
                     // running in it, and it's not a special process with a
                     // custom entry point, then the process is no longer
@@ -1003,6 +1019,7 @@ public final class OomAdjuster {
                     mService.mServices.foregroundServiceProcStateChangedLocked(uidRec);
                 }
             }
+            mService.mInternal.deletePendingTopUid(uidRec.uid);
         }
         if (mLocalPowerManager != null) {
             mLocalPowerManager.finishUidChanges();
@@ -1311,9 +1328,11 @@ public final class OomAdjuster {
             // value that the caller wants us to.
             adj = cachedAdj;
             procState = PROCESS_STATE_CACHED_EMPTY;
-            app.setCached(true);
-            app.empty = true;
-            app.adjType = "cch-empty";
+            if (!app.containsCycle) {
+                app.setCached(true);
+                app.empty = true;
+                app.adjType = "cch-empty";
+            }
             if (DEBUG_OOM_ADJ_REASON || logUid == appUid) {
                 reportOomAdjMessageLocked(TAG_OOM_ADJ, "Making empty: " + app);
             }
@@ -1503,12 +1522,12 @@ public final class OomAdjuster {
         }
 
         int capabilityFromFGS = 0; // capability from foreground service.
-        for (int is = app.services.size() - 1;
+        for (int is = app.numberOfRunningServices() - 1;
                 is >= 0 && (adj > ProcessList.FOREGROUND_APP_ADJ
                         || schedGroup == ProcessList.SCHED_GROUP_BACKGROUND
                         || procState > PROCESS_STATE_TOP);
                 is--) {
-            ServiceRecord s = app.services.valueAt(is);
+            ServiceRecord s = app.getRunningServiceAt(is);
             if (s.startRequested) {
                 app.hasStartedServices = true;
                 if (procState > PROCESS_STATE_SERVICE) {
@@ -1557,15 +1576,7 @@ public final class OomAdjuster {
                     capabilityFromFGS |=
                             (fgsType & FOREGROUND_SERVICE_TYPE_LOCATION)
                                     != 0 ? PROCESS_CAPABILITY_FOREGROUND_LOCATION : 0;
-                } else {
-                    //The FGS has the location capability, but due to FGS BG start restriction it
-                    //lost the capability, use temp location capability to mark this case.
-                    //TODO: remove this block when development is done.
-                    capabilityFromFGS |=
-                            (fgsType & FOREGROUND_SERVICE_TYPE_LOCATION)
-                                    != 0 ? DEBUG_PROCESS_CAPABILITY_FOREGROUND_LOCATION : 0;
-                }
-                if (s.mAllowWhileInUsePermissionInFgs) {
+
                     boolean enabled = false;
                     try {
                         enabled = mPlatformCompat.isChangeEnabled(
@@ -1575,23 +1586,13 @@ public final class OomAdjuster {
                     if (enabled) {
                         capabilityFromFGS |=
                                 (fgsType & FOREGROUND_SERVICE_TYPE_CAMERA)
-                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_CAMERA
-                                        : DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA;
+                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_CAMERA : 0;
                         capabilityFromFGS |=
                                 (fgsType & FOREGROUND_SERVICE_TYPE_MICROPHONE)
-                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
-                                        : DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
+                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_MICROPHONE : 0;
                     } else {
-                        // Remove fgsType check and assign PROCESS_CAPABILITY_FOREGROUND_CAMERA
-                        // and MICROPHONE when finish debugging.
-                        capabilityFromFGS |=
-                                (fgsType & FOREGROUND_SERVICE_TYPE_CAMERA)
-                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_CAMERA
-                                        : DEBUG_PROCESS_CAPABILITY_FOREGROUND_CAMERA_Q;
-                        capabilityFromFGS |=
-                                (fgsType & FOREGROUND_SERVICE_TYPE_MICROPHONE)
-                                        != 0 ? PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
-                                        : DEBUG_PROCESS_CAPABILITY_FOREGROUND_MICROPHONE_Q;
+                        capabilityFromFGS |= PROCESS_CAPABILITY_FOREGROUND_CAMERA
+                                | PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
                     }
                 }
             }
@@ -2257,7 +2258,7 @@ public final class OomAdjuster {
                         break;
                 }
                 mProcessGroupHandler.sendMessage(mProcessGroupHandler.obtainMessage(
-                        0 /* unused */, app.pid, processGroup, app.processName));
+                        0 /* unused */, app.pid, processGroup, app));
                 try {
                     if (curSchedGroup == ProcessList.SCHED_GROUP_TOP_APP) {
                         // do nothing if we already switched to RT

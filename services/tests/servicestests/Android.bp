@@ -44,7 +44,7 @@ android_test {
         "hamcrest-library",
         "servicestests-utils",
         "service-jobscheduler",
-        "service-permission",
+        "service-permission.impl",
         // TODO: remove once Android migrates to JUnit 4.12,
         // which provides assertThrows
         "testng",
@@ -99,6 +99,7 @@ android_test {
         ":PackageParserTestApp1",
         ":PackageParserTestApp2",
         ":PackageParserTestApp3",
+        ":apex.test",
     ],
     resource_zips: [":FrameworksServicesTests_apks_as_resources"],
 }

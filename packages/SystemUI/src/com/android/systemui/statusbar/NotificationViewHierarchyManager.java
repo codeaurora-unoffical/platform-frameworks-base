@@ -35,13 +35,13 @@ import com.android.systemui.statusbar.notification.DynamicPrivacyController;
 import com.android.systemui.statusbar.notification.NotificationEntryManager;
 import com.android.systemui.statusbar.notification.VisualStabilityManager;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
+import com.android.systemui.statusbar.notification.collection.inflation.LowPriorityInflationHelper;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.notification.stack.ForegroundServiceSectionController;
 import com.android.systemui.statusbar.notification.stack.NotificationListContainer;
 import com.android.systemui.statusbar.phone.KeyguardBypassController;
 import com.android.systemui.statusbar.phone.NotificationGroupManager;
 import com.android.systemui.util.Assert;
-import com.android.systemui.util.Utils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -60,7 +60,11 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
 
     private final Handler mHandler;
 
-    /** Re-usable map of notifications to their sorted children.*/
+    /**
+     * Re-usable map of top-level notifications to their sorted children if any.
+     * If the top-level notification doesn't have children, its key will still exist in this map
+     * with its value explicitly set to null.
+     */
     private final HashMap<NotificationEntry, List<NotificationEntry>> mTmpChildOrderMap =
             new HashMap<>();
 
@@ -71,6 +75,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
     protected final VisualStabilityManager mVisualStabilityManager;
     private final SysuiStatusBarStateController mStatusBarStateController;
     private final NotificationEntryManager mEntryManager;
+    private final LowPriorityInflationHelper mLowPriorityInflationHelper;
 
     /**
      * {@code true} if notifications not part of a group should by default be rendered in their
@@ -108,7 +113,8 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
             BubbleController bubbleController,
             DynamicPrivacyController privacyController,
             ForegroundServiceSectionController fgsSectionController,
-            DynamicChildBindController dynamicChildBindController) {
+            DynamicChildBindController dynamicChildBindController,
+            LowPriorityInflationHelper lowPriorityInflationHelper) {
         mContext = context;
         mHandler = mainHandler;
         mLockscreenUserManager = notificationLockscreenUserManager;
@@ -123,14 +129,15 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                 res.getBoolean(R.bool.config_alwaysExpandNonGroupedNotifications);
         mBubbleController = bubbleController;
         mDynamicPrivacyController = privacyController;
-        privacyController.addListener(this);
         mDynamicChildBindController = dynamicChildBindController;
+        mLowPriorityInflationHelper = lowPriorityInflationHelper;
     }
 
     public void setUpWithPresenter(NotificationPresenter presenter,
             NotificationListContainer listContainer) {
         mPresenter = presenter;
         mListContainer = listContainer;
+        mDynamicPrivacyController.addListener(this);
     }
 
     /**
@@ -146,9 +153,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
         final int N = activeNotifications.size();
         for (int i = 0; i < N; i++) {
             NotificationEntry ent = activeNotifications.get(i);
-            boolean hideMedia = Utils.useQsMediaPlayer(mContext);
             if (ent.isRowDismissed() || ent.isRowRemoved()
-                    || (ent.isMediaNotification() && hideMedia)
                     || mBubbleController.isBubbleNotificationSuppressedFromShade(ent)
                     || mFgsSectionController.hasEntry(ent)) {
                 // we don't want to update removed notifications because they could
@@ -177,23 +182,28 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                     currentUserId);
             ent.setSensitive(sensitive, deviceSensitive);
             ent.getRow().setNeedsRedaction(needsRedaction);
+            mLowPriorityInflationHelper.recheckLowPriorityViewAndInflate(ent, ent.getRow());
             boolean isChildInGroup = mGroupManager.isChildInGroupWithSummary(ent.getSbn());
 
-            boolean groupChangesAllowed = mVisualStabilityManager.areGroupChangesAllowed()
-                    || !ent.hasFinishedInitialization();
+            boolean groupChangesAllowed =
+                    mVisualStabilityManager.areGroupChangesAllowed() // user isn't looking at notifs
+                    || !ent.hasFinishedInitialization(); // notif recently added
+
             NotificationEntry parent = mGroupManager.getGroupSummary(ent.getSbn());
             if (!groupChangesAllowed) {
                 // We don't to change groups while the user is looking at them
                 boolean wasChildInGroup = ent.isChildInGroup();
                 if (isChildInGroup && !wasChildInGroup) {
                     isChildInGroup = wasChildInGroup;
-                    mVisualStabilityManager.addGroupChangesAllowedCallback(mEntryManager);
+                    mVisualStabilityManager.addGroupChangesAllowedCallback(mEntryManager,
+                            false /* persistent */);
                 } else if (!isChildInGroup && wasChildInGroup) {
                     // We allow grouping changes if the group was collapsed
                     if (mGroupManager.isLogicalGroupExpanded(ent.getSbn())) {
                         isChildInGroup = wasChildInGroup;
                         parent = ent.getRow().getNotificationParent().getEntry();
-                        mVisualStabilityManager.addGroupChangesAllowedCallback(mEntryManager);
+                        mVisualStabilityManager.addGroupChangesAllowedCallback(mEntryManager,
+                                false /* persistent */);
                     }
                 }
             }
@@ -206,8 +216,19 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                 }
                 orderedChildren.add(ent);
             } else {
+                // Top-level notif (either a summary or single notification)
+
+                // A child may have already added its summary to mTmpChildOrderMap with a
+                // list of children. This can happen since there's no guarantee summaries are
+                // sorted before its children.
+                if (!mTmpChildOrderMap.containsKey(ent)) {
+                    // mTmpChildOrderMap's keyset is used to iterate through all entries, so it's
+                    // necessary to add each top-level notif as a key
+                    mTmpChildOrderMap.put(ent, null);
+                }
                 toShow.add(ent.getRow());
             }
+
         }
 
         ArrayList<ExpandableNotificationRow> viewsToRemove = new ArrayList<>();
@@ -276,14 +297,15 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
                 if (mVisualStabilityManager.canReorderNotification(targetChild)) {
                     mListContainer.changeViewPosition(targetChild, i);
                 } else {
-                    mVisualStabilityManager.addReorderingAllowedCallback(mEntryManager);
+                    mVisualStabilityManager.addReorderingAllowedCallback(mEntryManager,
+                            false  /* persistent */);
                 }
             }
             j++;
 
         }
 
-        mDynamicChildBindController.updateChildContentViews(mTmpChildOrderMap);
+        mDynamicChildBindController.updateContentViews(mTmpChildOrderMap);
         mVisualStabilityManager.onReorderingFinished();
         // clear the map again for the next usage
         mTmpChildOrderMap.clear();
@@ -307,17 +329,20 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
             }
 
             ExpandableNotificationRow parent = (ExpandableNotificationRow) view;
-            List<ExpandableNotificationRow> children = parent.getNotificationChildren();
+            List<ExpandableNotificationRow> children = parent.getAttachedChildren();
             List<NotificationEntry> orderedChildren = mTmpChildOrderMap.get(parent.getEntry());
-
-            for (int childIndex = 0; orderedChildren != null && childIndex < orderedChildren.size();
-                    childIndex++) {
+            if (orderedChildren == null) {
+                // Not a group
+                continue;
+            }
+            parent.setUntruncatedChildCount(orderedChildren.size());
+            for (int childIndex = 0; childIndex < orderedChildren.size(); childIndex++) {
                 ExpandableNotificationRow childView = orderedChildren.get(childIndex).getRow();
                 if (children == null || !children.contains(childView)) {
                     if (childView.getParent() != null) {
-                        Log.wtf(TAG, "trying to add a notification child that already has " +
-                                "a parent. class:" + childView.getParent().getClass() +
-                                "\n child: " + childView);
+                        Log.wtf(TAG, "trying to add a notification child that already has "
+                                + "a parent. class:" + childView.getParent().getClass()
+                                + "\n child: " + childView);
                         // This shouldn't happen. We can recover by removing it though.
                         ((ViewGroup) childView.getParent()).removeView(childView);
                     }
@@ -349,7 +374,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
             }
 
             ExpandableNotificationRow parent = (ExpandableNotificationRow) view;
-            List<ExpandableNotificationRow> children = parent.getNotificationChildren();
+            List<ExpandableNotificationRow> children = parent.getAttachedChildren();
             List<NotificationEntry> orderedChildren = mTmpChildOrderMap.get(parent.getEntry());
 
             if (children != null) {
@@ -454,7 +479,7 @@ public class NotificationViewHierarchyManager implements DynamicPrivacyControlle
             }
             if (row.isSummaryWithChildren()) {
                 List<ExpandableNotificationRow> notificationChildren =
-                        row.getNotificationChildren();
+                        row.getAttachedChildren();
                 int size = notificationChildren.size();
                 for (int i = size - 1; i >= 0; i--) {
                     stack.push(notificationChildren.get(i));

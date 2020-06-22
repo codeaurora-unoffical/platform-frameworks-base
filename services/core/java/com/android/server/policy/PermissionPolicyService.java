@@ -72,6 +72,7 @@ import com.android.server.pm.permission.PermissionManagerServiceInternal;
 import com.android.server.policy.PermissionPolicyInternal.OnInitializedCallback;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +88,7 @@ import java.util.concurrent.ExecutionException;
 public final class PermissionPolicyService extends SystemService {
     private static final String LOG_TAG = PermissionPolicyService.class.getSimpleName();
     private static final boolean DEBUG = false;
+    private static final long USER_SENSITIVE_UPDATE_DELAY_MS = 10000;
 
     private final Object mLock = new Object();
 
@@ -107,6 +109,15 @@ public final class PermissionPolicyService extends SystemService {
     @GuardedBy("mLock")
     private final ArraySet<Pair<String, Integer>> mIsPackageSyncsScheduled = new ArraySet<>();
 
+    /**
+     * Whether an async {@link #resetAppOpPermissionsIfNotRequestedForUid} is currently
+     * scheduled for a uid.
+     */
+    @GuardedBy("mLock")
+    private final SparseBooleanArray mIsUidSyncScheduled = new SparseBooleanArray();
+
+    private List<String> mAppOpPermissions;
+
     public PermissionPolicyService(@NonNull Context context) {
         super(context);
 
@@ -117,7 +128,7 @@ public final class PermissionPolicyService extends SystemService {
     public void onStart() {
         final PackageManagerInternal packageManagerInternal = LocalServices.getService(
                 PackageManagerInternal.class);
-        final PermissionManagerServiceInternal permManagerInternal = LocalServices.getService(
+        final PermissionManagerServiceInternal permissionManagerInternal = LocalServices.getService(
                 PermissionManagerServiceInternal.class);
         final IAppOpsService appOpsService = IAppOpsService.Stub.asInterface(
                 ServiceManager.getService(Context.APP_OPS_SERVICE));
@@ -125,38 +136,44 @@ public final class PermissionPolicyService extends SystemService {
         packageManagerInternal.getPackageList(new PackageListObserver() {
             @Override
             public void onPackageAdded(String packageName, int uid) {
-                onPackageChanged(packageName, uid);
-            }
-
-            @Override
-            public void onPackageChanged(String packageName, int uid) {
                 final int userId = UserHandle.getUserId(uid);
-
                 if (isStarted(userId)) {
                     synchronizePackagePermissionsAndAppOpsForUser(packageName, userId);
                 }
             }
 
             @Override
+            public void onPackageChanged(String packageName, int uid) {
+                final int userId = UserHandle.getUserId(uid);
+                if (isStarted(userId)) {
+                    synchronizePackagePermissionsAndAppOpsForUser(packageName, userId);
+                    resetAppOpPermissionsIfNotRequestedForUid(uid);
+                }
+            }
+
+            @Override
             public void onPackageRemoved(String packageName, int uid) {
-                /* do nothing */
+                final int userId = UserHandle.getUserId(uid);
+                if (isStarted(userId)) {
+                    resetAppOpPermissionsIfNotRequestedForUid(uid);
+                }
             }
         });
 
-        permManagerInternal.addOnRuntimePermissionStateChangedListener(
+        permissionManagerInternal.addOnRuntimePermissionStateChangedListener(
                 this::synchronizePackagePermissionsAndAppOpsAsyncForUser);
 
         mAppOpsCallback = new IAppOpsCallback.Stub() {
             public void opChanged(int op, int uid, String packageName) {
                 synchronizePackagePermissionsAndAppOpsAsyncForUser(packageName,
                         UserHandle.getUserId(uid));
+                resetAppOpPermissionsIfNotRequestedForUidAsync(uid);
             }
         };
 
         final ArrayList<PermissionInfo> dangerousPerms =
-                permManagerInternal.getAllPermissionWithProtection(
+                permissionManagerInternal.getAllPermissionsWithProtection(
                         PermissionInfo.PROTECTION_DANGEROUS);
-
         try {
             int numDangerousPerms = dangerousPerms.size();
             for (int i = 0; i < numDangerousPerms; i++) {
@@ -177,6 +194,37 @@ public final class PermissionPolicyService extends SystemService {
             }
         } catch (RemoteException doesNotHappen) {
             Slog.wtf(LOG_TAG, "Cannot set up app-ops listener");
+        }
+
+        final List<PermissionInfo> appOpPermissionInfos =
+                permissionManagerInternal.getAllPermissionsWithProtectionFlags(
+                        PermissionInfo.PROTECTION_FLAG_APPOP);
+        mAppOpPermissions = new ArrayList<>();
+        final int appOpPermissionInfosSize = appOpPermissionInfos.size();
+        for (int i = 0; i < appOpPermissionInfosSize; i++) {
+            final PermissionInfo appOpPermissionInfo = appOpPermissionInfos.get(i);
+
+            switch (appOpPermissionInfo.name) {
+                case android.Manifest.permission.ACCESS_NOTIFICATIONS:
+                case android.Manifest.permission.MANAGE_IPSEC_TUNNELS:
+                    continue;
+                case android.Manifest.permission.REQUEST_INSTALL_PACKAGES:
+                    // Settings allows the user to control the app op if it's not in the default
+                    // mode, regardless of whether the app has requested the permission, so we
+                    // should not reset it.
+                    continue;
+                default:
+                    final int appOpCode = AppOpsManager.permissionToOpCode(
+                            appOpPermissionInfo.name);
+                    if (appOpCode != OP_NONE) {
+                        mAppOpPermissions.add(appOpPermissionInfo.name);
+                        try {
+                            appOpsService.startWatchingMode(appOpCode, null, mAppOpsCallback);
+                        } catch (RemoteException e) {
+                            Slog.wtf(LOG_TAG, "Cannot set up app-ops listener", e);
+                        }
+                    }
+            }
         }
 
         IntentFilter intentFilter = new IntentFilter();
@@ -372,7 +420,8 @@ public final class PermissionPolicyService extends SystemService {
                 throw new IllegalStateException(e);
             }
 
-            permissionControllerManager.updateUserSensitive();
+            FgThread.getHandler().postDelayed(permissionControllerManager::updateUserSensitive,
+                    USER_SENSITIVE_UPDATE_DELAY_MS);
 
             packageManagerInternal.updateRuntimePermissionsFingerprint(userId);
         }
@@ -445,6 +494,70 @@ public final class PermissionPolicyService extends SystemService {
         synchronizer.syncPackages();
     }
 
+    private void resetAppOpPermissionsIfNotRequestedForUidAsync(int uid) {
+        if (isStarted(UserHandle.getUserId(uid))) {
+            synchronized (mLock) {
+                if (!mIsUidSyncScheduled.get(uid)) {
+                    mIsUidSyncScheduled.put(uid, true);
+                    FgThread.getHandler().sendMessage(PooledLambda.obtainMessage(
+                            PermissionPolicyService::resetAppOpPermissionsIfNotRequestedForUid,
+                            this, uid));
+                }
+            }
+        }
+    }
+
+    private void resetAppOpPermissionsIfNotRequestedForUid(int uid) {
+        synchronized (mLock) {
+            mIsUidSyncScheduled.delete(uid);
+        }
+
+        final Context context = getContext();
+        final PackageManager userPackageManager = getUserContext(context,
+                UserHandle.getUserHandleForUid(uid)).getPackageManager();
+        final String[] packageNames = userPackageManager.getPackagesForUid(uid);
+        if (packageNames == null || packageNames.length == 0) {
+            return;
+        }
+
+        final ArraySet<String> requestedPermissions = new ArraySet<>();
+        for (String packageName : packageNames) {
+            final PackageInfo packageInfo;
+            try {
+                packageInfo = userPackageManager.getPackageInfo(packageName, GET_PERMISSIONS);
+            } catch (NameNotFoundException e) {
+                continue;
+            }
+            if (packageInfo == null || packageInfo.requestedPermissions == null) {
+                continue;
+            }
+            Collections.addAll(requestedPermissions, packageInfo.requestedPermissions);
+        }
+
+        final AppOpsManager appOpsManager = context.getSystemService(AppOpsManager.class);
+        final AppOpsManagerInternal appOpsManagerInternal = LocalServices.getService(
+                AppOpsManagerInternal.class);
+        final int appOpPermissionsSize = mAppOpPermissions.size();
+        for (int i = 0; i < appOpPermissionsSize; i++) {
+            final String appOpPermission = mAppOpPermissions.get(i);
+
+            if (!requestedPermissions.contains(appOpPermission)) {
+                final int appOpCode = AppOpsManager.permissionToOpCode(appOpPermission);
+                final int defaultAppOpMode = AppOpsManager.opToDefaultMode(appOpCode);
+                for (String packageName : packageNames) {
+                    final int appOpMode = appOpsManager.unsafeCheckOpRawNoThrow(appOpCode, uid,
+                            packageName);
+                    if (appOpMode != defaultAppOpMode) {
+                        appOpsManagerInternal.setUidModeFromPermissionPolicy(appOpCode, uid,
+                                defaultAppOpMode, mAppOpsCallback);
+                        appOpsManagerInternal.setModeFromPermissionPolicy(appOpCode, uid,
+                                packageName, defaultAppOpMode, mAppOpsCallback);
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * Synchronizes permission to app ops. You *must* always sync all packages
      * in a shared UID at the same time to ensure proper synchronization.
@@ -499,7 +612,7 @@ public final class PermissionPolicyService extends SystemService {
             PermissionManagerServiceInternal permissionManagerInternal = LocalServices.getService(
                     PermissionManagerServiceInternal.class);
             List<PermissionInfo> permissionInfos =
-                    permissionManagerInternal.getAllPermissionWithProtection(
+                    permissionManagerInternal.getAllPermissionsWithProtection(
                             PermissionInfo.PROTECTION_DANGEROUS);
             int permissionInfosSize = permissionInfos.size();
             for (int i = 0; i < permissionInfosSize; i++) {

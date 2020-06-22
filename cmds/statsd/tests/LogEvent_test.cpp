@@ -95,9 +95,10 @@ TEST(LogEventTest, TestPrimitiveParsing) {
     EXPECT_EQ(100, logEvent.GetTagId());
     EXPECT_EQ(1000, logEvent.GetUid());
     EXPECT_EQ(1001, logEvent.GetPid());
+    EXPECT_FALSE(logEvent.hasAttributionChain());
 
     const vector<FieldValue>& values = logEvent.getValues();
-    EXPECT_EQ(4, values.size());
+    ASSERT_EQ(4, values.size());
 
     const FieldValue& int32Item = values[0];
     Field expectedField = getField(100, {1, 1, 1}, 0, {false, false, false});
@@ -143,9 +144,10 @@ TEST(LogEventTest, TestStringAndByteArrayParsing) {
     EXPECT_EQ(100, logEvent.GetTagId());
     EXPECT_EQ(1000, logEvent.GetUid());
     EXPECT_EQ(1001, logEvent.GetPid());
+    EXPECT_FALSE(logEvent.hasAttributionChain());
 
     const vector<FieldValue>& values = logEvent.getValues();
-    EXPECT_EQ(2, values.size());
+    ASSERT_EQ(2, values.size());
 
     const FieldValue& stringItem = values[0];
     Field expectedField = getField(100, {1, 1, 1}, 0, {false, false, false});
@@ -179,9 +181,10 @@ TEST(LogEventTest, TestEmptyString) {
     EXPECT_EQ(100, logEvent.GetTagId());
     EXPECT_EQ(1000, logEvent.GetUid());
     EXPECT_EQ(1001, logEvent.GetPid());
+    EXPECT_FALSE(logEvent.hasAttributionChain());
 
     const vector<FieldValue>& values = logEvent.getValues();
-    EXPECT_EQ(1, values.size());
+    ASSERT_EQ(1, values.size());
 
     const FieldValue& item = values[0];
     Field expectedField = getField(100, {1, 1, 1}, 0, {true, false, false});
@@ -210,7 +213,7 @@ TEST(LogEventTest, TestByteArrayWithNullCharacter) {
     EXPECT_EQ(1001, logEvent.GetPid());
 
     const vector<FieldValue>& values = logEvent.getValues();
-    EXPECT_EQ(1, values.size());
+    ASSERT_EQ(1, values.size());
 
     const FieldValue& item = values[0];
     Field expectedField = getField(100, {1, 1, 1}, 0, {true, false, false});
@@ -246,7 +249,12 @@ TEST(LogEventTest, TestAttributionChain) {
     EXPECT_EQ(1001, logEvent.GetPid());
 
     const vector<FieldValue>& values = logEvent.getValues();
-    EXPECT_EQ(4, values.size());  // 2 per attribution node
+    ASSERT_EQ(4, values.size());  // 2 per attribution node
+
+    std::pair<int, int> attrIndexRange;
+    EXPECT_TRUE(logEvent.hasAttributionChain(&attrIndexRange));
+    EXPECT_EQ(0, attrIndexRange.first);
+    EXPECT_EQ(3, attrIndexRange.second);
 
     // Check first attribution node
     const FieldValue& uid1Item = values[0];
@@ -282,7 +290,7 @@ TEST(LogEventTest, TestAnnotationIdIsUid) {
     createIntWithBoolAnnotationLogEvent(&event, ANNOTATION_ID_IS_UID, true);
 
     const vector<FieldValue>& values = event.getValues();
-    EXPECT_EQ(values.size(), 1);
+    ASSERT_EQ(values.size(), 1);
     EXPECT_EQ(event.getUidFieldIndex(), 0);
 }
 
@@ -291,7 +299,7 @@ TEST(LogEventTest, TestAnnotationIdStateNested) {
     createIntWithBoolAnnotationLogEvent(&event, ANNOTATION_ID_STATE_NESTED, true);
 
     const vector<FieldValue>& values = event.getValues();
-    EXPECT_EQ(values.size(), 1);
+    ASSERT_EQ(values.size(), 1);
     EXPECT_TRUE(values[0].mAnnotations.isNested());
 }
 
@@ -300,7 +308,7 @@ TEST(LogEventTest, TestPrimaryFieldAnnotation) {
     createIntWithBoolAnnotationLogEvent(&event, ANNOTATION_ID_PRIMARY_FIELD, true);
 
     const vector<FieldValue>& values = event.getValues();
-    EXPECT_EQ(values.size(), 1);
+    ASSERT_EQ(values.size(), 1);
     EXPECT_TRUE(values[0].mAnnotations.isPrimaryField());
 }
 
@@ -309,7 +317,7 @@ TEST(LogEventTest, TestExclusiveStateAnnotation) {
     createIntWithBoolAnnotationLogEvent(&event, ANNOTATION_ID_EXCLUSIVE_STATE, true);
 
     const vector<FieldValue>& values = event.getValues();
-    EXPECT_EQ(values.size(), 1);
+    ASSERT_EQ(values.size(), 1);
     EXPECT_TRUE(values[0].mAnnotations.isExclusiveState());
 }
 
@@ -341,7 +349,7 @@ TEST(LogEventTest, TestPrimaryFieldFirstUidAnnotation) {
 
     // Check annotation
     const vector<FieldValue>& values = logEvent.getValues();
-    EXPECT_EQ(values.size(), numInts + 4);
+    ASSERT_EQ(values.size(), numInts + 4);
     EXPECT_TRUE(values[firstUidInChainIndex].mAnnotations.isPrimaryField());
 }
 
@@ -351,8 +359,8 @@ TEST(LogEventTest, TestResetStateAnnotation) {
     createIntWithIntAnnotationLogEvent(&event, ANNOTATION_ID_TRIGGER_STATE_RESET, resetState);
 
     const vector<FieldValue>& values = event.getValues();
-    EXPECT_EQ(values.size(), 1);
-    EXPECT_EQ(values[0].mAnnotations.getResetState(), resetState);
+    ASSERT_EQ(values.size(), 1);
+    EXPECT_EQ(event.getResetState(), resetState);
 }
 
 }  // namespace statsd

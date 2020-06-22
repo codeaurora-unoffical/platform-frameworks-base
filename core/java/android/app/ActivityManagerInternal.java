@@ -81,6 +81,15 @@ public abstract class ActivityManagerInternal {
             String processName, String abiOverride, int uid, Runnable crashHandler);
 
     /**
+     * Called when a user has been deleted. This can happen during normal device usage
+     * or just at startup, when partially removed users are purged. Any state persisted by the
+     * ActivityManager should be purged now.
+     *
+     * @param userId The user being cleaned up.
+     */
+    public abstract void onUserRemoved(@UserIdInt int userId);
+
+    /**
      * Kill foreground apps from the specified user.
      */
     public abstract void killForegroundAppsForUser(@UserIdInt int userId);
@@ -389,13 +398,6 @@ public abstract class ActivityManagerInternal {
      */
     public abstract boolean isUidCurrentlyInstrumented(int uid);
 
-    /**
-     * Show a debug toast, asking user to file a bugreport.
-     */
-    // TODO: remove this toast after feature development is done
-    public abstract void showWhileInUseDebugToast(int uid, int op, int mode);
-
-
     /** Is this a device owner app? */
     public abstract boolean isDeviceOwner(int uid);
 
@@ -418,6 +420,26 @@ public abstract class ActivityManagerInternal {
             IIntentReceiver resultTo,
             String[] requiredPermissions, boolean serialized,
             int userId, int[] appIdWhitelist);
+
+    /**
+     * Add uid to the ActivityManagerService PendingStartActivityUids list.
+     * @param uid uid
+     * @param pid pid of the ProcessRecord that is pending top.
+     */
+    public abstract void addPendingTopUid(int uid, int pid);
+
+    /**
+     * Delete uid from the ActivityManagerService PendingStartActivityUids list.
+     * @param uid uid
+     */
+    public abstract void deletePendingTopUid(int uid);
+
+    /**
+     * Is the uid in ActivityManagerService PendingStartActivityUids list?
+     * @param uid
+     * @return true if exists, false otherwise.
+     */
+    public abstract boolean isPendingTopUid(int uid);
 
     // Starts a process as empty.
     public abstract int startActivityAsUserEmpty(Bundle options);

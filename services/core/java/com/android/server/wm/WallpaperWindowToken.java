@@ -16,6 +16,7 @@
 
 package com.android.server.wm;
 
+import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
 
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_LAYERS;
@@ -45,6 +46,7 @@ class WallpaperWindowToken extends WindowToken {
             DisplayContent dc, boolean ownerCanManageAppTokens) {
         super(service, token, TYPE_WALLPAPER, explicit, dc, ownerCanManageAppTokens);
         dc.mWallpaperController.addWallpaperToken(this);
+        setWindowingMode(WINDOWING_MODE_FULLSCREEN);
     }
 
     @Override
@@ -121,19 +123,20 @@ class WallpaperWindowToken extends WindowToken {
         }
 
         final WallpaperController wallpaperController = mDisplayContent.mWallpaperController;
+        final WindowState wallpaperTarget = wallpaperController.getWallpaperTarget();
 
-        if (visible) {
-            final WindowState wallpaperTarget = wallpaperController.getWallpaperTarget();
+        if (visible && wallpaperTarget != null) {
             final RecentsAnimationController recentsAnimationController =
                     mWmService.getRecentsAnimationController();
-            if (wallpaperTarget != null
-                    && recentsAnimationController != null
+            if (recentsAnimationController != null
                     && recentsAnimationController.isAnimatingTask(wallpaperTarget.getTask())) {
                 // If the Recents animation is running, and the wallpaper target is the animating
                 // task we want the wallpaper to be rotated in the same orientation as the
                 // RecentsAnimation's target (e.g the launcher)
                 recentsAnimationController.linkFixedRotationTransformIfNeeded(this);
-            } else if (wallpaperTarget != null
+            } else if ((wallpaperTarget.mActivityRecord == null
+                    // Ignore invisible activity because it may be moving to background.
+                    || wallpaperTarget.mActivityRecord.mVisibleRequested)
                     && wallpaperTarget.mToken.hasFixedRotationTransform()) {
                 // If the wallpaper target has a fixed rotation, we want the wallpaper to follow its
                 // rotation

@@ -25,6 +25,7 @@ import android.content.res.CompatibilityInfo;
 import android.content.res.Configuration;
 import android.os.IBinder;
 import android.util.MergedConfiguration;
+import android.view.DisplayAdjustments.FixedRotationAdjustments;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.content.ReferrerIntent;
@@ -146,16 +147,8 @@ public abstract class ClientTransactionHandler {
     /** Deliver result from another activity. */
     public abstract void handleSendResult(IBinder token, List<ResultInfo> results, String reason);
 
-    /** Deliver multi-window mode change notification. */
-    public abstract void handleMultiWindowModeChanged(IBinder token, boolean isInMultiWindowMode,
-            Configuration overrideConfig);
-
     /** Deliver new intent. */
     public abstract void handleNewIntent(IBinder token, List<ReferrerIntent> intents);
-
-    /** Deliver picture-in-picture mode change notification. */
-    public abstract void handlePictureInPictureModeChanged(IBinder token, boolean isInPipMode,
-            Configuration overrideConfig);
 
     /** Request that an activity enter picture-in-picture. */
     public abstract void handlePictureInPictureRequested(IBinder token);
@@ -174,6 +167,10 @@ public abstract class ClientTransactionHandler {
 
     /** Deliver app configuration change notification. */
     public abstract void handleConfigurationChanged(Configuration config);
+
+    /** Apply addition adjustments to override display information. */
+    public abstract void handleFixedRotationAdjustments(IBinder token,
+            FixedRotationAdjustments fixedRotationAdjustments);
 
     /**
      * Get {@link android.app.ActivityThread.ActivityClientRecord} instance that corresponds to the

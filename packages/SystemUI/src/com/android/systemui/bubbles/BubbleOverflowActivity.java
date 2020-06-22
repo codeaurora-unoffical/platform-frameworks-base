@@ -21,6 +21,8 @@ import static com.android.systemui.bubbles.BubbleDebugConfig.TAG_BUBBLES;
 import static com.android.systemui.bubbles.BubbleDebugConfig.TAG_WITH_CLASS_NAME;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.pm.ShortcutInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
@@ -31,6 +33,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -38,6 +41,7 @@ import android.widget.TextView;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.android.internal.util.ContrastColorUtil;
 import com.android.systemui.R;
 
 import java.util.ArrayList;
@@ -60,6 +64,33 @@ public class BubbleOverflowActivity extends Activity {
     private RecyclerView mRecyclerView;
     private List<Bubble> mOverflowBubbles = new ArrayList<>();
 
+    private class NoScrollGridLayoutManager extends GridLayoutManager {
+        NoScrollGridLayoutManager(Context context, int columns) {
+            super(context, columns);
+        }
+        @Override
+        public boolean canScrollVertically() {
+            if (mBubbleController.inLandscape()) {
+                return super.canScrollVertically();
+            }
+            return false;
+        }
+
+        @Override
+        public int getColumnCountForAccessibility(RecyclerView.Recycler recycler,
+                RecyclerView.State state) {
+            int bubbleCount = state.getItemCount();
+            int columnCount = super.getColumnCountForAccessibility(recycler, state);
+            if (bubbleCount < columnCount) {
+                // If there are 4 columns and bubbles <= 3,
+                // TalkBack says "AppName 1 of 4 in list 4 items"
+                // This is a workaround until TalkBack bug is fixed for GridLayoutManager
+                return bubbleCount;
+            }
+            return columnCount;
+        }
+    }
+
     @Inject
     public BubbleOverflowActivity(BubbleController controller) {
         mBubbleController = controller;
@@ -75,15 +106,24 @@ public class BubbleOverflowActivity extends Activity {
         mRecyclerView = findViewById(R.id.bubble_overflow_recycler);
         mEmptyStateImage = findViewById(R.id.bubble_overflow_empty_state_image);
 
+        updateDimensions();
+        onDataChanged(mBubbleController.getOverflowBubbles());
+        mBubbleController.setOverflowCallback(() -> {
+            onDataChanged(mBubbleController.getOverflowBubbles());
+        });
+    }
+
+    void updateDimensions() {
         Resources res = getResources();
         final int columns = res.getInteger(R.integer.bubbles_overflow_columns);
         mRecyclerView.setLayoutManager(
-                new GridLayoutManager(getApplicationContext(), columns));
+                new NoScrollGridLayoutManager(getApplicationContext(), columns));
 
         DisplayMetrics displayMetrics = new DisplayMetrics();
         getWindowManager().getDefaultDisplay().getMetrics(displayMetrics);
-        final int recyclerViewWidth = (displayMetrics.widthPixels
-                - res.getDimensionPixelSize(R.dimen.bubble_overflow_padding));
+
+        final int overflowPadding = res.getDimensionPixelSize(R.dimen.bubble_overflow_padding);
+        final int recyclerViewWidth = displayMetrics.widthPixels - (overflowPadding * 2);
         final int viewWidth = recyclerViewWidth / columns;
 
         final int maxOverflowBubbles = res.getInteger(R.integer.bubbles_max_overflow);
@@ -92,20 +132,15 @@ public class BubbleOverflowActivity extends Activity {
                 - res.getDimensionPixelSize(R.dimen.bubble_overflow_padding);
         final int viewHeight = recyclerViewHeight / rows;
 
-        mAdapter = new BubbleOverflowAdapter(mOverflowBubbles,
+        mAdapter = new BubbleOverflowAdapter(getApplicationContext(), mOverflowBubbles,
                 mBubbleController::promoteBubbleFromOverflow, viewWidth, viewHeight);
         mRecyclerView.setAdapter(mAdapter);
-        onDataChanged(mBubbleController.getOverflowBubbles());
-        mBubbleController.setOverflowCallback(() -> {
-            onDataChanged(mBubbleController.getOverflowBubbles());
-        });
-        onThemeChanged();
     }
 
     /**
      * Handle theme changes.
      */
-    void onThemeChanged() {
+    void updateTheme() {
         final int mode =
                 getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         switch (mode) {
@@ -164,7 +199,8 @@ public class BubbleOverflowActivity extends Activity {
     @Override
     public void onResume() {
         super.onResume();
-        onThemeChanged();
+        updateDimensions();
+        updateTheme();
     }
 
     @Override
@@ -183,13 +219,17 @@ public class BubbleOverflowActivity extends Activity {
 }
 
 class BubbleOverflowAdapter extends RecyclerView.Adapter<BubbleOverflowAdapter.ViewHolder> {
+    private static final String TAG = TAG_WITH_CLASS_NAME ? "BubbleOverflowAdapter" : TAG_BUBBLES;
+
+    private Context mContext;
     private Consumer<Bubble> mPromoteBubbleFromOverflow;
     private List<Bubble> mBubbles;
     private int mWidth;
     private int mHeight;
 
-    public BubbleOverflowAdapter(List<Bubble> list, Consumer<Bubble> promoteBubble, int width,
-            int height) {
+    public BubbleOverflowAdapter(Context context, List<Bubble> list, Consumer<Bubble> promoteBubble,
+            int width, int height) {
+        mContext = context;
         mBubbles = list;
         mPromoteBubbleFromOverflow = promoteBubble;
         mWidth = width;
@@ -199,6 +239,8 @@ class BubbleOverflowAdapter extends RecyclerView.Adapter<BubbleOverflowAdapter.V
     @Override
     public BubbleOverflowAdapter.ViewHolder onCreateViewHolder(ViewGroup parent,
             int viewType) {
+
+        // Set layout for overflow bubble view.
         LinearLayout overflowView = (LinearLayout) LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.bubble_overflow_view, parent, false);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -207,6 +249,18 @@ class BubbleOverflowAdapter extends RecyclerView.Adapter<BubbleOverflowAdapter.V
         params.width = mWidth;
         params.height = mHeight;
         overflowView.setLayoutParams(params);
+
+        // Ensure name has enough contrast.
+        final TypedArray ta = mContext.obtainStyledAttributes(
+                new int[]{android.R.attr.colorBackgroundFloating, android.R.attr.textColorPrimary});
+        final int bgColor = ta.getColor(0, Color.WHITE);
+        int textColor = ta.getColor(1, Color.BLACK);
+        textColor = ContrastColorUtil.ensureTextContrast(textColor, bgColor, true);
+        ta.recycle();
+
+        TextView viewName = overflowView.findViewById(R.id.bubble_view_name);
+        viewName.setTextColor(textColor);
+
         return new ViewHolder(overflowView);
     }
 
@@ -215,17 +269,49 @@ class BubbleOverflowAdapter extends RecyclerView.Adapter<BubbleOverflowAdapter.V
         Bubble b = mBubbles.get(index);
 
         vh.iconView.setRenderedBubble(b);
+        vh.iconView.removeDotSuppressionFlag(BadgedImageView.SuppressionFlag.FLYOUT_VISIBLE);
         vh.iconView.setOnClickListener(view -> {
             mBubbles.remove(b);
             notifyDataSetChanged();
             mPromoteBubbleFromOverflow.accept(b);
         });
 
-        Bubble.FlyoutMessage message = b.getFlyoutMessage();
-        if (message != null && message.senderName != null) {
-            vh.textView.setText(message.senderName);
+        String titleStr = b.getTitle();
+        if (titleStr == null) {
+            titleStr = mContext.getResources().getString(R.string.notification_bubble_title);
+        }
+        vh.iconView.setContentDescription(mContext.getResources().getString(
+                R.string.bubble_content_description_single, titleStr, b.getAppName()));
+
+        vh.iconView.setAccessibilityDelegate(
+                new View.AccessibilityDelegate() {
+                    @Override
+                    public void onInitializeAccessibilityNodeInfo(View host,
+                            AccessibilityNodeInfo info) {
+                        super.onInitializeAccessibilityNodeInfo(host, info);
+                        // Talkback prompts "Double tap to add back to stack"
+                        // instead of the default "Double tap to activate"
+                        info.addAction(
+                                new AccessibilityNodeInfo.AccessibilityAction(
+                                        AccessibilityNodeInfo.ACTION_CLICK,
+                                        mContext.getResources().getString(
+                                                R.string.bubble_accessibility_action_add_back)));
+                    }
+                });
+
+        // If the bubble was persisted, the entry is null but it should have shortcut info
+        ShortcutInfo info = b.getEntry() == null
+                ? b.getShortcutInfo()
+                : b.getEntry().getRanking().getShortcutInfo();
+        if (info == null) {
+            Log.d(TAG, "ShortcutInfo required to bubble but none found for " + b);
         } else {
-            vh.textView.setText(b.getAppName());
+            CharSequence label = info.getLabel();
+            if (label == null) {
+                vh.textView.setText(b.getAppName());
+            } else {
+                vh.textView.setText(label.toString());
+            }
         }
     }
 

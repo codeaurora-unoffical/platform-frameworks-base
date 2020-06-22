@@ -817,6 +817,9 @@ public final class StrictMode {
 
             /** @hide */
             public @NonNull Builder permitActivityLeaks() {
+                synchronized (StrictMode.class) {
+                    sExpectedActivityInstanceCount.clear();
+                }
                 return disable(DETECT_VM_ACTIVITY_LEAKS);
             }
 
@@ -1022,7 +1025,6 @@ public final class StrictMode {
              * behaviors or empty states. Instead, apps should store data needed
              * while a user is locked under device protected storage areas.
              *
-             * @see Context#createCredentialProtectedStorageContext()
              * @see Context#createDeviceProtectedStorageContext()
              */
             public @NonNull Builder detectCredentialProtectedWhileLocked() {
@@ -2587,8 +2589,10 @@ public final class StrictMode {
                 return;
             }
 
+            // Use the instance count from InstanceTracker as initial value.
             Integer expected = sExpectedActivityInstanceCount.get(klass);
-            Integer newExpected = expected == null ? 1 : expected + 1;
+            Integer newExpected =
+                    expected == null ? InstanceTracker.getInstanceCount(klass) + 1 : expected + 1;
             sExpectedActivityInstanceCount.put(klass, newExpected);
         }
     }

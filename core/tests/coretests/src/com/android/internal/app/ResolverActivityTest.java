@@ -38,13 +38,17 @@ import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertFalse;
 
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
+import android.net.Uri;
+import android.os.RemoteException;
 import android.os.UserHandle;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.RelativeLayout;
+import android.widget.TextView;
 
 import androidx.test.InstrumentationRegistry;
 import androidx.test.espresso.Espresso;
@@ -543,7 +547,51 @@ public class ResolverActivityTest {
         assertThat(activity.getWorkListAdapter().getCount(), is(4));
     }
 
-    @Ignore // b/148156663
+    @Test
+    public void testWorkTab_headerIsVisibleInPersonalTab() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(1);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createOpenWebsiteIntent();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        TextView headerText = activity.findViewById(R.id.title);
+        String initialText = headerText.getText().toString();
+        assertFalse(initialText.isEmpty(), "Header text is empty.");
+        assertThat(headerText.getVisibility(), is(View.VISIBLE));
+    }
+
+    @Test
+    public void testWorkTab_switchTabs_headerStaysSame() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(1);
+        List<ResolvedComponentInfo> workResolvedComponentInfos = createResolvedComponentsForTest(4);
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createOpenWebsiteIntent();
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+        TextView headerText = activity.findViewById(R.id.title);
+        String initialText = headerText.getText().toString();
+        onView(withText(R.string.resolver_work_tab))
+                .perform(click());
+
+        waitForIdle();
+        String currentText = headerText.getText().toString();
+        assertThat(headerText.getVisibility(), is(View.VISIBLE));
+        assertThat(String.format("Header text is not the same when switching tabs, personal profile"
+                        + " header was %s but work profile header is %s", initialText, currentText),
+                TextUtils.equals(initialText, currentText));
+    }
+
     @Test
     public void testWorkTab_noPersonalApps_canStartWorkApps()
             throws InterruptedException {
@@ -568,8 +616,10 @@ public class ResolverActivityTest {
         waitForIdle();
         // wait for the share sheet to expand
         Thread.sleep(ChooserActivity.LIST_VIEW_UPDATE_INTERVAL_IN_MILLIS);
-        onView(first(allOf(withText(workResolvedComponentInfos.get(0)
-                .getResolveInfoAt(0).activityInfo.applicationInfo.name), isCompletelyDisplayed())))
+        onView(first(allOf(
+                withText(workResolvedComponentInfos.get(0)
+                        .getResolveInfoAt(0).activityInfo.applicationInfo.name),
+                isDisplayed())))
                 .perform(click());
         onView(withId(R.id.button_once))
                 .perform(click());
@@ -753,11 +803,72 @@ public class ResolverActivityTest {
         assertThat(chosen[0], is(personalResolvedComponentInfos.get(0).getResolveInfoAt(0)));
     }
 
+    @Test
+    public void testWorkTab_onePersonalTarget_emptyStateOnWorkTarget_autolaunch() {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+        int workProfileTargets = 4;
+        List<ResolvedComponentInfo> personalResolvedComponentInfos =
+                createResolvedComponentsForTestWithOtherProfile(2, /* userId */ 10);
+        List<ResolvedComponentInfo> workResolvedComponentInfos =
+                createResolvedComponentsForTest(workProfileTargets);
+        sOverrides.hasCrossProfileIntents = false;
+        setupResolverControllers(personalResolvedComponentInfos, workResolvedComponentInfos);
+        Intent sendIntent = createSendImageIntent();
+        sendIntent.setType("TestType");
+        ResolveInfo[] chosen = new ResolveInfo[1];
+        sOverrides.onSafelyStartCallback = targetInfo -> {
+            chosen[0] = targetInfo.getResolveInfo();
+            return true;
+        };
+
+        mActivityRule.launchActivity(sendIntent);
+        waitForIdle();
+
+        assertThat(chosen[0], is(personalResolvedComponentInfos.get(1).getResolveInfoAt(0)));
+    }
+
+    @Test
+    public void testLayoutWithDefault_withWorkTab_neverShown() throws RemoteException {
+        // enable the work tab feature flag
+        ResolverActivity.ENABLE_TABBED_VIEW = true;
+        markWorkProfileUserAvailable();
+
+        // In this case we prefer the other profile and don't display anything about the last
+        // chosen activity.
+        Intent sendIntent = createSendImageIntent();
+        List<ResolvedComponentInfo> resolvedComponentInfos =
+                createResolvedComponentsForTest(2);
+
+        when(sOverrides.resolverListController.getResolversForIntent(Mockito.anyBoolean(),
+                Mockito.anyBoolean(),
+                Mockito.isA(List.class))).thenReturn(resolvedComponentInfos);
+        when(sOverrides.resolverListController.getLastChosen())
+                .thenReturn(resolvedComponentInfos.get(1).getResolveInfoAt(0));
+
+        final ResolverWrapperActivity activity = mActivityRule.launchActivity(sendIntent);
+        Espresso.registerIdlingResources(activity.getAdapter().getLabelIdlingResource());
+        waitForIdle();
+
+        // The other entry is filtered to the last used slot
+        assertThat(activity.getAdapter().hasFilteredItem(), is(false));
+        assertThat(activity.getAdapter().getCount(), is(2));
+        assertThat(activity.getAdapter().getPlaceholderCount(), is(2));
+    }
+
     private Intent createSendImageIntent() {
         Intent sendIntent = new Intent();
         sendIntent.setAction(Intent.ACTION_SEND);
         sendIntent.putExtra(Intent.EXTRA_TEXT, "testing intent sending");
         sendIntent.setType("image/jpeg");
+        return sendIntent;
+    }
+
+    private Intent createOpenWebsiteIntent() {
+        Intent sendIntent = new Intent();
+        sendIntent.setAction(Intent.ACTION_VIEW);
+        sendIntent.setData(Uri.parse("https://google.com"));
         return sendIntent;
     }
 

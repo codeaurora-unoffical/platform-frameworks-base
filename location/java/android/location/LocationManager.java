@@ -34,6 +34,7 @@ import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
 import android.app.AlarmManager;
+import android.app.AppOpsManager;
 import android.app.PendingIntent;
 import android.app.PropertyInvalidatedCache;
 import android.compat.Compatibility;
@@ -2010,7 +2011,7 @@ public class LocationManager {
     @Deprecated
     @RequiresPermission(ACCESS_FINE_LOCATION)
     public boolean registerGnssStatusCallback(@NonNull GnssStatus.Callback callback) {
-        return registerGnssStatusCallback(Runnable::run, callback);
+        return registerGnssStatusCallback(callback, null);
     }
 
     /**
@@ -2580,7 +2581,7 @@ public class LocationManager {
         }
 
         public String getListenerId() {
-            return mConsumer.getClass().getName() + "@" + System.identityHashCode(mConsumer);
+            return AppOpsManager.toReceiverId(mConsumer);
         }
 
         public synchronized void register(AlarmManager alarmManager,
@@ -2709,7 +2710,7 @@ public class LocationManager {
         }
 
         public String getListenerId() {
-            return mListener.getClass().getName() + "@" + System.identityHashCode(mListener);
+            return AppOpsManager.toReceiverId(mListener);
         }
 
         public void register(@NonNull Executor executor) {
@@ -2972,10 +2973,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.unregisterGnssStatusCallback(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.unregisterGnssStatusCallback(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         private class GnssStatusListener extends IGnssStatusListener.Stub {
@@ -3038,10 +3039,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssMeasurementsListener(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssMeasurementsListener(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         @Override
@@ -3091,10 +3092,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssNavigationMessageListener(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssNavigationMessageListener(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         private class GnssNavigationMessageListener extends IGnssNavigationMessageListener.Stub {
@@ -3132,10 +3133,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssAntennaInfoListener(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssAntennaInfoListener(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         private class GnssAntennaInfoListener extends IGnssAntennaInfoListener.Stub {
@@ -3169,10 +3170,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssBatchingCallback();
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssBatchingCallback();
+                mListenerTransport = null;
+            }
         }
 
         private class BatchedLocationCallback extends IBatchedLocationCallback.Stub {

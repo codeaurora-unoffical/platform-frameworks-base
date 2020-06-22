@@ -51,17 +51,15 @@ interface ControlsController : UserAwareController {
      * Load all available [Control] for a given service.
      *
      * @param componentName the [ComponentName] of the [ControlsProviderService] to load from
-     * @param dataCallback a callback in which to retrieve the result.
+     * @param dataCallback a callback in which to retrieve the result
+     * @param cancelWrapper a callback to receive a [Runnable] that can be run to cancel the
+     *                      request
      */
     fun loadForComponent(
         componentName: ComponentName,
-        dataCallback: Consumer<LoadData>
+        dataCallback: Consumer<LoadData>,
+        cancelWrapper: Consumer<Runnable>
     )
-
-    /**
-     * Cancels a pending load call
-     */
-    fun cancelLoad()
 
     /**
      * Request to subscribe for favorited controls per structure
@@ -116,12 +114,12 @@ interface ControlsController : UserAwareController {
     /**
      * Send a request to seed favorites into the persisted XML file
      *
-     * @param componentName the component to seed controls from
-     * @param callback true if the favorites were persisted
+     * @param componentNames the list of components to seed controls from
+     * @param callback one [SeedResponse] per componentName
      */
-    fun seedFavoritesForComponent(
-        componentName: ComponentName,
-        callback: Consumer<Boolean>
+    fun seedFavoritesForComponents(
+        componentNames: List<ComponentName>,
+        callback: Consumer<SeedResponse>
     )
 
     /**
@@ -146,6 +144,18 @@ interface ControlsController : UserAwareController {
      * @return a list of the structures that have at least one favorited control
      */
     fun getFavoritesForComponent(componentName: ComponentName): List<StructureInfo>
+
+    /**
+     * Get all the favorites for a given structure.
+     *
+     * @param componentName the name of the service that provides the [Control]
+     * @param structureName the name of the structure
+     * @return a list of the current favorites in that structure
+     */
+    fun getFavoritesForStructure(
+        componentName: ComponentName,
+        structureName: CharSequence
+    ): List<ControlInfo>
 
     /**
      * Adds a single favorite to a given component and structure
@@ -220,3 +230,5 @@ fun createLoadDataObject(
         override val errorOnLoad = error
     }
 }
+
+data class SeedResponse(val packageName: String, val accepted: Boolean)

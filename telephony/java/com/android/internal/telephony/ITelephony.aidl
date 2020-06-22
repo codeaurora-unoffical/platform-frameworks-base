@@ -851,6 +851,14 @@ interface ITelephony {
     IImsRcsFeature getRcsFeatureAndListen(int slotId, in IImsServiceFeatureCallback callback);
 
     /**
+     * Unregister a callback that was previously registered through
+     * {@link #getMmTelFeatureAndListen} or {@link #getRcsFeatureAndListen}. This should always be
+     * called when the callback is no longer being used.
+     */
+    void unregisterImsFeatureCallback(int slotId, int featureType,
+            in IImsServiceFeatureCallback callback);
+
+    /**
     * Returns the IImsRegistration associated with the slot and feature specified.
     */
     IImsRegistration getImsRegistration(int slotId, int feature);
@@ -2268,4 +2276,9 @@ interface ITelephony {
      * @return operatorinfo on success
      */
     String getManualNetworkSelectionPlmn(int subId);
+
+    /**
+     * Whether device can connect to 5G network when two SIMs are active.
+     */
+    boolean canConnectTo5GInDsdsMode();
 }

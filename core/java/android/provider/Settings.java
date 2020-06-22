@@ -1778,6 +1778,15 @@ public final class Settings {
             = "android.settings.NOTIFICATION_SETTINGS";
 
     /**
+     * Activity Action: Show conversation settings.
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_CONVERSATION_SETTINGS
+            = "android.settings.CONVERSATION_SETTINGS";
+
+    /**
      * Activity Action: Show notification history screen.
      *
      * @hide
@@ -1868,6 +1877,24 @@ public final class Settings {
     /** @hide */
     @UnsupportedAppUsage
     public static final String EXTRA_APP_UID = "app_uid";
+
+    /**
+     * Activity Action: Show power menu settings.
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_POWER_MENU_SETTINGS =
+            "android.settings.ACTION_POWER_MENU_SETTINGS";
+
+    /**
+     * Activity Action: Show controls settings.
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_DEVICE_CONTROLS_SETTINGS =
+            "android.settings.ACTION_DEVICE_CONTROLS_SETTINGS";
 
     /**
      * Activity Action: Show a dialog with disabled by policy message.
@@ -2002,8 +2029,7 @@ public final class Settings {
      * In some cases, a matching Activity may not exist, so ensure you
      * safeguard against this.
      * <p>
-     * Input: The Intent's data URI specifies the application package name
-     * to be shown, with the "package" scheme.  That is "package:com.my.app".
+     * Input: Nothing.
      * <p>
      * Output: Nothing.
      */
@@ -3908,6 +3934,13 @@ public final class Settings {
         public static final String DISPLAY_COLOR_MODE = "display_color_mode";
 
         /**
+         * Whether to play tone while outgoing call is accepted.
+         * The value 1 - vibrate, 0 - not
+         * @hide
+         */
+        public static final String CALL_CONNECTED_TONE_ENABLED = "call_connected_tone_enabled";
+
+        /**
          * The user selected min refresh rate in frames per second.
          *
          * If this isn't set, 0 will be used.
@@ -4732,6 +4765,14 @@ public final class Settings {
         public static final String SHOW_BATTERY_PERCENT = "status_bar_show_battery_percent";
 
         /**
+         * Whether or not to enable multiple audio focus.
+         * When enabled, requires more management by user over application playback activity,
+         * for instance pausing media apps when another starts.
+         * @hide
+         */
+        public static final String MULTI_AUDIO_FOCUS_ENABLED = "multi_audio_focus_enabled";
+
+        /**
          * IMPORTANT: If you add a new public settings you also have to add it to
          * PUBLIC_SETTINGS below. If the new setting is hidden you have to add
          * it to PRIVATE_SETTINGS below. Also add a validator that can validate
@@ -4857,6 +4898,7 @@ public final class Settings {
             PRIVATE_SETTINGS.add(EGG_MODE);
             PRIVATE_SETTINGS.add(SHOW_BATTERY_PERCENT);
             PRIVATE_SETTINGS.add(DISPLAY_COLOR_MODE);
+            PRIVATE_SETTINGS.add(CALL_CONNECTED_TONE_ENABLED);
         }
 
         /**
@@ -5176,8 +5218,9 @@ public final class Settings {
     /**
      * Secure system settings, containing system preferences that applications
      * can read but are not allowed to write.  These are for preferences that
-     * the user must explicitly modify through the system UI or specialized
-     * APIs for those values, not modified directly by applications.
+     * the user must explicitly modify through the UI of a system app. Normal
+     * applications cannot modify the secure settings database, either directly
+     * or by calling the "put" methods that this class contains.
      */
     public static final class Secure extends NameValueTable {
         // NOTE: If you add new settings here, be sure to add them to
@@ -6312,14 +6355,6 @@ public final class Settings {
          * @hide
          */
         public static final int LOCATION_CHANGER_QUICK_SETTINGS = 2;
-
-        /**
-         * Setting to configure Wifi disconnect delay duration in seconds.
-         * @hide
-         **/
-        @SystemApi
-        public static final String WIFI_DISCONNECT_DELAY_DURATION =
-                "wifi_disconnect_delay_duration";
 
         /**
          * Location mode is off.
@@ -8593,6 +8628,16 @@ public final class Settings {
         public static final String CONTROLS_ENABLED = "controls_enabled";
 
         /**
+         * Whether power menu content (cards, passes, controls) will be shown when device is locked.
+         *
+         * 0 indicates hide and 1 indicates show. A non existent value will be treated as hide.
+         * @hide
+         */
+        @TestApi
+        public static final String POWER_MENU_LOCKED_SHOW_CONTENT =
+                "power_menu_locked_show_content";
+
+        /**
          * Specifies whether the web action API is enabled.
          *
          * @hide
@@ -9590,6 +9635,43 @@ public final class Settings {
         */
        public static final String HDMI_CONTROL_ENABLED = "hdmi_control_enabled";
 
+        /**
+         * Controls whether volume control commands via HDMI CEC are enabled. (0 = false, 1 =
+         * true).
+         *
+         * <p>Effects on different device types:
+         * <table>
+         *     <tr><th>HDMI CEC device type</th><th>0: disabled</th><th>1: enabled</th></tr>
+         *     <tr>
+         *         <td>TV (type: 0)</td>
+         *         <td>Per CEC specification.</td>
+         *         <td>TV changes system volume. TV no longer reacts to incoming volume changes
+         *         via {@code <User Control Pressed>}. TV no longer handles {@code <Report Audio
+         *         Status>}.</td>
+         *     </tr>
+         *     <tr>
+         *         <td>Playback device (type: 4)</td>
+         *         <td>Device sends volume commands to TV/Audio system via {@code <User Control
+         *         Pressed>}</td>
+         *         <td>Device does not send volume commands via {@code <User Control Pressed>}.</td>
+         *     </tr>
+         *     <tr>
+         *         <td>Audio device (type: 5)</td>
+         *         <td>Full "System Audio Control" capabilities.</td>
+         *         <td>Audio device no longer reacts to incoming {@code <User Control Pressed>}
+         *         volume commands. Audio device no longer reports volume changes via {@code
+         *         <Report Audio Status>}.</td>
+         *     </tr>
+         * </table>
+         *
+         * <p> Due to the resulting behavior, usage on TV and Audio devices is discouraged.
+         *
+         * @hide
+         * @see android.hardware.hdmi.HdmiControlManager#setHdmiCecVolumeControlEnabled(boolean)
+         */
+        public static final String HDMI_CONTROL_VOLUME_CONTROL_ENABLED =
+                "hdmi_control_volume_control_enabled";
+
        /**
         * Whether HDMI System Audio Control feature is enabled. If enabled, TV will try to turn on
         * system audio mode if there's a connected CEC-enabled AV Receiver. Then audio stream will
@@ -9626,6 +9708,13 @@ public final class Settings {
          */
         public static final String HDMI_CONTROL_AUTO_DEVICE_OFF_ENABLED =
                 "hdmi_control_auto_device_off_enabled";
+
+        /**
+         * Whether or not media is shown automatically when bypassing as a heads up.
+         * @hide
+         */
+        public static final String SHOW_MEDIA_ON_QUICK_SETTINGS =
+                "qs_media_player";
 
         /**
          * The interval in milliseconds at which location requests will be throttled when they are
@@ -9869,6 +9958,11 @@ public final class Settings {
        /** Timeout for package verification.
         * @hide */
        public static final String PACKAGE_VERIFIER_TIMEOUT = "verifier_timeout";
+
+        /** Timeout for app integrity verification.
+         * @hide */
+        public static final String APP_INTEGRITY_VERIFICATION_TIMEOUT =
+                "app_integrity_verification_timeout";
 
        /** Default response code for package verification.
         * @hide */
@@ -10688,13 +10782,33 @@ public final class Settings {
          * The associated value is a specially formatted string that describes the
          * size and density of simulated secondary display devices.
          * <p>
-         * Format: {width}x{height}/{dpi};...
+         * Format:
+         * <pre>
+         * [display1];[display2];...
+         * </pre>
+         * with each display specified as:
+         * <pre>
+         * [mode1]|[mode2]|...,[flag1],[flag2],...
+         * </pre>
+         * with each mode specified as:
+         * <pre>
+         * [width]x[height]/[densityDpi]
+         * </pre>
+         * Supported flags:
+         * <ul>
+         * <li><pre>secure</pre>: creates a secure display</li>
+         * <li><pre>own_content_only</pre>: only shows this display's own content</li>
+         * <li><pre>should_show_system_decorations</pre>: supports system decorations</li>
+         * </ul>
          * </p><p>
          * Example:
          * <ul>
          * <li><code>1280x720/213</code>: make one overlay that is 1280x720 at 213dpi.</li>
-         * <li><code>1920x1080/320;1280x720/213</code>: make two overlays, the first
-         * at 1080p and the second at 720p.</li>
+         * <li><code>1920x1080/320,secure;1280x720/213</code>: make two overlays, the first at
+         * 1080p and secure; the second at 720p.</li>
+         * <li><code>1920x1080/320|3840x2160/640</code>: make one overlay that is 1920x1080 at
+         * 213dpi by default, but can also be upscaled to 3840x2160 at 640dpi by the system if the
+         * display device allows.</li>
          * <li>If the value is empty, then no overlay display devices are created.</li>
          * </ul></p>
          *
@@ -11879,8 +11993,24 @@ public final class Settings {
                 "adaptive_battery_management_enabled";
 
         /**
+         * Whether or not apps are allowed into the
+         * {@link android.app.usage.UsageStatsManager#STANDBY_BUCKET_RESTRICTED} bucket.
+         * Type: int (0 for false, 1 for true)
+         * Default: {@value #DEFAULT_ENABLE_RESTRICTED_BUCKET}
+         *
+         * @hide
+         */
+        public static final String ENABLE_RESTRICTED_BUCKET = "enable_restricted_bucket";
+
+        /**
+         * @see #ENABLE_RESTRICTED_BUCKET
+         * @hide
+         */
+        public static final int DEFAULT_ENABLE_RESTRICTED_BUCKET = 1;
+
+        /**
          * Whether or not app auto restriction is enabled. When it is enabled, settings app will
-         * auto restrict the app if it has bad behavior(e.g. hold wakelock for long time).
+         * auto restrict the app if it has bad behavior (e.g. hold wakelock for long time).
          *
          * Type: boolean (0 for false, 1 for true)
          * Default: 1
@@ -13780,20 +13910,18 @@ public final class Settings {
                 "show_notification_channel_warnings";
 
         /**
-         * When enabled, requires all notifications in the conversation section to be backed
-         * by a long-lived sharing shortcut
-         *
-         * The value 1 - require a shortcut, 0 - do not require a shortcut
-         * @hide
-         */
-        public static final String REQUIRE_SHORTCUTS_FOR_CONVERSATIONS =
-                "require_shortcuts_for_conversations";
-
-        /**
          * Whether cell is enabled/disabled
          * @hide
          */
         public static final String CELL_ON = "cell_on";
+
+        /**
+         * Whether to vibrate while outgoing call is accepted
+         * The value 1 - vibrate, 0 - not
+         * @hide
+         */
+        public static final String VIBRATING_FOR_OUTGOING_CALL_ACCEPTED =
+                "vibrating_for_outgoing_call_accepted";
 
         /**
          * Global settings which can be accessed by instant apps.
@@ -13964,6 +14092,14 @@ public final class Settings {
          */
         public static final String ZRAM_ENABLED =
                 "zram_enabled";
+
+        /**
+         * Whether the app freezer is enabled on this device.
+         * The value of "enabled" enables the app freezer, "disabled" disables it and
+         * "device_default" will let the system decide whether to enable the freezer or not
+         * @hide
+         */
+        public static final String CACHED_APPS_FREEZER_ENABLED = "cached_apps_freezer";
 
         /**
          * Configuration flags for smart replies in notifications.
@@ -14149,15 +14285,6 @@ public final class Settings {
         public static final String KERNEL_CPU_THREAD_READER = "kernel_cpu_thread_reader";
 
         /**
-         * Persistent user id that is last logged in to.
-         *
-         * They map to user ids, for example, 10, 11, 12.
-         *
-         * @hide
-         */
-        public static final String LAST_ACTIVE_USER_ID = "last_active_persistent_user_id";
-
-        /**
          * Whether we've enabled native flags health check on this device. Takes effect on
          * reboot. The value "1" enables native flags health check; otherwise it's disabled.
          * @hide
@@ -14267,6 +14394,21 @@ public final class Settings {
          * @hide
          */
         public static final String ADVANCED_BATTERY_USAGE_AMOUNT = "advanced_battery_usage_amount";
+
+        /**
+         * For 5G NSA capable devices, determines whether NR tracking indications are on
+         * when the screen is off.
+         *
+         * Values are:
+         * 0: off - All 5G NSA tracking indications are off when the screen is off.
+         * 1: extended - All 5G NSA tracking indications are on when the screen is off as long as
+         *    the device is camped on 5G NSA (5G icon is showing in status bar).
+         *    If the device is not camped on 5G NSA, tracking indications are off.
+         * 2: always on - All 5G NSA tracking indications are on whether the screen is on or off.
+         * @hide
+         */
+        public static final String NR_NSA_TRACKING_SCREEN_OFF_MODE =
+                "nr_nsa_tracking_screen_off_mode";
     }
 
     /**

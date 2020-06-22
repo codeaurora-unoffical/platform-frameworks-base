@@ -346,12 +346,15 @@ public class SoundTriggerService extends SystemService {
             sEventLogger.log(new SoundTriggerLogger.StringEvent("deleteSoundModel(): id = "
                     + soundModelId));
 
-            // Unload the model if it is loaded.
-            mSoundTriggerHelper.unloadGenericSoundModel(soundModelId.getUuid());
-            mDbHelper.deleteGenericSoundModel(soundModelId.getUuid());
+            if (isInitialized()) {
+                // Unload the model if it is loaded.
+                mSoundTriggerHelper.unloadGenericSoundModel(soundModelId.getUuid());
 
-            // Stop recognition if it is started.
-            mSoundModelStatTracker.onStop(soundModelId.getUuid());
+                // Stop tracking recognition if it is started.
+                mSoundModelStatTracker.onStop(soundModelId.getUuid());
+            }
+
+            mDbHelper.deleteGenericSoundModel(soundModelId.getUuid());
         }
 
         @Override
@@ -442,6 +445,8 @@ public class SoundTriggerService extends SystemService {
             Objects.requireNonNull(config);
 
             enforceCallingPermission(Manifest.permission.MANAGE_SOUND_TRIGGER);
+
+            enforceDetectionPermissions(detectionService);
 
             if (!isInitialized()) return STATUS_ERROR;
             if (DEBUG) {
@@ -1529,6 +1534,16 @@ public class SoundTriggerService extends SystemService {
         if (mContext.checkCallingOrSelfPermission(permission)
                 != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("Caller does not hold the permission " + permission);
+        }
+    }
+
+    private void enforceDetectionPermissions(ComponentName detectionService) {
+        PackageManager packageManager = mContext.getPackageManager();
+        String packageName = detectionService.getPackageName();
+        if (packageManager.checkPermission(Manifest.permission.CAPTURE_AUDIO_HOTWORD, packageName)
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException(detectionService.getPackageName() + " does not have"
+                    + " permission " + Manifest.permission.CAPTURE_AUDIO_HOTWORD);
         }
     }
 

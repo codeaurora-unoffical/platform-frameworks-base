@@ -32,6 +32,7 @@ import android.os.IBinder;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.storage.DiskInfo;
+import android.os.storage.StorageEventListener;
 import android.os.storage.StorageManager;
 import android.os.storage.VolumeInfo;
 import android.provider.DocumentsContract;
@@ -119,6 +120,14 @@ public class ExternalStorageProvider extends FileSystemProvider {
         mUserManager = getContext().getSystemService(UserManager.class);
 
         updateVolumes();
+
+        mStorageManager.registerListener(new StorageEventListener() {
+                @Override
+                public void onVolumeStateChanged(VolumeInfo vol, int oldState, int newState) {
+                    updateVolumes();
+                }
+            });
+
         return true;
     }
 
@@ -264,6 +273,13 @@ public class ExternalStorageProvider extends FileSystemProvider {
 
     private static String[] resolveRootProjection(String[] projection) {
         return projection != null ? projection : DEFAULT_ROOT_PROJECTION;
+    }
+
+    @Override
+    public Cursor queryChildDocumentsForManage(
+            String parentDocId, String[] projection, String sortOrder)
+            throws FileNotFoundException {
+        return queryChildDocumentsShowAll(parentDocId, projection, sortOrder);
     }
 
     /**
@@ -433,7 +449,7 @@ public class ExternalStorageProvider extends FileSystemProvider {
         final int splitIndex = docId.indexOf(':', 1);
         final String path = docId.substring(splitIndex + 1);
 
-        File target = visible ? root.visiblePath : root.path;
+        File target = root.visiblePath != null ? root.visiblePath : root.path;
         if (target == null) {
             return null;
         }
@@ -504,9 +520,11 @@ public class ExternalStorageProvider extends FileSystemProvider {
         final RootInfo root = resolvedDocId.first;
         File child = resolvedDocId.second;
 
+        final File rootFile = root.visiblePath != null ? root.visiblePath
+                : root.path;
         final File parent = TextUtils.isEmpty(parentDocId)
-                        ? root.path
-                        : getFileForDocId(parentDocId);
+                ? rootFile
+                : getFileForDocId(parentDocId);
 
         return new Path(parentDocId == null ? root.rootId : null, findDocumentPath(parent, child));
     }
@@ -577,8 +595,11 @@ public class ExternalStorageProvider extends FileSystemProvider {
     public Cursor querySearchDocuments(String rootId, String[] projection, Bundle queryArgs)
             throws FileNotFoundException {
         final File parent;
+
         synchronized (mRootsLock) {
-            parent = mRoots.get(rootId).path;
+            RootInfo root = mRoots.get(rootId);
+            parent = root.visiblePath != null ? root.visiblePath
+                : root.path;
         }
 
         return querySearchDocuments(parent, projection, Collections.emptySet(), queryArgs);

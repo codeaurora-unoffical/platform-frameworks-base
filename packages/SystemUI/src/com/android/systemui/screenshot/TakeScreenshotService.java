@@ -16,7 +16,11 @@
 
 package com.android.systemui.screenshot;
 
+import static com.android.internal.util.ScreenshotHelper.SCREENSHOT_MSG_PROCESS_COMPLETE;
+import static com.android.internal.util.ScreenshotHelper.SCREENSHOT_MSG_URI;
+
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Insets;
@@ -32,6 +36,10 @@ import android.os.UserManager;
 import android.util.Log;
 import android.view.WindowManager;
 
+import com.android.internal.logging.UiEventLogger;
+import com.android.internal.util.ScreenshotHelper;
+import com.android.systemui.shared.recents.utilities.BitmapUtil;
+
 import java.util.function.Consumer;
 
 import javax.inject.Inject;
@@ -42,13 +50,21 @@ public class TakeScreenshotService extends Service {
     private final GlobalScreenshot mScreenshot;
     private final GlobalScreenshotLegacy mScreenshotLegacy;
     private final UserManager mUserManager;
+    private final UiEventLogger mUiEventLogger;
 
     private Handler mHandler = new Handler(Looper.myLooper()) {
         @Override
         public void handleMessage(Message msg) {
             final Messenger callback = msg.replyTo;
-            Consumer<Uri> finisher = uri -> {
-                Message reply = Message.obtain(null, 1, uri);
+            Consumer<Uri> uriConsumer = uri -> {
+                Message reply = Message.obtain(null, SCREENSHOT_MSG_URI, uri);
+                try {
+                    callback.send(reply);
+                } catch (RemoteException e) {
+                }
+            };
+            Runnable onComplete = () -> {
+                Message reply = Message.obtain(null, SCREENSHOT_MSG_PROCESS_COMPLETE);
                 try {
                     callback.send(reply);
                 } catch (RemoteException e) {
@@ -60,42 +76,52 @@ public class TakeScreenshotService extends Service {
             // animation and error notification.
             if (!mUserManager.isUserUnlocked()) {
                 Log.w(TAG, "Skipping screenshot because storage is locked!");
-                post(() -> finisher.accept(null));
+                post(() -> uriConsumer.accept(null));
+                post(onComplete);
                 return;
             }
 
-            // TODO (mkephart): clean up once notifications flow is fully deprecated
+            // TODO: clean up once notifications flow is fully deprecated
             boolean useCornerFlow = true;
+
+            ScreenshotHelper.ScreenshotRequest screenshotRequest =
+                    (ScreenshotHelper.ScreenshotRequest) msg.obj;
+
+            mUiEventLogger.log(ScreenshotEvent.getScreenshotSource(screenshotRequest.getSource()));
+
             switch (msg.what) {
                 case WindowManager.TAKE_SCREENSHOT_FULLSCREEN:
                     if (useCornerFlow) {
-                        mScreenshot.takeScreenshot(finisher);
+                        mScreenshot.takeScreenshot(uriConsumer, onComplete);
                     } else {
-                        mScreenshotLegacy.takeScreenshot(finisher, msg.arg1 > 0, msg.arg2 > 0);
+                        mScreenshotLegacy.takeScreenshot(
+                                uriConsumer, screenshotRequest.getHasStatusBar(),
+                                screenshotRequest.getHasNavBar());
                     }
                     break;
                 case WindowManager.TAKE_SCREENSHOT_SELECTED_REGION:
                     if (useCornerFlow) {
-                        mScreenshot.takeScreenshotPartial(finisher);
+                        mScreenshot.takeScreenshotPartial(uriConsumer, onComplete);
                     } else {
                         mScreenshotLegacy.takeScreenshotPartial(
-                                finisher, msg.arg1 > 0, msg.arg2 > 0);
+                                uriConsumer, screenshotRequest.getHasStatusBar(),
+                                screenshotRequest.getHasNavBar());
                     }
                     break;
                 case WindowManager.TAKE_SCREENSHOT_PROVIDED_IMAGE:
-                    Bitmap screenshot = msg.getData().getParcelable(
-                            WindowManager.PARCEL_KEY_SCREENSHOT_BITMAP);
-                    Rect screenBounds = msg.getData().getParcelable(
-                            WindowManager.PARCEL_KEY_SCREENSHOT_BOUNDS);
-                    Insets insets = msg.getData().getParcelable(
-                            WindowManager.PARCEL_KEY_SCREENSHOT_INSETS);
-                    int taskId = msg.getData().getInt(WindowManager.PARCEL_KEY_SCREENSHOT_TASK_ID);
+                    Bitmap screenshot = BitmapUtil.bundleToHardwareBitmap(
+                            screenshotRequest.getBitmapBundle());
+                    Rect screenBounds = screenshotRequest.getBoundsInScreen();
+                    Insets insets = screenshotRequest.getInsets();
+                    int taskId = screenshotRequest.getTaskId();
+                    int userId = screenshotRequest.getUserId();
+                    ComponentName topComponent = screenshotRequest.getTopComponent();
                     if (useCornerFlow) {
-                        mScreenshot.handleImageAsScreenshot(
-                                screenshot, screenBounds, insets, taskId, finisher);
+                        mScreenshot.handleImageAsScreenshot(screenshot, screenBounds, insets,
+                                taskId, userId, topComponent, uriConsumer, onComplete);
                     } else {
-                        mScreenshotLegacy.handleImageAsScreenshot(
-                                screenshot, screenBounds, insets, taskId, finisher);
+                        mScreenshotLegacy.handleImageAsScreenshot(screenshot, screenBounds, insets,
+                                taskId, userId, topComponent, uriConsumer);
                     }
                     break;
                 default:
@@ -106,10 +132,12 @@ public class TakeScreenshotService extends Service {
 
     @Inject
     public TakeScreenshotService(GlobalScreenshot globalScreenshot,
-            GlobalScreenshotLegacy globalScreenshotLegacy, UserManager userManager) {
+            GlobalScreenshotLegacy globalScreenshotLegacy, UserManager userManager,
+            UiEventLogger uiEventLogger) {
         mScreenshot = globalScreenshot;
         mScreenshotLegacy = globalScreenshotLegacy;
         mUserManager = userManager;
+        mUiEventLogger = uiEventLogger;
     }
 
     @Override
@@ -120,7 +148,7 @@ public class TakeScreenshotService extends Service {
     @Override
     public boolean onUnbind(Intent intent) {
         if (mScreenshot != null) mScreenshot.stopScreenshot();
-        // TODO (mkephart) remove once notifications flow is fully deprecated
+        // TODO remove once notifications flow is fully deprecated
         if (mScreenshotLegacy != null) mScreenshotLegacy.stopScreenshot();
         return true;
     }

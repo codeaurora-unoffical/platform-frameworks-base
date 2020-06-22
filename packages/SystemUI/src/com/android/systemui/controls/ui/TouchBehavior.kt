@@ -20,10 +20,11 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.LayerDrawable
 import android.view.View
 import android.service.controls.Control
-import android.service.controls.templates.StatelessTemplate
+import android.service.controls.templates.ControlTemplate
 
 import com.android.systemui.R
-import com.android.systemui.controls.ui.ControlActionCoordinator.MIN_LEVEL
+import com.android.systemui.controls.ui.ControlViewHolder.Companion.MAX_LEVEL
+import com.android.systemui.controls.ui.ControlViewHolder.Companion.MIN_LEVEL
 
 /**
  * Supports touch events, but has no notion of state as the {@link ToggleBehavior} does. Must be
@@ -31,28 +32,28 @@ import com.android.systemui.controls.ui.ControlActionCoordinator.MIN_LEVEL
  */
 class TouchBehavior : Behavior {
     lateinit var clipLayer: Drawable
-    lateinit var template: StatelessTemplate
+    lateinit var template: ControlTemplate
     lateinit var control: Control
     lateinit var cvh: ControlViewHolder
 
     override fun initialize(cvh: ControlViewHolder) {
         this.cvh = cvh
-        cvh.applyRenderInfo(false)
 
         cvh.layout.setOnClickListener(View.OnClickListener() {
-            ControlActionCoordinator.touch(cvh, template.getTemplateId())
+            cvh.controlActionCoordinator.touch(cvh, template.getTemplateId(), control)
         })
     }
 
-    override fun bind(cws: ControlWithState) {
+    override fun bind(cws: ControlWithState, colorOffset: Int) {
         this.control = cws.control!!
-        cvh.status.setText(control.getStatusText())
-        template = control.getControlTemplate() as StatelessTemplate
+        cvh.setStatusText(control.getStatusText())
+        template = control.getControlTemplate()
 
         val ld = cvh.layout.getBackground() as LayerDrawable
         clipLayer = ld.findDrawableByLayerId(R.id.clip_layer)
-        clipLayer.setLevel(MIN_LEVEL)
 
-        cvh.applyRenderInfo(false)
+        val enabled = if (colorOffset > 0) true else false
+        clipLayer.setLevel(if (enabled) MAX_LEVEL else MIN_LEVEL)
+        cvh.applyRenderInfo(enabled, colorOffset)
     }
 }

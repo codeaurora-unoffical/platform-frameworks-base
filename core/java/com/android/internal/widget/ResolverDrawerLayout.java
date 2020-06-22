@@ -825,18 +825,6 @@ public class ResolverDrawerLayout extends ViewGroup {
                     return true;
                 }
                 break;
-            case AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD:
-            case R.id.accessibilityActionScrollUp:
-                if (mCollapseOffset < mCollapsibleHeight) {
-                    smoothScrollTo(mCollapsibleHeight, 0);
-                    return true;
-                } else if ((mCollapseOffset < mCollapsibleHeight + mUncollapsibleHeight)
-                        && isDismissable()) {
-                    smoothScrollTo(mCollapsibleHeight + mUncollapsibleHeight, 0);
-                    mDismissOnScrollerFinished = true;
-                    return true;
-                }
-                break;
             case AccessibilityNodeInfo.ACTION_COLLAPSE:
                 if (mCollapseOffset < mCollapsibleHeight) {
                     smoothScrollTo(mCollapsibleHeight, 0);
@@ -886,7 +874,6 @@ public class ResolverDrawerLayout extends ViewGroup {
             }
             if ((mCollapseOffset < mCollapsibleHeight + mUncollapsibleHeight)
                     && ((mCollapseOffset < mCollapsibleHeight) || isDismissable())) {
-                info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD);
                 info.addAction(AccessibilityAction.ACTION_SCROLL_UP);
                 info.setScrollable(true);
             }
@@ -1084,6 +1071,7 @@ public class ResolverDrawerLayout extends ViewGroup {
     protected Parcelable onSaveInstanceState() {
         final SavedState ss = new SavedState(super.onSaveInstanceState());
         ss.open = mCollapsibleHeight > 0 && mCollapseOffset == 0;
+        ss.mCollapsibleHeightReserved = mCollapsibleHeightReserved;
         return ss;
     }
 
@@ -1092,6 +1080,7 @@ public class ResolverDrawerLayout extends ViewGroup {
         final SavedState ss = (SavedState) state;
         super.onRestoreInstanceState(ss.getSuperState());
         mOpenOnLayout = ss.open;
+        mCollapsibleHeightReserved = ss.mCollapsibleHeightReserved;
     }
 
     public static class LayoutParams extends MarginLayoutParams {
@@ -1142,6 +1131,7 @@ public class ResolverDrawerLayout extends ViewGroup {
 
     static class SavedState extends BaseSavedState {
         boolean open;
+        private int mCollapsibleHeightReserved;
 
         SavedState(Parcelable superState) {
             super(superState);
@@ -1150,12 +1140,14 @@ public class ResolverDrawerLayout extends ViewGroup {
         private SavedState(Parcel in) {
             super(in);
             open = in.readInt() != 0;
+            mCollapsibleHeightReserved = in.readInt();
         }
 
         @Override
         public void writeToParcel(Parcel out, int flags) {
             super.writeToParcel(out, flags);
             out.writeInt(open ? 1 : 0);
+            out.writeInt(mCollapsibleHeightReserved);
         }
 
         public static final Parcelable.Creator<SavedState> CREATOR =

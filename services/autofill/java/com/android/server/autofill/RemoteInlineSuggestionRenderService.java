@@ -27,7 +27,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
+import android.os.Bundle;
 import android.os.IBinder;
+import android.os.RemoteCallback;
 import android.service.autofill.IInlineSuggestionRenderService;
 import android.service.autofill.IInlineSuggestionUiCallback;
 import android.service.autofill.InlinePresentation;
@@ -45,7 +47,7 @@ public final class RemoteInlineSuggestionRenderService extends
 
     private static final String TAG = "RemoteInlineSuggestionRenderService";
 
-    private final int mIdleUnbindTimeoutMs = 5000;
+    private final long mIdleUnbindTimeoutMs = PERMANENT_BOUND_TIMEOUT_MS;
 
     RemoteInlineSuggestionRenderService(Context context, ComponentName componentName,
             String serviceInterface, int userId, InlineSuggestionRenderCallbacks callback,
@@ -89,6 +91,13 @@ public final class RemoteInlineSuggestionRenderService extends
             @Nullable IBinder hostInputToken, int displayId) {
         scheduleAsyncRequest((s) -> s.renderSuggestion(callback, presentation, width, height,
                 hostInputToken, displayId));
+    }
+
+    /**
+     * Gets the inline suggestions renderer info as a {@link Bundle}.
+     */
+    public void getInlineSuggestionsRendererInfo(@NonNull RemoteCallback callback) {
+        scheduleAsyncRequest((s) -> s.getInlineSuggestionsRendererInfo(callback));
     }
 
     @Nullable

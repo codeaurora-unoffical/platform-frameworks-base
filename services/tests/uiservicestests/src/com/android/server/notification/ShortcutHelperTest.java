@@ -16,7 +16,11 @@
 
 package com.android.server.notification;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -25,6 +29,7 @@ import static org.mockito.Mockito.when;
 import android.app.Notification;
 import android.content.pm.LauncherApps;
 import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutServiceInternal;
 import android.os.UserHandle;
 import android.service.notification.StatusBarNotification;
 import android.test.suitebuilder.annotation.SmallTest;
@@ -35,6 +40,7 @@ import androidx.test.runner.AndroidJUnit4;
 import com.android.server.UiServiceTestCase;
 
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -42,6 +48,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @SmallTest
@@ -58,6 +65,8 @@ public class ShortcutHelperTest extends UiServiceTestCase {
     @Mock
     ShortcutHelper.ShortcutListener mShortcutListener;
     @Mock
+    ShortcutServiceInternal mShortcutServiceInternal;
+    @Mock
     NotificationRecord mNr;
     @Mock
     Notification mNotif;
@@ -65,6 +74,8 @@ public class ShortcutHelperTest extends UiServiceTestCase {
     StatusBarNotification mSbn;
     @Mock
     Notification.BubbleMetadata mBubbleMetadata;
+    @Mock
+    ShortcutInfo mShortcutInfo;
 
     ShortcutHelper mShortcutHelper;
 
@@ -72,18 +83,19 @@ public class ShortcutHelperTest extends UiServiceTestCase {
     public void setUp() {
         MockitoAnnotations.initMocks(this);
 
-        mShortcutHelper = new ShortcutHelper(mLauncherApps, mShortcutListener);
+        mShortcutHelper = new ShortcutHelper(
+                mLauncherApps, mShortcutListener, mShortcutServiceInternal);
         when(mNr.getKey()).thenReturn(KEY);
         when(mNr.getSbn()).thenReturn(mSbn);
         when(mSbn.getPackageName()).thenReturn(PKG);
         when(mNr.getNotification()).thenReturn(mNotif);
+        when(mNr.getShortcutInfo()).thenReturn(mShortcutInfo);
+        when(mShortcutInfo.getId()).thenReturn(SHORTCUT_ID);
         when(mNotif.getBubbleMetadata()).thenReturn(mBubbleMetadata);
         when(mBubbleMetadata.getShortcutId()).thenReturn(SHORTCUT_ID);
     }
 
     private LauncherApps.Callback addShortcutBubbleAndVerifyListener() {
-        when(mNotif.isBubbleNotification()).thenReturn(true);
-
         mShortcutHelper.maybeListenForShortcutChangesForBubbles(mNr,
                 false /* removed */,
                 null /* handler */);
@@ -115,15 +127,54 @@ public class ShortcutHelperTest extends UiServiceTestCase {
     }
 
     @Test
-    public void testBubbleNoLongerBubble_listenerRemoved() {
+    public void testBubbleNoLongerHasBubbleMetadata_listenerRemoved() {
         // First set it up to listen
         addShortcutBubbleAndVerifyListener();
 
         // Then make it not a bubble
-        when(mNotif.isBubbleNotification()).thenReturn(false);
+        when(mNotif.getBubbleMetadata()).thenReturn(null);
         mShortcutHelper.maybeListenForShortcutChangesForBubbles(mNr,
                 false /* removed */,
                 null /* handler */);
+
+        verify(mLauncherApps, times(1)).unregisterCallback(any());
+    }
+
+    @Test
+    public void testBubbleNoLongerHasShortcutId_listenerRemoved() {
+        // First set it up to listen
+        addShortcutBubbleAndVerifyListener();
+
+        // Clear out shortcutId
+        when(mBubbleMetadata.getShortcutId()).thenReturn(null);
+        mShortcutHelper.maybeListenForShortcutChangesForBubbles(mNr,
+                false /* removed */,
+                null /* handler */);
+
+        verify(mLauncherApps, times(1)).unregisterCallback(any());
+    }
+
+    @Test
+    public void testNotifNoLongerHasShortcut_listenerRemoved() {
+        // First set it up to listen
+        addShortcutBubbleAndVerifyListener();
+
+        // Clear out shortcutId
+        when(mNr.getShortcutInfo()).thenReturn(null);
+        mShortcutHelper.maybeListenForShortcutChangesForBubbles(mNr,
+                false /* removed */,
+                null /* handler */);
+
+        verify(mLauncherApps, times(1)).unregisterCallback(any());
+    }
+
+    @Test
+    public void testOnShortcutsChanged_listenerRemoved() {
+        // First set it up to listen
+        LauncherApps.Callback callback = addShortcutBubbleAndVerifyListener();
+
+        // App shortcuts are removed:
+        callback.onShortcutsChanged(PKG, Collections.emptyList(),  mock(UserHandle.class));
 
         verify(mLauncherApps, times(1)).unregisterCallback(any());
     }
@@ -137,5 +188,95 @@ public class ShortcutHelperTest extends UiServiceTestCase {
 
         callback.onShortcutsChanged(PKG, shortcutInfos, mock(UserHandle.class));
         verify(mShortcutListener).onShortcutRemoved(mNr.getKey());
+    }
+
+    @Test
+    public void testGetValidShortcutInfo_noMatchingShortcut() {
+        when(mLauncherApps.getShortcuts(any(), any())).thenReturn(null);
+        when(mShortcutServiceInternal.isSharingShortcut(anyInt(), anyString(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(true);
+
+        assertThat(mShortcutHelper.getValidShortcutInfo("a", "p", UserHandle.SYSTEM)).isNull();
+    }
+
+    @Test
+    public void testGetValidShortcutInfo_nullShortcut() {
+        ArrayList<ShortcutInfo> shortcuts = new ArrayList<>();
+        shortcuts.add(null);
+        when(mLauncherApps.getShortcuts(any(), any())).thenReturn(shortcuts);
+        when(mShortcutServiceInternal.isSharingShortcut(anyInt(), anyString(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(true);
+
+        assertThat(mShortcutHelper.getValidShortcutInfo("a", "p", UserHandle.SYSTEM)).isNull();
+    }
+
+    @Test
+    public void testGetValidShortcutInfo_notLongLived() {
+        ShortcutInfo si = mock(ShortcutInfo.class);
+        when(si.getPackage()).thenReturn(PKG);
+        when(si.getId()).thenReturn(SHORTCUT_ID);
+        when(si.getUserId()).thenReturn(UserHandle.USER_SYSTEM);
+        when(si.isLongLived()).thenReturn(false);
+        when(si.isEnabled()).thenReturn(true);
+        ArrayList<ShortcutInfo> shortcuts = new ArrayList<>();
+        shortcuts.add(si);
+        when(mLauncherApps.getShortcuts(any(), any())).thenReturn(shortcuts);
+        when(mShortcutServiceInternal.isSharingShortcut(anyInt(), anyString(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(true);
+
+        assertThat(mShortcutHelper.getValidShortcutInfo("a", "p", UserHandle.SYSTEM)).isNull();
+    }
+
+    @Ignore("b/155016294")
+    @Test
+    public void testGetValidShortcutInfo_notSharingShortcut() {
+        ShortcutInfo si = mock(ShortcutInfo.class);
+        when(si.getPackage()).thenReturn(PKG);
+        when(si.getId()).thenReturn(SHORTCUT_ID);
+        when(si.getUserId()).thenReturn(UserHandle.USER_SYSTEM);
+        when(si.isLongLived()).thenReturn(true);
+        when(si.isEnabled()).thenReturn(true);
+        ArrayList<ShortcutInfo> shortcuts = new ArrayList<>();
+        shortcuts.add(si);
+        when(mLauncherApps.getShortcuts(any(), any())).thenReturn(shortcuts);
+        when(mShortcutServiceInternal.isSharingShortcut(anyInt(), anyString(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(false);
+
+        assertThat(mShortcutHelper.getValidShortcutInfo("a", "p", UserHandle.SYSTEM)).isNull();
+    }
+
+    @Test
+    public void testGetValidShortcutInfo_notEnabled() {
+        ShortcutInfo si = mock(ShortcutInfo.class);
+        when(si.getPackage()).thenReturn(PKG);
+        when(si.getId()).thenReturn(SHORTCUT_ID);
+        when(si.getUserId()).thenReturn(UserHandle.USER_SYSTEM);
+        when(si.isLongLived()).thenReturn(true);
+        when(si.isEnabled()).thenReturn(false);
+        ArrayList<ShortcutInfo> shortcuts = new ArrayList<>();
+        shortcuts.add(si);
+        when(mLauncherApps.getShortcuts(any(), any())).thenReturn(shortcuts);
+        when(mShortcutServiceInternal.isSharingShortcut(anyInt(), anyString(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(true);
+
+        assertThat(mShortcutHelper.getValidShortcutInfo("a", "p", UserHandle.SYSTEM)).isNull();
+    }
+
+    @Test
+    public void testGetValidShortcutInfo_isValid() {
+        ShortcutInfo si = mock(ShortcutInfo.class);
+        when(si.getPackage()).thenReturn(PKG);
+        when(si.getId()).thenReturn(SHORTCUT_ID);
+        when(si.getUserId()).thenReturn(UserHandle.USER_SYSTEM);
+        when(si.isLongLived()).thenReturn(true);
+        when(si.isEnabled()).thenReturn(true);
+        ArrayList<ShortcutInfo> shortcuts = new ArrayList<>();
+        shortcuts.add(si);
+        when(mLauncherApps.getShortcuts(any(), any())).thenReturn(shortcuts);
+        // TODO: b/155016294
+        //when(mShortcutServiceInternal.isSharingShortcut(anyInt(), anyString(), anyString(),
+         //       anyString(), anyInt(), any())).thenReturn(true);
+
+        assertThat(mShortcutHelper.getValidShortcutInfo("a", "p", UserHandle.SYSTEM)).isSameAs(si);
     }
 }

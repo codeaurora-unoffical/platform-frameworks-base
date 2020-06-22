@@ -60,6 +60,7 @@ import com.android.internal.util.CollectionUtils;
 
 import libcore.util.EmptyArray;
 
+import java.io.FileDescriptor;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
@@ -68,6 +69,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -81,6 +83,7 @@ import java.util.function.Consumer;
 public final class PermissionControllerManager {
     private static final String TAG = PermissionControllerManager.class.getSimpleName();
 
+    private static final long REQUEST_TIMEOUT_MILLIS = 60000;
     private static final long UNBIND_TIMEOUT_MILLIS = 10000;
     private static final int CHUNK_SIZE = 4 * 1024;
 
@@ -161,6 +164,7 @@ public final class PermissionControllerManager {
      *
      * @hide
      */
+    @TestApi
     public interface OnCountPermissionAppsResultCallback {
         /**
          * The result for {@link #countPermissionApps(List, int,
@@ -216,6 +220,11 @@ public final class PermissionControllerManager {
                     @Override
                     protected Handler getJobHandler() {
                         return handler;
+                    }
+
+                    @Override
+                    protected long getRequestTimeoutMs() {
+                        return REQUEST_TIMEOUT_MILLIS;
                     }
 
                     @Override
@@ -475,6 +484,20 @@ public final class PermissionControllerManager {
     }
 
     /**
+     * Dump permission controller state.
+     *
+     * @hide
+     */
+    public void dump(@NonNull FileDescriptor fd, @Nullable String[] args) {
+        try {
+            mRemoteService.post(service -> service.asBinder().dump(fd, args))
+                    .get(REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            Log.e(TAG, "Could not get dump", e);
+        }
+    }
+
+    /**
      * Gets the runtime permissions for an app.
      *
      * @param packageName The package for which to query.
@@ -514,6 +537,7 @@ public final class PermissionControllerManager {
      *
      * @hide
      */
+    @TestApi
     @RequiresPermission(Manifest.permission.REVOKE_RUNTIME_PERMISSIONS)
     public void revokeRuntimePermission(@NonNull String packageName,
             @NonNull String permissionName) {
@@ -534,6 +558,7 @@ public final class PermissionControllerManager {
      *
      * @hide
      */
+    @TestApi
     @RequiresPermission(Manifest.permission.GET_RUNTIME_PERMISSIONS)
     public void countPermissionApps(@NonNull List<String> permissionNames,
             @CountPermissionAppsFlag int flags,

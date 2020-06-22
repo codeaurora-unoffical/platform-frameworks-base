@@ -18,6 +18,7 @@
 
 #include <binder/BinderService.h>
 #include <binder/IServiceManager.h>
+#include <jni.h>
 
 #include "IncrementalService.h"
 #include "android/os/incremental/BnIncrementalService.h"
@@ -28,9 +29,9 @@ namespace android::os::incremental {
 class BinderIncrementalService : public BnIncrementalService,
                                  public BinderService<BinderIncrementalService> {
 public:
-    BinderIncrementalService(const sp<IServiceManager>& sm);
+    BinderIncrementalService(const sp<IServiceManager>& sm, JNIEnv* env);
 
-    static BinderIncrementalService* start();
+    static BinderIncrementalService* start(JNIEnv* env);
     static const char16_t* getServiceName() { return u"incremental"; }
     status_t dump(int fd, const Vector<String16>& args) final;
 
@@ -38,7 +39,13 @@ public:
     void onInvalidStorage(int mountId);
 
     binder::Status openStorage(const std::string& path, int32_t* _aidl_return) final;
-    binder::Status createStorage(const ::std::string& path, const ::android::content::pm::DataLoaderParamsParcel& params, const ::android::sp<::android::content::pm::IDataLoaderStatusListener>& listener, int32_t createMode, int32_t* _aidl_return) final;
+    binder::Status createStorage(
+            const ::std::string& path, const ::android::content::pm::DataLoaderParamsParcel& params,
+            int32_t createMode,
+            const ::android::sp<::android::content::pm::IDataLoaderStatusListener>& statusListener,
+            const ::android::os::incremental::StorageHealthCheckParams& healthCheckParams,
+            const ::android::sp<IStorageHealthListener>& healthListener,
+            int32_t* _aidl_return) final;
     binder::Status createLinkedStorage(const std::string& path, int32_t otherStorageId,
                                        int32_t createMode, int32_t* _aidl_return) final;
     binder::Status makeBindMount(int32_t storageId, const std::string& sourcePath,
@@ -51,8 +58,7 @@ public:
     binder::Status makeDirectories(int32_t storageId, const std::string& path,
                                    int32_t* _aidl_return) final;
     binder::Status makeFile(int32_t storageId, const std::string& path,
-                            const ::android::os::incremental::IncrementalNewFileParams& params,
-                            int32_t* _aidl_return) final;
+                            const IncrementalNewFileParams& params, int32_t* _aidl_return) final;
     binder::Status makeFileFromRange(int32_t storageId, const std::string& targetPath,
                                      const std::string& sourcePath, int64_t start, int64_t end,
                                      int32_t* _aidl_return) final;
@@ -68,9 +74,12 @@ public:
                                    std::vector<uint8_t>* _aidl_return) final;
     binder::Status startLoading(int32_t storageId, bool* _aidl_return) final;
     binder::Status deleteStorage(int32_t storageId) final;
+
     binder::Status configureNativeBinaries(int32_t storageId, const std::string& apkFullPath,
                                            const std::string& libDirRelativePath,
-                                           const std::string& abi, bool* _aidl_return) final;
+                                           const std::string& abi, bool extractNativeLibs,
+                                           bool* _aidl_return) final;
+    binder::Status waitForNativeBinariesExtraction(int storageId, bool* _aidl_return) final;
 
 private:
     android::incremental::IncrementalService mImpl;

@@ -30,7 +30,6 @@ import static android.app.ActivityManager.START_SUCCESS;
 import static android.app.ActivityManager.START_SWITCHES_CANCELED;
 import static android.app.ActivityManager.START_TASK_TO_FRONT;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_STANDARD;
-import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_PRIMARY;
 import static android.app.WindowConfiguration.WINDOWING_MODE_SPLIT_SCREEN_SECONDARY;
@@ -50,6 +49,7 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.spy;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.times;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
+import static com.android.server.wm.ActivityStackSupervisor.PRESERVE_WINDOWS;
 import static com.android.server.wm.WindowContainer.POSITION_BOTTOM;
 import static com.android.server.wm.WindowContainer.POSITION_TOP;
 
@@ -57,17 +57,15 @@ import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyObject;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 
-import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.IApplicationThread;
-import android.app.WindowConfiguration;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -82,8 +80,6 @@ import android.os.RemoteException;
 import android.platform.test.annotations.Presubmit;
 import android.service.voice.IVoiceInteractionSession;
 import android.view.Gravity;
-import android.window.ITaskOrganizer;
-import android.window.WindowContainerToken;
 
 import androidx.test.filters.SmallTest;
 
@@ -105,7 +101,6 @@ import org.junit.runner.RunWith;
 @Presubmit
 @RunWith(WindowTestRunner.class)
 public class ActivityStarterTests extends ActivityTestsBase {
-    private ActivityStarter mStarter;
     private ActivityStartController mController;
     private ActivityMetricsLogger mActivityMetricsLogger;
     private PackageManagerInternal mMockPackageManager;
@@ -133,8 +128,6 @@ public class ActivityStarterTests extends ActivityTestsBase {
         mController = mock(ActivityStartController.class);
         mActivityMetricsLogger = mock(ActivityMetricsLogger.class);
         clearInvocations(mActivityMetricsLogger);
-        mStarter = new ActivityStarter(mController, mService, mService.mStackSupervisor,
-                mock(ActivityStartInterceptor.class));
     }
 
     @Test
@@ -187,6 +180,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
      * {@link ActivityStarter#execute} based on these preconditions and ensures the result matches
      * the expected. It is important to note that the method also checks side effects of the start,
      * such as ensuring {@link ActivityOptions#abort()} is called in the relevant scenarios.
+     *
      * @param preconditions A bitmask representing the preconditions for the launch
      * @param launchFlags The launch flags to be provided by the launch {@link Intent}.
      * @param expectedResult The expected result from the launch.
@@ -208,7 +202,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
         final WindowProcessController wpc =
                 containsConditions(preconditions, PRECONDITION_NO_CALLER_APP)
                 ? null : new WindowProcessController(service, ai, null, 0, -1, null, listener);
-        doReturn(wpc).when(service).getProcessController(anyObject());
+        doReturn(wpc).when(service).getProcessController(any());
 
         final Intent intent = new Intent();
         intent.setFlags(launchFlags);
@@ -433,7 +427,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
 
         // Start activity and delivered new intent.
         starter.getIntent().setComponent(splitSecondReusableActivity.mActivityComponent);
-        doReturn(splitSecondReusableActivity).when(mRootWindowContainer).findTask(any(), anyInt());
+        doReturn(splitSecondReusableActivity).when(mRootWindowContainer).findTask(any(), any());
         final int result = starter.setReason("testSplitScreenDeliverToTop").execute();
 
         // Ensure result is delivering intent to top.
@@ -469,7 +463,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
 
         // Start activity and delivered new intent.
         starter.getIntent().setComponent(splitSecondReusableActivity.mActivityComponent);
-        doReturn(splitSecondReusableActivity).when(mRootWindowContainer).findTask(any(), anyInt());
+        doReturn(splitSecondReusableActivity).when(mRootWindowContainer).findTask(any(), any());
         final int result = starter.setReason("testSplitScreenMoveToFront").execute();
 
         // Ensure result is moving task to front.
@@ -818,6 +812,41 @@ public class ActivityStarterTests extends ActivityTestsBase {
         verify(secondaryTaskContainer, times(2)).createStack(anyInt(), anyInt(), anyBoolean());
     }
 
+    @Test
+    public void testWasVisibleInRestartAttempt() {
+        final ActivityStarter starter = prepareStarter(
+                FLAG_ACTIVITY_RESET_TASK_IF_NEEDED | FLAG_ACTIVITY_SINGLE_TOP, false);
+        final ActivityRecord reusableActivity =
+                new ActivityBuilder(mService).setCreateTask(true).build();
+        final ActivityRecord topActivity =
+                new ActivityBuilder(mService).setCreateTask(true).build();
+
+        // Make sure topActivity is on top
+        topActivity.getRootTask().moveToFront("testWasVisibleInRestartAttempt");
+        reusableActivity.setVisible(false);
+
+        final TaskChangeNotificationController taskChangeNotifier =
+                mService.getTaskChangeNotificationController();
+        spyOn(taskChangeNotifier);
+
+        Task task = topActivity.getTask();
+        starter.postStartActivityProcessing(
+                task.getTopNonFinishingActivity(), START_DELIVERED_TO_TOP, task.getStack());
+
+        verify(taskChangeNotifier).notifyActivityRestartAttempt(
+                any(), anyBoolean(), anyBoolean(), anyBoolean());
+        verify(taskChangeNotifier).notifyActivityRestartAttempt(
+                any(), anyBoolean(), anyBoolean(), eq(true));
+
+        Task task2 = reusableActivity.getTask();
+        starter.postStartActivityProcessing(
+                task2.getTopNonFinishingActivity(), START_TASK_TO_FRONT, task.getStack());
+        verify(taskChangeNotifier, times(2)).notifyActivityRestartAttempt(
+                any(), anyBoolean(), anyBoolean(), anyBoolean());
+        verify(taskChangeNotifier).notifyActivityRestartAttempt(
+                any(), anyBoolean(), anyBoolean(), eq(false));
+    }
+
     private ActivityRecord createSingleTaskActivityOn(ActivityStack stack) {
         final ComponentName componentName = ComponentName.createRelative(
                 DEFAULT_COMPONENT_PACKAGE_NAME,
@@ -965,7 +994,7 @@ public class ActivityStarterTests extends ActivityTestsBase {
                 .setUserId(10)
                 .build();
 
-        final int result = starter.recycleTask(task, null, null);
+        final int result = starter.recycleTask(task, null, null, null);
         assertThat(result == START_SUCCESS).isTrue();
         assertThat(starter.mAddingToTask).isTrue();
     }
@@ -1010,61 +1039,46 @@ public class ActivityStarterTests extends ActivityTestsBase {
         verify(recentTasks, times(1)).add(any());
     }
 
-    static class TestSplitOrganizer extends ITaskOrganizer.Stub {
-        final ActivityTaskManagerService mService;
-        Task mPrimary;
-        Task mSecondary;
-        boolean mInSplit = false;
-        int mDisplayId;
-        TestSplitOrganizer(ActivityTaskManagerService service, int displayId) {
-            mService = service;
-            mDisplayId = displayId;
-            mService.mTaskOrganizerController.registerTaskOrganizer(this,
-                    WINDOWING_MODE_SPLIT_SCREEN_PRIMARY);
-            mService.mTaskOrganizerController.registerTaskOrganizer(this,
-                    WINDOWING_MODE_SPLIT_SCREEN_SECONDARY);
-            WindowContainerToken primary = mService.mTaskOrganizerController.createRootTask(
-                    displayId, WINDOWING_MODE_SPLIT_SCREEN_PRIMARY).token;
-            mPrimary = WindowContainer.fromBinder(primary.asBinder()).asTask();
-            WindowContainerToken secondary = mService.mTaskOrganizerController.createRootTask(
-                    displayId, WINDOWING_MODE_SPLIT_SCREEN_SECONDARY).token;
-            mSecondary = WindowContainer.fromBinder(secondary.asBinder()).asTask();
-        }
-        @Override
-        public void onTaskAppeared(ActivityManager.RunningTaskInfo info) {
-        }
-        @Override
-        public void onTaskVanished(ActivityManager.RunningTaskInfo info) {
-        }
-        @Override
-        public void onTaskInfoChanged(ActivityManager.RunningTaskInfo info) {
-            if (mInSplit) {
-                return;
-            }
-            if (info.topActivityType != ACTIVITY_TYPE_UNDEFINED) {
-                if (info.configuration.windowConfiguration.getWindowingMode()
-                        == WINDOWING_MODE_SPLIT_SCREEN_PRIMARY) {
-                    mInSplit = true;
-                    mService.mTaskOrganizerController.setLaunchRoot(mDisplayId,
-                            mSecondary.mRemoteToken.toWindowContainerToken());
-                    // move everything to secondary because test expects this but usually sysui
-                    // does it.
-                    DisplayContent dc = mService.mRootWindowContainer.getDisplayContent(mDisplayId);
-                    for (int tdaNdx = dc.getTaskDisplayAreaCount() - 1; tdaNdx >= 0; --tdaNdx) {
-                        final TaskDisplayArea taskDisplayArea = dc.getTaskDisplayAreaAt(tdaNdx);
-                        for (int sNdx = taskDisplayArea.getStackCount() - 1; sNdx >= 0; --sNdx) {
-                            final ActivityStack stack = taskDisplayArea.getStackAt(sNdx);
-                            if (!WindowConfiguration.isSplitScreenWindowingMode(
-                                    stack.getWindowingMode())) {
-                                stack.reparent(mSecondary, POSITION_BOTTOM);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        @Override
-        public void onBackPressedOnTaskRoot(ActivityManager.RunningTaskInfo taskInfo) {
-        }
-    };
+    @Test
+    public void testStartActivityInner_allSplitScreenPrimaryActivitiesVisible() {
+        // Given
+        final ActivityStarter starter = prepareStarter(0, false);
+
+        starter.setReason("testAllSplitScreenPrimaryActivitiesAreResumed");
+
+        final ActivityRecord targetRecord = new ActivityBuilder(mService).build();
+        targetRecord.setFocusable(false);
+        targetRecord.setVisibility(false);
+        final ActivityRecord sourceRecord = new ActivityBuilder(mService).build();
+
+        final ActivityStack stack = spy(
+                mRootWindowContainer.getDefaultTaskDisplayArea()
+                        .createStack(WINDOWING_MODE_SPLIT_SCREEN_PRIMARY, ACTIVITY_TYPE_STANDARD,
+                                /* onTop */true));
+
+        stack.addChild(targetRecord);
+
+        doReturn(stack).when(mRootWindowContainer)
+                .getLaunchStack(any(), any(), any(), anyBoolean(), any(), anyInt(), anyInt());
+
+        starter.mStartActivity = new ActivityBuilder(mService).build();
+
+        // When
+        starter.startActivityInner(
+                /* r */targetRecord,
+                /* sourceRecord */ sourceRecord,
+                /* voiceSession */null,
+                /* voiceInteractor */ null,
+                /* startFlags */ 0,
+                /* doResume */true,
+                /* options */null,
+                /* inTask */null,
+                /* restrictedBgActivity */false,
+                /* intentGrants */null);
+
+        // Then
+        verify(stack).ensureActivitiesVisible(null, 0, !PRESERVE_WINDOWS);
+        verify(targetRecord).makeVisibleIfNeeded(null, true);
+        assertTrue(targetRecord.mVisibleRequested);
+    }
 }

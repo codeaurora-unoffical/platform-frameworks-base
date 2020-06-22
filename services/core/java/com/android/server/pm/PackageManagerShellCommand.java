@@ -51,7 +51,6 @@ import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.PackageParser.ApkLite;
 import android.content.pm.PackageParser.PackageLite;
-import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
@@ -63,6 +62,8 @@ import android.content.pm.dex.ArtManager;
 import android.content.pm.dex.DexMetadataHelper;
 import android.content.pm.dex.ISnapshotRuntimeProfileCallback;
 import android.content.pm.parsing.ApkLiteParseUtils;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
 import android.content.rollback.IRollbackManager;
@@ -297,6 +298,8 @@ class PackageManagerShellCommand extends ShellCommand {
                     return runGetModuleInfo();
                 case "log-visibility":
                     return runLogVisibility();
+                case "bypass-staged-installer-check":
+                    return runBypassStagedInstallerCheck();
                 default: {
                     String nextArg = getNextArg();
                     if (nextArg == null) {
@@ -390,6 +393,20 @@ class PackageManagerShellCommand extends ShellCommand {
             return -1;
         }
         return 1;
+    }
+
+    private int runBypassStagedInstallerCheck() {
+        final PrintWriter pw = getOutPrintWriter();
+        try {
+            mInterface.getPackageInstaller()
+                    .bypassNextStagedInstallerCheck(Boolean.parseBoolean(getNextArg()));
+            return 0;
+        } catch (RemoteException e) {
+            pw.println("Failure ["
+                    + e.getClass().getName() + " - "
+                    + e.getMessage() + "]");
+            return -1;
+        }
     }
 
     private int uninstallSystemUpdates() {
@@ -489,6 +506,7 @@ class PackageManagerShellCommand extends ShellCommand {
 
         long sessionSize = 0;
 
+        ParseTypeImpl input = ParseTypeImpl.forDefaultParsing();
         for (String inPath : inPaths) {
             final ParcelFileDescriptor fd = openFileForSystem(inPath, "r");
             if (fd == null) {
@@ -496,12 +514,19 @@ class PackageManagerShellCommand extends ShellCommand {
                 throw new IllegalArgumentException("Error: Can't open file: " + inPath);
             }
             try {
-                ApkLite baseApk = ApkLiteParseUtils.parseApkLite(fd.getFileDescriptor(), inPath, 0);
-                PackageLite pkgLite = new PackageLite(null, baseApk, null, null, null, null,
-                        null, null);
+                ParseResult<ApkLite> apkLiteResult = ApkLiteParseUtils.parseApkLite(
+                        input.reset(), fd.getFileDescriptor(), inPath, 0);
+                if (apkLiteResult.isError()) {
+                    throw new IllegalArgumentException(
+                            "Error: Failed to parse APK file: " + inPath + ": "
+                                    + apkLiteResult.getErrorMessage(),
+                            apkLiteResult.getException());
+                }
+                PackageLite pkgLite = new PackageLite(null, apkLiteResult.getResult(), null, null,
+                        null, null, null, null);
                 sessionSize += PackageHelper.calculateInstalledSize(pkgLite,
                         params.sessionParams.abiOverride, fd.getFileDescriptor());
-            } catch (PackageParserException | IOException e) {
+            } catch (IOException e) {
                 getErrPrintWriter().println("Error: Failed to parse APK file: " + inPath);
                 throw new IllegalArgumentException(
                         "Error: Failed to parse APK file: " + inPath, e);
@@ -3147,7 +3172,7 @@ class PackageManagerShellCommand extends ShellCommand {
             metadata = (streamingVersion == 0) ? Metadata.forDataOnlyStreaming(fileId)
                     : Metadata.forStreaming(fileId);
             try {
-                if (V4Signature.readFrom(signature) == null) {
+                if ((signature.length > 0) && (V4Signature.readFrom(signature) == null)) {
                     getErrPrintWriter().println("V4 signature is invalid in: " + arg);
                     return 1;
                 }

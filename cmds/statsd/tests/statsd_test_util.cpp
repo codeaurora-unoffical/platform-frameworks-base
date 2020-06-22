@@ -169,7 +169,6 @@ AtomMatcher CreateScreenStateChangedAtomMatcher(
     return atom_matcher;
 }
 
-
 AtomMatcher CreateScreenTurnedOnAtomMatcher() {
     return CreateScreenStateChangedAtomMatcher("ScreenTurnedOn",
             android::view::DisplayStateEnum::DISPLAY_STATE_ON);
@@ -324,77 +323,71 @@ State CreateOverlayState() {
     return state;
 }
 
-State CreateScreenStateWithOnOffMap() {
+State CreateScreenStateWithOnOffMap(int64_t screenOnId, int64_t screenOffId) {
     State state;
     state.set_id(StringToId("ScreenStateOnOff"));
     state.set_atom_id(util::SCREEN_STATE_CHANGED);
 
-    auto map = CreateScreenStateOnOffMap();
+    auto map = CreateScreenStateOnOffMap(screenOnId, screenOffId);
     *state.mutable_map() = map;
 
     return state;
 }
 
-State CreateScreenStateWithInDozeMap() {
+State CreateScreenStateWithSimpleOnOffMap(int64_t screenOnId, int64_t screenOffId) {
     State state;
-    state.set_id(StringToId("ScreenStateInDoze"));
+    state.set_id(StringToId("ScreenStateSimpleOnOff"));
     state.set_atom_id(util::SCREEN_STATE_CHANGED);
 
-    auto map = CreateScreenStateInDozeMap();
+    auto map = CreateScreenStateSimpleOnOffMap(screenOnId, screenOffId);
     *state.mutable_map() = map;
 
     return state;
 }
 
-StateMap_StateGroup CreateScreenStateOnGroup() {
+StateMap_StateGroup CreateScreenStateOnGroup(int64_t screenOnId) {
     StateMap_StateGroup group;
-    group.set_group_id(StringToId("SCREEN_ON"));
-    group.add_value(2);
-    group.add_value(5);
-    group.add_value(6);
+    group.set_group_id(screenOnId);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_ON);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_VR);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_ON_SUSPEND);
     return group;
 }
 
-StateMap_StateGroup CreateScreenStateOffGroup() {
+StateMap_StateGroup CreateScreenStateOffGroup(int64_t screenOffId) {
     StateMap_StateGroup group;
-    group.set_group_id(StringToId("SCREEN_OFF"));
-    group.add_value(0);
-    group.add_value(1);
-    group.add_value(3);
-    group.add_value(4);
+    group.set_group_id(screenOffId);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_OFF);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_DOZE);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_DOZE_SUSPEND);
     return group;
 }
 
-StateMap CreateScreenStateOnOffMap() {
+StateMap_StateGroup CreateScreenStateSimpleOnGroup(int64_t screenOnId) {
+    StateMap_StateGroup group;
+    group.set_group_id(screenOnId);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_ON);
+    return group;
+}
+
+StateMap_StateGroup CreateScreenStateSimpleOffGroup(int64_t screenOffId) {
+    StateMap_StateGroup group;
+    group.set_group_id(screenOffId);
+    group.add_value(android::view::DisplayStateEnum::DISPLAY_STATE_OFF);
+    return group;
+}
+
+StateMap CreateScreenStateOnOffMap(int64_t screenOnId, int64_t screenOffId) {
     StateMap map;
-    *map.add_group() = CreateScreenStateOnGroup();
-    *map.add_group() = CreateScreenStateOffGroup();
+    *map.add_group() = CreateScreenStateOnGroup(screenOnId);
+    *map.add_group() = CreateScreenStateOffGroup(screenOffId);
     return map;
 }
 
-StateMap_StateGroup CreateScreenStateInDozeGroup() {
-    StateMap_StateGroup group;
-    group.set_group_id(StringToId("SCREEN_DOZE"));
-    group.add_value(3);
-    group.add_value(4);
-    return group;
-}
-
-StateMap_StateGroup CreateScreenStateNotDozeGroup() {
-    StateMap_StateGroup group;
-    group.set_group_id(StringToId("SCREEN_NOT_DOZE"));
-    group.add_value(0);
-    group.add_value(1);
-    group.add_value(2);
-    group.add_value(5);
-    group.add_value(6);
-    return group;
-}
-
-StateMap CreateScreenStateInDozeMap() {
+StateMap CreateScreenStateSimpleOnOffMap(int64_t screenOnId, int64_t screenOffId) {
     StateMap map;
-    *map.add_group() = CreateScreenStateInDozeGroup();
-    *map.add_group() = CreateScreenStateNotDozeGroup();
+    *map.add_group() = CreateScreenStateSimpleOnGroup(screenOnId);
+    *map.add_group() = CreateScreenStateSimpleOffGroup(screenOffId);
     return map;
 }
 
@@ -600,14 +593,67 @@ shared_ptr<LogEvent> CreateNoValuesLogEvent(int atomId, int64_t eventTimeNs) {
     return logEvent;
 }
 
-std::unique_ptr<LogEvent> CreateScreenStateChangedEvent(
-        uint64_t timestampNs, const android::view::DisplayStateEnum state) {
+shared_ptr<LogEvent> makeUidLogEvent(int atomId, int64_t eventTimeNs, int uid, int data1,
+                                     int data2) {
+    AStatsEvent* statsEvent = AStatsEvent_obtain();
+    AStatsEvent_setAtomId(statsEvent, atomId);
+    AStatsEvent_overwriteTimestamp(statsEvent, eventTimeNs);
+
+    AStatsEvent_writeInt32(statsEvent, uid);
+    AStatsEvent_addBoolAnnotation(statsEvent, ANNOTATION_ID_IS_UID, true);
+    AStatsEvent_writeInt32(statsEvent, data1);
+    AStatsEvent_writeInt32(statsEvent, data2);
+
+    shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
+    return logEvent;
+}
+
+shared_ptr<LogEvent> makeAttributionLogEvent(int atomId, int64_t eventTimeNs,
+                                             const vector<int>& uids, const vector<string>& tags,
+                                             int data1, int data2) {
+    AStatsEvent* statsEvent = AStatsEvent_obtain();
+    AStatsEvent_setAtomId(statsEvent, atomId);
+    AStatsEvent_overwriteTimestamp(statsEvent, eventTimeNs);
+
+    writeAttribution(statsEvent, uids, tags);
+    AStatsEvent_writeInt32(statsEvent, data1);
+    AStatsEvent_writeInt32(statsEvent, data2);
+
+    shared_ptr<LogEvent> logEvent = std::make_shared<LogEvent>(/*uid=*/0, /*pid=*/0);
+    parseStatsEventToLogEvent(statsEvent, logEvent.get());
+    return logEvent;
+}
+
+sp<MockUidMap> makeMockUidMapForOneHost(int hostUid, const vector<int>& isolatedUids) {
+    sp<MockUidMap> uidMap = new NaggyMock<MockUidMap>();
+    EXPECT_CALL(*uidMap, getHostUidOrSelf(_)).WillRepeatedly(ReturnArg<0>());
+    for (const int isolatedUid : isolatedUids) {
+        EXPECT_CALL(*uidMap, getHostUidOrSelf(isolatedUid)).WillRepeatedly(Return(hostUid));
+    }
+
+    return uidMap;
+}
+
+sp<MockUidMap> makeMockUidMapForPackage(const string& pkg, const set<int32_t>& uids) {
+    sp<MockUidMap> uidMap = new StrictMock<MockUidMap>();
+    EXPECT_CALL(*uidMap, getAppUid(_)).Times(AnyNumber());
+    EXPECT_CALL(*uidMap, getAppUid(pkg)).WillRepeatedly(Return(uids));
+
+    return uidMap;
+}
+
+std::unique_ptr<LogEvent> CreateScreenStateChangedEvent(uint64_t timestampNs,
+                                                        const android::view::DisplayStateEnum state,
+                                                        int loggerUid) {
     AStatsEvent* statsEvent = AStatsEvent_obtain();
     AStatsEvent_setAtomId(statsEvent, util::SCREEN_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
     AStatsEvent_writeInt32(statsEvent, state);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, false);
 
-    std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
+    std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(loggerUid, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
     return logEvent;
 }
@@ -617,6 +663,8 @@ std::unique_ptr<LogEvent> CreateBatterySaverOnEvent(uint64_t timestampNs) {
     AStatsEvent_setAtomId(statsEvent, util::BATTERY_SAVER_MODE_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
     AStatsEvent_writeInt32(statsEvent, BatterySaverModeStateChanged::ON);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, false);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
@@ -628,6 +676,8 @@ std::unique_ptr<LogEvent> CreateBatterySaverOffEvent(uint64_t timestampNs) {
     AStatsEvent_setAtomId(statsEvent, util::BATTERY_SAVER_MODE_STATE_CHANGED);
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
     AStatsEvent_writeInt32(statsEvent, BatterySaverModeStateChanged::OFF);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, false);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
@@ -699,9 +749,14 @@ std::unique_ptr<LogEvent> CreateWakelockStateChangedEvent(uint64_t timestampNs,
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
 
     writeAttribution(statsEvent, attributionUids, attributionTags);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD_FIRST_UID, true);
     AStatsEvent_writeInt32(statsEvent, android::os::WakeLockLevelEnum::PARTIAL_WAKE_LOCK);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
     AStatsEvent_writeString(statsEvent, wakelockName.c_str());
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
     AStatsEvent_writeInt32(statsEvent, state);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, true);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
@@ -840,7 +895,11 @@ std::unique_ptr<LogEvent> CreateUidProcessStateChangedEvent(
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
 
     AStatsEvent_writeInt32(statsEvent, uid);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_IS_UID, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
     AStatsEvent_writeInt32(statsEvent, state);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, false);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
@@ -858,10 +917,20 @@ std::unique_ptr<LogEvent> CreateBleScanStateChangedEvent(uint64_t timestampNs,
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
 
     writeAttribution(statsEvent, attributionUids, attributionTags);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD_FIRST_UID, true);
     AStatsEvent_writeInt32(statsEvent, state);
-    AStatsEvent_writeInt32(statsEvent, filtered);       // filtered
-    AStatsEvent_writeInt32(statsEvent, firstMatch);     // first match
-    AStatsEvent_writeInt32(statsEvent, opportunistic);  // opportunistic
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, true);
+    if (state == util::BLE_SCAN_STATE_CHANGED__STATE__RESET) {
+        AStatsEvent_addInt32Annotation(statsEvent, ANNOTATION_ID_TRIGGER_STATE_RESET,
+                                       util::BLE_SCAN_STATE_CHANGED__STATE__OFF);
+    }
+    AStatsEvent_writeBool(statsEvent, filtered);  // filtered
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
+    AStatsEvent_writeBool(statsEvent, firstMatch);  // first match
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
+    AStatsEvent_writeBool(statsEvent, opportunistic);  // opportunistic
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
@@ -877,9 +946,14 @@ std::unique_ptr<LogEvent> CreateOverlayStateChangedEvent(int64_t timestampNs, co
     AStatsEvent_overwriteTimestamp(statsEvent, timestampNs);
 
     AStatsEvent_writeInt32(statsEvent, uid);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_IS_UID, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
     AStatsEvent_writeString(statsEvent, packageName.c_str());
-    AStatsEvent_writeInt32(statsEvent, usingAlertWindow);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_PRIMARY_FIELD, true);
+    AStatsEvent_writeBool(statsEvent, usingAlertWindow);
     AStatsEvent_writeInt32(statsEvent, state);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_EXCLUSIVE_STATE, true);
+    AStatsEvent_addBoolAnnotation(statsEvent, util::ANNOTATION_ID_STATE_NESTED, false);
 
     std::unique_ptr<LogEvent> logEvent = std::make_unique<LogEvent>(/*uid=*/0, /*pid=*/0);
     parseStatsEventToLogEvent(statsEvent, logEvent.get());
@@ -889,8 +963,7 @@ std::unique_ptr<LogEvent> CreateOverlayStateChangedEvent(int64_t timestampNs, co
 sp<StatsLogProcessor> CreateStatsLogProcessor(const int64_t timeBaseNs, const int64_t currentTimeNs,
                                               const StatsdConfig& config, const ConfigKey& key,
                                               const shared_ptr<IPullAtomCallback>& puller,
-                                              const int32_t atomTag) {
-    sp<UidMap> uidMap = new UidMap();
+                                              const int32_t atomTag, const sp<UidMap> uidMap) {
     sp<StatsPullerManager> pullerManager = new StatsPullerManager();
     if (puller != nullptr) {
         pullerManager->RegisterPullAtomCallback(/*uid=*/0, atomTag, NS_PER_SEC, NS_PER_SEC * 10, {},
@@ -926,11 +999,11 @@ int64_t StringToId(const string& str) {
 void ValidateWakelockAttributionUidAndTagDimension(const DimensionsValue& value, const int atomId,
                                                    const int uid, const string& tag) {
     EXPECT_EQ(value.field(), atomId);
-    EXPECT_EQ(value.value_tuple().dimensions_value_size(), 2);
+    ASSERT_EQ(value.value_tuple().dimensions_value_size(), 2);
     // Attribution field.
     EXPECT_EQ(value.value_tuple().dimensions_value(0).field(), 1);
     // Uid field.
-    EXPECT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value_size(), 1);
+    ASSERT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value_size(), 1);
     EXPECT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value(0).field(), 1);
     EXPECT_EQ(value.value_tuple().dimensions_value(0).value_tuple().dimensions_value(0).value_int(),
               uid);
@@ -941,7 +1014,7 @@ void ValidateWakelockAttributionUidAndTagDimension(const DimensionsValue& value,
 
 void ValidateAttributionUidDimension(const DimensionsValue& value, int atomId, int uid) {
     EXPECT_EQ(value.field(), atomId);
-    EXPECT_EQ(value.value_tuple().dimensions_value_size(), 1);
+    ASSERT_EQ(value.value_tuple().dimensions_value_size(), 1);
     // Attribution field.
     EXPECT_EQ(value.value_tuple().dimensions_value(0).field(), 1);
     // Uid only.
@@ -955,7 +1028,7 @@ void ValidateAttributionUidDimension(const DimensionsValue& value, int atomId, i
 
 void ValidateUidDimension(const DimensionsValue& value, int node_idx, int atomId, int uid) {
     EXPECT_EQ(value.field(), atomId);
-    EXPECT_GT(value.value_tuple().dimensions_value_size(), node_idx);
+    ASSERT_GT(value.value_tuple().dimensions_value_size(), node_idx);
     // Attribution field.
     EXPECT_EQ(value.value_tuple().dimensions_value(node_idx).field(), 1);
     EXPECT_EQ(value.value_tuple().dimensions_value(node_idx)
@@ -967,7 +1040,7 @@ void ValidateUidDimension(const DimensionsValue& value, int node_idx, int atomId
 void ValidateAttributionUidAndTagDimension(
     const DimensionsValue& value, int node_idx, int atomId, int uid, const std::string& tag) {
     EXPECT_EQ(value.field(), atomId);
-    EXPECT_GT(value.value_tuple().dimensions_value_size(), node_idx);
+    ASSERT_GT(value.value_tuple().dimensions_value_size(), node_idx);
     // Attribution field.
     EXPECT_EQ(1, value.value_tuple().dimensions_value(node_idx).field());
     // Uid only.
@@ -986,7 +1059,7 @@ void ValidateAttributionUidAndTagDimension(
 void ValidateAttributionUidAndTagDimension(
     const DimensionsValue& value, int atomId, int uid, const std::string& tag) {
     EXPECT_EQ(value.field(), atomId);
-    EXPECT_EQ(1, value.value_tuple().dimensions_value_size());
+    ASSERT_EQ(1, value.value_tuple().dimensions_value_size());
     // Attribution field.
     EXPECT_EQ(1, value.value_tuple().dimensions_value(0).field());
     // Uid only.
@@ -1038,6 +1111,27 @@ bool EqualsTo(const DimensionsValue& s1, const DimensionsValue& s2) {
     }
 }
 
+bool LessThan(const google::protobuf::RepeatedPtrField<StateValue>& s1,
+              const google::protobuf::RepeatedPtrField<StateValue>& s2) {
+    if (s1.size() != s2.size()) {
+        return s1.size() < s2.size();
+    }
+    for (int i = 0; i < s1.size(); i++) {
+        const StateValue& state1 = s1[i];
+        const StateValue& state2 = s2[i];
+        if (state1.atom_id() != state2.atom_id()) {
+            return state1.atom_id() < state2.atom_id();
+        }
+        if (state1.value() != state2.value()) {
+            return state1.value() < state2.value();
+        }
+        if (state1.group_id() != state2.group_id()) {
+            return state1.group_id() < state2.group_id();
+        }
+    }
+    return false;
+}
+
 bool LessThan(const DimensionsValue& s1, const DimensionsValue& s2) {
     if (s1.field() != s2.field()) {
         return s1.field() < s2.field();
@@ -1086,7 +1180,7 @@ bool LessThan(const DimensionsPair& s1, const DimensionsPair& s2) {
         return false;
     }
 
-    return LessThan(s1.dimInCondition, s2.dimInCondition);
+    return LessThan(s1.stateValues, s2.stateValues);
 }
 
 void backfillStringInDimension(const std::map<uint64_t, string>& str_map,
@@ -1288,7 +1382,7 @@ Status FakeSubsystemSleepCallback::onPullAtom(int atomTag,
         // stats_event.h/c uses a vector as opposed to a buffer.
         p.buffer.assign(buffer, buffer + size);
         parcels.push_back(std::move(p));
-        AStatsEvent_write(event);
+        AStatsEvent_release(event);
     }
     resultReceiver->pullFinished(atomTag, /*success=*/true, parcels);
     return Status::ok();

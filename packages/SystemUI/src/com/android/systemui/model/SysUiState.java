@@ -39,7 +39,7 @@ import javax.inject.Singleton;
 public class SysUiState implements Dumpable {
 
     private static final String TAG = SysUiState.class.getSimpleName();
-    public static final boolean DEBUG = true;
+    public static final boolean DEBUG = false;
 
     private @QuickStepContract.SystemUiStateFlags int mFlags;
     private final List<SysUiStateCallback> mCallbacks = new ArrayList<>();
@@ -58,6 +58,11 @@ public class SysUiState implements Dumpable {
     /** Callback will no longer receive events on state change */
     public void removeCallback(@NonNull SysUiStateCallback callback) {
         mCallbacks.remove(callback);
+    }
+
+    /** Returns the current sysui state flags. */
+    public int getFlags() {
+        return mFlags;
     }
 
     /** Methods to this call can be chained together before calling {@link #commitUpdate(int)}. */

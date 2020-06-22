@@ -21,13 +21,15 @@ import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
 import static android.provider.Settings.ACTION_PICTURE_IN_PICTURE_SETTINGS;
 import static android.view.accessibility.AccessibilityManager.FLAG_CONTENT_CONTROLS;
 import static android.view.accessibility.AccessibilityManager.FLAG_CONTENT_ICONS;
+import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK;
 
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_ACTIONS;
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_ALLOW_TIMEOUT;
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_CONTROLLER_MESSENGER;
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_DISMISS_FRACTION;
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_MENU_STATE;
-import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_MOVEMENT_BOUNDS;
+import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_SHOW_MENU_WITH_DELAY;
+import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_SHOW_RESIZE_HANDLE;
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_STACK_BOUNDS;
 import static com.android.systemui.pip.phone.PipMenuActivityController.EXTRA_WILL_RESIZE_MENU;
 import static com.android.systemui.pip.phone.PipMenuActivityController.MENU_STATE_CLOSE;
@@ -54,6 +56,7 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
@@ -67,6 +70,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager.LayoutParams;
 import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
@@ -85,6 +89,8 @@ public class PipMenuActivity extends Activity {
 
     private static final String TAG = "PipMenuActivity";
 
+    private static final int MESSAGE_INVALID_TYPE = -1;
+
     public static final int MESSAGE_SHOW_MENU = 1;
     public static final int MESSAGE_POKE_MENU = 2;
     public static final int MESSAGE_HIDE_MENU = 3;
@@ -92,6 +98,8 @@ public class PipMenuActivity extends Activity {
     public static final int MESSAGE_UPDATE_DISMISS_FRACTION = 5;
     public static final int MESSAGE_ANIMATION_ENDED = 6;
     public static final int MESSAGE_POINTER_EVENT = 7;
+    public static final int MESSAGE_MENU_EXPANDED = 8;
+    public static final int MESSAGE_FADE_OUT_MENU = 9;
 
     private static final int INITIAL_DISMISS_DELAY = 3500;
     private static final int POST_INTERACTION_DISMISS_DELAY = 2000;
@@ -116,6 +124,7 @@ public class PipMenuActivity extends Activity {
     private LinearLayout mActionsGroup;
     private View mSettingsButton;
     private View mDismissButton;
+    private View mResizeHandle;
     private int mBetweenActionPaddingLand;
 
     private AnimatorSet mMenuContainerAnimator;
@@ -129,9 +138,7 @@ public class PipMenuActivity extends Activity {
                 }
             };
 
-    private Handler mHandler = new Handler();
-    private Messenger mToControllerMessenger;
-    private Messenger mMessenger = new Messenger(new Handler() {
+    private Handler mHandler = new Handler(Looper.getMainLooper()) {
         @Override
         public void handleMessage(Message msg) {
             switch (msg.what) {
@@ -139,9 +146,10 @@ public class PipMenuActivity extends Activity {
                     final Bundle data = (Bundle) msg.obj;
                     showMenu(data.getInt(EXTRA_MENU_STATE),
                             data.getParcelable(EXTRA_STACK_BOUNDS),
-                            data.getParcelable(EXTRA_MOVEMENT_BOUNDS),
                             data.getBoolean(EXTRA_ALLOW_TIMEOUT),
-                            data.getBoolean(EXTRA_WILL_RESIZE_MENU));
+                            data.getBoolean(EXTRA_WILL_RESIZE_MENU),
+                            data.getBoolean(EXTRA_SHOW_MENU_WITH_DELAY),
+                            data.getBoolean(EXTRA_SHOW_RESIZE_HANDLE));
                     break;
                 }
                 case MESSAGE_POKE_MENU:
@@ -166,22 +174,26 @@ public class PipMenuActivity extends Activity {
                     mAllowTouches = true;
                     break;
                 }
-
                 case MESSAGE_POINTER_EVENT: {
                     final MotionEvent ev = (MotionEvent) msg.obj;
                     dispatchPointerEvent(ev);
                     break;
                 }
+                case MESSAGE_MENU_EXPANDED : {
+                    mMenuContainerAnimator.start();
+                    break;
+                }
+                case MESSAGE_FADE_OUT_MENU: {
+                    fadeOutMenu();
+                    break;
+                }
             }
         }
-    });
-
-    private final Runnable mFinishRunnable = new Runnable() {
-        @Override
-        public void run() {
-            hideMenu();
-        }
     };
+    private Messenger mToControllerMessenger;
+    private Messenger mMessenger = new Messenger(mHandler);
+
+    private final Runnable mFinishRunnable = this::hideMenu;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -214,6 +226,8 @@ public class PipMenuActivity extends Activity {
                 expandPip();
             }
         });
+        mResizeHandle = findViewById(R.id.resize_handle);
+        mResizeHandle.setAlpha(0);
         mActionsGroup = findViewById(R.id.actions_group);
         mBetweenActionPaddingLand = getResources().getDimensionPixelSize(
                 R.dimen.pip_between_action_padding_land);
@@ -224,6 +238,29 @@ public class PipMenuActivity extends Activity {
 
         // Hide without an animation.
         getWindow().setExitTransition(null);
+
+        initAccessibility();
+    }
+
+    private void initAccessibility() {
+        getWindow().getDecorView().setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override
+            public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                String label = getResources().getString(R.string.pip_menu_title);
+                info.addAction(new AccessibilityNodeInfo.AccessibilityAction(ACTION_CLICK, label));
+            }
+
+            @Override
+            public boolean performAccessibilityAction(View host, int action, Bundle args) {
+                if (action == ACTION_CLICK && mMenuState == MENU_STATE_CLOSE) {
+                    Message m = Message.obtain();
+                    m.what = PipMenuActivityController.MESSAGE_SHOW_MENU;
+                    sendMessage(m, "Could not notify controller to show PIP menu");
+                }
+                return super.performAccessibilityAction(host, action, args);
+            }
+        });
     }
 
     @Override
@@ -255,6 +292,14 @@ public class PipMenuActivity extends Activity {
         // If another task is starting on top of the menu, then hide and finish it so that it can be
         // recreated on the top next time it starts
         hideMenu();
+    }
+
+    @Override
+    public void onTopResumedActivityChanged(boolean isTopResumedActivity) {
+        super.onTopResumedActivityChanged(isTopResumedActivity);
+        if (!isTopResumedActivity && mMenuState != MENU_STATE_NONE) {
+            hideMenu();
+        }
     }
 
     @Override
@@ -320,8 +365,8 @@ public class PipMenuActivity extends Activity {
         // Do nothing
     }
 
-    private void showMenu(int menuState, Rect stackBounds, Rect movementBounds,
-            boolean allowMenuTimeout, boolean resizeMenuOnShow) {
+    private void showMenu(int menuState, Rect stackBounds, boolean allowMenuTimeout,
+            boolean resizeMenuOnShow, boolean withDelay, boolean showResizeHandle) {
         mAllowMenuTimeout = allowMenuTimeout;
         if (mMenuState != menuState) {
             // Disallow touches if the menu needs to resize while showing, and we are transitioning
@@ -334,7 +379,6 @@ public class PipMenuActivity extends Activity {
             if (mMenuContainerAnimator != null) {
                 mMenuContainerAnimator.cancel();
             }
-            notifyMenuStateChange(menuState, resizeMenuOnShow);
             mMenuContainerAnimator = new AnimatorSet();
             ObjectAnimator menuAnim = ObjectAnimator.ofFloat(mMenuContainer, View.ALPHA,
                     mMenuContainer.getAlpha(), 1f);
@@ -343,10 +387,14 @@ public class PipMenuActivity extends Activity {
                     mSettingsButton.getAlpha(), 1f);
             ObjectAnimator dismissAnim = ObjectAnimator.ofFloat(mDismissButton, View.ALPHA,
                     mDismissButton.getAlpha(), 1f);
+            ObjectAnimator resizeAnim = ObjectAnimator.ofFloat(mResizeHandle, View.ALPHA,
+                    mResizeHandle.getAlpha(), menuState == MENU_STATE_CLOSE && showResizeHandle
+                            ? 1f : 0f);
             if (menuState == MENU_STATE_FULL) {
-                mMenuContainerAnimator.playTogether(menuAnim, settingsAnim, dismissAnim);
+                mMenuContainerAnimator.playTogether(menuAnim, settingsAnim, dismissAnim,
+                        resizeAnim);
             } else {
-                mMenuContainerAnimator.playTogether(dismissAnim);
+                mMenuContainerAnimator.playTogether(dismissAnim, resizeAnim);
             }
             mMenuContainerAnimator.setInterpolator(Interpolators.ALPHA_IN);
             mMenuContainerAnimator.setDuration(MENU_FADE_DURATION);
@@ -358,7 +406,13 @@ public class PipMenuActivity extends Activity {
                     }
                 });
             }
-            mMenuContainerAnimator.start();
+            if (withDelay) {
+                // starts the menu container animation after window expansion is completed
+                notifyMenuStateChange(menuState, resizeMenuOnShow, MESSAGE_MENU_EXPANDED);
+            } else {
+                notifyMenuStateChange(menuState, resizeMenuOnShow, MESSAGE_INVALID_TYPE);
+                mMenuContainerAnimator.start();
+            }
         } else {
             // If we are already visible, then just start the delayed dismiss and unregister any
             // existing input consumers from the previous drag
@@ -368,20 +422,33 @@ public class PipMenuActivity extends Activity {
         }
     }
 
+    /**
+     * Different from {@link #hideMenu()}, this function does not try to finish this menu activity
+     * and instead, it fades out the controls by setting the alpha to 0 directly without menu
+     * visibility callbacks invoked.
+     */
+    private void fadeOutMenu() {
+        mMenuContainer.setAlpha(0f);
+        mSettingsButton.setAlpha(0f);
+        mDismissButton.setAlpha(0f);
+        mResizeHandle.setAlpha(0f);
+    }
+
     private void hideMenu() {
         hideMenu(null);
     }
 
     private void hideMenu(Runnable animationEndCallback) {
-        hideMenu(animationEndCallback, true /* notifyMenuVisibility */, false /* isDismissing */);
+        hideMenu(animationEndCallback, true /* notifyMenuVisibility */, false /* isDismissing */,
+                true /* animate */);
     }
 
     private void hideMenu(final Runnable animationFinishedRunnable, boolean notifyMenuVisibility,
-            boolean isDismissing) {
+            boolean isDismissing, boolean animate) {
         if (mMenuState != MENU_STATE_NONE) {
             cancelDelayedFinish();
             if (notifyMenuVisibility) {
-                notifyMenuStateChange(MENU_STATE_NONE, mResize);
+                notifyMenuStateChange(MENU_STATE_NONE, mResize, MESSAGE_INVALID_TYPE);
             }
             mMenuContainerAnimator = new AnimatorSet();
             ObjectAnimator menuAnim = ObjectAnimator.ofFloat(mMenuContainer, View.ALPHA,
@@ -391,9 +458,11 @@ public class PipMenuActivity extends Activity {
                     mSettingsButton.getAlpha(), 0f);
             ObjectAnimator dismissAnim = ObjectAnimator.ofFloat(mDismissButton, View.ALPHA,
                     mDismissButton.getAlpha(), 0f);
-            mMenuContainerAnimator.playTogether(menuAnim, settingsAnim, dismissAnim);
+            ObjectAnimator resizeAnim = ObjectAnimator.ofFloat(mResizeHandle, View.ALPHA,
+                    mResizeHandle.getAlpha(), 0f);
+            mMenuContainerAnimator.playTogether(menuAnim, settingsAnim, dismissAnim, resizeAnim);
             mMenuContainerAnimator.setInterpolator(Interpolators.ALPHA_OUT);
-            mMenuContainerAnimator.setDuration(MENU_FADE_DURATION);
+            mMenuContainerAnimator.setDuration(animate ? MENU_FADE_DURATION : 0);
             mMenuContainerAnimator.addListener(new AnimatorListenerAdapter() {
                 @Override
                 public void onAnimationEnd(Animator animation) {
@@ -433,10 +502,12 @@ public class PipMenuActivity extends Activity {
         final int menuState = intent.getIntExtra(EXTRA_MENU_STATE, MENU_STATE_NONE);
         if (menuState != MENU_STATE_NONE) {
             Rect stackBounds = intent.getParcelableExtra(EXTRA_STACK_BOUNDS);
-            Rect movementBounds = intent.getParcelableExtra(EXTRA_MOVEMENT_BOUNDS);
             boolean allowMenuTimeout = intent.getBooleanExtra(EXTRA_ALLOW_TIMEOUT, true);
             boolean willResizeMenu = intent.getBooleanExtra(EXTRA_WILL_RESIZE_MENU, false);
-            showMenu(menuState, stackBounds, movementBounds, allowMenuTimeout, willResizeMenu);
+            boolean withDelay = intent.getBooleanExtra(EXTRA_SHOW_MENU_WITH_DELAY, false);
+            boolean showResizeHandle = intent.getBooleanExtra(EXTRA_SHOW_RESIZE_HANDLE, false);
+            showMenu(menuState, stackBounds, allowMenuTimeout, willResizeMenu, withDelay,
+                    showResizeHandle);
         }
     }
 
@@ -539,13 +610,21 @@ public class PipMenuActivity extends Activity {
         mBackgroundDrawable.setAlpha(alpha);
     }
 
-    private void notifyMenuStateChange(int menuState, boolean resize) {
+    private void notifyMenuStateChange(int menuState, boolean resize, int callbackWhat) {
         mMenuState = menuState;
         mResize = resize;
         Message m = Message.obtain();
         m.what = PipMenuActivityController.MESSAGE_MENU_STATE_CHANGED;
         m.arg1 = menuState;
-        m.arg2 = resize ?  1 : 0;
+        m.arg2 = resize ? 1 : 0;
+        if (callbackWhat != MESSAGE_INVALID_TYPE) {
+            // This message could be sent across processes when in secondary user.
+            // Make the receiver end sending back via our own Messenger
+            m.replyTo = mMessenger;
+            final Bundle data = new Bundle(1);
+            data.putInt(PipMenuActivityController.EXTRA_MESSAGE_CALLBACK_WHAT, callbackWhat);
+            m.obj = data;
+        }
         sendMessage(m, "Could not notify controller of PIP menu visibility");
     }
 
@@ -555,16 +634,20 @@ public class PipMenuActivity extends Activity {
         hideMenu(() -> {
             sendEmptyMessage(PipMenuActivityController.MESSAGE_EXPAND_PIP,
                     "Could not notify controller to expand PIP");
-        }, false /* notifyMenuVisibility */, false /* isDismissing */);
+        }, false /* notifyMenuVisibility */, false /* isDismissing */, true /* animate */);
     }
 
     private void dismissPip() {
+        // Since tapping on the close-button invokes a double-tap wait callback in PipTouchHandler,
+        // we want to disable animating the fadeout animation of the buttons in order to call on
+        // PipTouchHandler#onPipDismiss fast enough.
+        final boolean animate = mMenuState != MENU_STATE_CLOSE;
         // Do not notify menu visibility when hiding the menu, the controller will do this when it
         // handles the message
         hideMenu(() -> {
             sendEmptyMessage(PipMenuActivityController.MESSAGE_DISMISS_PIP,
                     "Could not notify controller to dismiss PIP");
-        }, false /* notifyMenuVisibility */, true /* isDismissing */);
+        }, false /* notifyMenuVisibility */, true /* isDismissing */, animate);
     }
 
     private void showSettings() {

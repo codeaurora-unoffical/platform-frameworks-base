@@ -21,7 +21,6 @@ import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.media.MediaRoute2Info;
 import android.media.MediaRouter2Manager;
-import android.util.Pair;
 
 import com.android.settingslib.R;
 import com.android.settingslib.bluetooth.BluetoothUtils;
@@ -38,7 +37,7 @@ public class BluetoothMediaDevice extends MediaDevice {
 
     BluetoothMediaDevice(Context context, CachedBluetoothDevice device,
             MediaRouter2Manager routerManager, MediaRoute2Info info, String packageName) {
-        super(context, MediaDeviceType.TYPE_BLUETOOTH_DEVICE, routerManager, info, packageName);
+        super(context, routerManager, info, packageName);
         mCachedDevice = device;
         initDeviceRecord();
     }
@@ -57,9 +56,18 @@ public class BluetoothMediaDevice extends MediaDevice {
 
     @Override
     public Drawable getIcon() {
-        final Pair<Drawable, String> pair = BluetoothUtils
-                .getBtRainbowDrawableWithDescription(mContext, mCachedDevice);
-        return pair.first;
+        final Drawable drawable = getIconWithoutBackground();
+        if (!isFastPairDevice()) {
+            setColorFilter(drawable);
+        }
+        return BluetoothUtils.buildAdvancedDrawable(mContext, drawable);
+    }
+
+    @Override
+    public Drawable getIconWithoutBackground() {
+        return isFastPairDevice()
+                ? BluetoothUtils.getBtDrawableWithDescription(mContext, mCachedDevice).first
+                : mContext.getDrawable(R.drawable.ic_headphone);
     }
 
     @Override
@@ -86,6 +94,13 @@ public class BluetoothMediaDevice extends MediaDevice {
             }
         }
         return false;
+    }
+
+    @Override
+    public boolean isFastPairDevice() {
+        return mCachedDevice != null
+                && BluetoothUtils.getBooleanMetaData(
+                mCachedDevice.getDevice(), BluetoothDevice.METADATA_IS_UNTETHERED_HEADSET);
     }
 
     @Override

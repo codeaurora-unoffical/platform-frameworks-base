@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -40,6 +41,7 @@ import android.content.pm.ServiceInfo;
 import android.provider.Settings;
 import android.service.quicksettings.Tile;
 import android.testing.AndroidTestingRunner;
+import android.testing.TestableLooper;
 import android.text.TextUtils;
 import android.util.ArraySet;
 
@@ -58,6 +60,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -68,6 +71,7 @@ import java.util.Set;
 
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
+@TestableLooper.RunWithLooper
 public class TileQueryHelperTest extends SysuiTestCase {
     private static final String CURRENT_TILES = "wifi,dnd,nfc";
     private static final String ONLY_STOCK_TILES = "wifi,dnd";
@@ -105,6 +109,7 @@ public class TileQueryHelperTest extends SysuiTestCase {
     @Before
     public void setup() {
         MockitoAnnotations.initMocks(this);
+
         mContext.setMockPackageManager(mPackageManager);
 
         mState = new QSTile.State();
@@ -268,5 +273,23 @@ public class TileQueryHelperTest extends SysuiTestCase {
         mContext.getOrCreateTestableResources().addOverride(R.string.quick_settings_tiles_stock,
                 STOCK_TILES);
         mTileQueryHelper.queryTiles(mQSTileHost);
+    }
+
+    @Test
+    public void testQueryTiles_notAvailableDestroyed_tileSpecIsSet() {
+        Settings.Secure.putString(mContext.getContentResolver(), Settings.Secure.QS_TILES, null);
+
+        QSTile t = mock(QSTile.class);
+        when(mQSTileHost.createTile("hotspot")).thenReturn(t);
+
+        mContext.getOrCreateTestableResources().addOverride(R.string.quick_settings_tiles_stock,
+                "hotspot");
+
+        mTileQueryHelper.queryTiles(mQSTileHost);
+
+        FakeExecutor.exhaustExecutors(mMainExecutor, mBgExecutor);
+        InOrder verifier = inOrder(t);
+        verifier.verify(t).setTileSpec("hotspot");
+        verifier.verify(t).destroy();
     }
 }

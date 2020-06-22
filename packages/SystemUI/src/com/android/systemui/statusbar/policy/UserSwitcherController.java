@@ -31,6 +31,9 @@ import android.content.IntentFilter;
 import android.content.pm.UserInfo;
 import android.database.ContentObserver;
 import android.graphics.Bitmap;
+import android.graphics.ColorFilter;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Handler;
@@ -48,6 +51,7 @@ import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.util.UserIcons;
 import com.android.settingslib.RestrictedLockUtilsInternal;
@@ -61,6 +65,7 @@ import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.qs.DetailAdapter;
+import com.android.systemui.qs.QSUserSwitcherEvent;
 import com.android.systemui.qs.tiles.UserDetailView;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 
@@ -78,6 +83,9 @@ import javax.inject.Singleton;
  */
 @Singleton
 public class UserSwitcherController implements Dumpable {
+
+    public static final float USER_SWITCH_ENABLED_ALPHA = 1.0f;
+    public static final float USER_SWITCH_DISABLED_ALPHA = 0.38f;
 
     private static final String TAG = "UserSwitcherController";
     private static final boolean DEBUG = false;
@@ -108,13 +116,15 @@ public class UserSwitcherController implements Dumpable {
     private int mSecondaryUser = UserHandle.USER_NULL;
     private Intent mSecondaryUserServiceIntent;
     private SparseBooleanArray mForcePictureLoadForUserId = new SparseBooleanArray(2);
+    private final UiEventLogger mUiEventLogger;
 
     @Inject
     public UserSwitcherController(Context context, KeyguardStateController keyguardStateController,
             @Main Handler handler, ActivityStarter activityStarter,
-            BroadcastDispatcher broadcastDispatcher) {
+            BroadcastDispatcher broadcastDispatcher, UiEventLogger uiEventLogger) {
         mContext = context;
         mBroadcastDispatcher = broadcastDispatcher;
+        mUiEventLogger = uiEventLogger;
         if (!UserManager.isGuestUserEphemeral()) {
             mGuestResumeSessionReceiver.register(mBroadcastDispatcher);
         }
@@ -405,18 +415,6 @@ public class UserSwitcherController implements Dumpable {
         Log.e(TAG, "Couldn't switch to user, id=" + userId);
     }
 
-    public int getSwitchableUserCount() {
-        int count = 0;
-        final int N = mUsers.size();
-        for (int i = 0; i < N; ++i) {
-            UserRecord record = mUsers.get(i);
-            if (record.info != null && record.info.supportsSwitchToByUser()) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     protected void switchToUserId(int id) {
         try {
             pauseRefreshUsers();
@@ -682,6 +680,12 @@ public class UserSwitcherController implements Dumpable {
             }
         }
 
+        protected static ColorFilter getDisabledUserAvatarColorFilter() {
+            ColorMatrix matrix = new ColorMatrix();
+            matrix.setSaturation(0f);   // 0 - grayscale
+            return new ColorMatrixColorFilter(matrix);
+        }
+
         protected static Drawable getIconDrawable(Context context, UserRecord item) {
             int iconRes;
             if (item.isAddUser) {
@@ -801,7 +805,7 @@ public class UserSwitcherController implements Dumpable {
             UserDetailView v;
             if (!(convertView instanceof UserDetailView)) {
                 v = UserDetailView.inflate(context, parent, false);
-                v.createAndSetAdapter(UserSwitcherController.this);
+                v.createAndSetAdapter(UserSwitcherController.this, mUiEventLogger);
             } else {
                 v = (UserDetailView) convertView;
             }
@@ -826,6 +830,21 @@ public class UserSwitcherController implements Dumpable {
         @Override
         public int getMetricsCategory() {
             return MetricsEvent.QS_USERDETAIL;
+        }
+
+        @Override
+        public UiEventLogger.UiEventEnum openDetailEvent() {
+            return QSUserSwitcherEvent.QS_USER_DETAIL_OPEN;
+        }
+
+        @Override
+        public UiEventLogger.UiEventEnum closeDetailEvent() {
+            return QSUserSwitcherEvent.QS_USER_DETAIL_CLOSE;
+        }
+
+        @Override
+        public UiEventLogger.UiEventEnum moreSettingsEvent() {
+            return QSUserSwitcherEvent.QS_USER_MORE_SETTINGS;
         }
     };
 

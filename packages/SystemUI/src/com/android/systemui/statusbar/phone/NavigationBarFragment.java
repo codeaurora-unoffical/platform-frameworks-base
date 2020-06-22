@@ -28,6 +28,7 @@ import static android.view.WindowInsetsController.APPEARANCE_OPAQUE_NAVIGATION_B
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_3BUTTON;
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL;
 
+import static com.android.internal.accessibility.common.ShortcutConstants.CHOOSER_PACKAGE_NAME;
 import static com.android.internal.config.sysui.SystemUiDeviceConfigFlags.NAV_BAR_HANDLE_FORCE_OPAQUE;
 import static com.android.systemui.recents.OverviewProxyService.OverviewProxyListener;
 import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_A11Y_BUTTON_CLICKABLE;
@@ -58,6 +59,7 @@ import android.content.res.Configuration;
 import android.database.ContentObserver;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.hardware.display.DisplayManager;
 import android.inputmethodservice.InputMethodService;
 import android.net.Uri;
@@ -82,6 +84,7 @@ import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.WindowInsetsController.Appearance;
 import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
@@ -91,11 +94,15 @@ import android.view.accessibility.AccessibilityManager.AccessibilityServicesStat
 
 import androidx.annotation.VisibleForTesting;
 
+import com.android.internal.accessibility.dialog.AccessibilityButtonChooserActivity;
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.UiEvent;
+import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.util.LatencyTracker;
 import com.android.internal.view.AppearanceRegion;
 import com.android.systemui.R;
+import com.android.systemui.accessibility.SystemActions;
 import com.android.systemui.assist.AssistHandleViewController;
 import com.android.systemui.assist.AssistManager;
 import com.android.systemui.broadcast.BroadcastDispatcher;
@@ -108,7 +115,6 @@ import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.shared.system.QuickStepContract;
-import com.android.systemui.shared.system.TaskStackChangeListener;
 import com.android.systemui.stackdivider.Divider;
 import com.android.systemui.statusbar.AutoHideUiElement;
 import com.android.systemui.statusbar.CommandQueue;
@@ -176,13 +182,12 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
     private final Lazy<StatusBar> mStatusBarLazy;
     private final ShadeController mShadeController;
     private final NotificationRemoteInputManager mNotificationRemoteInputManager;
-    private Recents mRecents;
-    private StatusBar mStatusBar;
     private final Divider mDivider;
     private final Optional<Recents> mRecentsOptional;
     private WindowManager mWindowManager;
     private final CommandQueue mCommandQueue;
     private long mLastLockToAppLongPress;
+    private final SystemActions mSystemActions;
 
     private Locale mLocale;
     private int mLayoutDirection;
@@ -216,12 +221,31 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
      * original handle hidden and we'll flip the visibilities once the
      * {@link #mTasksFrozenListener} fires
      */
-    private NavigationHandle mOrientationHandle;
+    private VerticalNavigationHandle mOrientationHandle;
     private WindowManager.LayoutParams mOrientationParams;
-    private boolean mFrozenTasks;
     private int mStartingQuickSwitchRotation;
     private int mCurrentRotation;
     private boolean mFixedRotationEnabled;
+    private ViewTreeObserver.OnGlobalLayoutListener mOrientationHandleGlobalLayoutListener;
+    private UiEventLogger mUiEventLogger;
+
+    @com.android.internal.annotations.VisibleForTesting
+    public enum NavBarActionEvent implements UiEventLogger.UiEventEnum {
+
+        @UiEvent(doc = "Assistant invoked via home button long press.")
+        NAVBAR_ASSIST_LONGPRESS(550);
+
+        private final int mId;
+
+        NavBarActionEvent(int id) {
+            mId = id;
+        }
+
+        @Override
+        public int getId() {
+            return mId;
+        }
+    }
 
     /** Only for default display */
     @Nullable
@@ -301,14 +325,6 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         }
     };
 
-    private TaskStackChangeListener mTasksFrozenListener = new TaskStackChangeListener() {
-        @Override
-        public void onRecentTaskListFrozenChanged(boolean frozen) {
-            mFrozenTasks = frozen;
-            orientSecondaryHomeHandle();
-        }
-    };
-
     private NavigationBarTransitions.DarkIntensityListener mOrientationHandleIntensityListener =
             new NavigationBarTransitions.DarkIntensityListener() {
                 @Override
@@ -371,7 +387,9 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
             Optional<Recents> recentsOptional, Lazy<StatusBar> statusBarLazy,
             ShadeController shadeController,
             NotificationRemoteInputManager notificationRemoteInputManager,
-            @Main Handler mainHandler) {
+            SystemActions systemActions,
+            @Main Handler mainHandler,
+            UiEventLogger uiEventLogger) {
         mAccessibilityManagerWrapper = accessibilityManagerWrapper;
         mDeviceProvisionedController = deviceProvisionedController;
         mStatusBarStateController = statusBarStateController;
@@ -389,7 +407,9 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         mCommandQueue = commandQueue;
         mDivider = divider;
         mRecentsOptional = recentsOptional;
+        mSystemActions = systemActions;
         mHandler = mainHandler;
+        mUiEventLogger = uiEventLogger;
     }
 
     // ----- Fragment Lifecycle Callbacks -----
@@ -504,7 +524,6 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         }
 
         initSecondaryHomeHandleForRotation();
-        ActivityManagerWrapper.getInstance().registerTaskStackListener(mTasksFrozenListener);
     }
 
     @Override
@@ -521,12 +540,13 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         }
         mOverviewProxyService.removeCallback(mOverviewProxyListener);
         mBroadcastDispatcher.unregisterReceiver(mBroadcastReceiver);
-        ActivityManagerWrapper.getInstance().unregisterTaskStackListener(mTasksFrozenListener);
         if (mOrientationHandle != null) {
             resetSecondaryHandle();
             getContext().getSystemService(DisplayManager.class).unregisterDisplayListener(this);
             getBarTransitions().removeDarkIntensityListener(mOrientationHandleIntensityListener);
             mWindowManager.removeView(mOrientationHandle);
+            mOrientationHandle.getViewTreeObserver().removeOnGlobalLayoutListener(
+                    mOrientationHandleGlobalLayoutListener);
         }
     }
 
@@ -581,6 +601,20 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
                 PixelFormat.TRANSLUCENT);
         mWindowManager.addView(mOrientationHandle, mOrientationParams);
         mOrientationHandle.setVisibility(View.GONE);
+        mOrientationHandleGlobalLayoutListener =
+                () -> {
+                    if (mStartingQuickSwitchRotation == -1) {
+                        return;
+                    }
+
+                    RectF boundsOnScreen = mOrientationHandle.computeHomeHandleBounds();
+                    mOrientationHandle.mapRectFromViewToScreenCoords(boundsOnScreen, true);
+                    Rect boundsRounded = new Rect();
+                    boundsOnScreen.roundOut(boundsRounded);
+                    mNavigationBarView.setOrientedHandleSamplingRegion(boundsRounded);
+                };
+        mOrientationHandle.getViewTreeObserver().addOnGlobalLayoutListener(
+                mOrientationHandleGlobalLayoutListener);
     }
 
     private void orientSecondaryHomeHandle() {
@@ -588,7 +622,9 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
             return;
         }
 
-        if (!mFrozenTasks) {
+        if (mStartingQuickSwitchRotation == -1 || mDivider.isDividerVisible()) {
+            // Hide the secondary home handle if we are in multiwindow since apps in multiwindow
+            // aren't allowed to set the display orientation
             resetSecondaryHandle();
         } else {
             int deltaRotation = deltaRotation(mCurrentRotation, mStartingQuickSwitchRotation);
@@ -627,6 +663,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         }
         if (mNavigationBarView != null) {
             mNavigationBarView.setVisibility(View.VISIBLE);
+            mNavigationBarView.setOrientedHandleSamplingRegion(null);
         }
     }
 
@@ -994,6 +1031,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
             return false;
         }
         mMetricsLogger.action(MetricsEvent.ACTION_ASSIST_LONG_PRESS);
+        mUiEventLogger.log(NavBarActionEvent.NAVBAR_ASSIST_LONGPRESS);
         Bundle args  = new Bundle();
         args.putInt(
                 AssistManager.INVOCATION_TYPE_KEY, AssistManager.INVOCATION_HOME_BUTTON_LONG_PRESS);
@@ -1136,10 +1174,10 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
     }
 
     private boolean onAccessibilityLongClick(View v) {
-        Intent intent = new Intent(AccessibilityManager.ACTION_CHOOSE_ACCESSIBILITY_BUTTON);
+        final Intent intent = new Intent(AccessibilityManager.ACTION_CHOOSE_ACCESSIBILITY_BUTTON);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        intent.putExtra(AccessibilityManager.EXTRA_SHORTCUT_TYPE,
-                AccessibilityManager.ACCESSIBILITY_BUTTON);
+        final String chooserClassName = AccessibilityButtonChooserActivity.class.getName();
+        intent.setClassName(CHOOSER_PACKAGE_NAME, chooserClassName);
         v.getContext().startActivityAsUser(intent, UserHandle.CURRENT);
         return true;
     }
@@ -1166,6 +1204,16 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
                 .setFlag(SYSUI_STATE_A11Y_BUTTON_LONG_CLICKABLE, longClickable)
                 .setFlag(SYSUI_STATE_NAV_BAR_HIDDEN, !isNavBarWindowVisible())
                 .commitUpdate(mDisplayId);
+        registerAction(clickable, SystemActions.SYSTEM_ACTION_ID_ACCESSIBILITY_BUTTON);
+        registerAction(longClickable, SystemActions.SYSTEM_ACTION_ID_ACCESSIBILITY_BUTTON_CHOOSER);
+    }
+
+    private void registerAction(boolean register, int actionId) {
+        if (register) {
+            mSystemActions.register(actionId);
+        } else {
+            mSystemActions.unregister(actionId);
+        }
     }
 
     /**

@@ -90,12 +90,13 @@
 #include <utils/String8.h>
 #include <utils/Trace.h>
 
-#include "core_jni_helpers.h"
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/ScopedLocalRef.h>
 #include <nativehelper/ScopedPrimitiveArray.h>
 #include <nativehelper/ScopedUtfChars.h>
+#include "core_jni_helpers.h"
 #include "fd_utils.h"
+#include "filesystem_utils.h"
 
 #include "nativebridge/native_bridge.h"
 
@@ -121,6 +122,7 @@ typedef const std::function<void(std::string)>& fail_fn_t;
 
 static pid_t gSystemServerPid = 0;
 
+static constexpr const char* kVoldAppDataIsolation = "persist.sys.vold_app_data_isolation_enabled";
 static constexpr const char* kPropFuse = "persist.sys.fuse";
 static const char kZygoteClassName[] = "com/android/internal/os/Zygote";
 static jclass gZygoteClass;
@@ -526,8 +528,16 @@ static void UnsetChldSignalHandler() {
 
 // Calls POSIX setgroups() using the int[] object as an argument.
 // A nullptr argument is tolerated.
-static void SetGids(JNIEnv* env, jintArray managed_gids, fail_fn_t fail_fn) {
+static void SetGids(JNIEnv* env, jintArray managed_gids, jboolean is_child_zygote,
+                    fail_fn_t fail_fn) {
   if (managed_gids == nullptr) {
+    if (is_child_zygote) {
+      // For child zygotes like webview and app zygote, we want to clear out
+      // any supplemental groups the parent zygote had.
+      if (setgroups(0, NULL) == -1) {
+        fail_fn(CREATE_ERROR("Failed to remove supplementary groups for child zygote"));
+      }
+    }
     return;
   }
 
@@ -620,15 +630,6 @@ static void EnableDebugger() {
       }
     }
   }
-}
-
-static bool IsFilesystemSupported(const std::string& fsType) {
-    std::string supported;
-    if (!ReadFileToString("/proc/filesystems", &supported)) {
-        ALOGE("Failed to read supported filesystems");
-        return false;
-    }
-    return supported.find(fsType + "\n") != std::string::npos;
 }
 
 static void PreApplicationInit() {
@@ -840,6 +841,7 @@ static void MountEmulatedStorage(uid_t uid, jint mount_mode,
              multiuser_get_uid(user_id, AID_EVERYBODY), fail_fn);
 
   bool isFuse = GetBoolProperty(kPropFuse, false);
+  bool isAppDataIsolationEnabled = GetBoolProperty(kVoldAppDataIsolation, false);
 
   if (isFuse) {
     if (mount_mode == MOUNT_EXTERNAL_PASS_THROUGH) {
@@ -849,6 +851,9 @@ static void MountEmulatedStorage(uid_t uid, jint mount_mode,
     } else if (mount_mode == MOUNT_EXTERNAL_INSTALLER) {
       const std::string installer_source = StringPrintf("/mnt/installer/%d", user_id);
       BindMount(installer_source, "/storage", fail_fn);
+    } else if (isAppDataIsolationEnabled && mount_mode == MOUNT_EXTERNAL_ANDROID_WRITABLE) {
+      const std::string writable_source = StringPrintf("/mnt/androidwritable/%d", user_id);
+      BindMount(writable_source, "/storage", fail_fn);
     } else {
       BindMount(user_source, "/storage", fail_fn);
     }
@@ -1363,7 +1368,13 @@ static void isolateAppData(JNIEnv* env, const std::vector<std::string>& merged_d
   }
   closedir(dir);
 
-  bool legacySymlinkCreated = false;
+  // Prepare default dirs for user 0 as user 0 always exists.
+  int result = symlink("/data/data", "/data/user/0");
+  if (result != 0) {
+    fail_fn(CREATE_ERROR("Failed to create symlink /data/user/0 %s", strerror(errno)));
+  }
+  PrepareDirIfNotPresent("/data/user_de/0", DEFAULT_DATA_DIR_PERMISSION,
+      AID_ROOT, AID_ROOT, fail_fn);
 
   for (int i = 0; i < size; i += 3) {
     std::string const & packageName = merged_data_info_list[i];
@@ -1404,17 +1415,8 @@ static void isolateAppData(JNIEnv* env, const std::vector<std::string>& merged_d
       char internalDeUserPath[PATH_MAX];
       snprintf(internalCeUserPath, PATH_MAX, "/data/user/%d", userId);
       snprintf(internalDeUserPath, PATH_MAX, "/data/user_de/%d", userId);
-      // If it's user 0, create a symlink /data/user/0 -> /data/data,
-      // otherwise create /data/user/$USER
+      // If it's not user 0, create /data/user/$USER.
       if (userId == 0) {
-        if (!legacySymlinkCreated) {
-          legacySymlinkCreated = true;
-          int result = symlink(internalLegacyCePath, internalCeUserPath);
-          if (result != 0) {
-             fail_fn(CREATE_ERROR("Failed to create symlink %s %s", internalCeUserPath,
-              strerror(errno)));
-          }
-        }
         actualCePath = internalLegacyCePath;
       } else {
         PrepareDirIfNotPresent(internalCeUserPath, DEFAULT_DATA_DIR_PERMISSION,
@@ -1556,25 +1558,20 @@ static void isolateJitProfile(JNIEnv* env, jobjectArray pkg_data_info_list,
   }
 }
 
-static void BindMountStorageToLowerFs(const userid_t user_id, const char* dir_name,
-    const char* package, fail_fn_t fail_fn) {
+static void BindMountStorageToLowerFs(const userid_t user_id, const uid_t uid,
+    const char* dir_name, const char* package, fail_fn_t fail_fn) {
+    bool hasSdcardFs = IsSdcardfsUsed();
+    std::string source;
+    if (hasSdcardFs) {
+        source = StringPrintf("/mnt/runtime/default/emulated/%d/%s/%s", user_id, dir_name, package);
+    } else {
+        source = StringPrintf("/mnt/pass_through/%d/emulated/%d/%s/%s", user_id, user_id, dir_name,
+                              package);
+    }
+  std::string target = StringPrintf("/storage/emulated/%d/%s/%s", user_id, dir_name, package);
 
-  bool hasPackage = (package != nullptr);
-  bool hasSdcardFs = IsFilesystemSupported("sdcardfs");
-  std::string source;
-  if (hasSdcardFs) {
-    source = hasPackage ?
-        StringPrintf("/mnt/runtime/default/emulated/%d/%s/%s", user_id, dir_name, package) :
-        StringPrintf("/mnt/runtime/default/emulated/%d/%s", user_id, dir_name);
-  } else {
-    source = hasPackage ?
-        StringPrintf("/mnt/pass_through/%d/emulated/%d/%s/%s",
-            user_id, user_id, dir_name, package) :
-        StringPrintf("/mnt/pass_through/%d/emulated/%d/%s", user_id, user_id, dir_name);
-  }
-  std::string target = hasPackage ?
-      StringPrintf("/storage/emulated/%d/%s/%s", user_id, dir_name, package) :
-      StringPrintf("/storage/emulated/%d/%s", user_id, dir_name);
+  // As the parent is mounted as tmpfs, we need to create the target dir here.
+  PrepareDirIfNotPresent(target, 0700, uid, uid, fail_fn);
 
   if (access(source.c_str(), F_OK) != 0) {
     fail_fn(CREATE_ERROR("Error accessing %s: %s", source.c_str(), strerror(errno)));
@@ -1585,9 +1582,8 @@ static void BindMountStorageToLowerFs(const userid_t user_id, const char* dir_na
   BindMount(source, target, fail_fn);
 }
 
-// Bind mount all obb & data directories that are visible to this app.
-// If app data isolation is not enabled for this process, bind mount the whole obb
-// and data directory instead.
+// Mount tmpfs on Android/data and Android/obb, then bind mount all app visible package
+// directories in data and obb directories.
 static void BindMountStorageDirs(JNIEnv* env, jobjectArray pkg_data_info_list,
     uid_t uid, const char* process_name, jstring managed_nice_name, fail_fn_t fail_fn) {
 
@@ -1597,19 +1593,18 @@ static void BindMountStorageDirs(JNIEnv* env, jobjectArray pkg_data_info_list,
   // Fuse is ready, so we can start using fuse path.
   int size = (pkg_data_info_list != nullptr) ? env->GetArrayLength(pkg_data_info_list) : 0;
 
-  if (size == 0) {
-    // App data isolation is not enabled for this process, so we bind mount to whole obb/ dir.
-    BindMountStorageToLowerFs(user_id, "Android/obb", /* package */ nullptr, fail_fn);
-    BindMountStorageToLowerFs(user_id, "Android/data", /* package */ nullptr, fail_fn);
-    return;
-  }
+  // Create tmpfs on Android/obb and Android/data so these 2 dirs won't enter fuse anymore.
+  std::string androidObbDir = StringPrintf("/storage/emulated/%d/Android/obb", user_id);
+  MountAppDataTmpFs(androidObbDir, fail_fn);
+  std::string androidDataDir = StringPrintf("/storage/emulated/%d/Android/data", user_id);
+  MountAppDataTmpFs(androidDataDir, fail_fn);
 
   // Bind mount each package obb directory
   for (int i = 0; i < size; i += 3) {
     jstring package_str = (jstring) (env->GetObjectArrayElement(pkg_data_info_list, i));
     std::string packageName = extract_fn(package_str).value();
-    BindMountStorageToLowerFs(user_id, "Android/obb", packageName.c_str(), fail_fn);
-    BindMountStorageToLowerFs(user_id, "Android/data", packageName.c_str(), fail_fn);
+    BindMountStorageToLowerFs(user_id, uid, "Android/obb", packageName.c_str(), fail_fn);
+    BindMountStorageToLowerFs(user_id, uid, "Android/data", packageName.c_str(), fail_fn);
   }
 }
 
@@ -1662,7 +1657,10 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
             uid, process_name, managed_nice_name, fail_fn);
     isolateJitProfile(env, pkg_data_info_list, uid, process_name, managed_nice_name, fail_fn);
   }
-  if ((mount_external != MOUNT_EXTERNAL_INSTALLER) && mount_storage_dirs) {
+  // MOUNT_EXTERNAL_INSTALLER, MOUNT_EXTERNAL_PASS_THROUGH, MOUNT_EXTERNAL_ANDROID_WRITABLE apps
+  // will have mount_storage_dirs == false here (set by ProcessList.needsStorageDataIsolation()),
+  // and hence they won't bind mount storage dirs.
+  if (mount_storage_dirs) {
     BindMountStorageDirs(env, pkg_data_info_list, uid, process_name, managed_nice_name, fail_fn);
   }
 
@@ -1677,7 +1675,7 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
     }
   }
 
-  SetGids(env, gids, fail_fn);
+  SetGids(env, gids, is_child_zygote, fail_fn);
   SetRLimits(env, rlimits, fail_fn);
 
   if (need_pre_initialize_native_bridge) {
@@ -1748,6 +1746,8 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
       heap_tagging_level = M_HEAP_TAGGING_LEVEL_NONE;
   }
   android_mallopt(M_SET_HEAP_TAGGING_LEVEL, &heap_tagging_level, sizeof(heap_tagging_level));
+  // Now that we've used the flag, clear it so that we don't pass unknown flags to the ART runtime.
+  runtime_flags &= ~RuntimeFlags::MEMORY_TAG_LEVEL_MASK;
 
   bool forceEnableGwpAsan = false;
   switch (runtime_flags & RuntimeFlags::GWP_ASAN_LEVEL_MASK) {
@@ -1760,6 +1760,8 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
       case RuntimeFlags::GWP_ASAN_LEVEL_LOTTERY:
           android_mallopt(M_INITIALIZE_GWP_ASAN, &forceEnableGwpAsan, sizeof(forceEnableGwpAsan));
   }
+  // Now that we've used the flag, clear it so that we don't pass unknown flags to the ART runtime.
+  runtime_flags &= ~RuntimeFlags::GWP_ASAN_LEVEL_MASK;
 
   if (NeedsNoRandomizeWorkaround()) {
     // Work around ARM kernel ASLR lossage (http://b/5817320).

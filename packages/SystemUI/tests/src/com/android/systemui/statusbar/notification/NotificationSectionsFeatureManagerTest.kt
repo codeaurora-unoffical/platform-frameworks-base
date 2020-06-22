@@ -49,12 +49,12 @@ class NotificationSectionsFeatureManagerTest : SysuiTestCase() {
         manager!!.clearCache()
         originalQsMediaPlayer = Settings.System.getInt(context.getContentResolver(),
                 "qs_media_player", 1)
-        Settings.System.putInt(context.getContentResolver(), "qs_media_player", 0)
+        Settings.Global.putInt(context.getContentResolver(), "qs_media_player", 0)
     }
 
     @After
     public fun teardown() {
-        Settings.System.putInt(context.getContentResolver(), "qs_media_player",
+        Settings.Global.putInt(context.getContentResolver(), "qs_media_player",
                 originalQsMediaPlayer)
     }
 
@@ -74,7 +74,7 @@ class NotificationSectionsFeatureManagerTest : SysuiTestCase() {
                 DeviceConfig.NAMESPACE_SYSTEMUI, NOTIFICATIONS_USE_PEOPLE_FILTERING, "true", false)
 
         assertTrue("People filtering should be enabled", manager!!.isFilteringEnabled())
-        assertTrue("Expecting 4 buckets when people filtering is enabled",
-                manager!!.getNumberOfBuckets() == 4)
+        assertTrue("Expecting 5 buckets when people filtering is enabled",
+                manager!!.getNumberOfBuckets() == 5)
     }
 }

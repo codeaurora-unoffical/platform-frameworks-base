@@ -31,6 +31,9 @@ import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.Log;
 
+import com.android.internal.logging.InstanceId;
+import com.android.internal.logging.InstanceIdSequence;
+import com.android.internal.logging.UiEventLogger;
 import com.android.systemui.Dumpable;
 import com.android.systemui.R;
 import com.android.systemui.broadcast.BroadcastDispatcher;
@@ -73,6 +76,7 @@ import javax.inject.Singleton;
 public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, Dumpable {
     private static final String TAG = "QSTileHost";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
+    private static final int MAX_QS_INSTANCE_ID = 1 << 20;
 
     public static final String TILES_SETTING = Secure.QS_TILES;
 
@@ -85,6 +89,8 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
     private final DumpManager mDumpManager;
     private final BroadcastDispatcher mBroadcastDispatcher;
     private final QSLogger mQSLogger;
+    private final UiEventLogger mUiEventLogger;
+    private final InstanceIdSequence mInstanceIdSequence;
 
     private final List<Callback> mCallbacks = new ArrayList<>();
     private AutoTileManager mAutoTiles;
@@ -106,7 +112,8 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
             DumpManager dumpManager,
             BroadcastDispatcher broadcastDispatcher,
             Optional<StatusBar> statusBarOptional,
-            QSLogger qsLogger) {
+            QSLogger qsLogger,
+            UiEventLogger uiEventLogger) {
         mIconController = iconController;
         mContext = context;
         mUserContext = context;
@@ -114,8 +121,10 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
         mPluginManager = pluginManager;
         mDumpManager = dumpManager;
         mQSLogger = qsLogger;
+        mUiEventLogger = uiEventLogger;
         mBroadcastDispatcher = broadcastDispatcher;
 
+        mInstanceIdSequence = new InstanceIdSequence(MAX_QS_INSTANCE_ID);
         mServices = new TileServices(this, bgLooper, mBroadcastDispatcher);
         mStatusBarOptional = statusBarOptional;
 
@@ -135,6 +144,11 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
 
     public StatusBarIconController getIconController() {
         return mIconController;
+    }
+
+    @Override
+    public InstanceId getNewInstanceId() {
+        return mInstanceIdSequence.newInstanceId();
     }
 
     public void destroy() {
@@ -167,6 +181,11 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
 
     public QSLogger getQSLogger() {
         return mQSLogger;
+    }
+
+    @Override
+    public UiEventLogger getUiEventLogger() {
+        return mUiEventLogger;
     }
 
     @Override
@@ -320,21 +339,39 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
         changeTileSpecs(tileSpecs-> !tileSpecs.contains(spec) && tileSpecs.add(spec));
     }
 
+    private void saveTilesToSettings(List<String> tileSpecs) {
+        Settings.Secure.putStringForUser(mContext.getContentResolver(), TILES_SETTING,
+                TextUtils.join(",", tileSpecs), null /* tag */,
+                false /* default */, mCurrentUser, true /* overrideable by restore */);
+    }
+
     private void changeTileSpecs(Predicate<List<String>> changeFunction) {
         final String setting = Settings.Secure.getStringForUser(mContext.getContentResolver(),
-            TILES_SETTING, ActivityManager.getCurrentUser());
+                TILES_SETTING, mCurrentUser);
         final List<String> tileSpecs = loadTileSpecs(mContext, setting);
         if (changeFunction.test(tileSpecs)) {
-            Settings.Secure.putStringForUser(mContext.getContentResolver(), TILES_SETTING,
-                TextUtils.join(",", tileSpecs), ActivityManager.getCurrentUser());
+            saveTilesToSettings(tileSpecs);
         }
     }
 
     public void addTile(ComponentName tile) {
+        addTile(tile, /* end */ false);
+    }
+
+    /**
+     * Adds a custom tile to the set of current tiles.
+     * @param tile the component name of the {@link android.service.quicksettings.TileService}
+     * @param end if true, the tile will be added at the end. If false, at the beginning.
+     */
+    public void addTile(ComponentName tile, boolean end) {
         String spec = CustomTile.toSpec(tile);
         if (!mTileSpecs.contains(spec)) {
             List<String> newSpecs = new ArrayList<>(mTileSpecs);
-            newSpecs.add(0, spec);
+            if (end) {
+                newSpecs.add(spec);
+            } else {
+                newSpecs.add(0, spec);
+            }
             changeTiles(mTileSpecs, newSpecs);
         }
     }
@@ -356,7 +393,7 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
                 Intent intent = new Intent().setComponent(component);
                 TileLifecycleManager lifecycleManager = new TileLifecycleManager(new Handler(),
                         mContext, mServices, new Tile(), intent,
-                        new UserHandle(ActivityManager.getCurrentUser()),
+                        new UserHandle(mCurrentUser),
                         mBroadcastDispatcher);
                 lifecycleManager.onStopListening();
                 lifecycleManager.onTileRemoved();
@@ -365,8 +402,7 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
             }
         }
         if (DEBUG) Log.d(TAG, "saveCurrentTiles " + newTiles);
-        Secure.putStringForUser(getContext().getContentResolver(), QSTileHost.TILES_SETTING,
-                TextUtils.join(",", newTiles), ActivityManager.getCurrentUser());
+        saveTilesToSettings(newTiles);
     }
 
     public QSTile createTile(String tileSpec) {
@@ -435,11 +471,8 @@ public class QSTileHost implements QSHost, Tunable, PluginListener<QSFactory>, D
 
         final Resources res = context.getResources();
         final String defaultTileList = res.getString(R.string.quick_settings_tiles_default);
-        final String extraTileList = res.getString(
-                com.android.internal.R.string.config_defaultExtraQuickSettingsTiles);
 
         tiles.addAll(Arrays.asList(defaultTileList.split(",")));
-        tiles.addAll(Arrays.asList(extraTileList.split(",")));
         if (Build.IS_DEBUGGABLE
                 && GarbageMonitor.MemoryTile.ADD_TO_DEFAULT_ON_DEBUGGABLE_BUILDS) {
             tiles.add(GarbageMonitor.MemoryTile.TILE_SPEC);

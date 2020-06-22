@@ -18,7 +18,12 @@
 #include <inttypes.h>
 #include <utils/RefBase.h>
 
+#include <set>
+#include <string>
+#include <unordered_map>
+
 #include "HashableDimensionKey.h"
+#include "packages/UidMap.h"
 #include "state/StateListener.h"
 #include "state/StateTracker.h"
 
@@ -32,7 +37,7 @@ namespace statsd {
  */
 class StateManager : public virtual RefBase {
 public:
-    StateManager(){};
+    StateManager();
 
     ~StateManager(){};
 
@@ -45,10 +50,11 @@ public:
     // Notifies the correct StateTracker of an event.
     void onLogEvent(const LogEvent& event);
 
-    // Returns true if atomId is being tracked and is associated with a state
-    // atom. StateManager notifies the correct StateTracker to register listener.
+    // Notifies the StateTracker for the given atomId to register listener.
     // If the correct StateTracker does not exist, a new StateTracker is created.
-    bool registerListener(const int32_t atomId, wp<StateListener> listener);
+    // Note: StateTrackers can be created for non-state atoms. They are essentially empty and
+    // do not perform any actions.
+    void registerListener(const int32_t atomId, wp<StateListener> listener);
 
     // Notifies the correct StateTracker to unregister a listener
     // and removes the tracker if it no longer has any listeners.
@@ -60,6 +66,11 @@ public:
     // Returns false if the StateTracker doesn't exist.
     bool getStateValue(const int32_t atomId, const HashableDimensionKey& queryKey,
                        FieldValue* output) const;
+
+    // Updates mAllowedLogSources with the latest uids for the packages that are allowed to log.
+    void updateLogSources(const sp<UidMap>& uidMap);
+
+    void notifyAppChanged(const string& apk, const sp<UidMap>& uidMap);
 
     inline int getStateTrackersCount() const {
         return mStateTrackers.size();
@@ -78,6 +89,13 @@ private:
 
     // Maps state atom ids to StateTrackers
     std::unordered_map<int32_t, sp<StateTracker>> mStateTrackers;
+
+    // The package names that can log state events.
+    const std::set<std::string> mAllowedPkg;
+
+    // The combined uid sources (after translating pkg name to uid).
+    // State events from uids that are not in the list will be ignored to avoid state pollution.
+    std::set<int32_t> mAllowedLogSources;
 };
 
 }  // namespace statsd

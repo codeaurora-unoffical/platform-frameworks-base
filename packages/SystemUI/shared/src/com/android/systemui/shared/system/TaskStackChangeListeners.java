@@ -122,11 +122,12 @@ public class TaskStackChangeListeners extends TaskStackListener {
 
     @Override
     public void onActivityRestartAttempt(RunningTaskInfo task, boolean homeTaskVisible,
-            boolean clearedTask) throws RemoteException {
+            boolean clearedTask, boolean wasVisible) throws RemoteException {
         final SomeArgs args = SomeArgs.obtain();
         args.arg1 = task;
         args.argi1 = homeTaskVisible ? 1 : 0;
         args.argi2 = clearedTask ? 1 : 0;
+        args.argi3 = wasVisible ? 1 : 0;
         mHandler.removeMessages(H.ON_ACTIVITY_RESTART_ATTEMPT);
         mHandler.obtainMessage(H.ON_ACTIVITY_RESTART_ATTEMPT, args).sendToTarget();
     }
@@ -236,6 +237,12 @@ public class TaskStackChangeListeners extends TaskStackListener {
         mHandler.obtainMessage(H.ON_TASK_DESCRIPTION_CHANGED, taskInfo).sendToTarget();
     }
 
+    @Override
+    public void onActivityRotation(int displayId) {
+        mHandler.obtainMessage(H.ON_ACTIVITY_ROTATION, displayId, 0 /* unused */)
+                .sendToTarget();
+    }
+
     private final class H extends Handler {
         private static final int ON_TASK_STACK_CHANGED = 1;
         private static final int ON_TASK_SNAPSHOT_CHANGED = 2;
@@ -259,6 +266,7 @@ public class TaskStackChangeListeners extends TaskStackListener {
         private static final int ON_SINGLE_TASK_DISPLAY_EMPTY = 22;
         private static final int ON_TASK_LIST_FROZEN_UNFROZEN = 23;
         private static final int ON_TASK_DESCRIPTION_CHANGED = 24;
+        private static final int ON_ACTIVITY_ROTATION = 25;
 
 
         public H(Looper looper) {
@@ -305,9 +313,10 @@ public class TaskStackChangeListeners extends TaskStackListener {
                         final RunningTaskInfo task = (RunningTaskInfo) args.arg1;
                         final boolean homeTaskVisible = args.argi1 != 0;
                         final boolean clearedTask = args.argi2 != 0;
+                        final boolean wasVisible = args.argi3 != 0;
                         for (int i = mTaskStackListeners.size() - 1; i >= 0; i--) {
                             mTaskStackListeners.get(i).onActivityRestartAttempt(task,
-                                    homeTaskVisible, clearedTask);
+                                    homeTaskVisible, clearedTask, wasVisible);
                         }
                         break;
                     }
@@ -422,6 +431,12 @@ public class TaskStackChangeListeners extends TaskStackListener {
                         final RunningTaskInfo info = (RunningTaskInfo) msg.obj;
                         for (int i = mTaskStackListeners.size() - 1; i >= 0; i--) {
                             mTaskStackListeners.get(i).onTaskDescriptionChanged(info);
+                        }
+                        break;
+                    }
+                    case ON_ACTIVITY_ROTATION: {
+                        for (int i = mTaskStackListeners.size() - 1; i >= 0; i--) {
+                            mTaskStackListeners.get(i).onActivityRotation(msg.arg1);
                         }
                         break;
                     }

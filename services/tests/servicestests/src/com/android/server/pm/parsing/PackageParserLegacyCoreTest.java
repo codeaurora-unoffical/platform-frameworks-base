@@ -29,12 +29,17 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageParser;
 import android.content.pm.PermissionInfo;
+import android.content.pm.parsing.PackageInfoWithoutStateUtils;
+import android.content.pm.parsing.ParsingPackage;
+import android.content.pm.parsing.ParsingPackageUtils;
 import android.content.pm.parsing.component.ParsedComponent;
 import android.content.pm.parsing.component.ParsedPermission;
+import android.content.pm.parsing.result.ParseResult;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.FileUtils;
 import android.platform.test.annotations.Presubmit;
+import android.util.SparseIntArray;
 
 import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
@@ -517,10 +522,15 @@ public class PackageParserLegacyCoreTest {
         apexInfo.versionCode = 191000070;
         int flags = PackageManager.GET_META_DATA | PackageManager.GET_SIGNING_CERTIFICATES;
 
-        PackageParser pp = new PackageParser();
-        PackageParser.Package p = pp.parsePackage(apexFile, flags, false);
-        PackageParser.collectCertificates(p, false);
-        PackageInfo pi = PackageParser.generatePackageInfo(p, apexInfo, flags);
+        ParseResult<ParsingPackage> result = ParsingPackageUtils.parseDefaultOneTime(apexFile,
+                flags, false /*collectCertificates*/);
+        if (result.isError()) {
+            throw new IllegalStateException(result.getErrorMessage(), result.getException());
+        }
+
+        ParsingPackage pkg = result.getResult();
+        pkg.setSigningDetails(ParsingPackageUtils.getSigningDetails(pkg, false));
+        PackageInfo pi = PackageInfoWithoutStateUtils.generate(pkg, apexInfo, flags);
 
         assertEquals("com.google.android.tzdata", pi.applicationInfo.packageName);
         assertTrue(pi.applicationInfo.enabled);
@@ -542,7 +552,12 @@ public class PackageParserLegacyCoreTest {
 
     @Test
     public void testUsesSdk() throws Exception {
-        parsePackage("install_uses_sdk.apk_r0", R.raw.install_uses_sdk_r0, x -> x);
+        ParsedPackage pkg =
+                parsePackage("install_uses_sdk.apk_r0", R.raw.install_uses_sdk_r0, x -> x);
+        SparseIntArray minExtVers = pkg.getMinExtensionVersions();
+        assertEquals(1, minExtVers.size());
+        assertEquals(0, minExtVers.get(10000, -1));
+
         try {
             parsePackage("install_uses_sdk.apk_r5", R.raw.install_uses_sdk_r5, x -> x);
             fail("Expected parsing exception due to incompatible extension SDK version");

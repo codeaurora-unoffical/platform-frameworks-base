@@ -66,6 +66,7 @@ import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsNotedCallback;
 import com.android.internal.app.IAppOpsService;
+import com.android.internal.app.IAppOpsStartedCallback;
 import com.android.internal.app.MessageSamplingConfig;
 import com.android.internal.os.RuntimeInit;
 import com.android.internal.os.ZygoteInit;
@@ -181,6 +182,8 @@ public class AppOpsManager {
     @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
     public static final long CALL_BACK_ON_CHANGED_LISTENER_WITH_SWITCHED_OP_CHANGE = 148180766L;
 
+    private static final int MAX_UNFORWARDED_OPS = 10;
+
     final Context mContext;
 
     @UnsupportedAppUsage
@@ -201,6 +204,10 @@ public class AppOpsManager {
     private final ArrayMap<OnOpActiveChangedListener, IAppOpsActiveCallback> mActiveWatchers =
             new ArrayMap<>();
 
+    @GuardedBy("mStartedWatchers")
+    private final ArrayMap<OnOpStartedListener, IAppOpsStartedCallback> mStartedWatchers =
+            new ArrayMap<>();
+
     @GuardedBy("mNotedWatchers")
     private final ArrayMap<OnOpNotedListener, IAppOpsNotedCallback> mNotedWatchers =
             new ArrayMap<>();
@@ -210,6 +217,17 @@ public class AppOpsManager {
     /** Current {@link OnOpNotedCallback}. Change via {@link #setOnOpNotedCallback} */
     @GuardedBy("sLock")
     private static @Nullable OnOpNotedCallback sOnOpNotedCallback;
+
+    /**
+     * Sync note-ops collected from {@link #readAndLogNotedAppops(Parcel)} that have not been
+     * delivered to a callback yet.
+     *
+     * Similar to {@link com.android.server.appop.AppOpsService#mUnforwardedAsyncNotedOps} for
+     * {@link COLLECT_ASYNC}. Used in situation when AppOpsManager asks to collect stacktrace with
+     * {@link #sMessageCollector}, which forces {@link COLLECT_SYNC} mode.
+     */
+    @GuardedBy("sLock")
+    private static ArrayList<SyncNotedAppOp> sUnforwardedOps = new ArrayList<>();
 
     /**
      * Additional collector that collect accesses and forwards a few of them them via
@@ -233,12 +251,9 @@ public class AppOpsManager {
                 }
 
                 private void reportStackTraceIfNeeded(@NonNull SyncNotedAppOp op) {
-                    if (sConfig.getSampledOpCode() == OP_NONE
-                            && sConfig.getExpirationTimeSinceBootMillis()
-                            >= SystemClock.elapsedRealtime()) {
+                    if (!isCollectingStackTraces()) {
                         return;
                     }
-
                     MessageSamplingConfig config = sConfig;
                     if (leftCircularDistance(strOpToOp(op.getOp()), config.getSampledOpCode(),
                             _NUM_OP) <= config.getAcceptableLeftDistance()
@@ -1086,7 +1101,7 @@ public class AppOpsManager {
      * @hide
      */
     public static final int OP_ACTIVATE_PLATFORM_VPN = AppProtoEnums.APP_OP_ACTIVATE_PLATFORM_VPN;
-    /** @hide */
+    /** @hide Controls whether or not read logs are available for incremental installations. */
     public static final int OP_LOADER_USAGE_STATS = AppProtoEnums.APP_OP_LOADER_USAGE_STATS;
 
     // App op deprecated/removed.
@@ -2586,6 +2601,44 @@ public class AppOpsManager {
     }
 
     /**
+     * Returns a listenerId suitable for use with {@link #noteOp(int, int, String, String, String)}.
+     *
+     * This is intended for use client side, when the receiver id must be created before the
+     * associated call is made to the system server. If using {@link PendingIntent} as the receiver,
+     * avoid using this method as it will include a pointless additional x-process call. Instead to
+     * prefer passing the PendingIntent to the system server, and then invoking
+     * {@link #toReceiverId(PendingIntent)} instead.
+     *
+     * @param obj the receiver in use
+     * @return a string representation of the receiver suitable for app ops use
+     * @hide
+     */
+    // TODO: this should probably be @SystemApi as well
+    public static @NonNull String toReceiverId(@NonNull Object obj) {
+        if (obj instanceof PendingIntent) {
+            return toReceiverId((PendingIntent) obj);
+        } else {
+            return obj.getClass().getName() + "@" + System.identityHashCode(obj);
+        }
+    }
+
+    /**
+     * Returns a listenerId suitable for use with {@link #noteOp(int, int, String, String, String)}.
+     *
+     * This is intended for use server side, where ActivityManagerService can be referenced without
+     * an additional x-process call.
+     *
+     * @param pendingIntent the pendingIntent in use
+     * @return a string representation of the pending intent suitable for app ops use
+     * @see #toReceiverId(Object)
+     * @hide
+     */
+    // TODO: this should probably be @SystemApi as well
+    public static @NonNull String toReceiverId(@NonNull PendingIntent pendingIntent) {
+        return pendingIntent.getTag("");
+    }
+
+    /**
      * When to not enforce {@link #setUserRestriction restrictions}.
      *
      * @hide
@@ -3648,7 +3701,7 @@ public class AppOpsManager {
         /**
          * @hide
          */
-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+        @UnsupportedAppUsage(/*maxTargetSdk = Build.VERSION_CODES.R,*/ publicAlternatives = "{@code "
                 + "#getOpStr()}")
         public int getOp() {
             return mOp;
@@ -3667,7 +3720,7 @@ public class AppOpsManager {
          * @deprecated Use {@link #getLastAccessTime(int)} instead
          */
         @Deprecated
-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+        @UnsupportedAppUsage(/*maxTargetSdk = Build.VERSION_CODES.R,*/ publicAlternatives = "{@code "
                 + "#getLastAccessTime(int)}")
         public long getTime() {
             return getLastAccessTime(OP_FLAGS_ALL);
@@ -3782,7 +3835,7 @@ public class AppOpsManager {
          * @deprecated Use {@link #getLastRejectTime(int)} instead
          */
         @Deprecated
-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+        @UnsupportedAppUsage(/*maxTargetSdk = Build.VERSION_CODES.R,*/ publicAlternatives = "{@code "
                 + "#getLastRejectTime(int)}")
         public long getRejectTime() {
             return getLastRejectTime(OP_FLAGS_ALL);
@@ -6332,6 +6385,25 @@ public class AppOpsManager {
         default void onOpActiveChanged(int op, int uid, String packageName, boolean active) { }
     }
 
+    /**
+     * Callback for notification of an op being started.
+     *
+     * @hide
+     */
+    public interface OnOpStartedListener {
+        /**
+         * Called when an op was started.
+         *
+         * Note: This is only for op starts. It is not called when an op is noted or stopped.
+         *
+         * @param op The op code.
+         * @param uid The UID performing the operation.
+         * @param packageName The package performing the operation.
+         * @param result The result of the start.
+         */
+        void onOpStarted(int op, int uid, String packageName, int result);
+    }
+
     AppOpsManager(Context context, IAppOpsService service) {
         mContext = context;
         mService = service;
@@ -6823,10 +6895,7 @@ public class AppOpsManager {
      * @param ops The operations to watch.
      * @param callback Where to report changes.
      *
-     * @see #isOperationActive
      * @see #stopWatchingActive
-     * @see #startOp(int, int, String, boolean, String, String)
-     * @see #finishOp(int, int, String, String)
      */
     // TODO: Uncomment below annotation once b/73559440 is fixed
     // @RequiresPermission(value=Manifest.permission.WATCH_APPOPS, conditional=true)
@@ -6874,10 +6943,7 @@ public class AppOpsManager {
      * long running and it has a clear start and stop delimiters. Unregistering a
      * non-registered callback has no effect.
      *
-     * @see #isOperationActive
      * @see #startWatchingActive
-     * @see #startOp(int, int, String, boolean, String, String)
-     * @see #finishOp(int, int, String, String)
      */
     public void stopWatchingActive(@NonNull OnOpActiveChangedListener callback) {
         synchronized (mActiveWatchers) {
@@ -6885,6 +6951,73 @@ public class AppOpsManager {
             if (cb != null) {
                 try {
                     mService.stopWatchingActive(cb);
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
+            }
+        }
+    }
+
+    /**
+     * Start watching for started app-ops.
+     * An app-op may be long running and it has a clear start delimiter.
+     * If an op start is attempted by any package, you will get a callback.
+     * To change the watched ops for a registered callback you need to unregister and register it
+     * again.
+     *
+     * <p> If you don't hold the {@code android.Manifest.permission#WATCH_APPOPS} permission
+     * you can watch changes only for your UID.
+     *
+     * @param ops The operations to watch.
+     * @param callback Where to report changes.
+     *
+     * @see #stopWatchingStarted(OnOpStartedListener)
+     * @see #startWatchingActive(int[], OnOpActiveChangedListener)
+     * @see #startWatchingNoted(int[], OnOpNotedListener)
+     * @see #startOp(int, int, String, boolean, String, String)
+     * @see #finishOp(int, int, String, String)
+     *
+     * @hide
+     */
+     @RequiresPermission(value=Manifest.permission.WATCH_APPOPS, conditional=true)
+     public void startWatchingStarted(@NonNull int[] ops, @NonNull OnOpStartedListener callback) {
+         IAppOpsStartedCallback cb;
+         synchronized (mStartedWatchers) {
+             if (mStartedWatchers.containsKey(callback)) {
+                 return;
+             }
+             cb = new IAppOpsStartedCallback.Stub() {
+                 @Override
+                 public void opStarted(int op, int uid, String packageName, int mode) {
+                     callback.onOpStarted(op, uid, packageName, mode);
+                 }
+             };
+             mStartedWatchers.put(callback, cb);
+         }
+         try {
+             mService.startWatchingStarted(ops, cb);
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+    }
+
+    /**
+     * Stop watching for started app-ops.
+     * An app-op may be long running and it has a clear start delimiter.
+     * Henceforth, if an op start is attempted by any package, you will not get a callback.
+     * Unregistering a non-registered callback has no effect.
+     *
+     * @see #startWatchingStarted(int[], OnOpStartedListener)
+     * @see #startOp(int, int, String, boolean, String, String)
+     *
+     * @hide
+     */
+    public void stopWatchingStarted(@NonNull OnOpStartedListener callback) {
+        synchronized (mStartedWatchers) {
+            final IAppOpsStartedCallback cb = mStartedWatchers.remove(callback);
+            if (cb != null) {
+                try {
+                    mService.stopWatchingStarted(cb);
                 } catch (RemoteException e) {
                     throw e.rethrowFromSystemServer();
                 }
@@ -6906,6 +7039,7 @@ public class AppOpsManager {
      * @param callback Where to report changes.
      *
      * @see #startWatchingActive(int[], OnOpActiveChangedListener)
+     * @see #startWatchingStarted(int[], OnOpStartedListener)
      * @see #stopWatchingNoted(OnOpNotedListener)
      * @see #noteOp(String, int, String, String, String)
      *
@@ -6945,7 +7079,7 @@ public class AppOpsManager {
      */
     public void stopWatchingNoted(@NonNull OnOpNotedListener callback) {
         synchronized (mNotedWatchers) {
-            final IAppOpsNotedCallback cb = mNotedWatchers.get(callback);
+            final IAppOpsNotedCallback cb = mNotedWatchers.remove(callback);
             if (cb != null) {
                 try {
                     mService.stopWatchingNoted(cb);
@@ -8042,6 +8176,11 @@ public class AppOpsManager {
                             code = notedAppOps.nextSetBit(code + 1)) {
                         if (sOnOpNotedCallback != null) {
                             sOnOpNotedCallback.onNoted(new SyncNotedAppOp(code, attributionTag));
+                        } else {
+                            sUnforwardedOps.add(new SyncNotedAppOp(code, attributionTag));
+                            if (sUnforwardedOps.size() > MAX_UNFORWARDED_OPS) {
+                                sUnforwardedOps.remove(0);
+                            }
                         }
                     }
                 }
@@ -8108,6 +8247,17 @@ public class AppOpsManager {
                         }
                     }
                 }
+                synchronized (this) {
+                    int numMissedSyncOps = sUnforwardedOps.size();
+                    for (int i = 0; i < numMissedSyncOps; i++) {
+                        final SyncNotedAppOp syncNotedAppOp = sUnforwardedOps.get(i);
+                        if (sOnOpNotedCallback != null) {
+                            sOnOpNotedCallback.getAsyncNotedExecutor().execute(
+                                    () -> sOnOpNotedCallback.onNoted(syncNotedAppOp));
+                        }
+                    }
+                    sUnforwardedOps.clear();
+                }
             }
         }
     }
@@ -8143,7 +8293,22 @@ public class AppOpsManager {
      * @hide
      */
     public static boolean isListeningForOpNoted() {
-        return sOnOpNotedCallback != null;
+        return sOnOpNotedCallback != null || isCollectingStackTraces();
+    }
+
+    /**
+     * @return {@code true} iff the process is currently sampled for stacktrace collection.
+     *
+     * @see #setOnOpNotedCallback
+     *
+     * @hide
+     */
+    private static boolean isCollectingStackTraces() {
+        if (sConfig.getSampledOpCode() == OP_NONE &&
+                sConfig.getExpirationTimeSinceBootMillis() >= SystemClock.elapsedRealtime()) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -8435,6 +8600,25 @@ public class AppOpsManager {
     public void clearHistory() {
         try {
             mService.clearHistory();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Reboots the ops history.
+     *
+     * @param offlineDurationMillis The duration to wait between
+     * tearing down and initializing the history. Must be greater
+     * than or equal to zero.
+     *
+     * @hide
+     */
+    @TestApi
+    @RequiresPermission(Manifest.permission.MANAGE_APPOPS)
+    public void rebootHistory(long offlineDurationMillis) {
+        try {
+            mService.rebootHistory(offlineDurationMillis);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

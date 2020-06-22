@@ -385,7 +385,7 @@ std::unique_ptr<const ApkAssets> ApkAssets::LoadOverlay(const std::string& idmap
   const StringPiece idmap_data(
       reinterpret_cast<const char*>(idmap_asset->getBuffer(true /*wordAligned*/)),
       static_cast<size_t>(idmap_asset->getLength()));
-  std::unique_ptr<const LoadedIdmap> loaded_idmap = LoadedIdmap::Load(idmap_data);
+  std::unique_ptr<const LoadedIdmap> loaded_idmap = LoadedIdmap::Load(idmap_path, idmap_data);
   if (loaded_idmap == nullptr) {
     LOG(ERROR) << "failed to load IDMAP " << idmap_path;
     return {};
@@ -496,6 +496,11 @@ std::unique_ptr<const ApkAssets> ApkAssets::LoadImpl(
   const StringPiece data(
       reinterpret_cast<const char*>(loaded_apk->resources_asset_->getBuffer(true /*wordAligned*/)),
       loaded_apk->resources_asset_->getLength());
+  if (data.data() == nullptr || data.empty()) {
+    LOG(ERROR) << "Failed to read '" << kResourcesArsc << "' data in APK '" << path << "'.";
+    return {};
+  }
+
   loaded_apk->loaded_arsc_ = LoadedArsc::Load(data, loaded_apk->loaded_idmap_.get(),
                                               property_flags);
   if (!loaded_apk->loaded_arsc_) {
@@ -523,9 +528,14 @@ std::unique_ptr<const ApkAssets> ApkAssets::LoadTableImpl(
   const StringPiece data(
       reinterpret_cast<const char*>(loaded_apk->resources_asset_->getBuffer(true /*wordAligned*/)),
       loaded_apk->resources_asset_->getLength());
+  if (data.data() == nullptr || data.empty()) {
+    LOG(ERROR) << "Failed to read resources table data in '" << path << "'.";
+    return {};
+  }
+
   loaded_apk->loaded_arsc_ = LoadedArsc::Load(data, nullptr, property_flags);
   if (loaded_apk->loaded_arsc_ == nullptr) {
-    LOG(ERROR) << "Failed to load '" << kResourcesArsc << path;
+    LOG(ERROR) << "Failed to read resources table in '" << path << "'.";
     return {};
   }
 
@@ -538,8 +548,9 @@ bool ApkAssets::IsUpToDate() const {
     // Loaders are invalidated by the app, not the system, so assume they are up to date.
     return true;
   }
+  return (!loaded_idmap_ || loaded_idmap_->IsUpToDate()) &&
+      last_mod_time_ == getFileModDate(path_.c_str());
 
-  return last_mod_time_ == getFileModDate(path_.c_str());
 }
 
 }  // namespace android

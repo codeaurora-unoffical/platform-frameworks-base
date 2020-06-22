@@ -41,6 +41,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.debug.AdbManagerInternal;
+import android.debug.AdbNotifications;
 import android.debug.AdbTransportType;
 import android.debug.IAdbTransport;
 import android.hardware.usb.ParcelableUsbPort;
@@ -836,20 +837,31 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                     boolean prevHostConnected = mHostConnected;
                     UsbPort port = (UsbPort) args.arg1;
                     UsbPortStatus status = (UsbPortStatus) args.arg2;
-                    mHostConnected = status.getCurrentDataRole() == DATA_ROLE_HOST;
-                    mSourcePower = status.getCurrentPowerRole() == POWER_ROLE_SOURCE;
-                    mSinkPower = status.getCurrentPowerRole() == POWER_ROLE_SINK;
-                    mAudioAccessoryConnected = (status.getCurrentMode() == MODE_AUDIO_ACCESSORY);
+
+                    if (status != null) {
+                        mHostConnected = status.getCurrentDataRole() == DATA_ROLE_HOST;
+                        mSourcePower = status.getCurrentPowerRole() == POWER_ROLE_SOURCE;
+                        mSinkPower = status.getCurrentPowerRole() == POWER_ROLE_SINK;
+                        mAudioAccessoryConnected = (status.getCurrentMode() == MODE_AUDIO_ACCESSORY);
+
+                        // Ideally we want to see if PR_SWAP and DR_SWAP is supported.
+                        // But, this should be suffice, since, all four combinations are only supported
+                        // when PR_SWAP and DR_SWAP are supported.
+                        mSupportsAllCombinations = status.isRoleCombinationSupported(
+                                POWER_ROLE_SOURCE, DATA_ROLE_HOST)
+                                && status.isRoleCombinationSupported(POWER_ROLE_SINK, DATA_ROLE_HOST)
+                                && status.isRoleCombinationSupported(POWER_ROLE_SOURCE,
+                                DATA_ROLE_DEVICE)
+                                && status.isRoleCombinationSupported(POWER_ROLE_SINK, DATA_ROLE_DEVICE);
+                    } else {
+                        mHostConnected = false;
+                        mSourcePower = false;
+                        mSinkPower = false;
+                        mAudioAccessoryConnected = false;
+                        mSupportsAllCombinations = false;
+                    }
+
                     mAudioAccessorySupported = port.isModeSupported(MODE_AUDIO_ACCESSORY);
-                    // Ideally we want to see if PR_SWAP and DR_SWAP is supported.
-                    // But, this should be suffice, since, all four combinations are only supported
-                    // when PR_SWAP and DR_SWAP are supported.
-                    mSupportsAllCombinations = status.isRoleCombinationSupported(
-                            POWER_ROLE_SOURCE, DATA_ROLE_HOST)
-                            && status.isRoleCombinationSupported(POWER_ROLE_SINK, DATA_ROLE_HOST)
-                            && status.isRoleCombinationSupported(POWER_ROLE_SOURCE,
-                            DATA_ROLE_DEVICE)
-                            && status.isRoleCombinationSupported(POWER_ROLE_SINK, DATA_ROLE_DEVICE);
 
                     args.recycle();
                     updateUsbNotification(false);
@@ -1183,7 +1195,6 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
         protected void updateAdbNotification(boolean force) {
             if (mNotificationManager == null) return;
             final int id = SystemMessage.NOTE_ADB_ACTIVE;
-            final int titleRes = com.android.internal.R.string.adb_active_notification_title;
 
             if (isAdbEnabled() && mConnected) {
                 if ("0".equals(getSystemProperty("persist.adb.notify", ""))) return;
@@ -1194,38 +1205,10 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                 }
 
                 if (!mAdbNotificationShown) {
-                    Resources r = mContext.getResources();
-                    CharSequence title = r.getText(titleRes);
-                    CharSequence message = r.getText(
-                            com.android.internal.R.string.adb_active_notification_message);
-
-                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                    PendingIntent pi = PendingIntent.getActivityAsUser(mContext, 0,
-                            intent, 0, null, UserHandle.CURRENT);
-
-                    Notification notification =
-                            new Notification.Builder(mContext,
-                                    SystemNotificationChannels.DEVELOPER_IMPORTANT)
-                                    .setSmallIcon(com.android.internal.R.drawable.stat_sys_adb)
-                                    .setWhen(0)
-                                    .setOngoing(true)
-                                    .setTicker(title)
-                                    .setDefaults(0)  // please be quiet
-                                    .setColor(mContext.getColor(
-                                            com.android.internal.R.color
-                                                    .system_notification_accent_color))
-                                    .setContentTitle(title)
-                                    .setContentText(message)
-                                    .setContentIntent(pi)
-                                    .setVisibility(Notification.VISIBILITY_PUBLIC)
-                                    .extend(new Notification.TvExtender()
-                                            .setChannelId(ADB_NOTIFICATION_CHANNEL_ID_TV))
-                                    .build();
+                    Notification notification = AdbNotifications.createNotification(mContext,
+                            AdbTransportType.USB);
                     mAdbNotificationShown = true;
-                    mNotificationManager.notifyAsUser(null, id, notification,
-                            UserHandle.ALL);
+                    mNotificationManager.notifyAsUser(null, id, notification, UserHandle.ALL);
                 }
             } else if (mAdbNotificationShown) {
                 mAdbNotificationShown = false;

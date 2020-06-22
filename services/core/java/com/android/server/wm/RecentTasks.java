@@ -1033,9 +1033,13 @@ class RecentTasks {
     void add(Task task) {
         if (DEBUG_RECENTS_TRIM_TASKS) Slog.d(TAG, "add: task=" + task);
 
+        // Only allow trimming task if it is not updating visibility for activities, so the caller
+        // doesn't need to handle unexpected size and index when looping task containers.
+        final boolean canTrimTask = !mSupervisor.inActivityVisibilityUpdate();
+
         // Clean up the hidden tasks when going to home because the user may not be unable to return
         // to the task from recents.
-        if (!mHiddenTasks.isEmpty() && task.isActivityTypeHome()) {
+        if (canTrimTask && !mHiddenTasks.isEmpty() && task.isActivityTypeHome()) {
             removeUnreachableHiddenTasks(task.getWindowingMode());
         }
 
@@ -1157,7 +1161,9 @@ class RecentTasks {
         }
 
         // Trim the set of tasks to the active set
-        trimInactiveRecentTasks();
+        if (canTrimTask) {
+            trimInactiveRecentTasks();
+        }
         notifyTaskPersisterLocked(task, false /* flush */);
     }
 
@@ -1394,9 +1400,7 @@ class RecentTasks {
         return false;
     }
 
-    /**
-     * @return whether the given task can be trimmed even if it is outside the visible range.
-     */
+    /** @return whether the given task can be trimmed even if it is outside the visible range. */
     protected boolean isTrimmable(Task task) {
         final ActivityStack stack = task.getStack();
 
@@ -1411,10 +1415,13 @@ class RecentTasks {
             return false;
         }
 
-        // Trim tasks that are in stacks that are behind the home stack
-        final TaskDisplayArea taskDisplayArea = stack.getDisplayArea();
-        return taskDisplayArea.getIndexOf(stack) < taskDisplayArea.getIndexOf(
-                taskDisplayArea.getRootHomeTask());
+        final ActivityStack rootHomeTask = stack.getDisplayArea().getRootHomeTask();
+        // Home stack does not exist. Don't trim the task.
+        if (rootHomeTask == null) {
+            return false;
+        }
+        // Trim tasks that are behind the home task.
+        return task.compareTo(rootHomeTask) < 0;
     }
 
     /** Remove the tasks that user may not be able to return. */
@@ -1732,9 +1739,31 @@ class RecentTasks {
         final int size = mTasks.size();
         for (int i = 0; i < size; i++) {
             final Task task = mTasks.get(i);
-            if (dumpPackage != null && (task.realActivity == null ||
-                    !dumpPackage.equals(task.realActivity.getPackageName()))) {
-                continue;
+            if (dumpPackage != null) {
+                boolean match = task.intent != null
+                        && task.intent.getComponent() != null
+                        && dumpPackage.equals(
+                        task.intent.getComponent().getPackageName());
+                if (!match) {
+                    match |= task.affinityIntent != null
+                            && task.affinityIntent.getComponent() != null
+                            && dumpPackage.equals(
+                            task.affinityIntent.getComponent().getPackageName());
+                }
+                if (!match) {
+                    match |= task.origActivity != null
+                            && dumpPackage.equals(task.origActivity.getPackageName());
+                }
+                if (!match) {
+                    match |= task.realActivity != null
+                            && dumpPackage.equals(task.realActivity.getPackageName());
+                }
+                if (!match) {
+                    match |= dumpPackage.equals(task.mCallingPackage);
+                }
+                if (!match) {
+                    continue;
+                }
             }
 
             if (!printedHeader) {
@@ -1757,6 +1786,31 @@ class RecentTasks {
                     0, true /* getTasksAllowed */, mService.getCurrentUserId(), SYSTEM_UID);
             for (int i = 0; i < tasks.size(); i++) {
                 final ActivityManager.RecentTaskInfo taskInfo = tasks.get(i);
+                if (dumpPackage != null) {
+                    boolean match = taskInfo.baseIntent != null
+                            && taskInfo.baseIntent.getComponent() != null
+                            && dumpPackage.equals(
+                                    taskInfo.baseIntent.getComponent().getPackageName());
+                    if (!match) {
+                        match |= taskInfo.baseActivity != null
+                                && dumpPackage.equals(taskInfo.baseActivity.getPackageName());
+                    }
+                    if (!match) {
+                        match |= taskInfo.topActivity != null
+                                && dumpPackage.equals(taskInfo.topActivity.getPackageName());
+                    }
+                    if (!match) {
+                        match |= taskInfo.origActivity != null
+                                && dumpPackage.equals(taskInfo.origActivity.getPackageName());
+                    }
+                    if (!match) {
+                        match |= taskInfo.realActivity != null
+                                && dumpPackage.equals(taskInfo.realActivity.getPackageName());
+                    }
+                    if (!match) {
+                        continue;
+                    }
+                }
                 if (!printedHeader) {
                     if (printedAnything) {
                         // Separate from the last block if it printed

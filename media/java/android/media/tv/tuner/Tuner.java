@@ -23,6 +23,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.hardware.tv.tuner.V1_0.Constants;
 import android.media.tv.TvInputService;
@@ -55,9 +56,14 @@ import android.os.Looper;
 import android.os.Message;
 import android.util.Log;
 
+import com.android.internal.util.FrameworkStatsLog;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 
@@ -205,7 +211,7 @@ public class Tuner implements AutoCloseable  {
     private FrontendInfo mFrontendInfo;
     private Integer mFrontendHandle;
     private int mFrontendType = FrontendSettings.TYPE_UNDEFINED;
-
+    private int mUserId;
     private Lnb mLnb;
     private Integer mLnbHandle;
     @Nullable
@@ -222,13 +228,18 @@ public class Tuner implements AutoCloseable  {
     private Executor mOnResourceLostListenerExecutor;
 
     private Integer mDemuxHandle;
-    private Integer mDescramblerHandle;
-    private Descrambler mDescrambler;
+    private Map<Integer, Descrambler> mDescramblers = new HashMap<>();
+    private List<Filter> mFilters = new ArrayList<>();
 
     private final TunerResourceManager.ResourcesReclaimListener mResourceListener =
             new TunerResourceManager.ResourcesReclaimListener() {
                 @Override
                 public void onReclaimResources() {
+                    if (mFrontend != null) {
+                        FrameworkStatsLog
+                                .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                                    FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__UNKNOWN);
+                    }
                     mHandler.sendMessage(mHandler.obtainMessage(MSG_RESOURCE_LOST));
                 }
             };
@@ -258,19 +269,21 @@ public class Tuner implements AutoCloseable  {
                 profile, new HandlerExecutor(mHandler), mResourceListener, clientId);
         mClientId = clientId[0];
 
+        mUserId = ActivityManager.getCurrentUser();
+
         setFrontendInfoList();
         setLnbIds();
     }
 
     private void setFrontendInfoList() {
-        List<Integer> ids = nativeGetFrontendIds();
+        List<Integer> ids = getFrontendIds();
         if (ids == null) {
             return;
         }
         TunerFrontendInfo[] infos = new TunerFrontendInfo[ids.size()];
         for (int i = 0; i < ids.size(); i++) {
             int id = ids.get(i);
-            FrontendInfo frontendInfo = nativeGetFrontendInfo(id);
+            FrontendInfo frontendInfo = getFrontendInfoById(id);
             if (frontendInfo == null) {
                 continue;
             }
@@ -279,6 +292,11 @@ public class Tuner implements AutoCloseable  {
             infos[i] = tunerFrontendInfo;
         }
         mTunerResourceManager.setFrontendInfoList(infos);
+    }
+
+    /** @hide */
+    public List<Integer> getFrontendIds() {
+        return nativeGetFrontendIds();
     }
 
     private void setLnbIds() {
@@ -345,14 +363,42 @@ public class Tuner implements AutoCloseable  {
     @Override
     public void close() {
         if (mFrontendHandle != null) {
-            mTunerResourceManager.releaseFrontend(mFrontendHandle);
+            int res = nativeCloseFrontend(mFrontendHandle);
+            if (res != Tuner.RESULT_SUCCESS) {
+                TunerUtils.throwExceptionForResult(res, "failed to close frontend");
+            }
+            mTunerResourceManager.releaseFrontend(mFrontendHandle, mClientId);
+            FrameworkStatsLog
+                    .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                        FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__UNKNOWN);
             mFrontendHandle = null;
+            mFrontend = null;
         }
         if (mLnb != null) {
-            mTunerResourceManager.releaseLnb(mLnbHandle);
-            mLnb = null;
+            mLnb.close();
         }
-        nativeClose();
+        if (!mDescramblers.isEmpty()) {
+            for (Map.Entry<Integer, Descrambler> d : mDescramblers.entrySet()) {
+                d.getValue().close();
+                mTunerResourceManager.releaseDescrambler(d.getKey(), mClientId);
+            }
+            mDescramblers.clear();
+        }
+        if (!mFilters.isEmpty()) {
+            for (Filter f : mFilters) {
+                f.close();
+            }
+            mFilters.clear();
+        }
+        if (mDemuxHandle != null) {
+            int res = nativeCloseDemux(mDemuxHandle);
+            if (res != Tuner.RESULT_SUCCESS) {
+                TunerUtils.throwExceptionForResult(res, "failed to close demux");
+            }
+            mTunerResourceManager.releaseDemux(mDemuxHandle, mClientId);
+            mFrontendHandle = null;
+        }
+        TunerUtils.throwExceptionForResult(nativeClose(), "failed to close tuner");
     }
 
     /**
@@ -374,6 +420,8 @@ public class Tuner implements AutoCloseable  {
      * Native method to open frontend of the given ID.
      */
     private native Frontend nativeOpenFrontendByHandle(int handle);
+    @Result
+    private native int nativeCloseFrontendByHandle(int handle);
     private native int nativeTune(int type, FrontendSettings settings);
     private native int nativeStopTune();
     private native int nativeScan(int settingsType, FrontendSettings settings, int scanType);
@@ -394,13 +442,15 @@ public class Tuner implements AutoCloseable  {
     private native Lnb nativeOpenLnbByName(String name);
 
     private native Descrambler nativeOpenDescramblerByHandle(int handle);
-    private native Descrambler nativeOpenDemuxByhandle(int handle);
+    private native int nativeOpenDemuxByhandle(int handle);
 
     private native DvrRecorder nativeOpenDvrRecorder(long bufferSize);
     private native DvrPlayback nativeOpenDvrPlayback(long bufferSize);
 
-    private static native DemuxCapabilities nativeGetDemuxCapabilities();
+    private native DemuxCapabilities nativeGetDemuxCapabilities();
 
+    private native int nativeCloseDemux(int handle);
+    private native int nativeCloseFrontend(int handle);
     private native int nativeClose();
 
 
@@ -520,10 +570,17 @@ public class Tuner implements AutoCloseable  {
      */
     @Result
     public int tune(@NonNull FrontendSettings settings) {
+        Log.d(TAG, "Tune to " + settings.getFrequency());
         mFrontendType = settings.getType();
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_FRONTEND);
-        mFrontendInfo = null;
-        return nativeTune(settings.getType(), settings);
+        if (checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_FRONTEND)) {
+            mFrontendInfo = null;
+            Log.d(TAG, "Write Stats Log for tuning.");
+            FrameworkStatsLog
+                    .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                        FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__TUNING);
+            return nativeTune(settings.getType(), settings);
+        }
+        return RESULT_UNAVAILABLE;
     }
 
     /**
@@ -559,11 +616,16 @@ public class Tuner implements AutoCloseable  {
                             + "started.");
         }
         mFrontendType = settings.getType();
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_FRONTEND);
-        mScanCallback = scanCallback;
-        mScanCallbackExecutor = executor;
-        mFrontendInfo = null;
-        return nativeScan(settings.getType(), settings, scanType);
+        if (checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_FRONTEND)) {
+            mScanCallback = scanCallback;
+            mScanCallbackExecutor = executor;
+            mFrontendInfo = null;
+            FrameworkStatsLog
+                    .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                        FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__SCANNING);
+            return nativeScan(settings.getType(), settings, scanType);
+        }
+        return RESULT_UNAVAILABLE;
     }
 
     /**
@@ -579,6 +641,10 @@ public class Tuner implements AutoCloseable  {
      */
     @Result
     public int cancelScanning() {
+        FrameworkStatsLog
+                .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                    FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__SCAN_STOPPED);
+
         int retVal = nativeStopScan();
         mScanCallback = null;
         mScanCallbackExecutor = null;
@@ -646,7 +712,9 @@ public class Tuner implements AutoCloseable  {
      * @return the id of hardware A/V sync.
      */
     public int getAvSyncHwId(@NonNull Filter filter) {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return INVALID_AV_SYNC_ID;
+        }
         Integer id = nativeGetAvSyncHwId(filter);
         return id == null ? INVALID_AV_SYNC_ID : id;
     }
@@ -661,7 +729,9 @@ public class Tuner implements AutoCloseable  {
      * @return the current timestamp of hardware A/V sync.
      */
     public long getAvSyncTime(int avSyncHwId) {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return INVALID_TIMESTAMP;
+        }
         Long time = nativeGetAvSyncTime(avSyncHwId);
         return time == null ? INVALID_TIMESTAMP : time;
     }
@@ -677,8 +747,10 @@ public class Tuner implements AutoCloseable  {
      */
     @Result
     public int connectCiCam(int ciCamId) {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
-        return nativeConnectCiCam(ciCamId);
+        if (checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return nativeConnectCiCam(ciCamId);
+        }
+        return RESULT_UNAVAILABLE;
     }
 
     /**
@@ -690,8 +762,10 @@ public class Tuner implements AutoCloseable  {
      */
     @Result
     public int disconnectCiCam() {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
-        return nativeDisconnectCiCam();
+        if (checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return nativeDisconnectCiCam();
+        }
+        return RESULT_UNAVAILABLE;
     }
 
     /**
@@ -701,14 +775,21 @@ public class Tuner implements AutoCloseable  {
      */
     @Nullable
     public FrontendInfo getFrontendInfo() {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_FRONTEND);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_FRONTEND)) {
+            return null;
+        }
         if (mFrontend == null) {
             throw new IllegalStateException("frontend is not initialized");
         }
         if (mFrontendInfo == null) {
-            mFrontendInfo = nativeGetFrontendInfo(mFrontend.mId);
+            mFrontendInfo = getFrontendInfoById(mFrontend.mId);
         }
         return mFrontendInfo;
+    }
+
+    /** @hide */
+    public FrontendInfo getFrontendInfoById(int id) {
+        return nativeGetFrontendInfo(id);
     }
 
     /**
@@ -723,12 +804,33 @@ public class Tuner implements AutoCloseable  {
     }
 
     private void onFrontendEvent(int eventType) {
+        Log.d(TAG, "Got event from tuning. Event type: " + eventType);
         if (mOnTunerEventExecutor != null && mOnTuneEventListener != null) {
             mOnTunerEventExecutor.execute(() -> mOnTuneEventListener.onTuneEvent(eventType));
+        }
+
+        Log.d(TAG, "Wrote Stats Log for the events from tuning.");
+        if (eventType == OnTuneEventListener.SIGNAL_LOCKED) {
+            FrameworkStatsLog
+                    .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                        FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__LOCKED);
+        } else if (eventType == OnTuneEventListener.SIGNAL_NO_SIGNAL) {
+            FrameworkStatsLog
+                    .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                        FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__NOT_LOCKED);
+        } else if (eventType == OnTuneEventListener.SIGNAL_LOST_LOCK) {
+            FrameworkStatsLog
+                    .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                        FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__SIGNAL_LOST);
         }
     }
 
     private void onLocked() {
+        Log.d(TAG, "Wrote Stats Log for locked event from scanning.");
+        FrameworkStatsLog
+                .write(FrameworkStatsLog.TV_TUNER_STATE_CHANGED, mUserId,
+                    FrameworkStatsLog.TV_TUNER_STATE_CHANGED__STATE__LOCKED);
+
         if (mScanCallbackExecutor != null && mScanCallback != null) {
             mScanCallbackExecutor.execute(() -> mScanCallback.onLocked());
         }
@@ -831,16 +933,18 @@ public class Tuner implements AutoCloseable  {
     public Filter openFilter(@Type int mainType, @Subtype int subType,
             @BytesLong long bufferSize, @CallbackExecutor @Nullable Executor executor,
             @Nullable FilterCallback cb) {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return null;
+        }
         Filter filter = nativeOpenFilter(
                 mainType, TunerUtils.getFilterSubtype(mainType, subType), bufferSize);
         if (filter != null) {
-            filter.setMainType(mainType);
-            filter.setSubtype(subType);
+            filter.setType(mainType, subType);
             filter.setCallback(cb, executor);
             if (mHandler == null) {
                 mHandler = createEventHandler();
             }
+            mFilters.add(filter);
         }
         return filter;
     }
@@ -859,11 +963,16 @@ public class Tuner implements AutoCloseable  {
     public Lnb openLnb(@CallbackExecutor @NonNull Executor executor, @NonNull LnbCallback cb) {
         Objects.requireNonNull(executor, "executor must not be null");
         Objects.requireNonNull(cb, "LnbCallback must not be null");
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_LNB);
         if (mLnb != null) {
-            mLnb.setCallback(executor, cb);
+            mLnb.setCallback(executor, cb, this);
+            return mLnb;
         }
-        return mLnb;
+        if (checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_LNB) && mLnb != null) {
+            mLnb.setCallback(executor, cb, this);
+            setLnb(mLnb);
+            return mLnb;
+        }
+        return null;
     }
 
     /**
@@ -881,9 +990,15 @@ public class Tuner implements AutoCloseable  {
         Objects.requireNonNull(name, "LNB name must not be null");
         Objects.requireNonNull(executor, "executor must not be null");
         Objects.requireNonNull(cb, "LnbCallback must not be null");
-        mLnb = nativeOpenLnbByName(name);
-        if (mLnb != null) {
-            mLnb.setCallback(executor, cb);
+        Lnb newLnb = nativeOpenLnbByName(name);
+        if (newLnb != null) {
+            if (mLnb != null) {
+                mLnb.close();
+                mLnbHandle = null;
+            }
+            mLnb = newLnb;
+            mLnb.setCallback(executor, cb, this);
+            setLnb(mLnb);
         }
         return mLnb;
     }
@@ -906,7 +1021,9 @@ public class Tuner implements AutoCloseable  {
      */
     @Nullable
     public TimeFilter openTimeFilter() {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return null;
+        }
         return nativeOpenTimeFilter();
     }
 
@@ -918,8 +1035,10 @@ public class Tuner implements AutoCloseable  {
     @RequiresPermission(android.Manifest.permission.ACCESS_TV_DESCRAMBLER)
     @Nullable
     public Descrambler openDescrambler() {
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DESCRAMBLER);
-        return mDescrambler;
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return null;
+        }
+        return requestDescrambler();
     }
 
     /**
@@ -939,7 +1058,9 @@ public class Tuner implements AutoCloseable  {
             @NonNull OnRecordStatusChangedListener l) {
         Objects.requireNonNull(executor, "executor must not be null");
         Objects.requireNonNull(l, "OnRecordStatusChangedListener must not be null");
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return null;
+        }
         DvrRecorder dvr = nativeOpenDvrRecorder(bufferSize);
         dvr.setListener(executor, l);
         return dvr;
@@ -962,7 +1083,9 @@ public class Tuner implements AutoCloseable  {
             @NonNull OnPlaybackStatusChangedListener l) {
         Objects.requireNonNull(executor, "executor must not be null");
         Objects.requireNonNull(l, "OnPlaybackStatusChangedListener must not be null");
-        checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX);
+        if (!checkResource(TunerResourceManager.TUNER_RESOURCE_TYPE_DEMUX)) {
+            return null;
+        }
         DvrPlayback dvr = nativeOpenDvrPlayback(bufferSize);
         dvr.setListener(executor, l);
         return dvr;
@@ -979,15 +1102,21 @@ public class Tuner implements AutoCloseable  {
         return granted;
     }
 
-    private boolean requestDescrambler() {
+    private Descrambler requestDescrambler() {
         int[] descramblerHandle = new int[1];
         TunerDescramblerRequest request = new TunerDescramblerRequest(mClientId);
         boolean granted = mTunerResourceManager.requestDescrambler(request, descramblerHandle);
-        if (granted) {
-            mDescramblerHandle = descramblerHandle[0];
-            nativeOpenDescramblerByHandle(mDescramblerHandle);
+        if (!granted) {
+            return null;
         }
-        return granted;
+        int handle = descramblerHandle[0];
+        Descrambler descrambler = nativeOpenDescramblerByHandle(handle);
+        if (descrambler != null) {
+            mDescramblers.put(handle, descrambler);
+        } else {
+            mTunerResourceManager.releaseDescrambler(handle, mClientId);
+        }
+        return descrambler;
     }
 
     private boolean checkResource(int resourceType)  {
@@ -999,7 +1128,7 @@ public class Tuner implements AutoCloseable  {
                 break;
             }
             case TunerResourceManager.TUNER_RESOURCE_TYPE_LNB: {
-                if (mLnbHandle == null && !requestLnb()) {
+                if (mLnb == null && !requestLnb()) {
                     return false;
                 }
                 break;
@@ -1010,13 +1139,18 @@ public class Tuner implements AutoCloseable  {
                 }
                 break;
             }
-            case TunerResourceManager.TUNER_RESOURCE_TYPE_DESCRAMBLER: {
-                if (mDescramblerHandle == null && !requestDescrambler()) {
-                    return false;
-                }
-                break;
-            }
+            default:
+                return false;
         }
         return true;
+    }
+
+    /* package */ void releaseLnb() {
+        if (mLnbHandle != null) {
+            // LNB handle can be null if it's opened by name.
+            mTunerResourceManager.releaseLnb(mLnbHandle, mClientId);
+            mLnbHandle = null;
+        }
+        mLnb = null;
     }
 }

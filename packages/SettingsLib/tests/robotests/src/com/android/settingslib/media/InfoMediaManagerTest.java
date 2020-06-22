@@ -16,20 +16,29 @@
 
 package com.android.settingslib.media;
 
+import static android.media.MediaRoute2Info.TYPE_BLUETOOTH_A2DP;
+import static android.media.MediaRoute2Info.TYPE_BUILTIN_SPEAKER;
+import static android.media.MediaRoute2Info.TYPE_REMOTE_SPEAKER;
+import static android.media.MediaRoute2Info.TYPE_USB_DEVICE;
+import static android.media.MediaRoute2Info.TYPE_WIRED_HEADSET;
 import static android.media.MediaRoute2ProviderService.REASON_NETWORK_ERROR;
 import static android.media.MediaRoute2ProviderService.REASON_UNKNOWN_ERROR;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.media.MediaRoute2Info;
 import android.media.MediaRouter2Manager;
 import android.media.RoutingSessionInfo;
 
+import com.android.settingslib.bluetooth.CachedBluetoothDevice;
+import com.android.settingslib.bluetooth.CachedBluetoothDeviceManager;
 import com.android.settingslib.bluetooth.LocalBluetoothManager;
 import com.android.settingslib.testutils.shadow.ShadowRouter2Manager;
 
@@ -127,7 +136,7 @@ public class InfoMediaManagerTest {
     }
 
     @Test
-    public void onControlCategoriesChanged_samePackageName_shouldAddMediaDevice() {
+    public void onPreferredFeaturesChanged_samePackageName_shouldAddMediaDevice() {
         final List<RoutingSessionInfo> routingSessionInfos = new ArrayList<>();
         final RoutingSessionInfo sessionInfo = mock(RoutingSessionInfo.class);
         routingSessionInfos.add(sessionInfo);
@@ -147,7 +156,7 @@ public class InfoMediaManagerTest {
         final MediaDevice mediaDevice = mInfoMediaManager.findMediaDevice(TEST_ID);
         assertThat(mediaDevice).isNull();
 
-        mInfoMediaManager.mMediaRouterCallback.onControlCategoriesChanged(TEST_PACKAGE_NAME, null);
+        mInfoMediaManager.mMediaRouterCallback.onPreferredFeaturesChanged(TEST_PACKAGE_NAME, null);
 
         final MediaDevice infoDevice = mInfoMediaManager.mMediaDevices.get(0);
         assertThat(infoDevice.getId()).isEqualTo(TEST_ID);
@@ -156,8 +165,8 @@ public class InfoMediaManagerTest {
     }
 
     @Test
-    public void onControlCategoriesChanged_differentPackageName_doNothing() {
-        mInfoMediaManager.mMediaRouterCallback.onControlCategoriesChanged("com.fake.play", null);
+    public void onPreferredFeaturesChanged_differentPackageName_doNothing() {
+        mInfoMediaManager.mMediaRouterCallback.onPreferredFeaturesChanged("com.fake.play", null);
 
         assertThat(mInfoMediaManager.mMediaDevices).hasSize(0);
     }
@@ -407,6 +416,36 @@ public class InfoMediaManagerTest {
     }
 
     @Test
+    public void getDeselectableMediaDevice_packageNameIsNull_returnFalse() {
+        mInfoMediaManager.mPackageName = null;
+
+        assertThat(mInfoMediaManager.getDeselectableMediaDevice()).isEmpty();
+    }
+
+    @Test
+    public void getDeselectableMediaDevice_checkList() {
+        final List<RoutingSessionInfo> routingSessionInfos = new ArrayList<>();
+        final RoutingSessionInfo info = mock(RoutingSessionInfo.class);
+        routingSessionInfos.add(info);
+        final List<MediaRoute2Info> mediaRoute2Infos = new ArrayList<>();
+        final MediaRoute2Info mediaRoute2Info = mock(MediaRoute2Info.class);
+        mediaRoute2Infos.add(mediaRoute2Info);
+        mShadowRouter2Manager.setRoutingSessions(routingSessionInfos);
+        mShadowRouter2Manager.setDeselectableRoutes(mediaRoute2Infos);
+        when(mediaRoute2Info.getName()).thenReturn(TEST_NAME);
+
+        final List<MediaDevice> mediaDevices = mInfoMediaManager.getDeselectableMediaDevice();
+
+        assertThat(mediaDevices.size()).isEqualTo(1);
+        assertThat(mediaDevices.get(0).getName()).isEqualTo(TEST_NAME);
+    }
+
+    @Test
+    public void adjustSessionVolume_routingSessionInfoIsNull_noCrash() {
+        mInfoMediaManager.adjustSessionVolume(null, 10);
+    }
+
+    @Test
     public void adjustSessionVolume_packageNameIsNull_noCrash() {
         mInfoMediaManager.mPackageName = null;
 
@@ -475,6 +514,14 @@ public class InfoMediaManagerTest {
         mShadowRouter2Manager.setRoutingSessions(routingSessionInfos);
 
         assertThat(mInfoMediaManager.getSessionVolume()).isEqualTo(-1);
+    }
+
+    @Test
+    public void getActiveMediaSession_returnActiveSession() {
+        final List<RoutingSessionInfo> infos = new ArrayList<>();
+        mShadowRouter2Manager.setActiveSessions(infos);
+
+        assertThat(mInfoMediaManager.getActiveMediaSession()).containsExactlyElementsIn(infos);
     }
 
     @Test
@@ -568,7 +615,7 @@ public class InfoMediaManagerTest {
         final MediaDevice mediaDevice = mInfoMediaManager.findMediaDevice(TEST_ID);
         assertThat(mediaDevice).isNull();
 
-        mInfoMediaManager.mMediaRouterCallback.onTransferred(null, null);
+        mInfoMediaManager.mMediaRouterCallback.onTransferred(sessionInfo, sessionInfo);
 
         final MediaDevice infoDevice = mInfoMediaManager.mMediaDevices.get(0);
         assertThat(infoDevice.getId()).isEqualTo(TEST_ID);
@@ -580,6 +627,7 @@ public class InfoMediaManagerTest {
     @Test
     public void onTransferred_buildAllRoutes_shouldAddMediaDevice() {
         final MediaRoute2Info info = mock(MediaRoute2Info.class);
+        final RoutingSessionInfo sessionInfo = mock(RoutingSessionInfo.class);
         mInfoMediaManager.registerCallback(mCallback);
 
         when(info.getId()).thenReturn(TEST_ID);
@@ -594,11 +642,76 @@ public class InfoMediaManagerTest {
         assertThat(mediaDevice).isNull();
 
         mInfoMediaManager.mPackageName = "";
-        mInfoMediaManager.mMediaRouterCallback.onTransferred(null, null);
+        mInfoMediaManager.mMediaRouterCallback.onTransferred(sessionInfo, sessionInfo);
 
         final MediaDevice infoDevice = mInfoMediaManager.mMediaDevices.get(0);
         assertThat(infoDevice.getId()).isEqualTo(TEST_ID);
         assertThat(mInfoMediaManager.mMediaDevices).hasSize(routes.size());
         verify(mCallback).onConnectedDeviceChanged(null);
+    }
+
+    @Test
+    public void onSessionUpdated_shouldDispatchDataChanged() {
+        mInfoMediaManager.registerCallback(mCallback);
+
+        mInfoMediaManager.mMediaRouterCallback.onSessionUpdated(mock(RoutingSessionInfo.class));
+
+        verify(mCallback).onDeviceAttributesChanged();
+    }
+
+    @Test
+    public void addMediaDevice_verifyDeviceTypeCanCorrespondToMediaDevice() {
+        final MediaRoute2Info route2Info = mock(MediaRoute2Info.class);
+        final CachedBluetoothDeviceManager cachedBluetoothDeviceManager =
+                mock(CachedBluetoothDeviceManager.class);
+        final CachedBluetoothDevice cachedDevice = mock(CachedBluetoothDevice.class);
+
+        when(route2Info.getType()).thenReturn(TYPE_REMOTE_SPEAKER);
+        mInfoMediaManager.addMediaDevice(route2Info);
+        assertThat(mInfoMediaManager.mMediaDevices.get(0) instanceof InfoMediaDevice).isTrue();
+
+        when(route2Info.getType()).thenReturn(TYPE_USB_DEVICE);
+        mInfoMediaManager.mMediaDevices.clear();
+        mInfoMediaManager.addMediaDevice(route2Info);
+        assertThat(mInfoMediaManager.mMediaDevices.get(0) instanceof PhoneMediaDevice).isTrue();
+
+        when(route2Info.getType()).thenReturn(TYPE_WIRED_HEADSET);
+        mInfoMediaManager.mMediaDevices.clear();
+        mInfoMediaManager.addMediaDevice(route2Info);
+        assertThat(mInfoMediaManager.mMediaDevices.get(0) instanceof PhoneMediaDevice).isTrue();
+
+        when(route2Info.getType()).thenReturn(TYPE_BLUETOOTH_A2DP);
+        when(route2Info.getOriginalId()).thenReturn("00:00:00:00:00:00");
+        when(mLocalBluetoothManager.getCachedDeviceManager())
+                .thenReturn(cachedBluetoothDeviceManager);
+        when(cachedBluetoothDeviceManager.findDevice(any(BluetoothDevice.class)))
+                .thenReturn(cachedDevice);
+        mInfoMediaManager.mMediaDevices.clear();
+        mInfoMediaManager.addMediaDevice(route2Info);
+        assertThat(mInfoMediaManager.mMediaDevices.get(0) instanceof BluetoothMediaDevice).isTrue();
+
+        when(route2Info.getType()).thenReturn(TYPE_BUILTIN_SPEAKER);
+        mInfoMediaManager.mMediaDevices.clear();
+        mInfoMediaManager.addMediaDevice(route2Info);
+        assertThat(mInfoMediaManager.mMediaDevices.get(0) instanceof PhoneMediaDevice).isTrue();
+    }
+
+    @Test
+    public void addMediaDevice_cachedBluetoothDeviceIsNull_shouldNotAdded() {
+        final MediaRoute2Info route2Info = mock(MediaRoute2Info.class);
+        final CachedBluetoothDeviceManager cachedBluetoothDeviceManager =
+                mock(CachedBluetoothDeviceManager.class);
+
+        when(route2Info.getType()).thenReturn(TYPE_BLUETOOTH_A2DP);
+        when(route2Info.getOriginalId()).thenReturn("00:00:00:00:00:00");
+        when(mLocalBluetoothManager.getCachedDeviceManager())
+                .thenReturn(cachedBluetoothDeviceManager);
+        when(cachedBluetoothDeviceManager.findDevice(any(BluetoothDevice.class)))
+                .thenReturn(null);
+
+        mInfoMediaManager.mMediaDevices.clear();
+        mInfoMediaManager.addMediaDevice(route2Info);
+
+        assertThat(mInfoMediaManager.mMediaDevices.size()).isEqualTo(0);
     }
 }

@@ -42,6 +42,7 @@ import android.os.Message;
 import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -389,6 +390,10 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
     private ObjectAnimator mColorFadeOffAnimator;
     private RampAnimator<DisplayPowerState> mScreenBrightnessRampAnimator;
 
+    // The brightness synchronizer to allow changes in the int brightness value to be reflected in
+    // the float brightness value and vice versa.
+    @Nullable
+    private final BrightnessSynchronizer mBrightnessSynchronizer;
 
     /**
      * Creates the display power controller.
@@ -405,6 +410,7 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
         mWindowManagerPolicy = LocalServices.getService(WindowManagerPolicy.class);
         mBlanker = blanker;
         mContext = context;
+        mBrightnessSynchronizer = new BrightnessSynchronizer(context);
         mDisplayDevice = displayDevice;
 
         PowerManager pm =  context.getSystemService(PowerManager.class);
@@ -942,8 +948,7 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
         if (Float.isNaN(brightnessState)) {
             float newAutoBrightnessAdjustment = autoBrightnessAdjustment;
             if (autoBrightnessEnabled) {
-                brightnessState = BrightnessSynchronizer.brightnessIntToFloat(
-                mContext, mAutomaticBrightnessController.getAutomaticScreenBrightness());
+                brightnessState = mAutomaticBrightnessController.getAutomaticScreenBrightness();
                 newAutoBrightnessAdjustment =
                         mAutomaticBrightnessController.getAutomaticScreenBrightnessAdjustment();
             }
@@ -1062,12 +1067,22 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
                     mColorFadeEnabled && mPowerState.getColorFadeLevel() == 1.0f;
             final boolean brightnessIsTemporary =
                     mAppliedTemporaryBrightness || mAppliedTemporaryAutoBrightnessAdjustment;
-            if (initialRampSkip || hasBrightnessBuckets
-                    || wasOrWillBeInVr || !isDisplayContentVisible || brightnessIsTemporary) {
-                animateScreenBrightness(brightnessState, SCREEN_ANIMATION_RATE_MINIMUM);
-            } else {
-                animateScreenBrightness(brightnessState,
-                        slowChange ? mBrightnessRampRateSlow : mBrightnessRampRateFast);
+            // We only want to animate the brightness if it is between 0.0f and 1.0f.
+            // brightnessState can contain the values -1.0f and NaN, which we do not want to
+            // animate to. To avoid this, we check the value first.
+            // If the brightnessState is off (-1.0f) we still want to animate to the minimum
+            // brightness (0.0f) to accommodate for LED displays, which can appear bright to the
+            // user even when the display is all black.
+            float animateValue = brightnessState == PowerManager.BRIGHTNESS_OFF_FLOAT
+                    ? PowerManager.BRIGHTNESS_MIN : brightnessState;
+            if (isValidBrightnessValue(animateValue)) {
+                if (initialRampSkip || hasBrightnessBuckets
+                        || wasOrWillBeInVr || !isDisplayContentVisible || brightnessIsTemporary) {
+                    animateScreenBrightness(animateValue, SCREEN_ANIMATION_RATE_MINIMUM);
+                } else {
+                    animateScreenBrightness(animateValue,
+                            slowChange ? mBrightnessRampRateSlow : mBrightnessRampRateFast);
+                }
             }
 
             if (!brightnessIsTemporary) {
@@ -1243,6 +1258,8 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
 
             if (!reportOnly) {
                 Trace.traceCounter(Trace.TRACE_TAG_POWER, "ScreenState", state);
+                // TODO(b/153319140) remove when we can get this from the above trace invocation
+                SystemProperties.set("debug.tracing.screen_state", String.valueOf(state));
                 mPowerState.setScreenState(state);
                 // Tell battery stats about the transition.
                 try {
@@ -1319,6 +1336,8 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
         }
         if (mScreenBrightnessRampAnimator.animateTo(target, rate)) {
             Trace.traceCounter(Trace.TRACE_TAG_POWER, "TargetScreenBrightness", (int) target);
+            // TODO(b/153319140) remove when we can get this from the above trace invocation
+            SystemProperties.set("debug.tracing.screen_brightness", String.valueOf(target));
             try {
                 // TODO(brightnessfloat): change BatteryStats to use float
                 mBatteryStats.noteScreenBrightness(

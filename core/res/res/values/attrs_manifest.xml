@@ -1830,9 +1830,13 @@
         <!-- @hide no longer used, kept to preserve padding -->
         <attr name="allowAutoRevokePermissionsExemption" format="boolean" />
 
+        <!-- No longer used. Declaring this does nothing -->
         <attr name="autoRevokePermissions">
+            <!-- No longer used -->
             <enum name="allowed" value="0" />
+            <!-- No longer used -->
             <enum name="discouraged" value="1" />
+            <!-- No longer used -->
             <enum name="disallowed" value="2" />
         </attr>
     </declare-styleable>

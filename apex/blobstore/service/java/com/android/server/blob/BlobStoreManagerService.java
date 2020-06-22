@@ -25,12 +25,13 @@ import static android.app.blob.XmlTags.TAG_SESSIONS;
 import static android.content.pm.PackageManager.MATCH_DIRECT_BOOT_AWARE;
 import static android.content.pm.PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
 import static android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES;
+import static android.os.UserHandle.USER_CURRENT;
 import static android.os.UserHandle.USER_NULL;
 
 import static com.android.server.blob.BlobStoreConfig.LOGV;
-import static com.android.server.blob.BlobStoreConfig.SESSION_EXPIRY_TIMEOUT_MILLIS;
 import static com.android.server.blob.BlobStoreConfig.TAG;
 import static com.android.server.blob.BlobStoreConfig.XML_VERSION_CURRENT;
+import static com.android.server.blob.BlobStoreConfig.getAdjustedCommitTimeMs;
 import static com.android.server.blob.BlobStoreSession.STATE_ABANDONED;
 import static com.android.server.blob.BlobStoreSession.STATE_COMMITTED;
 import static com.android.server.blob.BlobStoreSession.STATE_VERIFIED_INVALID;
@@ -45,6 +46,8 @@ import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UserIdInt;
+import android.app.ActivityManager;
+import android.app.ActivityManagerInternal;
 import android.app.blob.BlobHandle;
 import android.app.blob.BlobInfo;
 import android.app.blob.IBlobStoreManager;
@@ -475,11 +478,14 @@ public class BlobStoreManagerService extends SystemService {
                             ? Resources.ID_NULL
                             : getDescriptionResourceId(resourcesGetter.apply(leasee.packageName),
                                     leasee.descriptionResEntryName, leasee.packageName);
-                    leaseInfos.add(new LeaseInfo(leasee.packageName, leasee.expiryTimeMillis,
+                    final long expiryTimeMs = leasee.expiryTimeMillis == 0
+                            ? blobHandle.getExpiryTimeMillis() : leasee.expiryTimeMillis;
+                    leaseInfos.add(new LeaseInfo(leasee.packageName, expiryTimeMs,
                             descriptionResId, leasee.description));
                 });
                 blobInfos.add(new BlobInfo(blobMetadata.getBlobId(),
-                        blobHandle.getExpiryTimeMillis(), blobHandle.getLabel(), leaseInfos));
+                        blobHandle.getExpiryTimeMillis(), blobHandle.getLabel(),
+                        blobMetadata.getSize(), leaseInfos));
             });
         }
         return blobInfos;
@@ -566,13 +572,18 @@ public class BlobStoreManagerService extends SystemService {
                             userId);
                     BlobMetadata blob = userBlobs.get(session.getBlobHandle());
                     if (blob == null) {
-                        blob = new BlobMetadata(mContext,
-                                session.getSessionId(), session.getBlobHandle(), userId);
+                        blob = new BlobMetadata(mContext, session.getSessionId(),
+                                session.getBlobHandle(), userId);
                         addBlobForUserLocked(blob, userBlobs);
                     }
+                    final Committer existingCommitter = blob.getExistingCommitter(
+                            session.getOwnerPackageName(), session.getOwnerUid());
+                    final long existingCommitTimeMs =
+                            (existingCommitter == null) ? 0 : existingCommitter.getCommitTimeMs();
                     final Committer newCommitter = new Committer(session.getOwnerPackageName(),
-                            session.getOwnerUid(), session.getBlobAccessMode());
-                    final Committer existingCommitter = blob.getExistingCommitter(newCommitter);
+                            session.getOwnerUid(), session.getBlobAccessMode(),
+                            getAdjustedCommitTimeMs(existingCommitTimeMs,
+                                    System.currentTimeMillis()));
                     blob.addOrReplaceCommitter(newCommitter);
                     try {
                         writeBlobsInfoLocked();
@@ -583,6 +594,7 @@ public class BlobStoreManagerService extends SystemService {
                         } else {
                             blob.addOrReplaceCommitter(existingCommitter);
                         }
+                        Slog.d(TAG, "Error committing the blob", e);
                         session.sendCommitCallbackResult(COMMIT_RESULT_ERROR);
                     }
                     getUserSessionsLocked(UserHandle.getUserId(session.getOwnerUid()))
@@ -978,8 +990,7 @@ public class BlobStoreManagerService extends SystemService {
                 boolean shouldRemove = false;
 
                 // Cleanup sessions which haven't been modified in a while.
-                if (blobStoreSession.getSessionFile().lastModified()
-                        < System.currentTimeMillis() - SESSION_EXPIRY_TIMEOUT_MILLIS) {
+                if (blobStoreSession.isExpired()) {
                     shouldRemove = true;
                 }
 
@@ -1047,6 +1058,18 @@ public class BlobStoreManagerService extends SystemService {
     void runIdleMaintenance() {
         synchronized (mBlobsLock) {
             handleIdleMaintenanceLocked();
+        }
+    }
+
+    boolean isBlobAvailable(long blobId, int userId) {
+        synchronized (mBlobsLock) {
+            final ArrayMap<BlobHandle, BlobMetadata> userBlobs = getUserBlobsLocked(userId);
+            for (BlobMetadata blobMetadata : userBlobs.values()) {
+                if (blobMetadata.getBlobId() == blobId) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -1372,7 +1395,14 @@ public class BlobStoreManagerService extends SystemService {
                         + "queryBlobsForUser()");
             }
 
-            return queryBlobsForUserInternal(userId);
+            final int resolvedUserId = userId == USER_CURRENT
+                    ? ActivityManager.getCurrentUser() : userId;
+            // Don't allow any other special user ids apart from USER_CURRENT
+            final ActivityManagerInternal amInternal = LocalServices.getService(
+                    ActivityManagerInternal.class);
+            amInternal.ensureNotSpecialUser(resolvedUserId);
+
+            return queryBlobsForUserInternal(resolvedUserId);
         }
 
         @Override
@@ -1473,12 +1503,13 @@ public class BlobStoreManagerService extends SystemService {
         private static final int FLAG_DUMP_CONFIG = 1 << 2;
 
         private int mSelectedSectionFlags;
-        private boolean mDumpFull;
+        private boolean mDumpUnredacted;
         private final ArrayList<String> mDumpPackages = new ArrayList<>();
         private final ArrayList<Integer> mDumpUids = new ArrayList<>();
         private final ArrayList<Integer> mDumpUserIds = new ArrayList<>();
         private final ArrayList<Long> mDumpBlobIds = new ArrayList<>();
         private boolean mDumpHelp;
+        private boolean mDumpAll;
 
         public boolean shouldDumpSession(String packageName, int uid, long blobId) {
             if (!CollectionUtils.isEmpty(mDumpPackages)
@@ -1497,7 +1528,7 @@ public class BlobStoreManagerService extends SystemService {
         }
 
         public boolean shouldDumpAllSections() {
-            return mSelectedSectionFlags == 0;
+            return mDumpAll || (mSelectedSectionFlags == 0);
         }
 
         public void allowDumpSessions() {
@@ -1539,7 +1570,7 @@ public class BlobStoreManagerService extends SystemService {
         }
 
         public boolean shouldDumpFull() {
-            return mDumpFull;
+            return mDumpUnredacted;
         }
 
         public boolean shouldDumpUser(int userId) {
@@ -1561,10 +1592,12 @@ public class BlobStoreManagerService extends SystemService {
 
             for (int i = 0; i < args.length; ++i) {
                 final String opt = args[i];
-                if ("--full".equals(opt) || "-f".equals(opt)) {
+                if ("--all".equals(opt) || "-a".equals(opt)) {
+                    dumpArgs.mDumpAll = true;
+                } else if ("--unredacted".equals(opt) || "-u".equals(opt)) {
                     final int callingUid = Binder.getCallingUid();
                     if (callingUid == Process.SHELL_UID || callingUid == Process.ROOT_UID) {
-                        dumpArgs.mDumpFull = true;
+                        dumpArgs.mDumpUnredacted = true;
                     }
                 } else if ("--sessions".equals(opt)) {
                     dumpArgs.allowDumpSessions();
@@ -1574,7 +1607,7 @@ public class BlobStoreManagerService extends SystemService {
                     dumpArgs.allowDumpConfig();
                 } else if ("--package".equals(opt) || "-p".equals(opt)) {
                     dumpArgs.mDumpPackages.add(getStringArgRequired(args, ++i, "packageName"));
-                } else if ("--uid".equals(opt) || "-u".equals(opt)) {
+                } else if ("--uid".equals(opt)) {
                     dumpArgs.mDumpUids.add(getIntArgRequired(args, ++i, "uid"));
                 } else if ("--user".equals(opt)) {
                     dumpArgs.mDumpUserIds.add(getIntArgRequired(args, ++i, "userId"));

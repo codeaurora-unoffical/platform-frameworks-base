@@ -23,7 +23,9 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.Region;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.util.MergedConfiguration;
@@ -32,6 +34,7 @@ import android.util.SparseArray;
 import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.DragEvent;
+import android.view.IScrollCaptureController;
 import android.view.IWindow;
 import android.view.IWindowManager;
 import android.view.IWindowSession;
@@ -122,7 +125,7 @@ public class SystemWindows {
      */
     public void removeView(View view) {
         SurfaceControlViewHost root = mViewRoots.remove(view);
-        root.die();
+        root.release();
     }
 
     /**
@@ -135,6 +138,23 @@ public class SystemWindows {
         }
         view.setLayoutParams(params);
         root.relayout((WindowManager.LayoutParams) params);
+    }
+
+    /**
+     * Sets the touchable region of a view's window. This will be cropped to the window size.
+     * @param view
+     * @param region
+     */
+    public void setTouchableRegion(@NonNull View view, Region region) {
+        SurfaceControlViewHost root = mViewRoots.get(view);
+        if (root == null) {
+            return;
+        }
+        WindowlessWindowManager wwm = root.getWindowlessWM();
+        if (!(wwm instanceof SysUiWindowManager)) {
+            return;
+        }
+        ((SysUiWindowManager) wwm).setTouchableRegionForWindow(view, region);
     }
 
     /**
@@ -169,8 +189,8 @@ public class SystemWindows {
     public SurfaceControl getViewSurface(View rootView) {
         for (int i = 0; i < mPerDisplay.size(); ++i) {
             for (int iWm = 0; iWm < mPerDisplay.valueAt(i).mWwms.size(); ++iWm) {
-                SurfaceControl out =
-                        mPerDisplay.valueAt(i).mWwms.get(iWm).getSurfaceControlForWindow(rootView);
+                SurfaceControl out = mPerDisplay.valueAt(i).mWwms.valueAt(iWm)
+                        .getSurfaceControlForWindow(rootView);
                 if (out != null) {
                     return out;
                 }
@@ -200,6 +220,14 @@ public class SystemWindows {
             attrs.flags |= FLAG_HARDWARE_ACCELERATED;
             viewRoot.setView(view, attrs);
             mViewRoots.put(view, viewRoot);
+
+            try {
+                mWmService.setShellRootAccessibilityWindow(mDisplayId, windowType,
+                        viewRoot.getWindowToken());
+            } catch (RemoteException e) {
+                Slog.e(TAG, "Error setting accessibility window for " + mDisplayId + ":"
+                        + windowType, e);
+            }
         }
 
         SysUiWindowManager addRoot(int windowType) {
@@ -280,6 +308,14 @@ public class SystemWindows {
         SurfaceControl getSurfaceControlForWindow(View rootView) {
             return getSurfaceControl(rootView);
         }
+
+        void setTouchableRegionForWindow(View rootView, Region region) {
+            IBinder token = rootView.getWindowToken();
+            if (token == null) {
+                return;
+            }
+            setTouchRegion(token, region);
+        }
     }
 
     class ContainerWindow extends IWindow.Stub {
@@ -352,5 +388,14 @@ public class SystemWindows {
 
         @Override
         public void dispatchPointerCaptureChanged(boolean hasCapture) {}
+
+        @Override
+        public void requestScrollCapture(IScrollCaptureController controller) {
+            try {
+                controller.onClientUnavailable();
+            } catch (RemoteException ex) {
+                // ignore
+            }
+        }
     }
 }

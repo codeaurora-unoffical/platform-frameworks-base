@@ -70,14 +70,15 @@ const int FIELD_ID_END_BUCKET_ELAPSED_MILLIS = 8;
 
 GaugeMetricProducer::GaugeMetricProducer(
         const ConfigKey& key, const GaugeMetric& metric, const int conditionIndex,
-        const sp<ConditionWizard>& wizard, const int whatMatcherIndex,
-        const sp<EventMatcherWizard>& matcherWizard, const int pullTagId, const int triggerAtomId,
-        const int atomId, const int64_t timeBaseNs, const int64_t startTimeNs,
-        const sp<StatsPullerManager>& pullerManager,
+        const vector<ConditionState>& initialConditionCache, const sp<ConditionWizard>& wizard,
+        const int whatMatcherIndex, const sp<EventMatcherWizard>& matcherWizard,
+        const int pullTagId, const int triggerAtomId, const int atomId, const int64_t timeBaseNs,
+        const int64_t startTimeNs, const sp<StatsPullerManager>& pullerManager,
         const unordered_map<int, shared_ptr<Activation>>& eventActivationMap,
         const unordered_map<int, vector<shared_ptr<Activation>>>& eventDeactivationMap)
-    : MetricProducer(metric.id(), key, timeBaseNs, conditionIndex, wizard, eventActivationMap,
-                     eventDeactivationMap, /*slicedStateAtoms=*/{}, /*stateGroupMap=*/{}),
+    : MetricProducer(metric.id(), key, timeBaseNs, conditionIndex, initialConditionCache, wizard,
+                     eventActivationMap, eventDeactivationMap, /*slicedStateAtoms=*/{},
+                     /*stateGroupMap=*/{}),
       mWhatMatcherIndex(whatMatcherIndex),
       mEventMatcherWizard(matcherWizard),
       mPullerManager(pullerManager),
@@ -270,11 +271,9 @@ void GaugeMetricProducer::onDumpReportLocked(const int64_t dumpTimeNs,
                     protoOutput->end(atomsToken);
                 }
                 for (const auto& atom : bucket.mGaugeAtoms) {
-                    const int64_t elapsedTimestampNs =
-                            truncateTimestampIfNecessary(mAtomId, atom.mElapsedTimestamps);
-                    protoOutput->write(
-                        FIELD_TYPE_INT64 | FIELD_COUNT_REPEATED | FIELD_ID_ELAPSED_ATOM_TIMESTAMP,
-                        (long long)elapsedTimestampNs);
+                    protoOutput->write(FIELD_TYPE_INT64 | FIELD_COUNT_REPEATED |
+                                               FIELD_ID_ELAPSED_ATOM_TIMESTAMP,
+                                       (long long)atom.mElapsedTimestampNs);
                 }
             }
             protoOutput->end(bucketInfoToken);
@@ -323,18 +322,17 @@ void GaugeMetricProducer::pullAndMatchEventsLocked(const int64_t timestampNs) {
         return;
     }
     vector<std::shared_ptr<LogEvent>> allData;
-    if (!mPullerManager->Pull(mPullTagId, mConfigKey, &allData)) {
+    if (!mPullerManager->Pull(mPullTagId, mConfigKey, timestampNs, &allData)) {
         ALOGE("Gauge Stats puller failed for tag: %d at %lld", mPullTagId, (long long)timestampNs);
         return;
     }
     const int64_t pullDelayNs = getElapsedRealtimeNs() - timestampNs;
+    StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
     if (pullDelayNs > mMaxPullDelayNs) {
         ALOGE("Pull finish too late for atom %d", mPullTagId);
         StatsdStats::getInstance().notePullExceedMaxDelay(mPullTagId);
-        StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
         return;
     }
-    StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
     for (const auto& data : allData) {
         LogEvent localCopy = data->makeCopy();
         localCopy.setElapsedTimestampNs(timestampNs);
@@ -417,6 +415,13 @@ void GaugeMetricProducer::onDataPulled(const std::vector<std::shared_ptr<LogEven
     if (!pullSuccess || allData.size() == 0) {
         return;
     }
+    const int64_t pullDelayNs = getElapsedRealtimeNs() - originalPullTimeNs;
+    StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
+    if (pullDelayNs > mMaxPullDelayNs) {
+        ALOGE("Pull finish too late for atom %d", mPullTagId);
+        StatsdStats::getInstance().notePullExceedMaxDelay(mPullTagId);
+        return;
+    }
     for (const auto& data : allData) {
         if (mEventMatcherWizard->matchLogEvent(
                 *data, mWhatMatcherIndex) == MatchingState::kMatched) {
@@ -477,7 +482,9 @@ void GaugeMetricProducer::onMatchedLogEventInternalLocked(
     if ((*mCurrentSlicedBucket)[eventKey].size() >= mGaugeAtomsPerDimensionLimit) {
         return;
     }
-    GaugeAtom gaugeAtom(getGaugeFields(event), eventTimeNs);
+
+    const int64_t truncatedElapsedTimestampNs = truncateTimestampIfNecessary(event);
+    GaugeAtom gaugeAtom(getGaugeFields(event), truncatedElapsedTimestampNs);
     (*mCurrentSlicedBucket)[eventKey].push_back(gaugeAtom);
     // Anomaly detection on gauge metric only works when there is one numeric
     // field specified.

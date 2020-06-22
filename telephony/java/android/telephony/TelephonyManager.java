@@ -147,6 +147,10 @@ import java.util.regex.Pattern;
  * information unless it has the appropriate permissions declared in
  * its manifest file. Where permissions apply, they are noted in the
  * the methods through which you access the protected information.
+ *
+ * <p>TelephonyManager is intended for use on devices that implement
+ * {@link android.content.pm.PackageManager#FEATURE_TELEPHONY FEATURE_TELEPHONY}. On devices
+ * that do not implement this feature, the behavior is not reliable.
  */
 @SystemService(Context.TELEPHONY_SERVICE)
 public class TelephonyManager {
@@ -5848,6 +5852,10 @@ public class TelephonyManager {
      * {@link android.telephony.PhoneStateListener#onCellInfoChanged onCellInfoChanged()}
      * for each active subscription.
      *
+     * <p>This method returns valid data for devices with
+     * {@link android.content.pm.PackageManager#FEATURE_TELEPHONY FEATURE_TELEPHONY}. On devices
+     * that do not implement this feature, the behavior is not reliable.
+     *
      * @param executor the executor on which callback will be invoked.
      * @param callback a callback to receive CellInfo.
      */
@@ -5893,6 +5901,10 @@ public class TelephonyManager {
      * <p>Any available results from this request will be provided by calls to
      * {@link android.telephony.PhoneStateListener#onCellInfoChanged onCellInfoChanged()}
      * for each active subscription.
+     *
+     * <p>This method returns valid data for devices with
+     * {@link android.content.pm.PackageManager#FEATURE_TELEPHONY FEATURE_TELEPHONY}. On devices
+     * that do not implement this feature, the behavior is not reliable.
      *
      * @param workSource the requestor to whom the power consumption for this should be attributed.
      * @param executor the executor on which callback will be invoked.
@@ -7386,6 +7398,29 @@ public class TelephonyManager {
                     + e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * Unregister a IImsServiceFeatureCallback previously associated with an ImsFeature through
+     * {@link #getImsMmTelFeatureAndListen(int, IImsServiceFeatureCallback)} or
+     * {@link #getImsRcsFeatureAndListen(int, IImsServiceFeatureCallback)}.
+     * @param slotIndex The SIM slot associated with the callback.
+     * @param featureType The {@link android.telephony.ims.feature.ImsFeature.FeatureType}
+     *                    associated with the callback.
+     * @param callback The callback to be unregistered.
+     * @hide
+     */
+    public void unregisterImsFeatureCallback(int slotIndex, int featureType,
+            IImsServiceFeatureCallback callback) {
+        try {
+            ITelephony telephony = getITelephony();
+            if (telephony != null) {
+                telephony.unregisterImsFeatureCallback(slotIndex, featureType, callback);
+            }
+        } catch (RemoteException e) {
+            Rlog.e(TAG, "unregisterImsFeatureCallback, RemoteException: "
+                    + e.getMessage());
+        }
     }
 
     /**
@@ -10409,7 +10444,7 @@ public class TelephonyManager {
      * <p>To recognize a carrier (including MVNO) as a first-class identity, Android assigns each
      * carrier with a canonical integer a.k.a. carrier id. The carrier ID is an Android
      * platform-wide identifier for a carrier. AOSP maintains carrier ID assignments in
-     * <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/carrier_list.textpb">here</a>
+     * <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/latest_carrier_id/carrier_list.textpb">here</a>
      *
      * <p>Apps which have carrier-specific configurations or business logic can use the carrier id
      * as an Android platform-wide identifier for carriers.
@@ -10471,7 +10506,7 @@ public class TelephonyManager {
      *
      * <p>For carriers without fine-grained specific carrier ids, return {@link #getSimCarrierId()}
      * <p>Specific carrier ids are defined in the same way as carrier id
-     * <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/carrier_list.textpb">here</a>
+     * <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/latest_carrier_id/carrier_list.textpb">here</a>
      * except each with a "parent" id linking to its top-level carrier id.
      *
      * @return Returns fine-grained carrier id of the current subscription.
@@ -10520,7 +10555,7 @@ public class TelephonyManager {
      * This is used for fallback when configurations/logic for exact carrier id
      * {@link #getSimCarrierId()} are not found.
      *
-     * Android carrier id table <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/carrier_list.textpb">here</a>
+     * Android carrier id table <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/latest_carrier_id/carrier_list.textpb">here</a>
      * can be updated out-of-band, its possible a MVNO (Mobile Virtual Network Operator) carrier
      * was not fully recognized and assigned to its MNO (Mobile Network Operator) carrier id
      * by default. After carrier id table update, a new carrier id was assigned. If apps don't
@@ -10547,7 +10582,7 @@ public class TelephonyManager {
       * used for fallback when configurations/logic for exact carrier id {@link #getSimCarrierId()}
       * are not found.
       *
-      * Android carrier id table <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/carrier_list.textpb">here</a>
+      * Android carrier id table <a href="https://android.googlesource.com/platform/packages/providers/TelephonyProvider/+/master/assets/latest_carrier_id/carrier_list.textpb">here</a>
       * can be updated out-of-band, its possible a MVNO (Mobile Virtual Network Operator) carrier
       * was not fully recognized and assigned to its MNO (Mobile Network Operator) carrier id
       * by default. After carrier id table update, a new carrier id was assigned. If apps don't
@@ -12687,7 +12722,6 @@ public class TelephonyManager {
             @Nullable String mvnoMatchData) {
         try {
             if (!mccmnc.equals(getSimOperator())) {
-                Log.d(TAG, "The mccmnc does not match");
                 return false;
             }
             ITelephony service = getITelephony();
@@ -13092,7 +13126,9 @@ public class TelephonyManager {
                 service.userActivity();
             }
         } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
+            // one-way notification, if telephony is not available, it is okay to not throw
+            // exception here.
+            Log.w(TAG, "notifyUserActivity exception: " + e.getMessage());
         }
     }
 
@@ -13113,6 +13149,7 @@ public class TelephonyManager {
             if (sISub != null) {
                 sISub.asBinder().unlinkToDeath(sServiceDeath, 0);
                 sISub = null;
+                SubscriptionManager.clearCaches();
             }
             if (sISms != null) {
                 sISms.asBinder().unlinkToDeath(sServiceDeath, 0);
@@ -13243,5 +13280,22 @@ public class TelephonyManager {
     @VisibleForTesting
     public static void enableServiceHandleCaching() {
         sServiceHandleCacheEnabled = true;
+    }
+
+    /**
+     * Whether device can connect to 5G network when two SIMs are active.
+     * @hide
+     * TODO b/153669716: remove or make system API.
+     */
+    public boolean canConnectTo5GInDsdsMode() {
+        ITelephony telephony = getITelephony();
+        if (telephony == null) return true;
+        try {
+            return telephony.canConnectTo5GInDsdsMode();
+        } catch (RemoteException ex) {
+            return true;
+        } catch (NullPointerException ex) {
+            return true;
+        }
     }
 }

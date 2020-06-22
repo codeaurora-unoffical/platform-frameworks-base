@@ -41,6 +41,7 @@ import static org.mockito.Mockito.mock;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.UserHandle;
 import android.util.Log;
 import android.view.Display;
 import android.view.DisplayInfo;
@@ -51,18 +52,10 @@ import android.view.WindowManager;
 
 import com.android.server.AttributeCache;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 
-import java.util.HashSet;
-import java.util.LinkedList;
-
-/**
- * Common base class for window manager unit test classes.
- *
- * Make sure any requests to WM hold the WM lock if needed b/73966377
- */
+/** Common base class for window manager unit test classes. */
 class WindowTestsBase extends SystemServiceTestsBase {
     private static final String TAG = WindowTestsBase.class.getSimpleName();
 
@@ -84,7 +77,6 @@ class WindowTestsBase extends SystemServiceTestsBase {
     WindowState mAppWindow;
     WindowState mChildAppWindowAbove;
     WindowState mChildAppWindowBelow;
-    HashSet<WindowState> mCommonWindows;
 
     /**
      * Spied {@link Transaction} class than can be used to verify calls.
@@ -98,44 +90,40 @@ class WindowTestsBase extends SystemServiceTestsBase {
 
     @Before
     public void setUpBase() {
+        mWm = mSystemServicesTestRule.getWindowManagerService();
+        SystemServicesTestRule.checkHoldsLock(mWm.mGlobalLock);
+
+        mTransaction = mSystemServicesTestRule.mTransaction;
+        mMockSession = mock(Session.class);
+        final Context context = getInstrumentation().getTargetContext();
         // If @Before throws an exception, the error isn't logged. This will make sure any failures
         // in the set up are clear. This can be removed when b/37850063 is fixed.
         try {
-            mMockSession = mock(Session.class);
-
-            final Context context = getInstrumentation().getTargetContext();
-
-            mWm = mSystemServicesTestRule.getWindowManagerService();
-            mTransaction = mSystemServicesTestRule.mTransaction;
-
             beforeCreateDisplay();
 
             context.getDisplay().getDisplayInfo(mDisplayInfo);
             mDisplayContent = createNewDisplay(true /* supportIme */);
 
             // Set-up some common windows.
-            mCommonWindows = new HashSet<>();
-            synchronized (mWm.mGlobalLock) {
-                mWallpaperWindow = createCommonWindow(null, TYPE_WALLPAPER, "wallpaperWindow");
-                mImeWindow = createCommonWindow(null, TYPE_INPUT_METHOD, "mImeWindow");
-                mDisplayContent.mInputMethodWindow = mImeWindow;
-                mImeDialogWindow = createCommonWindow(null, TYPE_INPUT_METHOD_DIALOG,
-                        "mImeDialogWindow");
-                mStatusBarWindow = createCommonWindow(null, TYPE_STATUS_BAR, "mStatusBarWindow");
-                mNotificationShadeWindow = createCommonWindow(null, TYPE_NOTIFICATION_SHADE,
-                        "mNotificationShadeWindow");
-                mNavBarWindow = createCommonWindow(null, TYPE_NAVIGATION_BAR, "mNavBarWindow");
-                mDockedDividerWindow = createCommonWindow(null, TYPE_DOCK_DIVIDER,
-                        "mDockedDividerWindow");
-                mAppWindow = createCommonWindow(null, TYPE_BASE_APPLICATION, "mAppWindow");
-                mChildAppWindowAbove = createCommonWindow(mAppWindow,
-                        TYPE_APPLICATION_ATTACHED_DIALOG,
-                        "mChildAppWindowAbove");
-                mChildAppWindowBelow = createCommonWindow(mAppWindow,
-                        TYPE_APPLICATION_MEDIA_OVERLAY,
-                        "mChildAppWindowBelow");
-                mDisplayContent.getDisplayPolicy().setForceShowSystemBars(false);
-            }
+            mWallpaperWindow = createCommonWindow(null, TYPE_WALLPAPER, "wallpaperWindow");
+            mImeWindow = createCommonWindow(null, TYPE_INPUT_METHOD, "mImeWindow");
+            mDisplayContent.mInputMethodWindow = mImeWindow;
+            mImeDialogWindow = createCommonWindow(null, TYPE_INPUT_METHOD_DIALOG,
+                    "mImeDialogWindow");
+            mStatusBarWindow = createCommonWindow(null, TYPE_STATUS_BAR, "mStatusBarWindow");
+            mNotificationShadeWindow = createCommonWindow(null, TYPE_NOTIFICATION_SHADE,
+                    "mNotificationShadeWindow");
+            mNavBarWindow = createCommonWindow(null, TYPE_NAVIGATION_BAR, "mNavBarWindow");
+            mDockedDividerWindow = createCommonWindow(null, TYPE_DOCK_DIVIDER,
+                    "mDockedDividerWindow");
+            mAppWindow = createCommonWindow(null, TYPE_BASE_APPLICATION, "mAppWindow");
+            mChildAppWindowAbove = createCommonWindow(mAppWindow,
+                    TYPE_APPLICATION_ATTACHED_DIALOG,
+                    "mChildAppWindowAbove");
+            mChildAppWindowBelow = createCommonWindow(mAppWindow,
+                    TYPE_APPLICATION_MEDIA_OVERLAY,
+                    "mChildAppWindowBelow");
+            mDisplayContent.getDisplayPolicy().setForceShowSystemBars(false);
 
             // Adding a display will cause freezing the display. Make sure to wait until it's
             // unfrozen to not run into race conditions with the tests.
@@ -150,63 +138,20 @@ class WindowTestsBase extends SystemServiceTestsBase {
         // Called before display is created.
     }
 
-    @After
-    public void tearDownBase() {
-        // If @After throws an exception, the error isn't logged. This will make sure any failures
-        // in the tear down are clear. This can be removed when b/37850063 is fixed.
-        try {
-            // Test may schedule to perform surface placement or other messages. Wait until a
-            // stable state to clean up for consistency.
-            waitUntilHandlersIdle();
-
-            final LinkedList<WindowState> nonCommonWindows = new LinkedList<>();
-
-            synchronized (mWm.mGlobalLock) {
-                mWm.mRoot.forAllWindows(w -> {
-                    if (!mCommonWindows.contains(w)) {
-                        nonCommonWindows.addLast(w);
-                    }
-                }, true /* traverseTopToBottom */);
-
-                while (!nonCommonWindows.isEmpty()) {
-                    nonCommonWindows.pollLast().removeImmediately();
-                }
-
-                // Remove app transition & window freeze timeout callbacks to prevent unnecessary
-                // actions after test.
-                mWm.getDefaultDisplayContentLocked().mAppTransition
-                        .removeAppTransitionTimeoutCallbacks();
-                mWm.mH.removeMessages(WindowManagerService.H.WINDOW_FREEZE_TIMEOUT);
-                mDisplayContent.mInputMethodTarget = null;
-            }
-
-            // Cleaned up everything in Handler.
-            cleanupWindowManagerHandlers();
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to tear down test", e);
-            throw e;
-        }
-    }
-
     private WindowState createCommonWindow(WindowState parent, int type, String name) {
-        synchronized (mWm.mGlobalLock) {
-            final WindowState win = createWindow(parent, type, name);
-            mCommonWindows.add(win);
-            // Prevent common windows from been IMe targets
-            win.mAttrs.flags |= FLAG_NOT_FOCUSABLE;
-            return win;
-        }
+        final WindowState win = createWindow(parent, type, name);
+        // Prevent common windows from been IME targets.
+        win.mAttrs.flags |= FLAG_NOT_FOCUSABLE;
+        return win;
     }
 
     private WindowToken createWindowToken(
             DisplayContent dc, int windowingMode, int activityType, int type) {
-        synchronized (mWm.mGlobalLock) {
-            if (type < FIRST_APPLICATION_WINDOW || type > LAST_APPLICATION_WINDOW) {
-                return WindowTestUtils.createTestWindowToken(type, dc);
-            }
-
-            return createActivityRecord(dc, windowingMode, activityType);
+        if (type < FIRST_APPLICATION_WINDOW || type > LAST_APPLICATION_WINDOW) {
+            return WindowTestUtils.createTestWindowToken(type, dc);
         }
+
+        return createActivityRecord(dc, windowingMode, activityType);
     }
 
     ActivityRecord createActivityRecord(DisplayContent dc, int windowingMode, int activityType) {
@@ -220,103 +165,86 @@ class WindowTestsBase extends SystemServiceTestsBase {
     }
 
     WindowState createWindow(WindowState parent, int type, String name) {
-        synchronized (mWm.mGlobalLock) {
-            return (parent == null)
-                    ? createWindow(parent, type, mDisplayContent, name)
-                    : createWindow(parent, type, parent.mToken, name);
-        }
+        return (parent == null)
+                ? createWindow(parent, type, mDisplayContent, name)
+                : createWindow(parent, type, parent.mToken, name);
     }
 
     WindowState createWindow(WindowState parent, int type, String name, int ownerId) {
-        synchronized (mWm.mGlobalLock) {
-            return (parent == null)
-                    ? createWindow(parent, type, mDisplayContent, name, ownerId)
-                    : createWindow(parent, type, parent.mToken, name, ownerId);
-        }
+        return (parent == null)
+                ? createWindow(parent, type, mDisplayContent, name, ownerId)
+                : createWindow(parent, type, parent.mToken, name, ownerId);
     }
 
     WindowState createWindowOnStack(WindowState parent, int windowingMode, int activityType,
             int type, DisplayContent dc, String name) {
-        synchronized (mWm.mGlobalLock) {
-            final WindowToken token = createWindowToken(dc, windowingMode, activityType, type);
-            return createWindow(parent, type, token, name);
-        }
+        final WindowToken token = createWindowToken(dc, windowingMode, activityType, type);
+        return createWindow(parent, type, token, name);
     }
 
     WindowState createAppWindow(Task task, int type, String name) {
-        synchronized (mWm.mGlobalLock) {
-            final ActivityRecord activity =
-                    WindowTestUtils.createTestActivityRecord(mDisplayContent);
-            task.addChild(activity, 0);
-            return createWindow(null, type, activity, name);
-        }
+        final ActivityRecord activity =
+                WindowTestUtils.createTestActivityRecord(task.getDisplayContent());
+        task.addChild(activity, 0);
+        return createWindow(null, type, activity, name);
     }
 
     WindowState createWindow(WindowState parent, int type, DisplayContent dc, String name) {
-        synchronized (mWm.mGlobalLock) {
-            final WindowToken token = createWindowToken(
-                    dc, WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, type);
-            return createWindow(parent, type, token, name, 0 /* ownerId */);
-        }
+        final WindowToken token = createWindowToken(
+                dc, WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, type);
+        return createWindow(parent, type, token, name, 0 /* ownerId */);
     }
 
     WindowState createWindow(WindowState parent, int type, DisplayContent dc, String name,
             int ownerId) {
-        synchronized (mWm.mGlobalLock) {
-            final WindowToken token = createWindowToken(
-                    dc, WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, type);
-            return createWindow(parent, type, token, name, ownerId);
-        }
+        final WindowToken token = createWindowToken(
+                dc, WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, type);
+        return createWindow(parent, type, token, name, ownerId);
     }
 
     WindowState createWindow(WindowState parent, int type, DisplayContent dc, String name,
             boolean ownerCanAddInternalSystemWindow) {
-        synchronized (mWm.mGlobalLock) {
-            final WindowToken token = createWindowToken(
-                    dc, WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, type);
-            return createWindow(parent, type, token, name, 0 /* ownerId */,
-                    ownerCanAddInternalSystemWindow);
-        }
+        final WindowToken token = createWindowToken(
+                dc, WINDOWING_MODE_FULLSCREEN, ACTIVITY_TYPE_STANDARD, type);
+        return createWindow(parent, type, token, name, 0 /* ownerId */,
+                ownerCanAddInternalSystemWindow);
     }
 
     WindowState createWindow(WindowState parent, int type, WindowToken token, String name) {
-        synchronized (mWm.mGlobalLock) {
-            return createWindow(parent, type, token, name, 0 /* ownerId */,
-                    false /* ownerCanAddInternalSystemWindow */);
-        }
+        return createWindow(parent, type, token, name, 0 /* ownerId */,
+                false /* ownerCanAddInternalSystemWindow */);
     }
 
     WindowState createWindow(WindowState parent, int type, WindowToken token, String name,
             int ownerId) {
-        synchronized (mWm.mGlobalLock) {
-            return createWindow(parent, type, token, name, ownerId,
-                    false /* ownerCanAddInternalSystemWindow */);
-        }
+        return createWindow(parent, type, token, name, ownerId,
+                false /* ownerCanAddInternalSystemWindow */);
     }
 
     WindowState createWindow(WindowState parent, int type, WindowToken token, String name,
             int ownerId, boolean ownerCanAddInternalSystemWindow) {
-        return createWindow(parent, type, token, name, ownerId, ownerCanAddInternalSystemWindow,
-                mWm, mMockSession, mIWindow, mSystemServicesTestRule.getPowerManagerWrapper());
+        return createWindow(parent, type, token, name, ownerId, UserHandle.getUserId(ownerId),
+                ownerCanAddInternalSystemWindow, mWm, mMockSession, mIWindow,
+                mSystemServicesTestRule.getPowerManagerWrapper());
     }
 
     static WindowState createWindow(WindowState parent, int type, WindowToken token,
-            String name, int ownerId, boolean ownerCanAddInternalSystemWindow,
+            String name, int ownerId, int userId, boolean ownerCanAddInternalSystemWindow,
             WindowManagerService service, Session session, IWindow iWindow,
             WindowState.PowerManagerWrapper powerManagerWrapper) {
-        synchronized (service.mGlobalLock) {
-            final WindowManager.LayoutParams attrs = new WindowManager.LayoutParams(type);
-            attrs.setTitle(name);
+        SystemServicesTestRule.checkHoldsLock(service.mGlobalLock);
 
-            final WindowState w = new WindowState(service, session, iWindow, token, parent,
-                    OP_NONE,
-                    0, attrs, VISIBLE, ownerId, ownerCanAddInternalSystemWindow,
-                    powerManagerWrapper);
-            // TODO: Probably better to make this call in the WindowState ctor to avoid errors with
-            // adding it to the token...
-            token.addWindow(w);
-            return w;
-        }
+        final WindowManager.LayoutParams attrs = new WindowManager.LayoutParams(type);
+        attrs.setTitle(name);
+
+        final WindowState w = new WindowState(service, session, iWindow, token, parent,
+                OP_NONE, 0, attrs, VISIBLE, ownerId, userId,
+                ownerCanAddInternalSystemWindow,
+                powerManagerWrapper);
+        // TODO: Probably better to make this call in the WindowState ctor to avoid errors with
+        // adding it to the token...
+        token.addWindow(w);
+        return w;
     }
 
     static void makeWindowVisible(WindowState... windows) {
@@ -335,16 +263,24 @@ class WindowTestsBase extends SystemServiceTestsBase {
     }
 
     ActivityStack createTaskStackOnDisplay(int windowingMode, int activityType, DisplayContent dc) {
-        synchronized (mWm.mGlobalLock) {
-            return new ActivityTestsBase.StackBuilder(
-                    dc.mWmService.mAtmService.mRootWindowContainer)
-                    .setDisplay(dc)
-                    .setWindowingMode(windowingMode)
-                    .setActivityType(activityType)
-                    .setCreateActivity(false)
-                    .setIntent(new Intent())
-                    .build();
-        }
+        return new ActivityTestsBase.StackBuilder(dc.mWmService.mRoot)
+                .setDisplay(dc)
+                .setWindowingMode(windowingMode)
+                .setActivityType(activityType)
+                .setCreateActivity(false)
+                .setIntent(new Intent())
+                .build();
+    }
+
+    ActivityStack createTaskStackOnTaskDisplayArea(int windowingMode, int activityType,
+            TaskDisplayArea tda) {
+        return new ActivityTestsBase.StackBuilder(tda.mWmService.mRoot)
+                .setTaskDisplayArea(tda)
+                .setWindowingMode(windowingMode)
+                .setActivityType(activityType)
+                .setCreateActivity(false)
+                .setIntent(new Intent())
+                .build();
     }
 
     /** Creates a {@link Task} and adds it to the specified {@link ActivityStack}. */
@@ -394,9 +330,9 @@ class WindowTestsBase extends SystemServiceTestsBase {
     /** Creates a {@link com.android.server.wm.WindowTestUtils.TestWindowState} */
     WindowTestUtils.TestWindowState createWindowState(WindowManager.LayoutParams attrs,
             WindowToken token) {
-        synchronized (mWm.mGlobalLock) {
-            return new WindowTestUtils.TestWindowState(mWm, mMockSession, mIWindow, attrs, token);
-        }
+        SystemServicesTestRule.checkHoldsLock(mWm.mGlobalLock);
+
+        return new WindowTestUtils.TestWindowState(mWm, mMockSession, mIWindow, attrs, token);
     }
 
     /** Creates a {@link DisplayContent} as parts of simulate display info for test. */

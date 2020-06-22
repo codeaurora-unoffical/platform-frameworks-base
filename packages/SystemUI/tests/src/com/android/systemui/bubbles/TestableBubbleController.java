@@ -16,8 +16,11 @@
 
 package com.android.systemui.bubbles;
 
+import android.app.INotificationManager;
 import android.content.Context;
+import android.view.WindowManager;
 
+import com.android.internal.statusbar.IStatusBarService;
 import com.android.systemui.dump.DumpManager;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
@@ -54,12 +57,18 @@ public class TestableBubbleController extends BubbleController {
             FeatureFlags featureFlags,
             DumpManager dumpManager,
             FloatingContentCoordinator floatingContentCoordinator,
-            SysUiState sysUiState) {
+            BubbleDataRepository dataRepository,
+            SysUiState sysUiState,
+            INotificationManager notificationManager,
+            IStatusBarService statusBarService,
+            WindowManager windowManager) {
         super(context,
                 notificationShadeWindowController, statusBarStateController, shadeController,
                 data, Runnable::run, configurationController, interruptionStateProvider,
                 zenModeController, lockscreenUserManager, groupManager, entryManager,
-                notifPipeline, featureFlags, dumpManager, floatingContentCoordinator, sysUiState);
+                notifPipeline, featureFlags, dumpManager, floatingContentCoordinator,
+                dataRepository, sysUiState, notificationManager, statusBarService,
+                windowManager);
         setInflateSynchronously(true);
     }
 }

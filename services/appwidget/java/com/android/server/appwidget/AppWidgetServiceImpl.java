@@ -19,7 +19,6 @@ package com.android.server.appwidget;
 import static android.content.Context.KEYGUARD_SERVICE;
 import static android.content.Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
-
 import static com.android.server.pm.PackageManagerService.PLATFORM_PACKAGE_NAME;
 
 import android.annotation.UserIdInt;
@@ -101,7 +100,6 @@ import android.util.proto.ProtoOutputStream;
 import android.view.Display;
 import android.view.View;
 import android.widget.RemoteViews;
-
 import com.android.internal.R;
 import com.android.internal.app.SuspendedAppActivity;
 import com.android.internal.app.UnlaunchableAppActivity;
@@ -116,11 +114,6 @@ import com.android.internal.widget.IRemoteViewsFactory;
 import com.android.server.LocalServices;
 import com.android.server.WidgetBackupProvider;
 import com.android.server.policy.IconUtilities;
-
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -142,6 +135,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlSerializer;
 
 class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBackupProvider,
         OnCrossProfileWidgetProvidersChangeListener {
@@ -3652,11 +3648,12 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
      * Note an app widget is tapped on. If a app widget is tapped, the underlying app is treated as
      * foreground so the app can get while-in-use permission.
      *
-     * @param uid UID of the underlying app.
-     * @param packageName Package name of the app.
+     * @param callingPackage calling app's packageName.
+     * @param appWidgetId App widget id.
      */
     @Override
-    public void noteAppWidgetTapped(int uid, String packageName) {
+    public void noteAppWidgetTapped(String callingPackage, int appWidgetId) {
+        mSecurityPolicy.enforceCallFromPackage(callingPackage);
         final int callingUid = Binder.getCallingUid();
         final long ident = Binder.clearCallingIdentity();
         try {
@@ -3665,29 +3662,22 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
             if (procState > ActivityManager.PROCESS_STATE_TOP) {
                 return;
             }
-
-            // Default launcher from package manager.
-            final ComponentName defaultLauncher = mPackageManagerInternal
-                    .getDefaultHomeActivity(UserHandle.getUserId(callingUid));
-            int defaultLauncherUid  = 0;
-            try {
-                defaultLauncherUid = mPackageManager.getApplicationInfo(
-                        defaultLauncher.getPackageName(), 0 ,
-                        UserHandle.getUserId(callingUid)).uid;
-            } catch (RemoteException e) {
-                Slog.e(TAG, "Failed to getApplicationInfo for package:"
-                        + defaultLauncher.getPackageName(), e);
-                return;
+            synchronized (mLock) {
+                final Widget widget = lookupWidgetLocked(appWidgetId, callingUid, callingPackage);
+                if (widget == null) {
+                    return;
+                }
+                final ProviderId providerId = widget.provider.id;
+                final String packageName = providerId.componentName.getPackageName();
+                if (packageName == null) {
+                    return;
+                }
+                final SparseArray<String> uid2PackageName = new SparseArray<String>();
+                uid2PackageName.put(providerId.uid, packageName);
+                mAppOpsManagerInternal.updateAppWidgetVisibility(uid2PackageName, true);
+                mUsageStatsManagerInternal.reportEvent(packageName,
+                        UserHandle.getUserId(providerId.uid), UsageEvents.Event.USER_INTERACTION);
             }
-            // The callingUid must be default launcher uid.
-            if (defaultLauncherUid != callingUid) {
-                return;
-            }
-            final SparseArray<String> uid2PackageName = new SparseArray<String>();
-            uid2PackageName.put(uid, packageName);
-            mAppOpsManagerInternal.updateAppWidgetVisibility(uid2PackageName, true);
-            mUsageStatsManagerInternal.reportEvent(packageName, UserHandle.getUserId(uid),
-                    UsageEvents.Event.USER_INTERACTION);
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
@@ -4893,7 +4883,7 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
                 final int widgetCount = mWidgets.size();
                 for (int i = 0; i < widgetCount; i++) {
                     final Widget widget = mWidgets.get(i);
-                    if  (widget.host.id.uid == uid) {
+                    if  (widget.host.id.uid == uid && widget.provider != null) {
                         if (widgetPackages == null) {
                             widgetPackages = new ArraySet<>();
                         }

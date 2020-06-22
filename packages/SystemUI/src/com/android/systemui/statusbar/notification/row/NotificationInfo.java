@@ -71,6 +71,7 @@ import java.util.Set;
  */
 public class NotificationInfo extends LinearLayout implements NotificationGuts.GutsContent {
     private static final String TAG = "InfoGuts";
+    private int mActualHeight;
 
     @IntDef(prefix = { "ACTION_" }, value = {
             ACTION_NONE,
@@ -140,7 +141,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
     // used by standard ui
     private OnClickListener mOnDismissSettings = v -> {
         mPressedApply = true;
-        closeControls(v, true);
+        mGutsContainer.closeControls(v, true);
     };
 
     public NotificationInfo(Context context, AttributeSet attrs) {
@@ -174,6 +175,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
             PackageManager pm,
             INotificationManager iNotificationManager,
             VisualStabilityManager visualStabilityManager,
+            ChannelEditorDialogController channelEditorDialogController,
             String pkg,
             NotificationChannel notificationChannel,
             Set<NotificationChannel> uniqueChannelsInRow,
@@ -187,7 +189,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
         mINotificationManager = iNotificationManager;
         mMetricsLogger = Dependency.get(MetricsLogger.class);
         mVisualStabilityManager = visualStabilityManager;
-        mChannelEditorDialogController = Dependency.get(ChannelEditorDialogController.class);
+        mChannelEditorDialogController = channelEditorDialogController;
         mPackageName = pkg;
         mUniqueChannelsInRow = uniqueChannelsInRow;
         mNumUniqueChannelsInRow = uniqueChannelsInRow.size();
@@ -248,7 +250,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
 
         View done = findViewById(R.id.done);
         done.setOnClickListener(mOnDismissSettings);
-
+        done.setAccessibilityDelegate(mGutsContainer.getAccessibilityDelegate());
 
         View silent = findViewById(R.id.silence);
         View alert = findViewById(R.id.alert);
@@ -328,7 +330,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
                         mUniqueChannelsInRow, mPkgIcon, mOnSettingsClickListener);
                 mChannelEditorDialogController.setOnFinishListener(() -> {
                     mPresentingChannelEditorDialog = false;
-                    closeControls(this, false);
+                    mGutsContainer.closeControls(this, false);
                 });
                 mChannelEditorDialogController.show();
             }
@@ -373,14 +375,11 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
             }
         }
         TextView groupNameView = findViewById(R.id.group_name);
-        View divider = findViewById(R.id.group_divider);
         if (groupName != null) {
             groupNameView.setText(groupName);
             groupNameView.setVisibility(VISIBLE);
-            divider.setVisibility(VISIBLE);
         } else {
             groupNameView.setVisibility(GONE);
-            divider.setVisibility(GONE);
         }
     }
 
@@ -488,6 +487,11 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
     }
 
     @Override
+    public boolean needsFalsingProtection() {
+        return true;
+    }
+
+    @Override
     public void onInitializeAccessibilityEvent(AccessibilityEvent event) {
         super.onInitializeAccessibilityEvent(event);
         if (mGutsContainer != null &&
@@ -522,25 +526,6 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
         intent.putExtra(Notification.EXTRA_NOTIFICATION_ID, id);
         intent.putExtra(Notification.EXTRA_NOTIFICATION_TAG, tag);
         return intent;
-    }
-
-    /**
-     * Closes the controls and commits the updated importance values (indirectly).
-     *
-     * <p><b>Note,</b> this will only get called once the view is dismissing. This means that the
-     * user does not have the ability to undo the action anymore.
-     */
-    @VisibleForTesting
-    void closeControls(View v, boolean save) {
-        int[] parentLoc = new int[2];
-        int[] targetLoc = new int[2];
-        mGutsContainer.getLocationOnScreen(parentLoc);
-        v.getLocationOnScreen(targetLoc);
-        final int centerX = v.getWidth() / 2;
-        final int centerY = v.getHeight() / 2;
-        final int x = targetLoc[0] - parentLoc[0] + centerX;
-        final int y = targetLoc[1] - parentLoc[1] + centerY;
-        mGutsContainer.closeControls(x, y, save, false /* force */);
     }
 
     @Override
@@ -582,7 +567,15 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
 
     @Override
     public int getActualHeight() {
-        return getHeight();
+        // Because we're animating the bounds, getHeight will return the small height at the
+        // beginning of the animation. Instead we'd want it to already return the end value
+        return mActualHeight;
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        super.onLayout(changed, l, t, r, b);
+        mActualHeight = getHeight();
     }
 
     @VisibleForTesting

@@ -18,6 +18,7 @@ package com.android.systemui;
 
 import android.annotation.NonNull;
 import android.content.Context;
+import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -27,6 +28,7 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.keyguard.ViewMediatorCallback;
+import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.dagger.DaggerSystemUIRootComponent;
 import com.android.systemui.dagger.DependencyProvider;
 import com.android.systemui.dagger.SystemUIRootComponent;
@@ -120,6 +122,16 @@ public class SystemUIFactory {
         return mRootComponent;
     }
 
+    /** Returns the list of system UI components that should be started. */
+    public String[] getSystemUIServiceComponents(Resources resources) {
+        return resources.getStringArray(R.array.config_systemUIServiceComponents);
+    }
+
+    /** Returns the list of system UI components that should be started per user. */
+    public String[] getSystemUIServiceComponentsPerUser(Resources resources) {
+        return resources.getStringArray(R.array.config_systemUIServiceComponentsPerUser);
+    }
+
     /**
      * Creates an instance of ScreenshotNotificationSmartActionsProvider.
      * This method is overridden in vendor specific implementation of Sys UI.
@@ -153,7 +165,8 @@ public class SystemUIFactory {
                 wakeUpCoordinator, keyguardBypassController,
                 Dependency.get(NotificationMediaManager.class),
                 Dependency.get(NotificationListener.class),
-                Dependency.get(DozeParameters.class));
+                Dependency.get(DozeParameters.class),
+                Dependency.get(BubbleController.class));
     }
 
     @Module

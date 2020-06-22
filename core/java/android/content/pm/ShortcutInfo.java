@@ -119,11 +119,26 @@ public final class ShortcutInfo implements Parcelable {
     /** @hide */
     public static final int FLAG_LONG_LIVED = 1 << 13;
 
-    /** @hide */
-    public static final int FLAG_CACHED = 1 << 14;
+    /**
+     * TODO(b/155135057): This is a quick and temporary fix for b/155135890. ShortcutService doesn't
+     *  need to be aware of the outside world. Replace this with a more extensible solution.
+     * @hide
+     */
+    public static final int FLAG_CACHED_NOTIFICATIONS = 1 << 14;
 
     /** @hide */
     public static final int FLAG_HAS_ICON_URI = 1 << 15;
+
+
+    /**
+     * TODO(b/155135057): This is a quick and temporary fix for b/155135890. ShortcutService doesn't
+     *  need to be aware of the outside world. Replace this with a more extensible solution.
+     * @hide
+     */
+    public static final int FLAG_CACHED_BUBBLES = 1 << 30;
+
+    /** @hide */
+    public static final int FLAG_CACHED_ALL = FLAG_CACHED_NOTIFICATIONS | FLAG_CACHED_BUBBLES;
 
     /** @hide */
     @IntDef(flag = true, prefix = { "FLAG_" }, value = {
@@ -141,8 +156,9 @@ public final class ShortcutInfo implements Parcelable {
             FLAG_ICON_FILE_PENDING_SAVE,
             FLAG_SHADOW,
             FLAG_LONG_LIVED,
-            FLAG_CACHED,
             FLAG_HAS_ICON_URI,
+            FLAG_CACHED_NOTIFICATIONS,
+            FLAG_CACHED_BUBBLES,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ShortcutFlags {}
@@ -1450,6 +1466,21 @@ public final class ShortcutInfo implements Parcelable {
         return mText;
     }
 
+    /**
+     * Returns the {@link #getLongLabel()} if it's populated, and if not, the
+     * {@link #getShortLabel()}.
+     * @hide
+     */
+    @Nullable
+    public CharSequence getLabel() {
+        CharSequence label = getLongLabel();
+        if (TextUtils.isEmpty(label)) {
+            label = getShortLabel();
+        }
+
+        return label;
+    }
+
     /** @hide */
     public int getLongLabelResourceId() {
         return mTextResId;
@@ -1692,13 +1723,13 @@ public final class ShortcutInfo implements Parcelable {
     }
 
     /** @hide */
-    public void setCached() {
-        addFlags(FLAG_CACHED);
+    public void setCached(@ShortcutFlags int cacheFlag) {
+        addFlags(cacheFlag);
     }
 
     /** Return whether a shortcut is cached. */
     public boolean isCached() {
-        return hasFlags(FLAG_CACHED);
+        return (getFlags() & FLAG_CACHED_ALL) != 0;
     }
 
     /** Return whether a shortcut is dynamic. */
@@ -1759,6 +1790,12 @@ public final class ShortcutInfo implements Parcelable {
         return isDeclaredInManifest() && isVisibleToPublisher();
     }
 
+    /** @hide */
+    public boolean isNonManifestVisible() {
+        return !isDeclaredInManifest() && isVisibleToPublisher()
+                && (isPinned() || isCached() || isDynamic());
+    }
+
     /**
      * Return if a shortcut is immutable, in which case it cannot be modified with any of
      * {@link ShortcutManager} APIs.
@@ -1786,7 +1823,7 @@ public final class ShortcutInfo implements Parcelable {
     /** @hide */
     public boolean isAlive() {
         return hasFlags(FLAG_PINNED) || hasFlags(FLAG_DYNAMIC) || hasFlags(FLAG_MANIFEST)
-                || hasFlags(FLAG_CACHED);
+                || isCached();
     }
 
     /** @hide */
@@ -2053,8 +2090,8 @@ public final class ShortcutInfo implements Parcelable {
         final ClassLoader cl = getClass().getClassLoader();
 
         mUserId = source.readInt();
-        mId = source.readString();
-        mPackageName = source.readString();
+        mId = source.readString8();
+        mPackageName = source.readString8();
         mActivity = source.readParcelable(cl);
         mFlags = source.readInt();
         mIconResId = source.readInt();
@@ -2076,12 +2113,12 @@ public final class ShortcutInfo implements Parcelable {
         mIntentPersistableExtrases = source.readParcelableArray(cl, PersistableBundle.class);
         mRank = source.readInt();
         mExtras = source.readParcelable(cl);
-        mBitmapPath = source.readString();
+        mBitmapPath = source.readString8();
 
-        mIconResName = source.readString();
-        mTitleResName = source.readString();
-        mTextResName = source.readString();
-        mDisabledMessageResName = source.readString();
+        mIconResName = source.readString8();
+        mTitleResName = source.readString8();
+        mTextResName = source.readString8();
+        mDisabledMessageResName = source.readString8();
 
         int N = source.readInt();
         if (N == 0) {
@@ -2089,20 +2126,20 @@ public final class ShortcutInfo implements Parcelable {
         } else {
             mCategories = new ArraySet<>(N);
             for (int i = 0; i < N; i++) {
-                mCategories.add(source.readString().intern());
+                mCategories.add(source.readString8().intern());
             }
         }
 
         mPersons = source.readParcelableArray(cl, Person.class);
         mLocusId = source.readParcelable(cl);
-        mIconUri = source.readString();
+        mIconUri = source.readString8();
     }
 
     @Override
     public void writeToParcel(Parcel dest, int flags) {
         dest.writeInt(mUserId);
-        dest.writeString(mId);
-        dest.writeString(mPackageName);
+        dest.writeString8(mId);
+        dest.writeString8(mPackageName);
         dest.writeParcelable(mActivity, flags);
         dest.writeInt(mFlags);
         dest.writeInt(mIconResId);
@@ -2127,18 +2164,18 @@ public final class ShortcutInfo implements Parcelable {
         dest.writeParcelableArray(mIntentPersistableExtrases, flags);
         dest.writeInt(mRank);
         dest.writeParcelable(mExtras, flags);
-        dest.writeString(mBitmapPath);
+        dest.writeString8(mBitmapPath);
 
-        dest.writeString(mIconResName);
-        dest.writeString(mTitleResName);
-        dest.writeString(mTextResName);
-        dest.writeString(mDisabledMessageResName);
+        dest.writeString8(mIconResName);
+        dest.writeString8(mTitleResName);
+        dest.writeString8(mTextResName);
+        dest.writeString8(mDisabledMessageResName);
 
         if (mCategories != null) {
             final int N = mCategories.size();
             dest.writeInt(N);
             for (int i = 0; i < N; i++) {
-                dest.writeString(mCategories.valueAt(i));
+                dest.writeString8(mCategories.valueAt(i));
             }
         } else {
             dest.writeInt(0);
@@ -2146,7 +2183,7 @@ public final class ShortcutInfo implements Parcelable {
 
         dest.writeParcelableArray(mPersons, flags);
         dest.writeParcelable(mLocusId, flags);
-        dest.writeString(mIconUri);
+        dest.writeString8(mIconUri);
     }
 
     public static final @android.annotation.NonNull Creator<ShortcutInfo> CREATOR =

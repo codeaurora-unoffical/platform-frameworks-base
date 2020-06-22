@@ -2742,6 +2742,9 @@ final public class MediaCodec {
          * See {@link MediaCodec.CryptoInfo.Pattern}.
          */
         public void setPattern(Pattern newPattern) {
+            if (newPattern == null) {
+                newPattern = zeroPattern;
+            }
             pattern = newPattern;
         }
 
@@ -2767,6 +2770,11 @@ final public class MediaCodec {
             builder.append(Arrays.toString(numBytesOfClearData));
             builder.append(", encrypted ");
             builder.append(Arrays.toString(numBytesOfEncryptedData));
+            builder.append(", pattern (encrypt: ");
+            builder.append(pattern.mEncryptBlocks);
+            builder.append(", skip: ");
+            builder.append(pattern.mSkipBlocks);
+            builder.append(")");
             return builder.toString();
         }
     };
@@ -4848,8 +4856,13 @@ final public class MediaCodec {
         }
 
         public MediaImage(
-                @NonNull Image.Plane[] planes, int width, int height, int format, boolean readOnly,
+                @NonNull ByteBuffer[] buffers, int[] rowStrides, int[] pixelStrides,
+                int width, int height, int format, boolean readOnly,
                 long timestamp, int xOffset, int yOffset, @Nullable Rect cropRect, long context) {
+            if (buffers.length != rowStrides.length || buffers.length != pixelStrides.length) {
+                throw new IllegalArgumentException(
+                        "buffers, rowStrides and pixelStrides should have the same length");
+            }
             mWidth = width;
             mHeight = height;
             mFormat = format;
@@ -4858,7 +4871,10 @@ final public class MediaCodec {
             mIsReadOnly = readOnly;
             mBuffer = null;
             mInfo = null;
-            mPlanes = planes;
+            mPlanes = new MediaPlane[buffers.length];
+            for (int i = 0; i < buffers.length; ++i) {
+                mPlanes[i] = new MediaPlane(buffers[i], rowStrides[i], pixelStrides[i]);
+            }
 
             // save offsets and info
             mXOffset = xOffset;

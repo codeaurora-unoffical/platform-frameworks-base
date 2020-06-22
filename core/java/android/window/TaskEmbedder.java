@@ -23,10 +23,8 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityOptions;
 import android.app.ActivityTaskManager;
-import android.app.ActivityView;
 import android.app.IActivityTaskManager;
 import android.app.PendingIntent;
-import android.app.TaskStackListener;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -37,13 +35,15 @@ import android.graphics.Matrix;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.Region;
+import android.hardware.display.VirtualDisplay;
 import android.os.RemoteException;
 import android.os.UserHandle;
-import android.util.Log;
 import android.view.IWindow;
 import android.view.IWindowManager;
+import android.view.IWindowSession;
 import android.view.KeyEvent;
 import android.view.SurfaceControl;
+import android.view.WindowManagerGlobal;
 
 import dalvik.system.CloseGuard;
 
@@ -129,7 +129,6 @@ public abstract class TaskEmbedder {
 
     protected SurfaceControl.Transaction mTransaction;
     protected SurfaceControl mSurfaceControl;
-    protected TaskStackListener mTaskStackListener;
     protected Listener mListener;
     protected boolean mOpened; // Protected by mGuard.
 
@@ -170,13 +169,6 @@ public abstract class TaskEmbedder {
         if (!onInitialize()) {
             return false;
         }
-
-        mTaskStackListener = createTaskStackListener();
-        try {
-            mActivityTaskManager.registerTaskStackListener(mTaskStackListener);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Failed to register task stack listener", e);
-        }
         if (mListener != null && isInitialized()) {
             mListener.onInitialized();
         }
@@ -187,11 +179,6 @@ public abstract class TaskEmbedder {
     }
 
     /**
-     * @return the task stack listener for this embedder
-     */
-    public abstract TaskStackListener createTaskStackListener();
-
-    /**
      * Whether this container has been initialized.
      *
      * @return true if initialized
@@ -200,31 +187,45 @@ public abstract class TaskEmbedder {
 
     /**
      * Called when the task embedder should be initialized.
+     * NOTE: all overriding methods should call this one after they finish their initialization.
      * @return whether to report whether the embedder was initialized.
      */
-    public abstract boolean onInitialize();
+    public boolean onInitialize() {
+        updateLocationAndTapExcludeRegion();
+        return true;
+    }
 
     /**
      * Called when the task embedder should be released.
      * @return whether to report whether the embedder was released.
      */
-    protected abstract boolean onRelease();
+    protected boolean onRelease() {
+        // Clear tap-exclude region (if any) for this window.
+        clearTapExcludeRegion();
+        return true;
+    }
 
     /**
      * Starts presentation of tasks in this container.
      */
-    public abstract void start();
+    public void start() {
+        updateLocationAndTapExcludeRegion();
+    }
 
     /**
      * Stops presentation of tasks in this container.
      */
-    public abstract void stop();
+    public void stop() {
+        clearTapExcludeRegion();
+    }
 
     /**
      * This should be called whenever the position or size of the surface changes
      * or if touchable areas above the surface are added or removed.
      */
-    public abstract void notifyBoundsChanged();
+    public void notifyBoundsChanged() {
+        updateLocationAndTapExcludeRegion();
+    }
 
     /**
      * Called to update the dimensions whenever the host size changes.
@@ -270,6 +271,10 @@ public abstract class TaskEmbedder {
         return INVALID_DISPLAY;
     }
 
+    public VirtualDisplay getVirtualDisplay() {
+        return null;
+    }
+
     /**
      * Set forwarded insets on the task content.
      *
@@ -277,6 +282,48 @@ public abstract class TaskEmbedder {
      */
     public void setForwardedInsets(Insets insets) {
         // Do nothing
+    }
+
+    /**
+     * Updates position and bounds information needed by WM and IME to manage window
+     * focus and touch events properly.
+     * <p>
+     * This should be called whenever the position or size of the surface changes
+     * or if touchable areas above the surface are added or removed.
+     */
+    protected void updateLocationAndTapExcludeRegion() {
+        if (!isInitialized() || mHost.getWindow() == null) {
+            return;
+        }
+        applyTapExcludeRegion(mHost.getWindow(), mHost.getTapExcludeRegion());
+    }
+
+    /**
+     * Call to update the tap exclude region for the window.
+     * <p>
+     * This should not normally be called directly, but through
+     * {@link #updateLocationAndTapExcludeRegion()}. This method
+     * is provided as an optimization when managing multiple TaskSurfaces within a view.
+     *
+     * @see IWindowSession#updateTapExcludeRegion(IWindow, Region)
+     */
+    private void applyTapExcludeRegion(IWindow window, @Nullable Region tapExcludeRegion) {
+        try {
+            IWindowSession session = WindowManagerGlobal.getWindowSession();
+            session.updateTapExcludeRegion(window, tapExcludeRegion);
+        } catch (RemoteException e) {
+            e.rethrowAsRuntimeException();
+        }
+    }
+
+    /**
+     * Removes the tap exclude region set by {@link #updateLocationAndTapExcludeRegion()}.
+     */
+    private void clearTapExcludeRegion() {
+        if (!isInitialized() || mHost.getWindow() == null) {
+            return;
+        }
+        applyTapExcludeRegion(mHost.getWindow(), null);
     }
 
     /**
@@ -420,16 +467,6 @@ public abstract class TaskEmbedder {
         mSurfaceControl.release();
 
         boolean reportReleased = onRelease();
-
-        if (mTaskStackListener != null) {
-            try {
-                mActivityTaskManager.unregisterTaskStackListener(mTaskStackListener);
-            } catch (RemoteException e) {
-                Log.e(TAG, "Failed to unregister task stack listener", e);
-            }
-            mTaskStackListener = null;
-        }
-
         if (mListener != null && reportReleased) {
             mListener.onReleased();
         }

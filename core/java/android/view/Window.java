@@ -26,6 +26,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.StyleRes;
 import android.annotation.SystemApi;
+import android.annotation.TestApi;
 import android.app.WindowConfiguration;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
@@ -1795,6 +1796,24 @@ public abstract class Window {
     public abstract @NonNull View getDecorView();
 
     /**
+     * @return the status bar background view or null.
+     * @hide
+     */
+    @TestApi
+    public @Nullable View getStatusBarBackgroundView() {
+        return null;
+    }
+
+    /**
+     * @return the navigation bar background view or null.
+     * @hide
+     */
+    @TestApi
+    public @Nullable View getNavigationBarBackgroundView() {
+        return null;
+    }
+
+    /**
      * Retrieve the current decor view, but only if it has already been created;
      * otherwise returns null.
      *
@@ -2533,6 +2552,33 @@ public abstract class Window {
     @NonNull
     public List<Rect> getSystemGestureExclusionRects() {
         return Collections.emptyList();
+    }
+
+    /**
+     * System request to begin scroll capture.
+     *
+     * @param controller the controller to receive responses
+     * @hide
+     */
+    public void requestScrollCapture(IScrollCaptureController controller) {
+    }
+
+    /**
+     * Registers a {@link ScrollCaptureCallback} with the root of this window.
+     *
+     * @param callback the callback to add
+     * @hide
+     */
+    public void addScrollCaptureCallback(@NonNull ScrollCaptureCallback callback) {
+    }
+
+    /**
+     * Unregisters a {@link ScrollCaptureCallback} previously registered with this window.
+     *
+     * @param callback the callback to remove
+     * @hide
+     */
+    public void removeScrollCaptureCallback(@NonNull ScrollCaptureCallback callback) {
     }
 
     /** @hide */

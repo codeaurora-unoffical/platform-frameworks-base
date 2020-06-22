@@ -334,7 +334,8 @@ public class NetworkControllerImpl extends BroadcastReceiver
         return mDataSaverController;
     }
 
-    private void registerListeners() {
+    @VisibleForTesting
+    void registerListeners() {
         for (int i = 0; i < mMobileSignalControllers.size(); i++) {
             MobileSignalController mobileSignalController = mMobileSignalControllers.valueAt(i);
             mobileSignalController.registerListener();
@@ -364,7 +365,30 @@ public class NetworkControllerImpl extends BroadcastReceiver
         mBroadcastDispatcher.registerReceiverWithHandler(this, filter, mReceiverHandler);
         mListening = true;
 
+        // Initial setup of connectivity. Handled as if we had received a sticky broadcast of
+        // ConnectivityManager.CONNECTIVITY_ACTION or ConnectivityManager.INET_CONDITION_ACTION.
+        mReceiverHandler.post(this::updateConnectivity);
+
+        // Initial setup of WifiSignalController. Handled as if we had received a sticky broadcast
+        // of WifiManager.WIFI_STATE_CHANGED_ACTION or WifiManager.NETWORK_STATE_CHANGED_ACTION
+        mReceiverHandler.post(mWifiSignalController::fetchInitialState);
+
+        // Initial setup of mLastServiceState. Only run if there is no service state yet.
+        // Each MobileSignalController will also get their corresponding
+        mReceiverHandler.post(() -> {
+            if (mLastServiceState == null) {
+                mLastServiceState = mPhone.getServiceState();
+                if (mMobileSignalControllers.size() == 0) {
+                    recalculateEmergency();
+                }
+            }
+        });
+
         updateMobileControllers();
+
+        // Initial setup of emergency information. Handled as if we had received a sticky broadcast
+        // of TelephonyManager.ACTION_DEFAULT_VOICE_SUBSCRIPTION_CHANGED.
+        mReceiverHandler.post(this::recalculateEmergency);
     }
 
     private void unregisterListeners() {
@@ -375,7 +399,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
             mobileSignalController.unregisterFiveGStateListener(mFiveGServiceClient);
         }
         mSubscriptionManager.removeOnSubscriptionsChangedListener(mSubscriptionListener);
-        mContext.unregisterReceiver(this);
+        mBroadcastDispatcher.unregisterReceiver(this);
     }
 
     public int getConnectedWifiLevel() {
@@ -869,6 +893,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
         pw.println("  - telephony ------");
         pw.print("  hasVoiceCallingFeature()=");
         pw.println(hasVoiceCallingFeature());
+        pw.println("  mListening=" + mListening);
 
         pw.println("  - connectivity ------");
         pw.print("  mConnectedTransports=");
@@ -1183,6 +1208,7 @@ public class NetworkControllerImpl extends BroadcastReceiver
         boolean showVolteIcon = false;
         boolean alwaysShowNetworkTypeIcon = false;
         boolean enableRatIconEnhancement = false;
+        boolean showVowifiIcon = false;
 
         static Config readConfig(Context context) {
             Config config = new Config();
@@ -1222,6 +1248,8 @@ public class NetworkControllerImpl extends BroadcastReceiver
 
             config.enableRatIconEnhancement =
                     SystemProperties.getBoolean("persist.sysui.rat_icon_enhancement", false);
+            config.showVowifiIcon = res.getBoolean(R.bool.config_display_vowifi);
+
             return config;
         }
     }

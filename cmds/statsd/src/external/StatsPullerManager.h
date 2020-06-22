@@ -78,11 +78,12 @@ public:
                                     wp<PullDataReceiver> receiver);
 
     // Registers a pull uid provider for the config key. When pulling atoms, it will be used to
-    // determine which atoms to pull from.
+    // determine which uids to pull from.
     virtual void RegisterPullUidProvider(const ConfigKey& configKey, wp<PullUidProvider> provider);
 
     // Unregister a pull uid provider.
-    virtual void UnregisterPullUidProvider(const ConfigKey& configKey);
+    virtual void UnregisterPullUidProvider(const ConfigKey& configKey,
+                                           wp<PullUidProvider> provider);
 
     // Verify if we know how to pull for this matcher
     bool PullerForMatcherExists(int tagId) const;
@@ -100,11 +101,11 @@ public:
     //      registered for any of the uids for this atom.
     // If the metric wants to make any change to the data, like timestamps, they
     // should make a copy as this data may be shared with multiple metrics.
-    virtual bool Pull(int tagId, const ConfigKey& configKey,
+    virtual bool Pull(int tagId, const ConfigKey& configKey, const int64_t eventTimeNs,
                       vector<std::shared_ptr<LogEvent>>* data, bool useUids = true);
 
     // Same as above, but directly specify the allowed uids to pull from.
-    virtual bool Pull(int tagId, const vector<int32_t>& uids,
+    virtual bool Pull(int tagId, const vector<int32_t>& uids, const int64_t eventTimeNs,
                       vector<std::shared_ptr<LogEvent>>* data, bool useUids = true);
 
     // Clear pull data cache immediately.
@@ -151,11 +152,11 @@ private:
     // mapping from Config Key to the PullUidProvider for that config
     std::map<ConfigKey, wp<PullUidProvider>> mPullUidProviders;
 
-    bool PullLocked(int tagId, const ConfigKey& configKey, vector<std::shared_ptr<LogEvent>>* data,
-                    bool useUids = true);
+    bool PullLocked(int tagId, const ConfigKey& configKey, const int64_t eventTimeNs,
+                    vector<std::shared_ptr<LogEvent>>* data, bool useUids = true);
 
-    bool PullLocked(int tagId, const vector<int32_t>& uids, vector<std::shared_ptr<LogEvent>>* data,
-                    bool useUids);
+    bool PullLocked(int tagId, const vector<int32_t>& uids, const int64_t eventTimeNs,
+                    vector<std::shared_ptr<LogEvent>>* data, bool useUids);
 
     // locks for data receiver and StatsCompanionService changes
     std::mutex mLock;
@@ -180,6 +181,8 @@ private:
     FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents);
     FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_LateAlarm);
     FRIEND_TEST(ValueMetricE2eTest, TestPulledEvents_WithActivation);
+
+    FRIEND_TEST(StatsLogProcessorTest, TestPullUidProviderSetOnConfigUpdate);
 };
 
 }  // namespace statsd

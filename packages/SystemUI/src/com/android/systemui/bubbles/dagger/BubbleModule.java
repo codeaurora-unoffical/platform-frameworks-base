@@ -16,10 +16,14 @@
 
 package com.android.systemui.bubbles.dagger;
 
+import android.app.INotificationManager;
 import android.content.Context;
+import android.view.WindowManager;
 
+import com.android.internal.statusbar.IStatusBarService;
 import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.bubbles.BubbleData;
+import com.android.systemui.bubbles.BubbleDataRepository;
 import com.android.systemui.dump.DumpManager;
 import com.android.systemui.model.SysUiState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
@@ -64,14 +68,18 @@ public interface BubbleModule {
             FeatureFlags featureFlags,
             DumpManager dumpManager,
             FloatingContentCoordinator floatingContentCoordinator,
-            SysUiState sysUiState) {
+            BubbleDataRepository bubbleDataRepository,
+            SysUiState sysUiState,
+            INotificationManager notifManager,
+            IStatusBarService statusBarService,
+            WindowManager windowManager) {
         return new BubbleController(
                 context,
                 notificationShadeWindowController,
                 statusBarStateController,
                 shadeController,
                 data,
-                /* synchronizer */null,
+                null /* synchronizer */,
                 configurationController,
                 interruptionStateProvider,
                 zenModeController,
@@ -82,6 +90,10 @@ public interface BubbleModule {
                 featureFlags,
                 dumpManager,
                 floatingContentCoordinator,
-                sysUiState);
+                bubbleDataRepository,
+                sysUiState,
+                notifManager,
+                statusBarService,
+                windowManager);
     }
 }
