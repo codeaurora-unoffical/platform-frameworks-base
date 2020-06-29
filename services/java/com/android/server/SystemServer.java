@@ -24,6 +24,7 @@ import static android.view.Display.DEFAULT_DISPLAY;
 
 import android.annotation.NonNull;
 import android.annotation.StringRes;
+import android.app.ActivityManager;
 import android.app.ActivityThread;
 import android.app.INotificationManager;
 import android.app.usage.UsageStatsManagerInternal;
@@ -1004,18 +1005,6 @@ public final class SystemServer {
             ServiceManager.addService("vibrator", vibrator);
             traceEnd();
 
-            traceBeginAndSlog("StartDynamicSystemService");
-            dynamicSystem = new DynamicSystemService(context);
-            ServiceManager.addService("dynamic_system", dynamicSystem);
-            traceEnd();
-
-            if (!isWatch) {
-                traceBeginAndSlog("StartConsumerIrService");
-                consumerIr = new ConsumerIrService(context);
-                ServiceManager.addService(Context.CONSUMER_IR_SERVICE, consumerIr);
-                traceEnd();
-            }
-
             traceBeginAndSlog("StartAlarmManagerService");
             mSystemServiceManager.startService(new AlarmManagerService(context));
             traceEnd();
@@ -1537,10 +1526,6 @@ public final class SystemServer {
                 traceEnd();
             }
 
-            traceBeginAndSlog("StartDockObserver");
-            mSystemServiceManager.startService(DockObserver.class);
-            traceEnd();
-
             if (isWatch) {
                 traceBeginAndSlog("StartThermalObserver");
                 mSystemServiceManager.startService(THERMAL_OBSERVER_CLASS);
@@ -1725,10 +1710,10 @@ public final class SystemServer {
                 traceEnd();
             }
 
-            // Dreams (interactive idle-time views, a/k/a screen savers, and doze mode)
-            traceBeginAndSlog("StartDreamManager");
-            mSystemServiceManager.startService(DreamManagerService.class);
-            traceEnd();
+	    // Dreams (interactive idle-time views, a/k/a screen savers, and doze mode)
+	    traceBeginAndSlog("StartDreamManager");
+	    mSystemServiceManager.startService(DreamManagerService.class);
+	    traceEnd();
 
             traceBeginAndSlog("AddGraphicsStatsService");
             ServiceManager.addService(GraphicsStatsService.GRAPHICS_STATS_SERVICE,
@@ -1938,10 +1923,12 @@ public final class SystemServer {
             mActivityManagerService.enterSafeMode();
         }
 
-        // MMS service broker
-        traceBeginAndSlog("StartMmsService");
-        mmsService = mSystemServiceManager.startService(MmsServiceBroker.class);
-        traceEnd();
+        if (!ActivityManager.isLowRamDeviceStatic()) {
+            // MMS service broker
+            traceBeginAndSlog("StartMmsService");
+            mmsService = mSystemServiceManager.startService(MmsServiceBroker.class);
+            traceEnd();
+        }
 
         if (mPackageManager.hasSystemFeature(PackageManager.FEATURE_AUTOFILL)) {
             traceBeginAndSlog("StartAutoFillService");
