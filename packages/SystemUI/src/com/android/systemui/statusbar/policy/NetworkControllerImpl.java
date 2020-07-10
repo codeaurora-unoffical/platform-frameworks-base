@@ -41,6 +41,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PersistableBundle;
+import android.os.SystemProperties;
 import android.provider.Settings;
 import android.telephony.CarrierConfigManager;
 import android.telephony.PhoneStateListener;
@@ -1164,6 +1165,9 @@ public class NetworkControllerImpl extends BroadcastReceiver
         boolean hideNoInternetState = false;
         boolean showVolteIcon = false;
         boolean alwaysShowNetworkTypeIcon = false;
+        boolean enableRatIconEnhancement = false;
+        boolean showVowifiIcon = false;
+
         /**
          * Mapping from NR 5G status string to an integer. The NR 5G status string should match
          * those in carrier config.
@@ -1226,6 +1230,10 @@ public class NetworkControllerImpl extends BroadcastReceiver
                         b.getInt(CarrierConfigManager.KEY_5G_ICON_DISPLAY_GRACE_PERIOD_SEC_INT),
                         config);
             }
+            config.enableRatIconEnhancement =
+                    SystemProperties.getBoolean("persist.sysui.rat_icon_enhancement", false);
+            config.showVowifiIcon = res.getBoolean(R.bool.config_display_vowifi);
+
             return config;
         }
 
