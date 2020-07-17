@@ -3129,8 +3129,7 @@ public class PackageManagerService extends IPackageManager.Stub
 
             mWellbeingPackage = getWellbeingPackageName();
             mDocumenterPackage = getDocumenterPackageName();
-            mConfiguratorPackage =
-                    mContext.getString(R.string.config_deviceConfiguratorPackageName);
+            mConfiguratorPackage = getDeviceConfiguratorPackageName();
             mAppPredictionServicePackage = getAppPredictionServicePackageName();
             mIncidentReportApproverPackage = getIncidentReportApproverPackageName();
 
@@ -18166,36 +18165,48 @@ public class PackageManagerService extends IPackageManager.Stub
         int count = 0;
         final String packageName = pkg.packageName;
 
+        boolean handlesWebUris = false;
+        final boolean alreadyVerified;
         synchronized (mPackages) {
             // If this is a new install and we see that we've already run verification for this
             // package, we have nothing to do: it means the state was restored from backup.
-            if (!replacing) {
-                IntentFilterVerificationInfo ivi =
-                        mSettings.getIntentFilterVerificationLPr(packageName);
-                if (ivi != null) {
-                    if (DEBUG_DOMAIN_VERIFICATION) {
-                        Slog.i(TAG, "Package " + packageName+ " already verified: status="
-                                + ivi.getStatusString());
-                    }
-                    return;
+            final IntentFilterVerificationInfo ivi =
+                    mSettings.getIntentFilterVerificationLPr(packageName);
+            alreadyVerified = (ivi != null);
+            if (!replacing && alreadyVerified) {
+                if (DEBUG_DOMAIN_VERIFICATION) {
+                    Slog.i(TAG, "Package " + packageName + " already verified: status="
+                            + ivi.getStatusString());
                 }
+                return;
             }
 
-            // If any filters need to be verified, then all need to be.
+            // If any filters need to be verified, then all need to be.  In addition, we need to
+            // know whether an updating app has any web navigation intent filters, to re-
+            // examine handling policy even if not re-verifying.
             boolean needToVerify = false;
             for (PackageParser.Activity a : pkg.activities) {
                 for (ActivityIntentInfo filter : a.intents) {
+                    if (filter.handlesWebUris(true)) {
+                        handlesWebUris = true;
+                    }
                     if (filter.needsVerification() && needsNetworkVerificationLPr(filter)) {
                         if (DEBUG_DOMAIN_VERIFICATION) {
                             Slog.d(TAG,
                                     "Intent filter needs verification, so processing all filters");
                         }
                         needToVerify = true;
+                        // It's safe to break out here because filter.needsVerification()
+                        // can only be true if filter.handlesWebUris(true) returns true, so
+                        // we've already noted that.
                         break;
                     }
                 }
             }
 
+            // Note whether this app publishes any web navigation handling support at all,
+            // and whether there are any web-nav filters that fit the profile for running
+            // a verification pass now.
             if (needToVerify) {
                 final int verificationId = mIntentFilterVerificationToken++;
                 for (PackageParser.Activity a : pkg.activities) {
@@ -18213,13 +18224,23 @@ public class PackageManagerService extends IPackageManager.Stub
         }
 
         if (count > 0) {
+            // count > 0 means that we're running a full verification pass
             if (DEBUG_DOMAIN_VERIFICATION) Slog.d(TAG, "Starting " + count
                     + " IntentFilter verification" + (count > 1 ? "s" : "")
                     +  " for userId:" + userId);
             mIntentFilterVerifier.startVerifications(userId);
+        } else if (alreadyVerified && handlesWebUris) {
+            // App used autoVerify in the past, no longer does, but still handles web
+            // navigation starts.
+            if (DEBUG_DOMAIN_VERIFICATION) {
+                Slog.d(TAG, "App changed web filters but no longer verifying - resetting policy");
+            }
+            synchronized (mPackages) {
+                clearIntentFilterVerificationsLPw(packageName, userId);
+            }
         } else {
             if (DEBUG_DOMAIN_VERIFICATION) {
-                Slog.d(TAG, "No filters or not all autoVerify for " + packageName);
+                Slog.d(TAG, "No web filters or no prior verify policy for " + packageName);
             }
         }
     }
@@ -21200,7 +21221,8 @@ public class PackageManagerService extends IPackageManager.Stub
 
     @Override
     public String getSystemTextClassifierPackageName() {
-        return mContext.getString(R.string.config_defaultTextClassifierPackage);
+        return ensureSystemPackageName(mContext.getString(
+                R.string.config_defaultTextClassifierPackage));
     }
 
     @Override
@@ -21210,7 +21232,7 @@ public class PackageManagerService extends IPackageManager.Stub
         if (flattenedComponentName != null) {
             ComponentName componentName = ComponentName.unflattenFromString(flattenedComponentName);
             if (componentName != null && componentName.getPackageName() != null) {
-                return componentName.getPackageName();
+                return ensureSystemPackageName(componentName.getPackageName());
             }
         }
         return null;
@@ -21235,9 +21257,15 @@ public class PackageManagerService extends IPackageManager.Stub
         }
     }
 
+    @Nullable
+    private String getDeviceConfiguratorPackageName() {
+        return ensureSystemPackageName(mContext.getString(
+                R.string.config_deviceConfiguratorPackageName));
+    }
+
     @Override
     public String getWellbeingPackageName() {
-        return mContext.getString(R.string.config_defaultWellbeingPackage);
+        return ensureSystemPackageName(mContext.getString(R.string.config_defaultWellbeingPackage));
     }
 
     @Override
@@ -21252,7 +21280,7 @@ public class PackageManagerService extends IPackageManager.Stub
         if (appPredictionServiceComponentName == null) {
             return null;
         }
-        return appPredictionServiceComponentName.getPackageName();
+        return ensureSystemPackageName(appPredictionServiceComponentName.getPackageName());
     }
 
     @Override
@@ -21269,11 +21297,33 @@ public class PackageManagerService extends IPackageManager.Stub
         if (systemCaptionsServiceComponentName == null) {
             return null;
         }
-        return systemCaptionsServiceComponentName.getPackageName();
+        return ensureSystemPackageName(systemCaptionsServiceComponentName.getPackageName());
     }
 
     public String getIncidentReportApproverPackageName() {
-        return mContext.getString(R.string.config_incidentReportApproverPackage);
+        return ensureSystemPackageName(mContext.getString(
+                R.string.config_incidentReportApproverPackage));
+    }
+
+    @Nullable
+    private String ensureSystemPackageName(@Nullable String packageName) {
+        if (packageName == null) {
+            return null;
+        }
+        long token = Binder.clearCallingIdentity();
+        try {
+            if (getPackageInfo(packageName, MATCH_FACTORY_ONLY, UserHandle.USER_SYSTEM) == null) {
+                PackageInfo packageInfo = getPackageInfo(packageName, 0, UserHandle.USER_SYSTEM);
+                if (packageInfo != null) {
+                    EventLog.writeEvent(0x534e4554, "145981139", packageInfo.applicationInfo.uid,
+                            "");
+                }
+                return null;
+            }
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+        return packageName;
     }
 
     @Override
@@ -23796,6 +23846,13 @@ public class PackageManagerService extends IPackageManager.Stub
             mPermissionManager.updateAllPermissions(
                     StorageManager.UUID_PRIVATE_INTERNAL, true, mPackages.values(),
                     mPermissionCallback);
+        }
+    }
+
+    boolean readPermissionStateForUser(@UserIdInt int userId) {
+        synchronized (mPackages) {
+            mSettings.readPermissionStateForUserSyncLPr(userId);
+            return mSettings.areDefaultRuntimePermissionsGrantedLPr(userId);
         }
     }
 
