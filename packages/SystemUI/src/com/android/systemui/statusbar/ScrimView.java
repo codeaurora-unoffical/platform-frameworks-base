@@ -37,6 +37,7 @@ import android.view.Display;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.animation.Interpolator;
+import android.view.MotionEvent;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.colorextraction.ColorExtractor;
@@ -124,6 +125,12 @@ public class ScrimView extends View implements ConfigurationController.Configura
         // since it's independent from view bounds.
         ConfigurationController config = Dependency.get(ConfigurationController.class);
         config.addCallback(this);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        setClickable(false);
+        return super.onTouchEvent(event);
     }
 
     @Override
