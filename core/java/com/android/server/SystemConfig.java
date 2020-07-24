@@ -986,6 +986,14 @@ public class SystemConfig {
     }
 
     private void addFeature(String name, int version) {
+        /* disable aware by vendor prop */
+        if (PackageManager.FEATURE_WIFI_AWARE.equals(name)) {
+            if (!SystemProperties.getBoolean("ro.vendor.wlan.aware", true)) {
+                Slog.w(TAG, "<" + name + "> not supported due to ro.vendor.wlan.aware is false");
+                return;
+            }
+        }
+
         FeatureInfo fi = mAvailableFeatures.get(name);
         if (fi == null) {
             fi = new FeatureInfo();
