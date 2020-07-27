@@ -1182,8 +1182,8 @@ public class WifiConfiguration implements Parcelable {
     /**
      * @hide
      * Wifi Identity to identify on which interface this configuration is allowed.
-     * it should take one of WifiManager.STA_SHARED/STA_PRIMARY/STA_SECONDARY.
-     * default value: WifiManager.STA_SHARED.
+     * it should take one of WifiManager.STA_PRIMARY/STA_SECONDARY.
+     * default value: WifiManager.STA_PRIMARY.
      */
     public int staId;
 
@@ -1900,7 +1900,7 @@ public class WifiConfiguration implements Parcelable {
         dppNetAccessKeyExpiry = -1;
         dppCsign = null;
         oweTransIfaceName = null;
-        staId = WifiManager.STA_SHARED;
+        staId = WifiManager.STA_PRIMARY;
         linkedNetworkId = INVALID_NETWORK_ID;
     }
 
@@ -2239,15 +2239,23 @@ public class WifiConfiguration implements Parcelable {
                 throw new IllegalStateException("Not an EAP network");
             }
 
-            return trimStringForKeyId(SSID) + "_" + keyMgmt + "_" +
-                    trimStringForKeyId(enterpriseConfig.getKeyId(current != null ?
-                            current.enterpriseConfig : null));
+            String keyId = trimStringForKeyId(SSID) + "_" + keyMgmt + "_"
+                    + trimStringForKeyId(enterpriseConfig.getKeyId(current != null
+                    ? current.enterpriseConfig : null));
+
+            if (!fromWifiNetworkSuggestion) {
+                return keyId;
+            }
+            return keyId + "_" + trimStringForKeyId(BSSID) + "_" + trimStringForKeyId(creatorName);
         } catch (NullPointerException e) {
             throw new IllegalStateException("Invalid config details");
         }
     }
 
     private String trimStringForKeyId(String string) {
+        if (string == null) {
+            return "";
+        }
         // Remove quotes and spaces
         return string.replace("\"", "").replace(" ", "");
     }
