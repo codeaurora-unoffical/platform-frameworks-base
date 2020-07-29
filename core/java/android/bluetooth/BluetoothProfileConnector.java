@@ -117,7 +117,6 @@ public abstract class BluetoothProfileConnector<T> {
             } finally {
                 if (mServiceListener != null) {
                     mServiceListener.onServiceDisconnected(mProfileId);
-                    mServiceListener = null;
                 }
             }
         }
@@ -147,6 +146,9 @@ public abstract class BluetoothProfileConnector<T> {
             }
         }
         doUnbind();
+        // Move clear here to ensure profile listener in CarService can listen
+        // and collect Bluetooth profile proxy connections after BT OFF to ON.
+        mServiceListener = null;
     }
 
     T getService() {
