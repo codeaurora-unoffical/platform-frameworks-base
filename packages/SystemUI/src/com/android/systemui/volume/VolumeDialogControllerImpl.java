@@ -386,6 +386,7 @@ public class VolumeDialogControllerImpl implements VolumeDialogController, Dumpa
         updateStatusBar();
         // if status bar isn't null, check if phone is in AOD, else check flags
         // since we could be using a different status bar
+        notifyVisible(true);
         return mStatusBar != null ?
                 mStatusBar.getWakefulnessState() != WakefulnessLifecycle.WAKEFULNESS_ASLEEP
                 && mStatusBar.getWakefulnessState() !=
