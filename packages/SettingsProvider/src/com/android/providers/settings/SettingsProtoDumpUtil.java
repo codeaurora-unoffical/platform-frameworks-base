@@ -376,6 +376,9 @@ class SettingsProtoDumpUtil {
                 Settings.Global.BUGREPORT_IN_POWER_MENU,
                 GlobalSettingsProto.BUGREPORT_IN_POWER_MENU);
         dumpSetting(s, p,
+                Settings.Global.CACHED_APPS_FREEZER_ENABLED,
+                GlobalSettingsProto.CACHED_APPS_FREEZER_ENABLED);
+        dumpSetting(s, p,
                 Settings.Global.CALL_AUTO_RETRY,
                 GlobalSettingsProto.CALL_AUTO_RETRY);
 
@@ -1127,6 +1130,10 @@ class SettingsProtoDumpUtil {
         dumpSetting(s, p,
                 Settings.Global.NSD_ON,
                 GlobalSettingsProto.NSD_ON);
+
+        dumpSetting(s, p,
+                Settings.Global.NR_NSA_TRACKING_SCREEN_OFF_MODE,
+                GlobalSettingsProto.NR_NSA_TRACKING_SCREEN_OFF_MODE);
 
         final long ntpToken = p.start(GlobalSettingsProto.NTP);
         dumpSetting(s, p,

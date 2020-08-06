@@ -41,6 +41,9 @@ import android.util.Log;
 import androidx.annotation.VisibleForTesting;
 
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.UiEvent;
+import com.android.internal.logging.UiEventLogger;
+import com.android.internal.logging.UiEventLoggerImpl;
 import com.android.internal.logging.nano.MetricsProto;
 import com.android.systemui.plugins.SensorManagerPlugin;
 import com.android.systemui.statusbar.phone.DozeParameters;
@@ -56,8 +59,8 @@ import java.util.function.Consumer;
 public class DozeSensors {
 
     private static final boolean DEBUG = DozeService.DEBUG;
-
     private static final String TAG = "DozeSensors";
+    private static final UiEventLogger UI_EVENT_LOGGER = new UiEventLoggerImpl();
 
     private final Context mContext;
     private final AlarmManager mAlarmManager;
@@ -79,9 +82,27 @@ public class DozeSensors {
     private boolean mListening;
     private boolean mPaused;
 
+    @VisibleForTesting
+    public enum DozeSensorsUiEvent implements UiEventLogger.UiEventEnum {
+        @UiEvent(doc = "User performs pickup gesture that activates the ambient display")
+        ACTION_AMBIENT_GESTURE_PICKUP(459);
+
+        private final int mId;
+
+        DozeSensorsUiEvent(int id) {
+            mId = id;
+        }
+
+        @Override
+        public int getId() {
+            return mId;
+        }
+    }
+
     public DozeSensors(Context context, AlarmManager alarmManager, AsyncSensorManager sensorManager,
             DozeParameters dozeParameters, AmbientDisplayConfiguration config, WakeLock wakeLock,
-            Callback callback, Consumer<Boolean> proxCallback, DozeLog dozeLog) {
+            Callback callback, Consumer<Boolean> proxCallback, DozeLog dozeLog,
+            ProximitySensor proximitySensor) {
         mContext = context;
         mAlarmManager = alarmManager;
         mSensorManager = sensorManager;
@@ -91,6 +112,7 @@ public class DozeSensors {
         mProxCallback = proxCallback;
         mResolver = mContext.getContentResolver();
         mCallback = callback;
+        mProximitySensor = proximitySensor;
 
         boolean alwaysOn = mConfig.alwaysOnEnabled(UserHandle.USER_CURRENT);
         mSensors = new TriggerSensor[] {
@@ -153,7 +175,6 @@ public class DozeSensors {
                         dozeLog),
         };
 
-        mProximitySensor = new ProximitySensor(context.getResources(), sensorManager);
         setProxListening(false);  // Don't immediately start listening when we register.
         mProximitySensor.register(
                 proximityEvent -> {
@@ -416,6 +437,7 @@ public class DozeSensors {
                     MetricsLogger.action(
                             mContext, MetricsProto.MetricsEvent.ACTION_AMBIENT_GESTURE,
                             subType);
+                    UI_EVENT_LOGGER.log(DozeSensorsUiEvent.ACTION_AMBIENT_GESTURE_PICKUP);
                 }
 
                 mRegistered = false;

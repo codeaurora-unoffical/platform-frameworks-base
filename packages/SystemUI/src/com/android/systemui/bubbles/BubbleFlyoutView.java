@@ -31,6 +31,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PointF;
 import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.ShapeDrawable;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
@@ -186,6 +187,9 @@ public class BubbleFlyoutView extends FrameLayout {
             }
         });
 
+        // Use locale direction so the text is aligned correctly.
+        setLayoutDirection(LAYOUT_DIRECTION_LOCALE);
+
         mBgPaint.setColor(mFloatingBackgroundColor);
 
         mLeftTriangleShape =
@@ -220,9 +224,10 @@ public class BubbleFlyoutView extends FrameLayout {
             float[] dotCenter,
             boolean hideDot) {
 
-        if (flyoutMessage.senderAvatar != null && flyoutMessage.isGroupChat) {
+        final Drawable senderAvatar = flyoutMessage.senderAvatar;
+        if (senderAvatar != null && flyoutMessage.isGroupChat) {
             mSenderAvatar.setVisibility(VISIBLE);
-            mSenderAvatar.setImageDrawable(flyoutMessage.senderAvatar);
+            mSenderAvatar.setImageDrawable(senderAvatar);
         } else {
             mSenderAvatar.setVisibility(GONE);
             mSenderAvatar.setTranslationX(0);
@@ -230,8 +235,12 @@ public class BubbleFlyoutView extends FrameLayout {
             mSenderText.setTranslationX(0);
         }
 
+        final int maxTextViewWidth =
+                (int) (parentWidth * FLYOUT_MAX_WIDTH_PERCENT) - mFlyoutPadding * 2;
+
         // Name visibility
         if (!TextUtils.isEmpty(flyoutMessage.senderName)) {
+            mSenderText.setMaxWidth(maxTextViewWidth);
             mSenderText.setText(flyoutMessage.senderName);
             mSenderText.setVisibility(VISIBLE);
         } else {
@@ -248,8 +257,7 @@ public class BubbleFlyoutView extends FrameLayout {
         // Set the flyout TextView's max width in terms of percent, and then subtract out the
         // padding so that the entire flyout view will be the desired width (rather than the
         // TextView being the desired width + extra padding).
-        mMessageText.setMaxWidth(
-                (int) (parentWidth * FLYOUT_MAX_WIDTH_PERCENT) - mFlyoutPadding * 2);
+        mMessageText.setMaxWidth(maxTextViewWidth);
         mMessageText.setText(flyoutMessage.message);
 
         // Wait for the TextView to lay out so we know its line count.

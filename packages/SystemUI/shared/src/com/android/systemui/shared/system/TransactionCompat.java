@@ -18,9 +18,8 @@ package com.android.systemui.shared.system;
 
 import android.graphics.Matrix;
 import android.graphics.Rect;
-import android.view.Surface;
-import android.view.SurfaceControl.Transaction;
 import android.view.SurfaceControl;
+import android.view.SurfaceControl.Transaction;
 
 public class TransactionCompat {
 
@@ -100,13 +99,22 @@ public class TransactionCompat {
         return this;
     }
 
+    @Deprecated
     public TransactionCompat setEarlyWakeup() {
-        mTransaction.setEarlyWakeup();
         return this;
     }
 
     public TransactionCompat setColor(SurfaceControlCompat surfaceControl, float[] color) {
         mTransaction.setColor(surfaceControl.mSurfaceControl, color);
         return this;
+    }
+
+    public static void deferTransactionUntil(Transaction t, SurfaceControl surfaceControl,
+            SurfaceControl barrier, long frameNumber) {
+        t.deferTransactionUntil(surfaceControl, barrier, frameNumber);
+    }
+
+    @Deprecated
+    public static void setEarlyWakeup(Transaction t) {
     }
 }

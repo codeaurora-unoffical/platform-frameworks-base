@@ -155,6 +155,7 @@
     <!-- Screen Recording -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT"/>
 
     <!-- Assist -->
     <uses-permission android:name="android.permission.ACCESS_VOICE_INTERACTION_SERVICE" />
@@ -259,6 +260,12 @@
     <!-- Permission to register process observer -->
     <uses-permission android:name="android.permission.SET_ACTIVITY_WATCHER"/>
 
+    <!-- Restore settings (used by QS) even if they have been modified -->
+    <uses-permission android:name="android.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE" />
+
+    <!-- Permission to make accessibility service access Bubbles -->
+    <uses-permission android:name="android.permission.ADD_TRUSTED_DISPLAY" />
+
     <protected-broadcast android:name="com.android.settingslib.action.REGISTER_SLICE_RECEIVER" />
     <protected-broadcast android:name="com.android.settingslib.action.UNREGISTER_SLICE_RECEIVER" />
     <protected-broadcast android:name="com.android.settings.flashlight.action.FLASHLIGHT_CHANGED" />
@@ -322,6 +329,7 @@
 
         <activity android:name=".screenrecord.ScreenRecordDialog"
             android:theme="@style/ScreenRecord"
+            android:showForAllUsers="true"
             android:excludeFromRecents="true" />
         <service android:name=".screenrecord.RecordingService" />
 
@@ -603,7 +611,7 @@
                   android:excludeFromRecents="true"
                   android:stateNotNeeded="true"
                   android:resumeWhilePausing="true"
-                  android:theme="@android:style/Theme.Black.NoTitleBar">
+                  android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen">
             <intent-filter>
                 <action android:name="android.app.action.CONFIRM_DEVICE_CREDENTIAL_WITH_USER" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -682,6 +690,7 @@
         </activity>
 
         <activity android:name=".controls.management.ControlsEditingActivity"
+                  android:label="@string/controls_menu_edit"
                   android:theme="@style/Theme.ControlsManagement"
                   android:excludeFromRecents="true"
                   android:noHistory="true"
@@ -719,7 +728,7 @@
             android:finishOnCloseSystemDialogs="true"
             android:showForAllUsers="true"
             android:clearTaskOnLaunch="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleInstance"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden"
             android:excludeFromRecents="true"
             android:visibleToInstantApps="true"/>
@@ -759,7 +768,8 @@
         <provider
             android:name="com.android.keyguard.clock.ClockOptionsProvider"
             android:authorities="com.android.keyguard.clock"
-            android:exported="true"
+            android:enabled="false"
+            android:exported="false"
             android:grantUriPermissions="true">
         </provider>
 

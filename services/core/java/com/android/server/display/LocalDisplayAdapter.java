@@ -201,7 +201,6 @@ final class LocalDisplayAdapter extends DisplayAdapter {
         private SurfaceControl.DisplayConfig[] mDisplayConfigs;
         private Spline mSystemBrightnessToNits;
         private Spline mNitsToHalBrightness;
-        private boolean mHalBrightnessSupport;
 
         private DisplayDeviceConfig mDisplayDeviceConfig;
 
@@ -225,7 +224,6 @@ final class LocalDisplayAdapter extends DisplayAdapter {
             }
             mAllmSupported = SurfaceControl.getAutoLowLatencyModeSupport(displayToken);
             mGameContentTypeSupported = SurfaceControl.getGameContentTypeSupport(displayToken);
-            mHalBrightnessSupport = SurfaceControl.getDisplayBrightnessSupport(displayToken);
             mDisplayDeviceConfig = null;
             // Defer configuration file loading
             BackgroundThread.getHandler().sendMessage(PooledLambda.obtainMessage(
@@ -579,6 +577,8 @@ final class LocalDisplayAdapter extends DisplayAdapter {
                     mInfo.name = getContext().getResources().getString(
                             com.android.internal.R.string.display_manager_hdmi_display_name);
                 }
+                // The display is trusted since it is created by system.
+                mInfo.flags |= DisplayDeviceInfo.FLAG_TRUSTED;
             }
             return mInfo;
         }
@@ -717,11 +717,10 @@ final class LocalDisplayAdapter extends DisplayAdapter {
                         Trace.traceBegin(Trace.TRACE_TAG_POWER, "setDisplayBrightness("
                                 + "id=" + physicalDisplayId + ", brightness=" + brightness + ")");
                         try {
-                            // TODO: make it float
                             if (isHalBrightnessRangeSpecified()) {
                                 brightness = displayBrightnessToHalBrightness(
-                                        BrightnessSynchronizer.brightnessFloatToInt(getContext(),
-                                                brightness));
+                                        BrightnessSynchronizer.brightnessFloatToIntRange(
+                                                getContext(), brightness));
                             }
                             if (mBacklight != null) {
                                 mBacklight.setBrightness(brightness);
@@ -744,12 +743,13 @@ final class LocalDisplayAdapter extends DisplayAdapter {
                      * Hal brightness space if the HAL brightness space has been provided via
                      * a display device configuration file.
                      */
-                    private float displayBrightnessToHalBrightness(int brightness) {
+                    private float displayBrightnessToHalBrightness(float brightness) {
                         if (!isHalBrightnessRangeSpecified()) {
                             return PowerManager.BRIGHTNESS_INVALID_FLOAT;
                         }
 
-                        if (brightness == 0) {
+                        if (BrightnessSynchronizer.floatEquals(
+                                brightness, PowerManager.BRIGHTNESS_OFF)) {
                             return PowerManager.BRIGHTNESS_OFF_FLOAT;
                         }
 

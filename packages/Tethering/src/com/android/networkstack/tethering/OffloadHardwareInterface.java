@@ -16,8 +16,11 @@
 
 package com.android.networkstack.tethering;
 
+import static android.net.netlink.StructNlMsgHdr.NLM_F_DUMP;
+import static android.net.netlink.StructNlMsgHdr.NLM_F_REQUEST;
 import static android.net.util.TetheringUtils.uint16;
 
+import android.annotation.NonNull;
 import android.hardware.tetheroffload.config.V1_0.IOffloadConfig;
 import android.hardware.tetheroffload.control.V1_0.IOffloadControl;
 import android.hardware.tetheroffload.control.V1_0.ITetheringOffloadCallback;
@@ -25,6 +28,7 @@ import android.hardware.tetheroffload.control.V1_0.NatTimeoutUpdate;
 import android.hardware.tetheroffload.control.V1_0.NetworkProtocol;
 import android.hardware.tetheroffload.control.V1_0.OffloadCallbackEvent;
 import android.net.netlink.NetlinkSocket;
+import android.net.netlink.StructNlMsgHdr;
 import android.net.util.SharedLog;
 import android.net.util.SocketUtils;
 import android.os.Handler;
@@ -37,9 +41,11 @@ import android.system.OsConstants;
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.FileDescriptor;
+import java.io.InterruptedIOException;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.net.SocketException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.NoSuchElementException;
 
@@ -63,9 +69,15 @@ public class OffloadHardwareInterface {
     private static final int NF_NETLINK_CONNTRACK_NEW = 1;
     private static final int NF_NETLINK_CONNTRACK_UPDATE = 2;
     private static final int NF_NETLINK_CONNTRACK_DESTROY = 4;
+    // Reference libnetfilter_conntrack/linux_nfnetlink_conntrack.h
+    public static final short NFNL_SUBSYS_CTNETLINK = 1;
+    public static final short IPCTNL_MSG_CT_GET = 1;
+
+    private final long NETLINK_MESSAGE_TIMEOUT_MS = 500;
 
     private final Handler mHandler;
     private final SharedLog mLog;
+    private final Dependencies mDeps;
     private IOffloadControl mOffloadControl;
     private TetheringOffloadCallback mTetheringOffloadCallback;
     private ControlCallback mControlCallback;
@@ -126,8 +138,76 @@ public class OffloadHardwareInterface {
     }
 
     public OffloadHardwareInterface(Handler h, SharedLog log) {
+        this(h, log, new Dependencies(log));
+    }
+
+    OffloadHardwareInterface(Handler h, SharedLog log, Dependencies deps) {
         mHandler = h;
         mLog = log.forSubComponent(TAG);
+        mDeps = deps;
+    }
+
+    /** Capture OffloadHardwareInterface dependencies, for injection. */
+    static class Dependencies {
+        private final SharedLog mLog;
+
+        Dependencies(SharedLog log) {
+            mLog = log;
+        }
+
+        public IOffloadConfig getOffloadConfig() {
+            try {
+                return IOffloadConfig.getService(true /*retry*/);
+            } catch (RemoteException | NoSuchElementException e) {
+                mLog.e("getIOffloadConfig error " + e);
+                return null;
+            }
+        }
+
+        public IOffloadControl getOffloadControl() {
+            try {
+                return IOffloadControl.getService(true /*retry*/);
+            } catch (RemoteException | NoSuchElementException e) {
+                mLog.e("tethering offload control not supported: " + e);
+                return null;
+            }
+        }
+
+        public NativeHandle createConntrackSocket(final int groups) {
+            final FileDescriptor fd;
+            try {
+                fd = NetlinkSocket.forProto(OsConstants.NETLINK_NETFILTER);
+            } catch (ErrnoException e) {
+                mLog.e("Unable to create conntrack socket " + e);
+                return null;
+            }
+
+            final SocketAddress sockAddr = SocketUtils.makeNetlinkSocketAddress(0, groups);
+            try {
+                Os.bind(fd, sockAddr);
+            } catch (ErrnoException | SocketException e) {
+                mLog.e("Unable to bind conntrack socket for groups " + groups + " error: " + e);
+                try {
+                    SocketUtils.closeSocket(fd);
+                } catch (IOException ie) {
+                    // Nothing we can do here
+                }
+                return null;
+            }
+            try {
+                Os.connect(fd, sockAddr);
+            } catch (ErrnoException | SocketException e) {
+                mLog.e("connect to kernel fail for groups " + groups + " error: " + e);
+                try {
+                    SocketUtils.closeSocket(fd);
+                } catch (IOException ie) {
+                    // Nothing we can do here
+                }
+                return null;
+            }
+
+            return new NativeHandle(fd, true);
+        }
     }
 
     /** Get default value indicating whether offload is supported. */
@@ -141,13 +221,7 @@ public class OffloadHardwareInterface {
      * share them with offload management process.
      */
     public boolean initOffloadConfig() {
-        IOffloadConfig offloadConfig;
-        try {
-            offloadConfig = IOffloadConfig.getService(true /*retry*/);
-        } catch (RemoteException | NoSuchElementException e) {
-            mLog.e("getIOffloadConfig error " + e);
-            return false;
-        }
+        final IOffloadConfig offloadConfig = mDeps.getOffloadConfig();
         if (offloadConfig == null) {
             mLog.e("Could not find IOffloadConfig service");
             return false;
@@ -159,11 +233,14 @@ public class OffloadHardwareInterface {
         //
         // h2    provides a file descriptor bound to the following netlink groups
         //       (NF_NETLINK_CONNTRACK_UPDATE | NF_NETLINK_CONNTRACK_DESTROY).
-        final NativeHandle h1 = createConntrackSocket(
+        final NativeHandle h1 = mDeps.createConntrackSocket(
                 NF_NETLINK_CONNTRACK_NEW | NF_NETLINK_CONNTRACK_DESTROY);
         if (h1 == null) return false;
 
-        final NativeHandle h2 = createConntrackSocket(
+        sendNetlinkMessage(h1, (short) ((NFNL_SUBSYS_CTNETLINK << 8) | IPCTNL_MSG_CT_GET),
+                           (short) (NLM_F_REQUEST | NLM_F_DUMP));
+
+        final NativeHandle h2 = mDeps.createConntrackSocket(
                 NF_NETLINK_CONNTRACK_UPDATE | NF_NETLINK_CONNTRACK_DESTROY);
         if (h2 == null) {
             closeFdInNativeHandle(h1);
@@ -189,6 +266,25 @@ public class OffloadHardwareInterface {
         return results.mSuccess;
     }
 
+    @VisibleForTesting
+    public void sendNetlinkMessage(@NonNull NativeHandle handle, short type, short flags) {
+        final int length = StructNlMsgHdr.STRUCT_SIZE;
+        final byte[] msg = new byte[length];
+        final StructNlMsgHdr nlh = new StructNlMsgHdr();
+        final ByteBuffer byteBuffer = ByteBuffer.wrap(msg);
+        nlh.nlmsg_len = length;
+        nlh.nlmsg_type = type;
+        nlh.nlmsg_flags = flags;
+        nlh.nlmsg_seq = 1;
+        nlh.pack(byteBuffer);
+        try {
+            NetlinkSocket.sendMessage(handle.getFileDescriptor(), msg, 0 /* offset */, length,
+                                      NETLINK_MESSAGE_TIMEOUT_MS);
+        } catch (ErrnoException | InterruptedIOException e) {
+            mLog.e("Unable to send netfilter message, error: " + e);
+        }
+    }
+
     private void closeFdInNativeHandle(final NativeHandle h) {
         try {
             h.close();
@@ -198,53 +294,12 @@ public class OffloadHardwareInterface {
         }
     }
 
-    private NativeHandle createConntrackSocket(final int groups) {
-        FileDescriptor fd;
-        try {
-            fd = NetlinkSocket.forProto(OsConstants.NETLINK_NETFILTER);
-        } catch (ErrnoException e) {
-            mLog.e("Unable to create conntrack socket " + e);
-            return null;
-        }
-
-        final SocketAddress sockAddr = SocketUtils.makeNetlinkSocketAddress(0, groups);
-        try {
-            Os.bind(fd, sockAddr);
-        } catch (ErrnoException | SocketException e) {
-            mLog.e("Unable to bind conntrack socket for groups " + groups + " error: " + e);
-            try {
-                SocketUtils.closeSocket(fd);
-            } catch (IOException ie) {
-                // Nothing we can do here
-            }
-            return null;
-        }
-        try {
-            Os.connect(fd, sockAddr);
-        } catch (ErrnoException | SocketException e) {
-            mLog.e("connect to kernel fail for groups " + groups + " error: " + e);
-            try {
-                SocketUtils.closeSocket(fd);
-            } catch (IOException ie) {
-                // Nothing we can do here
-            }
-            return null;
-        }
-
-        return new NativeHandle(fd, true);
-    }
-
     /** Initialize the tethering offload HAL. */
     public boolean initOffloadControl(ControlCallback controlCb) {
         mControlCallback = controlCb;
 
         if (mOffloadControl == null) {
-            try {
-                mOffloadControl = IOffloadControl.getService(true /*retry*/);
-            } catch (RemoteException | NoSuchElementException e) {
-                mLog.e("tethering offload control not supported: " + e);
-                return false;
-            }
+            mOffloadControl = mDeps.getOffloadControl();
             if (mOffloadControl == null) {
                 mLog.e("tethering IOffloadControl.getService() returned null");
                 return false;

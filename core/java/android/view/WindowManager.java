@@ -1162,7 +1162,7 @@ public interface WindowManager extends ViewManager {
 
         /**
          * Window type: shows directly above the keyguard. The layer is
-         * reserved for screenshot region selection. These windows must not take input focus.
+         * reserved for screenshot animation, region selection and UI.
          * In multiuser systems shows only on the owning user's window.
          * @hide
          */
@@ -1215,6 +1215,14 @@ public interface WindowManager extends ViewManager {
          * @hide
          */
         public static final int TYPE_STATUS_BAR_ADDITIONAL = FIRST_SYSTEM_WINDOW + 41;
+
+        /**
+         * Similar to TYPE_APPLICATION_OVERLAY, but trusted to overlay other windows since it is
+         * is coming from the system.
+         * @hide
+         */
+        // TODO(b/155781676): Remove and replace call points with trustedOverlay when that is ready.
+        public static final int TYPE_TRUSTED_APPLICATION_OVERLAY = FIRST_SYSTEM_WINDOW + 42;
 
         /**
          * End of types of system windows.
@@ -1446,11 +1454,22 @@ public interface WindowManager extends ViewManager {
         @Deprecated
         public static final int FLAG_LAYOUT_INSET_DECOR = 0x00010000;
 
-        /** Window flag: When set, input method can't interact with the focusable window
-         * and can be placed to use more space and cover the input method.
-         * Note: When combined with {@link #FLAG_NOT_FOCUSABLE}, this flag has no
-         * effect since input method cannot interact with windows having {@link #FLAG_NOT_FOCUSABLE}
-         * flag set.
+        /** Window flag: when set, inverts the input method focusability of the window.
+         *
+         * The effect of setting this flag depends on whether {@link #FLAG_NOT_FOCUSABLE} is set:
+         * <p>
+         * If {@link #FLAG_NOT_FOCUSABLE} is <em>not</em> set, i.e. when the window is focusable,
+         * setting this flag prevents this window from becoming the target of the input method.
+         * Consequently, it will <em>not</em> be able to interact with the input method,
+         * and will be layered above the input method (unless there is another input method
+         * target above it).
+         *
+         * <p>
+         * If {@link #FLAG_NOT_FOCUSABLE} <em>is</em> set, setting this flag requests for the window
+         * to be the input method target even though  the window is <em>not</em> focusable.
+         * Consequently, it will be layered below the input method.
+         * Note: Windows that set {@link #FLAG_NOT_FOCUSABLE} cannot interact with the input method,
+         * regardless of this flag.
          */
         public static final int FLAG_ALT_FOCUSABLE_IM = 0x00020000;
 
@@ -2134,13 +2153,12 @@ public interface WindowManager extends ViewManager {
          * focus.  In particular, this checks the
          * {@link #FLAG_NOT_FOCUSABLE} and {@link #FLAG_ALT_FOCUSABLE_IM}
          * flags and returns true if the combination of the two corresponds
-         * to a window that needs to be behind the input method so that the
-         * user can type into it.
+         * to a window that can use the input method.
          *
          * @param flags The current window manager flags.
          *
-         * @return Returns {@code true} if such a window should be behind/interact
-         * with an input method, {@code false} if not.
+         * @return Returns {@code true} if a window with the given flags would be able to
+         * use the input method, {@code false} if not.
          */
         public static boolean mayUseInputMethod(int flags) {
             return (flags & FLAG_NOT_FOCUSABLE) != FLAG_NOT_FOCUSABLE

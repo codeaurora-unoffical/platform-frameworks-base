@@ -63,6 +63,7 @@ import android.app.usage.UsageEvents;
 import android.appwidget.AppWidgetManager;
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -107,6 +108,10 @@ public class AppStandbyControllerTests {
     private static final int UID_1 = 10000;
     private static final String PACKAGE_EXEMPTED_1 = "com.android.exempted";
     private static final int UID_EXEMPTED_1 = 10001;
+    private static final String PACKAGE_SYSTEM_HEADFULL = "com.example.system.headfull";
+    private static final int UID_SYSTEM_HEADFULL = 10002;
+    private static final String PACKAGE_SYSTEM_HEADLESS = "com.example.system.headless";
+    private static final int UID_SYSTEM_HEADLESS = 10003;
     private static final int USER_ID = 0;
     private static final int USER_ID2 = 10;
     private static final UserHandle USER_HANDLE_USER2 = new UserHandle(USER_ID2);
@@ -165,6 +170,7 @@ public class AppStandbyControllerTests {
         long mElapsedRealtime;
         boolean mIsAppIdleEnabled = true;
         boolean mIsCharging;
+        boolean mIsRestrictedBucketEnabled = true;
         List<String> mNonIdleWhitelistApps = new ArrayList<>();
         boolean mDisplayOn;
         DisplayManager.DisplayListener mDisplayListener;
@@ -207,8 +213,13 @@ public class AppStandbyControllerTests {
         }
 
         @Override
-        boolean isNonIdleWhitelisted(String packageName) throws RemoteException {
+        boolean isNonIdleWhitelisted(String packageName) {
             return mNonIdleWhitelistApps.contains(packageName);
+        }
+
+        @Override
+        boolean isRestrictedBucketEnabled() {
+            return mIsRestrictedBucketEnabled;
         }
 
         @Override
@@ -299,18 +310,33 @@ public class AppStandbyControllerTests {
         pie.packageName = PACKAGE_EXEMPTED_1;
         packages.add(pie);
 
+        PackageInfo pis = new PackageInfo();
+        pis.activities = new ActivityInfo[]{mock(ActivityInfo.class)};
+        pis.applicationInfo = new ApplicationInfo();
+        pis.applicationInfo.uid = UID_SYSTEM_HEADFULL;
+        pis.applicationInfo.flags = ApplicationInfo.FLAG_SYSTEM;
+        pis.packageName = PACKAGE_SYSTEM_HEADFULL;
+        packages.add(pis);
+
+        PackageInfo pish = new PackageInfo();
+        pish.applicationInfo = new ApplicationInfo();
+        pish.applicationInfo.uid = UID_SYSTEM_HEADLESS;
+        pish.applicationInfo.flags = ApplicationInfo.FLAG_SYSTEM;
+        pish.packageName = PACKAGE_SYSTEM_HEADLESS;
+        packages.add(pish);
+
         doReturn(packages).when(mockPm).getInstalledPackagesAsUser(anyInt(), anyInt());
         try {
-            doReturn(UID_1).when(mockPm).getPackageUidAsUser(eq(PACKAGE_1), anyInt());
-            doReturn(UID_1).when(mockPm).getPackageUidAsUser(eq(PACKAGE_1), anyInt(), anyInt());
-            doReturn(UID_EXEMPTED_1).when(mockPm).getPackageUidAsUser(eq(PACKAGE_EXEMPTED_1),
-                    anyInt());
-            doReturn(UID_EXEMPTED_1).when(mockPm).getPackageUidAsUser(eq(PACKAGE_EXEMPTED_1),
-                    anyInt(), anyInt());
-            doReturn(pi.applicationInfo).when(mockPm).getApplicationInfo(eq(pi.packageName),
-                    anyInt());
-            doReturn(pie.applicationInfo).when(mockPm).getApplicationInfo(eq(pie.packageName),
-                    anyInt());
+            for (int i = 0; i < packages.size(); ++i) {
+                PackageInfo pkg = packages.get(i);
+
+                doReturn(pkg.applicationInfo.uid).when(mockPm)
+                        .getPackageUidAsUser(eq(pkg.packageName), anyInt());
+                doReturn(pkg.applicationInfo.uid).when(mockPm)
+                        .getPackageUidAsUser(eq(pkg.packageName), anyInt(), anyInt());
+                doReturn(pkg.applicationInfo).when(mockPm)
+                        .getApplicationInfo(eq(pkg.packageName), anyInt());
+            }
         } catch (PackageManager.NameNotFoundException nnfe) {}
     }
 
@@ -361,34 +387,92 @@ public class AppStandbyControllerTests {
     @Test
     public void testBoundWidgetPackageExempt() throws Exception {
         assumeTrue(mInjector.getContext().getSystemService(AppWidgetManager.class) != null);
-        assertEquals(STANDBY_BUCKET_EXEMPTED,
+        assertEquals(STANDBY_BUCKET_ACTIVE,
                 mController.getAppStandbyBucket(PACKAGE_EXEMPTED_1, USER_ID,
                         mInjector.mElapsedRealtime, false));
     }
 
+    private static class TestParoleListener extends AppIdleStateChangeListener {
+        private boolean mIsParoleOn = false;
+        private CountDownLatch mLatch;
+        private boolean mIsExpecting = false;
+        private boolean mExpectedParoleState;
+
+        boolean getParoleState() {
+            synchronized (this) {
+                return mIsParoleOn;
+            }
+        }
+
+        void rearmLatch(boolean expectedParoleState) {
+            synchronized (this) {
+                mLatch = new CountDownLatch(1);
+                mIsExpecting = true;
+                mExpectedParoleState = expectedParoleState;
+            }
+        }
+
+        void awaitOnLatch(long time) throws Exception {
+            mLatch.await(time, TimeUnit.MILLISECONDS);
+        }
+
+        @Override
+        public void onAppIdleStateChanged(String packageName, int userId, boolean idle,
+                int bucket, int reason) {
+        }
+
+        @Override
+        public void onParoleStateChanged(boolean isParoleOn) {
+            synchronized (this) {
+                // Only record information if it is being looked for
+                if (mLatch != null && mLatch.getCount() > 0) {
+                    mIsParoleOn = isParoleOn;
+                    if (mIsExpecting && isParoleOn == mExpectedParoleState) {
+                        mLatch.countDown();
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     public void testIsAppIdle_Charging() throws Exception {
+        TestParoleListener paroleListener = new TestParoleListener();
+        mController.addListener(paroleListener);
+
         setChargingState(mController, false);
         mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RARE,
                 REASON_MAIN_FORCED_BY_SYSTEM);
         assertEquals(STANDBY_BUCKET_RARE, getStandbyBucket(mController, PACKAGE_1));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, 0));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, false));
+        assertFalse(mController.isInParole());
 
+        paroleListener.rearmLatch(true);
         setChargingState(mController, true);
+        paroleListener.awaitOnLatch(2000);
+        assertTrue(paroleListener.getParoleState());
         assertEquals(STANDBY_BUCKET_RARE, getStandbyBucket(mController, PACKAGE_1));
         assertFalse(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, 0));
         assertFalse(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, false));
+        assertTrue(mController.isInParole());
 
+        paroleListener.rearmLatch(false);
         setChargingState(mController, false);
+        paroleListener.awaitOnLatch(2000);
+        assertFalse(paroleListener.getParoleState());
         assertEquals(STANDBY_BUCKET_RARE, getStandbyBucket(mController, PACKAGE_1));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, 0));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, false));
+        assertFalse(mController.isInParole());
     }
 
     @Test
     public void testIsAppIdle_Enabled() throws Exception {
         setChargingState(mController, false);
+        TestParoleListener paroleListener = new TestParoleListener();
+        mController.addListener(paroleListener);
+
         setAppIdleEnabled(mController, true);
         mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RARE,
                 REASON_MAIN_FORCED_BY_SYSTEM);
@@ -396,11 +480,17 @@ public class AppStandbyControllerTests {
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, 0));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, false));
 
+        paroleListener.rearmLatch(false);
         setAppIdleEnabled(mController, false);
+        paroleListener.awaitOnLatch(2000);
+        assertTrue(paroleListener.mIsParoleOn);
         assertFalse(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, 0));
         assertFalse(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, false));
 
+        paroleListener.rearmLatch(true);
         setAppIdleEnabled(mController, true);
+        paroleListener.awaitOnLatch(2000);
+        assertFalse(paroleListener.getParoleState());
         assertEquals(STANDBY_BUCKET_RARE, getStandbyBucket(mController, PACKAGE_1));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, 0));
         assertTrue(mController.isAppIdleFiltered(PACKAGE_1, UID_1, USER_ID, false));
@@ -426,7 +516,7 @@ public class AppStandbyControllerTests {
         UsageEvents.Event ev = new UsageEvents.Event();
         ev.mPackage = packageName;
         ev.mEventType = eventType;
-        controller.reportEvent(ev, elapsedTime, USER_ID);
+        controller.reportEvent(ev, USER_ID);
     }
 
     private int getStandbyBucket(AppStandbyController controller, String packageName) {
@@ -444,7 +534,15 @@ public class AppStandbyControllerTests {
     }
 
     private void assertBucket(int bucket) {
-        assertEquals(bucket, getStandbyBucket(mController, PACKAGE_1));
+        assertBucket(bucket, PACKAGE_1);
+    }
+
+    private void assertBucket(int bucket, String pkg) {
+        assertEquals(bucket, getStandbyBucket(mController, pkg));
+    }
+
+    private void assertNotBucket(int bucket) {
+        assertNotEquals(bucket, getStandbyBucket(mController, PACKAGE_1));
     }
 
     @Test
@@ -879,6 +977,48 @@ public class AppStandbyControllerTests {
         mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RARE,
                 REASON_MAIN_PREDICTED);
         assertBucket(STANDBY_BUCKET_RESTRICTED);
+    }
+
+    @Test
+    public void testRestrictedBucketDisabled() {
+        mInjector.mIsRestrictedBucketEnabled = false;
+        // Get the controller to read the new value. Capturing the ContentObserver isn't possible
+        // at the moment.
+        mController.onBootPhase(SystemService.PHASE_SYSTEM_SERVICES_READY);
+
+        reportEvent(mController, USER_INTERACTION, mInjector.mElapsedRealtime, PACKAGE_1);
+        mInjector.mElapsedRealtime += RESTRICTED_THRESHOLD;
+
+        // Nothing should be able to put it into the RESTRICTED bucket.
+        mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RESTRICTED,
+                REASON_MAIN_TIMEOUT);
+        assertNotBucket(STANDBY_BUCKET_RESTRICTED);
+        mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RESTRICTED,
+                REASON_MAIN_PREDICTED);
+        assertNotBucket(STANDBY_BUCKET_RESTRICTED);
+        mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RESTRICTED,
+                REASON_MAIN_FORCED_BY_SYSTEM);
+        assertNotBucket(STANDBY_BUCKET_RESTRICTED);
+        mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RESTRICTED,
+                REASON_MAIN_FORCED_BY_USER);
+        assertNotBucket(STANDBY_BUCKET_RESTRICTED);
+    }
+
+    @Test
+    public void testRestrictedBucket_EnabledToDisabled() {
+        reportEvent(mController, USER_INTERACTION, mInjector.mElapsedRealtime, PACKAGE_1);
+        mInjector.mElapsedRealtime += RESTRICTED_THRESHOLD;
+        mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RESTRICTED,
+                REASON_MAIN_FORCED_BY_SYSTEM);
+        assertBucket(STANDBY_BUCKET_RESTRICTED);
+
+        mInjector.mIsRestrictedBucketEnabled = false;
+        // Get the controller to read the new value. Capturing the ContentObserver isn't possible
+        // at the moment.
+        mController.onBootPhase(SystemService.PHASE_SYSTEM_SERVICES_READY);
+
+        mController.checkIdleStates(USER_ID);
+        assertNotBucket(STANDBY_BUCKET_RESTRICTED);
     }
 
     @Test
@@ -1344,6 +1484,32 @@ public class AppStandbyControllerTests {
         assertBucket(STANDBY_BUCKET_RESTRICTED);
         mController.maybeUnrestrictBuggyApp("com.random.package", USER_ID);
         assertBucket(STANDBY_BUCKET_RESTRICTED);
+    }
+
+    @Test
+    public void testSystemHeadlessAppElevated() {
+        reportEvent(mController, USER_INTERACTION, mInjector.mElapsedRealtime, PACKAGE_1);
+        reportEvent(mController, USER_INTERACTION, mInjector.mElapsedRealtime,
+                PACKAGE_SYSTEM_HEADFULL);
+        reportEvent(mController, USER_INTERACTION, mInjector.mElapsedRealtime,
+                PACKAGE_SYSTEM_HEADLESS);
+        mInjector.mElapsedRealtime += RESTRICTED_THRESHOLD;
+
+
+        mController.setAppStandbyBucket(PACKAGE_SYSTEM_HEADFULL, USER_ID, STANDBY_BUCKET_RARE,
+                REASON_MAIN_TIMEOUT);
+        assertBucket(STANDBY_BUCKET_RARE, PACKAGE_SYSTEM_HEADFULL);
+
+        // Make sure headless system apps don't get lowered.
+        mController.setAppStandbyBucket(PACKAGE_SYSTEM_HEADLESS, USER_ID, STANDBY_BUCKET_RARE,
+                REASON_MAIN_TIMEOUT);
+        assertBucket(STANDBY_BUCKET_ACTIVE, PACKAGE_SYSTEM_HEADLESS);
+
+        // Package 1 doesn't have activities and is headless, but is not a system app, so it can
+        // be lowered.
+        mController.setAppStandbyBucket(PACKAGE_1, USER_ID, STANDBY_BUCKET_RARE,
+                REASON_MAIN_TIMEOUT);
+        assertBucket(STANDBY_BUCKET_RARE, PACKAGE_1);
     }
 
     private String getAdminAppsStr(int userId) {

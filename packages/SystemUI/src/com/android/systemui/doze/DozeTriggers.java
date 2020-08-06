@@ -26,7 +26,6 @@ import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.hardware.display.AmbientDisplayConfiguration;
 import android.metrics.LogMaker;
-import android.os.Handler;
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.text.format.Formatter;
@@ -152,9 +151,9 @@ public class DozeTriggers implements DozeMachine.Part {
 
     public DozeTriggers(Context context, DozeMachine machine, DozeHost dozeHost,
             AlarmManager alarmManager, AmbientDisplayConfiguration config,
-            DozeParameters dozeParameters, AsyncSensorManager sensorManager, Handler handler,
+            DozeParameters dozeParameters, AsyncSensorManager sensorManager,
             WakeLock wakeLock, boolean allowPulseTriggers, DockManager dockManager,
-            ProximitySensor proximitySensor,
+            ProximitySensor proximitySensor, ProximitySensor.ProximityCheck proxCheck,
             DozeLog dozeLog, BroadcastDispatcher broadcastDispatcher) {
         mContext = context;
         mMachine = machine;
@@ -165,10 +164,10 @@ public class DozeTriggers implements DozeMachine.Part {
         mWakeLock = wakeLock;
         mAllowPulseTriggers = allowPulseTriggers;
         mDozeSensors = new DozeSensors(context, alarmManager, mSensorManager, dozeParameters,
-                config, wakeLock, this::onSensor, this::onProximityFar, dozeLog);
+                config, wakeLock, this::onSensor, this::onProximityFar, dozeLog, proximitySensor);
         mUiModeManager = mContext.getSystemService(UiModeManager.class);
         mDockManager = dockManager;
-        mProxCheck = new ProximitySensor.ProximityCheck(proximitySensor, handler);
+        mProxCheck = proxCheck;
         mDozeLog = dozeLog;
         mBroadcastDispatcher = broadcastDispatcher;
     }

@@ -22,9 +22,9 @@ import static android.view.View.GONE;
 import static com.android.systemui.bubbles.BadgedImageView.DEFAULT_PATH_SIZE;
 
 import android.content.Context;
-import android.content.res.TypedArray;
+import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Path;
 import android.graphics.drawable.AdaptiveIconDrawable;
@@ -58,68 +58,77 @@ public class BubbleOverflow implements BubbleViewProvider {
     public BubbleOverflow(Context context) {
         mContext = context;
         mInflater = LayoutInflater.from(context);
-        mBitmapSize = mContext.getResources().getDimensionPixelSize(R.dimen.bubble_bitmap_size);
-        mIconBitmapSize = mContext.getResources().getDimensionPixelSize(
-                R.dimen.bubble_overflow_icon_bitmap_size);
     }
 
     void setUpOverflow(ViewGroup parentViewGroup, BubbleStackView stackView) {
+        updateDimensions();
         mExpandedView = (BubbleExpandedView) mInflater.inflate(
                 R.layout.bubble_expanded_view, parentViewGroup /* root */,
                 false /* attachToRoot */);
         mExpandedView.setOverflow(true);
         mExpandedView.setStackView(stackView);
-
+        mExpandedView.applyThemeAttrs();
         updateIcon(mContext, parentViewGroup);
     }
 
-    // TODO(b/149146374) Propagate theme change to bubbles in overflow.
+    void updateDimensions() {
+        mBitmapSize = mContext.getResources().getDimensionPixelSize(R.dimen.bubble_bitmap_size);
+        mIconBitmapSize = mContext.getResources().getDimensionPixelSize(
+                R.dimen.bubble_overflow_icon_bitmap_size);
+        if (mExpandedView != null) {
+            mExpandedView.updateDimensions();
+        }
+    }
+
     void updateIcon(Context context, ViewGroup parentViewGroup) {
+        mContext = context;
         mInflater = LayoutInflater.from(context);
         mOverflowBtn = (BadgedImageView) mInflater.inflate(R.layout.bubble_overflow_button,
                 parentViewGroup /* root */,
                 false /* attachToRoot */);
+        mOverflowBtn.setContentDescription(mContext.getResources().getString(
+                R.string.bubble_overflow_button_content_description));
+        Resources res = mContext.getResources();
 
-        TypedArray ta = mContext.obtainStyledAttributes(
-                new int[]{android.R.attr.colorBackgroundFloating});
-        int bgColor = ta.getColor(0, Color.WHITE /* default */);
-        ta.recycle();
-
+        // Set color for button icon and dot
         TypedValue typedValue = new TypedValue();
-        context.getTheme().resolveAttribute(android.R.attr.colorAccent, typedValue, true);
+        mContext.getTheme().resolveAttribute(android.R.attr.colorAccent, typedValue, true);
         int colorAccent = mContext.getColor(typedValue.resourceId);
         mOverflowBtn.getDrawable().setTint(colorAccent);
         mDotColor = colorAccent;
 
-        ColorDrawable bg = new ColorDrawable(bgColor);
+        // Set color for button and activity background
+        ColorDrawable bg = new ColorDrawable(res.getColor(R.color.bubbles_light));
+        final int mode = res.getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        if (mode == Configuration.UI_MODE_NIGHT_YES) {
+            bg = new ColorDrawable(res.getColor(R.color.bubbles_dark));
+        }
+
+        // Apply icon inset
         InsetDrawable fg = new InsetDrawable(mOverflowBtn.getDrawable(),
                 mBitmapSize - mIconBitmapSize /* inset */);
         AdaptiveIconDrawable adaptiveIconDrawable = new AdaptiveIconDrawable(bg, fg);
 
-        BubbleIconFactory iconFactory = new BubbleIconFactory(context);
+        BubbleIconFactory iconFactory = new BubbleIconFactory(mContext);
         mIcon = iconFactory.createBadgedIconBitmap(adaptiveIconDrawable,
                 null /* user */,
                 true /* shrinkNonAdaptiveIcons */).icon;
 
+        // Get path with dot location
         float scale = iconFactory.getNormalizer().getScale(mOverflowBtn.getDrawable(),
                 null /* outBounds */, null /* path */, null /* outMaskShape */);
         float radius = DEFAULT_PATH_SIZE / 2f;
         mPath = PathParser.createPathFromPathData(
-                context.getResources().getString(com.android.internal.R.string.config_icon_mask));
+                mContext.getResources().getString(com.android.internal.R.string.config_icon_mask));
         Matrix matrix = new Matrix();
         matrix.setScale(scale /* x scale */, scale /* y scale */, radius /* pivot x */,
                 radius /* pivot y */);
         mPath.transform(matrix);
 
-        mOverflowBtn.setVisibility(GONE);
         mOverflowBtn.setRenderedBubble(this);
     }
 
-    ImageView getBtn() {
-        return mOverflowBtn;
-    }
-
-    void setBtnVisible(int visible) {
+    void setVisible(int visible) {
         mOverflowBtn.setVisibility(visible);
     }
 

@@ -17,6 +17,7 @@
 package com.android.systemui.controls.management
 
 import android.content.ComponentName
+import android.graphics.drawable.Icon
 import androidx.recyclerview.widget.RecyclerView
 import com.android.systemui.controls.ControlInterface
 import com.android.systemui.controls.ControlStatus
@@ -41,6 +42,8 @@ interface ControlsModel {
      * List of all the elements to display by the corresponding [RecyclerView].
      */
     val elements: List<ElementWrapper>
+
+    val moveHelper: MoveHelper?
 
     /**
      * Change the favorite status of a particular control.
@@ -69,6 +72,34 @@ interface ControlsModel {
          */
         fun onFirstChange()
     }
+
+    /**
+     * Interface to facilitate moving controls from an [AccessibilityDelegate].
+     *
+     * All positions should be 0 based.
+     */
+    interface MoveHelper {
+
+        /**
+         * Whether the control in `position` can be moved to the position before it.
+         */
+        fun canMoveBefore(position: Int): Boolean
+
+        /**
+         * Whether the control in `position` can be moved to the position after it.
+         */
+        fun canMoveAfter(position: Int): Boolean
+
+        /**
+         * Move the control in `position` to the position before it.
+         */
+        fun moveBefore(position: Int)
+
+        /**
+         * Move the control in `position` to the position after it.
+         */
+        fun moveAfter(position: Int)
+    }
 }
 
 /**
@@ -96,6 +127,9 @@ data class ControlInfoWrapper(
         get() = controlInfo.controlSubtitle
     override val deviceType: Int
         get() = controlInfo.deviceType
+    override val customIcon: Icon?
+        // Will need to address to support for edit activity
+        get() = null
 }
 
 data class DividerWrapper(

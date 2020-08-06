@@ -27,7 +27,8 @@
     <RelativeLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:layoutDirection="ltr">
 
         <FrameLayout
             android:id="@+id/left_hvac_container"
@@ -76,7 +77,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:background="@null"
-                systemui:intent="intent:#Intent;component=com.android.car.settings/.common.CarSettingActivity;launchFlags=0x24000000;end"
+                systemui:intent="intent:#Intent;component=com.android.car.settings/.common.CarSettingActivities$QuickSettingActivity;launchFlags=0x24000000;end"
             />
             <com.android.systemui.statusbar.policy.Clock
                 android:id="@+id/clock"

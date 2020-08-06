@@ -36,6 +36,7 @@ import java.util.function.Consumer;
  * TODO: Should be merged into PermissionManagerInternal, but currently uses internal classes.
  */
 public abstract class PermissionManagerServiceInternal extends PermissionManagerInternal {
+
     /**
      * Provider for package names.
      */
@@ -155,7 +156,7 @@ public abstract class PermissionManagerServiceInternal extends PermissionManager
         }
         public void onInstallPermissionGranted() {
         }
-        public void onPermissionRevoked(int uid, @UserIdInt int userId) {
+        public void onPermissionRevoked(int uid, @UserIdInt int userId, String reason) {
         }
         public void onInstallPermissionRevoked() {
         }
@@ -302,9 +303,13 @@ public abstract class PermissionManagerServiceInternal extends PermissionManager
     /** HACK HACK methods to allow for partial migration of data to the PermissionManager class */
     public abstract @Nullable BasePermission getPermissionTEMP(@NonNull String permName);
 
-    /** Get all permission that have a certain protection level */
-    public abstract @NonNull ArrayList<PermissionInfo> getAllPermissionWithProtection(
+    /** Get all permissions that have a certain protection */
+    public abstract @NonNull ArrayList<PermissionInfo> getAllPermissionsWithProtection(
             @PermissionInfo.Protection int protection);
+
+    /** Get all permissions that have certain protection flags */
+    public abstract @NonNull ArrayList<PermissionInfo> getAllPermissionsWithProtectionFlags(
+            @PermissionInfo.ProtectionFlags int protectionFlags);
 
     /**
      * Returns the delegate used to influence permission checking.
@@ -451,4 +456,10 @@ public abstract class PermissionManagerServiceInternal extends PermissionManager
 
     /** Called when a new user has been created. */
     public abstract void onNewUserCreated(@UserIdInt int userId);
+
+    /**
+     * Removes invalid permissions which are not {@link PermissionInfo#FLAG_HARD_RESTRICTED} or
+     * {@link PermissionInfo#FLAG_SOFT_RESTRICTED} from the input.
+     */
+    public abstract void retainHardAndSoftRestrictedPermissions(@NonNull List<String> permissions);
 }

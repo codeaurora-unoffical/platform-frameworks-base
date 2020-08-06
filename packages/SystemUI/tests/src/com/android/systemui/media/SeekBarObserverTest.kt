@@ -16,19 +16,15 @@
 
 package com.android.systemui.media
 
-import android.graphics.Color
-import android.content.res.ColorStateList
 import android.testing.AndroidTestingRunner
 import android.testing.TestableLooper
 import android.view.View
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.test.filters.SmallTest
-
 import com.android.systemui.R
 import com.android.systemui.SysuiTestCase
 import com.google.common.truth.Truth.assertThat
-
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,55 +37,65 @@ import org.mockito.Mockito.`when` as whenever
 @TestableLooper.RunWithLooper
 public class SeekBarObserverTest : SysuiTestCase() {
 
+    private val disabledHeight = 1
+    private val enabledHeight = 2
+
     private lateinit var observer: SeekBarObserver
-    @Mock private lateinit var mockView: View
+    @Mock private lateinit var mockHolder: PlayerViewHolder
     private lateinit var seekBarView: SeekBar
     private lateinit var elapsedTimeView: TextView
     private lateinit var totalTimeView: TextView
 
     @Before
     fun setUp() {
-        mockView = mock(View::class.java)
+        mockHolder = mock(PlayerViewHolder::class.java)
+
+        context.orCreateTestableResources
+            .addOverride(R.dimen.qs_media_enabled_seekbar_height, enabledHeight)
+        context.orCreateTestableResources
+            .addOverride(R.dimen.qs_media_disabled_seekbar_height, disabledHeight)
+
         seekBarView = SeekBar(context)
         elapsedTimeView = TextView(context)
         totalTimeView = TextView(context)
-        whenever<SeekBar>(
-                mockView.findViewById(R.id.media_progress_bar)).thenReturn(seekBarView)
-        whenever<TextView>(
-                mockView.findViewById(R.id.media_elapsed_time)).thenReturn(elapsedTimeView)
-        whenever<TextView>(mockView.findViewById(R.id.media_total_time)).thenReturn(totalTimeView)
-        observer = SeekBarObserver(mockView)
+        whenever(mockHolder.seekBar).thenReturn(seekBarView)
+        whenever(mockHolder.elapsedTimeView).thenReturn(elapsedTimeView)
+        whenever(mockHolder.totalTimeView).thenReturn(totalTimeView)
+
+        observer = SeekBarObserver(mockHolder)
     }
 
     @Test
     fun seekBarGone() {
         // WHEN seek bar is disabled
         val isEnabled = false
-        val data = SeekBarViewModel.Progress(isEnabled, false, null, null, null)
+        val data = SeekBarViewModel.Progress(isEnabled, false, null, null)
         observer.onChanged(data)
-        // THEN seek bar shows just a line with no text
+        // THEN seek bar shows just a thin line with no text
         assertThat(seekBarView.isEnabled()).isFalse()
         assertThat(seekBarView.getThumb().getAlpha()).isEqualTo(0)
         assertThat(elapsedTimeView.getText()).isEqualTo("")
         assertThat(totalTimeView.getText()).isEqualTo("")
+        assertThat(seekBarView.maxHeight).isEqualTo(disabledHeight)
     }
 
     @Test
     fun seekBarVisible() {
         // WHEN seek bar is enabled
         val isEnabled = true
-        val data = SeekBarViewModel.Progress(isEnabled, true, 3000, 12000, -1)
+        val data = SeekBarViewModel.Progress(isEnabled, true, 3000, 12000)
         observer.onChanged(data)
-        // THEN seek bar is visible
+        // THEN seek bar is visible and thick
         assertThat(seekBarView.getVisibility()).isEqualTo(View.VISIBLE)
         assertThat(elapsedTimeView.getVisibility()).isEqualTo(View.VISIBLE)
         assertThat(totalTimeView.getVisibility()).isEqualTo(View.VISIBLE)
+        assertThat(seekBarView.maxHeight).isEqualTo(enabledHeight)
     }
 
     @Test
     fun seekBarProgress() {
         // WHEN seek bar progress is about half
-        val data = SeekBarViewModel.Progress(true, true, 3000, 120000, -1)
+        val data = SeekBarViewModel.Progress(true, true, 3000, 120000)
         observer.onChanged(data)
         // THEN seek bar is visible
         assertThat(seekBarView.progress).isEqualTo(100)
@@ -102,7 +108,7 @@ public class SeekBarObserverTest : SysuiTestCase() {
     fun seekBarDisabledWhenSeekNotAvailable() {
         // WHEN seek is not available
         val isSeekAvailable = false
-        val data = SeekBarViewModel.Progress(true, isSeekAvailable, 3000, 120000, -1)
+        val data = SeekBarViewModel.Progress(true, isSeekAvailable, 3000, 120000)
         observer.onChanged(data)
         // THEN seek bar is not enabled
         assertThat(seekBarView.isEnabled()).isFalse()
@@ -112,20 +118,9 @@ public class SeekBarObserverTest : SysuiTestCase() {
     fun seekBarEnabledWhenSeekNotAvailable() {
         // WHEN seek is available
         val isSeekAvailable = true
-        val data = SeekBarViewModel.Progress(true, isSeekAvailable, 3000, 120000, -1)
+        val data = SeekBarViewModel.Progress(true, isSeekAvailable, 3000, 120000)
         observer.onChanged(data)
         // THEN seek bar is not enabled
         assertThat(seekBarView.isEnabled()).isTrue()
-    }
-
-    @Test
-    fun seekBarColor() {
-        // WHEN data included color
-        val data = SeekBarViewModel.Progress(true, true, 3000, 120000, Color.RED)
-        observer.onChanged(data)
-        // THEN seek bar is colored
-        val red = ColorStateList.valueOf(Color.RED)
-        assertThat(elapsedTimeView.getTextColors()).isEqualTo(red)
-        assertThat(totalTimeView.getTextColors()).isEqualTo(red)
     }
 }

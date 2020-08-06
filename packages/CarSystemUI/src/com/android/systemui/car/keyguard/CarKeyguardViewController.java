@@ -103,6 +103,7 @@ public class CarKeyguardViewController extends OverlayViewController implements
     private KeyguardBouncer mBouncer;
     private OnKeyguardCancelClickedListener mKeyguardCancelClickedListener;
     private boolean mShowing;
+    private boolean mIsOccluded;
 
     @Inject
     public CarKeyguardViewController(
@@ -171,6 +172,7 @@ public class CarKeyguardViewController extends OverlayViewController implements
         mKeyguardStateController.notifyKeyguardState(mShowing, /* occluded= */ false);
         mCarNavigationBarController.showAllKeyguardButtons(/* isSetUp= */ true);
         start();
+        getOverlayViewGlobalStateController().setWindowFocusable(/* focusable= */ true);
         reset(/* hideBouncerWhenShowing= */ false);
         notifyKeyguardUpdateMonitor();
     }
@@ -185,8 +187,9 @@ public class CarKeyguardViewController extends OverlayViewController implements
         mBouncer.hide(/* destroyView= */ true);
         mCarNavigationBarController.hideAllKeyguardButtons(/* isSetUp= */ true);
         stop();
+        getOverlayViewGlobalStateController().setWindowFocusable(/* focusable= */ false);
         mKeyguardStateController.notifyKeyguardDoneFading();
-        mViewMediatorCallback.keyguardGone();
+        mHandler.post(mViewMediatorCallback::keyguardGone);
         notifyKeyguardUpdateMonitor();
     }
 
@@ -201,6 +204,11 @@ public class CarKeyguardViewController extends OverlayViewController implements
             }
             mKeyguardUpdateMonitor.sendKeyguardReset();
             notifyKeyguardUpdateMonitor();
+        } else {
+            // This is necessary in order to address an inconsistency between the keyguard service
+            // and the keyguard views.
+            // TODO: Investigate the source of the inconsistency.
+            show(/* options= */ null);
         }
     }
 
@@ -212,8 +220,17 @@ public class CarKeyguardViewController extends OverlayViewController implements
     }
 
     @Override
+    public void setOccluded(boolean occluded, boolean animate) {
+        mIsOccluded = occluded;
+        getOverlayViewGlobalStateController().setOccluded(occluded);
+        if (!occluded) {
+            reset(/* hideBouncerWhenShowing= */ false);
+        }
+    }
+
+    @Override
     public void onCancelClicked() {
-        if (!mShowing) return;
+        if (mBouncer == null) return;
 
         getOverlayViewGlobalStateController().setWindowFocusable(/* focusable= */ false);
         getOverlayViewGlobalStateController().setWindowNeedsInput(/* needsInput= */ false);
@@ -229,19 +246,26 @@ public class CarKeyguardViewController extends OverlayViewController implements
 
     @Override
     public void dismissAndCollapse() {
-        hide(/* startTime= */ 0, /* fadeoutDuration= */ 0);
+        // If dismissing and collapsing Keyguard is requested (e.g. by a Keyguard-dismissing
+        // Activity) while Keyguard is occluded, unocclude Keyguard so the user can authenticate to
+        // dismiss Keyguard.
+        if (mIsOccluded) {
+            setOccluded(/* occluded= */ false, /* animate= */ false);
+        }
+        if (!mBouncer.isSecure()) {
+            hide(/* startTime= */ 0, /* fadeoutDuration= */ 0);
+        }
     }
 
     @Override
     public void startPreHideAnimation(Runnable finishRunnable) {
-        if (!mShowing) return;
+        if (mBouncer == null) return;
 
         mBouncer.startPreHideAnimation(finishRunnable);
     }
 
     @Override
     public void setNeedsInput(boolean needsInput) {
-        getOverlayViewGlobalStateController().setWindowFocusable(needsInput);
         getOverlayViewGlobalStateController().setWindowNeedsInput(needsInput);
     }
 
@@ -303,11 +327,6 @@ public class CarKeyguardViewController extends OverlayViewController implements
 
     @Override
     public void onScreenTurnedOn() {
-        // no-op
-    }
-
-    @Override
-    public void setOccluded(boolean occluded, boolean animate) {
         // no-op
     }
 

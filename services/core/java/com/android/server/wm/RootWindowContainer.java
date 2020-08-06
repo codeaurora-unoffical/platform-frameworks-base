@@ -40,6 +40,7 @@ import static android.view.WindowManager.TRANSIT_CRASHING_ACTIVITY_CLOSE;
 import static android.view.WindowManager.TRANSIT_NONE;
 import static android.view.WindowManager.TRANSIT_SHOW_SINGLE_TASK_DISPLAY;
 
+import static com.android.server.policy.PhoneWindowManager.SYSTEM_DIALOG_REASON_ASSIST;
 import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_LAYOUT;
 import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_WALLPAPER;
 import static com.android.server.wm.ActivityStack.ActivityState.FINISHING;
@@ -262,9 +263,6 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
     /** Set when a power hint has started, but not ended. */
     private boolean mPowerHintSent;
 
-    /** Used to keep ensureActivitiesVisible() from being entered recursively. */
-    private boolean mInEnsureActivitiesVisible = false;
-
     // The default minimal size that will be used if the activity doesn't specify its minimal size.
     // It will be calculated when the default display gets added.
     int mDefaultMinSizeOfResizeableTaskDp = -1;
@@ -330,7 +328,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
             documentData = isDocument ? intent.getData() : null;
 
             if (DEBUG_TASKS) Slog.d(TAG_TASKS, "Looking for task of " + target + " in " + parent);
-            parent.forAllTasks(this);
+            parent.forAllLeafTasks(this);
         }
 
         void clear() {
@@ -665,10 +663,10 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         }
     }
 
-    void setSecureSurfaceState(int userId, boolean disabled) {
+    void setSecureSurfaceState(int userId) {
         forAllWindows((w) -> {
             if (w.mHasSurface && userId == w.mShowUserId) {
-                w.mWinAnimator.setSecureLocked(disabled);
+                w.mWinAnimator.setSecureLocked(w.isSecureLocked());
             }
         }, true /* traverseTopToBottom */);
     }
@@ -992,9 +990,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         }
 
         // Remove all deferred displays stacks, tasks, and activities.
-        for (int displayNdx = mChildren.size() - 1; displayNdx >= 0; --displayNdx) {
-            mChildren.get(displayNdx).checkCompleteDeferredRemoval();
-        }
+        handleCompleteDeferredRemoval();
 
         forAllDisplays(dc -> {
             dc.getInputMonitor().updateInputWindowsLw(true /*force*/);
@@ -1372,7 +1368,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         calculateDefaultMinimalSizeOfResizeableTasks();
 
         final TaskDisplayArea defaultTaskDisplayArea = getDefaultTaskDisplayArea();
-        defaultTaskDisplayArea.getOrCreateRootHomeTask();
+        defaultTaskDisplayArea.getOrCreateRootHomeTask(ON_TOP);
         positionChildAt(POSITION_TOP, defaultTaskDisplayArea.mDisplayContent,
                 false /* includingParents */);
     }
@@ -1993,14 +1989,13 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
      */
     void ensureActivitiesVisible(ActivityRecord starting, int configChanges,
             boolean preserveWindows, boolean notifyClients) {
-        if (mInEnsureActivitiesVisible) {
+        if (mStackSupervisor.inActivityVisibilityUpdate()) {
             // Don't do recursive work.
             return;
         }
-        mInEnsureActivitiesVisible = true;
 
         try {
-            mStackSupervisor.getKeyguardController().beginActivityVisibilityUpdate();
+            mStackSupervisor.beginActivityVisibilityUpdate();
             // First the front stacks. In case any are not fullscreen and are in front of home.
             for (int displayNdx = getChildCount() - 1; displayNdx >= 0; --displayNdx) {
                 final DisplayContent display = getChildAt(displayNdx);
@@ -2008,8 +2003,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                         notifyClients);
             }
         } finally {
-            mStackSupervisor.getKeyguardController().endActivityVisibilityUpdate();
-            mInEnsureActivitiesVisible = false;
+            mStackSupervisor.endActivityVisibilityUpdate();
         }
     }
 
@@ -2175,12 +2169,16 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
             final boolean singleActivity = task.getChildCount() == 1;
             final ActivityStack stack;
             if (singleActivity) {
-                stack = r.getRootTask();
+                stack = (ActivityStack) task;
             } else {
                 // In the case of multiple activities, we will create a new task for it and then
                 // move the PIP activity into the task.
                 stack = taskDisplayArea.createStack(WINDOWING_MODE_UNDEFINED, r.getActivityType(),
                         ON_TOP, r.info, r.intent, false /* createdByOrganizer */);
+                // It's possible the task entering PIP is in freeform, so save the last
+                // non-fullscreen bounds. Then when this new PIP task exits PIP, it can restore
+                // to its previous freeform bounds.
+                stack.setLastNonFullscreenBounds(task.mLastNonFullscreenBounds);
 
                 // There are multiple activities in the task and moving the top activity should
                 // reveal/leave the other activities in their original task.
@@ -2188,6 +2186,19 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                 // up-to-dated pinned stack information on this newly created stack.
                 r.reparent(stack, MAX_VALUE, reason);
             }
+            // The intermediate windowing mode to be set on the ActivityRecord later.
+            // This needs to happen before the re-parenting, otherwise we will always set the
+            // ActivityRecord to be fullscreen.
+            final int intermediateWindowingMode = stack.getWindowingMode();
+            if (stack.getParent() != taskDisplayArea) {
+                // stack is nested, but pinned tasks need to be direct children of their
+                // display area, so reparent.
+                stack.reparent(taskDisplayArea, true /* onTop */);
+            }
+            // Defer the windowing mode change until after the transition to prevent the activity
+            // from doing work and changing the activity visuals while animating
+            // TODO(task-org): Figure-out more structured way to do this long term.
+            r.setWindowingMode(intermediateWindowingMode);
             stack.setWindowingMode(WINDOWING_MODE_PINNED);
 
             // Reset the state that indicates it can enter PiP while pausing after we've moved it
@@ -2364,7 +2375,8 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                         // triggered after contents are drawn on the display.
                         if (display.isSingleTaskInstance()) {
                             display.mDisplayContent.prepareAppTransition(
-                                    TRANSIT_SHOW_SINGLE_TASK_DISPLAY, false);
+                                    TRANSIT_SHOW_SINGLE_TASK_DISPLAY, false,
+                                    0 /* flags */, true /* forceOverride*/);
                         }
                         stack.awakeFromSleepingLocked();
                         if (display.isSingleTaskInstance()) {
@@ -2380,6 +2392,12 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
                             // activity here.
                             resumeFocusedStacksTopActivities();
                         }
+                        // The visibility update must not be called before resuming the top, so the
+                        // display orientation can be updated first if needed. Otherwise there may
+                        // have redundant configuration changes due to apply outdated display
+                        // orientation (from keyguard) to activity.
+                        stack.ensureActivitiesVisible(null /* starting */, 0 /* configChanges */,
+                                false /* preserveWindows */);
                     }
                 }
             }
@@ -2507,20 +2525,6 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
             }
         }
         return list;
-    }
-
-    void deferUpdateBounds(int activityType) {
-        final ActivityStack stack = getStack(WINDOWING_MODE_UNDEFINED, activityType);
-        if (stack != null) {
-            stack.deferUpdateBounds();
-        }
-    }
-
-    void continueUpdateBounds(int activityType) {
-        final ActivityStack stack = getStack(WINDOWING_MODE_UNDEFINED, activityType);
-        if (stack != null) {
-            stack.continueUpdateBounds();
-        }
     }
 
     @Override
@@ -3123,12 +3127,23 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         return hasVisibleActivities;
     }
 
-    void closeSystemDialogs() {
+    void closeSystemDialogActivities(String reason) {
         forAllActivities((r) -> {
-            if ((r.info.flags & ActivityInfo.FLAG_FINISH_ON_CLOSE_SYSTEM_DIALOGS) != 0) {
-                r.finishIfPossible("close-sys", true /* oomAdj */);
+            if ((r.info.flags & ActivityInfo.FLAG_FINISH_ON_CLOSE_SYSTEM_DIALOGS) != 0
+                    || shouldCloseAssistant(r, reason)) {
+                r.finishIfPossible(reason, true /* oomAdj */);
             }
         });
+    }
+
+    private boolean shouldCloseAssistant(ActivityRecord r, String reason) {
+        if (!r.isActivityTypeAssistant()) return false;
+        if (reason == SYSTEM_DIALOG_REASON_ASSIST) return false;
+        // When the assistant is configured to be on top of the dream, it will have higher z-order
+        // than other activities. If it is also opaque, it will prevent other activities from
+        // starting. We want to close the assistant on closeSystemDialogs to allow other activities
+        // to start, e.g. on home button press.
+        return mWmService.mAssistantOnTopOfDream;
     }
 
     FinishDisabledPackageActivitiesHelper mFinishDisabledPackageActivitiesHelper =
@@ -3572,12 +3587,14 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
         }
     }
 
-    public void dump(PrintWriter pw, String prefix) {
+    @Override
+    public void dump(PrintWriter pw, String prefix, boolean dumpAll) {
+        super.dump(pw, prefix, dumpAll);
         pw.print(prefix);
         pw.println("topDisplayFocusedStack=" + getTopDisplayFocusedStack());
         for (int i = getChildCount() - 1; i >= 0; --i) {
             final DisplayContent display = getChildAt(i);
-            display.dump(pw, prefix, true /* dumpAll */);
+            display.dump(pw, prefix, dumpAll);
         }
         pw.println();
     }

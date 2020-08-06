@@ -33,6 +33,7 @@ import android.os.Trace;
 import android.provider.DeviceConfig;
 import android.provider.DeviceConfig.OnPropertiesChangedListener;
 import android.provider.DeviceConfig.Properties;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.EventLog;
 import android.util.Slog;
@@ -44,6 +45,7 @@ import com.android.server.ServiceThread;
 
 import java.io.FileOutputStream;
 import java.io.FileReader;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -112,6 +114,14 @@ public final class CachedAppOptimizer {
         void onPropertyChanged();
     }
     private PropertyChangedCallbackForTest mTestCallback;
+
+    // This interface is for functions related to the Process object that need a different
+    // implementation in the tests as we are not creating real processes when testing compaction.
+    @VisibleForTesting
+    interface ProcessDependencies {
+        long[] getRss(int pid);
+        void performCompaction(String action, int pid) throws IOException;
+    }
 
     // Handler constants.
     static final int COMPACT_PROCESS_SOME = 1;
@@ -214,13 +224,16 @@ public final class CachedAppOptimizer {
     @VisibleForTesting final Set<Integer> mProcStateThrottle;
 
     // Handler on which compaction runs.
-    private Handler mCompactionHandler;
+    @VisibleForTesting
+    Handler mCompactionHandler;
     private Handler mFreezeHandler;
 
     // Maps process ID to last compaction statistics for processes that we've fully compacted. Used
     // when evaluating throttles that we only consider for "full" compaction, so we don't store
-    // data for "some" compactions.
-    private Map<Integer, LastCompactionStats> mLastCompactionStats =
+    // data for "some" compactions. Uses LinkedHashMap to ensure insertion order is kept and
+    // facilitate removal of the oldest entry.
+    @VisibleForTesting
+    LinkedHashMap<Integer, LastCompactionStats> mLastCompactionStats =
             new LinkedHashMap<Integer, LastCompactionStats>() {
                 @Override
                 protected boolean removeEldestEntry(Map.Entry eldest) {
@@ -232,17 +245,20 @@ public final class CachedAppOptimizer {
     private int mFullCompactionCount;
     private int mPersistentCompactionCount;
     private int mBfgsCompactionCount;
+    private final ProcessDependencies mProcessDependencies;
 
     public CachedAppOptimizer(ActivityManagerService am) {
-        mAm = am;
-        mCachedAppOptimizerThread = new ServiceThread("CachedAppOptimizerThread",
-                THREAD_PRIORITY_FOREGROUND, true);
-        mProcStateThrottle = new HashSet<>();
+        this(am, null, new DefaultProcessDependencies());
     }
 
     @VisibleForTesting
-    CachedAppOptimizer(ActivityManagerService am, PropertyChangedCallbackForTest callback) {
-        this(am);
+    CachedAppOptimizer(ActivityManagerService am, PropertyChangedCallbackForTest callback,
+            ProcessDependencies processDependencies) {
+        mAm = am;
+        mCachedAppOptimizerThread = new ServiceThread("CachedAppOptimizerThread",
+            THREAD_PRIORITY_FOREGROUND, true);
+        mProcStateThrottle = new HashSet<>();
+        mProcessDependencies = processDependencies;
         mTestCallback = callback;
     }
 
@@ -407,7 +423,7 @@ public final class CachedAppOptimizer {
     /**
      * Determines whether the freezer is correctly supported by this system
      */
-    public boolean isFreezerSupported() {
+    public static boolean isFreezerSupported() {
         boolean supported = false;
         FileReader fr = null;
 
@@ -443,7 +459,13 @@ public final class CachedAppOptimizer {
      */
     @GuardedBy("mPhenotypeFlagLock")
     private void updateUseFreezer() {
-        if (DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER_NATIVE_BOOT,
+        final String configOverride = Settings.Global.getString(mAm.mContext.getContentResolver(),
+                Settings.Global.CACHED_APPS_FREEZER_ENABLED);
+
+        if ("disabled".equals(configOverride)) {
+            mUseFreezer = false;
+        } else if ("enabled".equals(configOverride)
+                || DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_ACTIVITY_MANAGER_NATIVE_BOOT,
                     KEY_USE_FREEZER, DEFAULT_USE_FREEZER)) {
             mUseFreezer = isFreezerSupported();
         }
@@ -652,7 +674,8 @@ public final class CachedAppOptimizer {
         }
     }
 
-    private static final class LastCompactionStats {
+    @VisibleForTesting
+    static final class LastCompactionStats {
         private final long[] mRssAfterCompaction;
 
         LastCompactionStats(long[] rss) {
@@ -705,9 +728,7 @@ public final class CachedAppOptimizer {
 
                         lastCompactAction = proc.lastCompactAction;
                         lastCompactTime = proc.lastCompactTime;
-                        // remove rather than get so that insertion order will be updated when we
-                        // put the post-compaction stats back into the map.
-                        lastCompactionStats = mLastCompactionStats.remove(pid);
+                        lastCompactionStats = mLastCompactionStats.get(pid);
                     }
 
                     if (pid == 0) {
@@ -799,7 +820,7 @@ public final class CachedAppOptimizer {
                         return;
                     }
 
-                    long[] rssBefore = Process.getRss(pid);
+                    long[] rssBefore = mProcessDependencies.getRss(pid);
                     long anonRssBefore = rssBefore[2];
 
                     if (rssBefore[0] == 0 && rssBefore[1] == 0 && rssBefore[2] == 0
@@ -856,16 +877,13 @@ public final class CachedAppOptimizer {
                         default:
                             break;
                     }
-
                     try {
                         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "Compact "
                                 + ((pendingAction == COMPACT_PROCESS_SOME) ? "some" : "full")
                                 + ": " + name);
                         long zramFreeKbBefore = Debug.getZramFreeKb();
-                        FileOutputStream fos = new FileOutputStream("/proc/" + pid + "/reclaim");
-                        fos.write(action.getBytes());
-                        fos.close();
-                        long[] rssAfter = Process.getRss(pid);
+                        mProcessDependencies.performCompaction(action, pid);
+                        long[] rssAfter = mProcessDependencies.getRss(pid);
                         long end = SystemClock.uptimeMillis();
                         long time = end - start;
                         long zramFreeKbAfter = Debug.getZramFreeKb();
@@ -875,7 +893,6 @@ public final class CachedAppOptimizer {
                                 rssAfter[2] - rssBefore[2], rssAfter[3] - rssBefore[3], time,
                                 lastCompactAction, lastCompactTime, lastOomAdj, procState,
                                 zramFreeKbBefore, zramFreeKbAfter - zramFreeKbBefore);
-
                         // Note that as above not taking mPhenoTypeFlagLock here to avoid locking
                         // on every single compaction for a flag that will seldom change and the
                         // impact of reading the wrong value here is low.
@@ -887,14 +904,14 @@ public final class CachedAppOptimizer {
                                     lastOomAdj, ActivityManager.processStateAmToProto(procState),
                                     zramFreeKbBefore, zramFreeKbAfter);
                         }
-
                         synchronized (mAm) {
                             proc.lastCompactTime = end;
                             proc.lastCompactAction = pendingAction;
                         }
-
                         if (action.equals(COMPACT_ACTION_FULL)
                                 || action.equals(COMPACT_ACTION_ANON)) {
+                            // Remove entry and insert again to update insertion order.
+                            mLastCompactionStats.remove(pid);
                             mLastCompactionStats.put(pid, new LastCompactionStats(rssAfter));
                         }
                     } catch (Exception e) {
@@ -1008,6 +1025,25 @@ public final class CachedAppOptimizer {
                         pid,
                         processName,
                         frozenDuration);
+            }
+        }
+    }
+
+    /**
+     * Default implementation for ProcessDependencies, public vor visibility to OomAdjuster class.
+     */
+    private static final class DefaultProcessDependencies implements ProcessDependencies {
+        // Get memory RSS from process.
+        @Override
+        public long[] getRss(int pid) {
+            return Process.getRss(pid);
+        }
+
+        // Compact process.
+        @Override
+        public void performCompaction(String action, int pid) throws IOException {
+            try (FileOutputStream fos = new FileOutputStream("/proc/" + pid + "/reclaim")) {
+                fos.write(action.getBytes());
             }
         }
     }

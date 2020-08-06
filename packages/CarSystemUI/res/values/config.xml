@@ -70,11 +70,13 @@
         to a constant alpha percent value using the initial alpha. -->
     <integer name="config_finalNotificationBackgroundAlpha">100</integer>
 
-    <!-- Car System UI's OverlayViewsMediator-->
+    <!-- Car System UI's OverlayViewsMediator.
+         Whenever a new class is added, make sure to also add that class to OverlayWindowModule. -->
     <string-array name="config_carSystemUIOverlayViewsMediators" translatable="false">
         <item>@string/config_notificationPanelViewMediator</item>
         <item>com.android.systemui.car.keyguard.CarKeyguardViewMediator</item>
         <item>com.android.systemui.car.userswitcher.FullscreenUserSwitcherViewMediator</item>
+        <item>com.android.systemui.car.userswitcher.UserSwitchTransitionViewMediator</item>
     </string-array>
 
     <!--
@@ -116,4 +118,7 @@
         <item>com.android.systemui.car.window.SystemUIOverlayWindowManager</item>
         <item>com.android.systemui.car.volume.VolumeUI</item>
     </string-array>
+
+    <!-- How many milliseconds to wait before force hiding the UserSwitchTransitionView -->
+    <integer name="config_userSwitchTransitionViewShownTimeoutMs" translatable="false">5000</integer>
 </resources>

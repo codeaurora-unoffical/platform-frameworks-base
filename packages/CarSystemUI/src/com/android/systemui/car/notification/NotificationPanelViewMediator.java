@@ -17,30 +17,63 @@
 package com.android.systemui.car.notification;
 
 import android.car.hardware.power.CarPowerManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.Configuration;
+import android.os.UserHandle;
+import android.util.Log;
 
 import androidx.annotation.CallSuper;
 
+import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.car.CarDeviceProvisionedController;
 import com.android.systemui.car.navigationbar.CarNavigationBarController;
 import com.android.systemui.car.window.OverlayViewMediator;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 
-/** The view mediator which attaches the view controller to other elements of the system ui. */
-public abstract class NotificationPanelViewMediator implements OverlayViewMediator,
+import javax.inject.Inject;
+import javax.inject.Singleton;
+
+/**
+ * The view mediator which attaches the view controller to other elements of the system ui. Disables
+ * drag open behavior of the notification panel from any navigation bar.
+ */
+@Singleton
+public class NotificationPanelViewMediator implements OverlayViewMediator,
         ConfigurationController.ConfigurationListener {
+
+    private static final boolean DEBUG = false;
+    private static final String TAG = "NotificationPanelVM";
 
     private final CarNavigationBarController mCarNavigationBarController;
     private final NotificationPanelViewController mNotificationPanelViewController;
     private final PowerManagerHelper mPowerManagerHelper;
+    private final BroadcastDispatcher mBroadcastDispatcher;
     private final CarDeviceProvisionedController mCarDeviceProvisionedController;
     private final ConfigurationController mConfigurationController;
 
+    private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (DEBUG) Log.v(TAG, "onReceive: " + intent);
+            String action = intent.getAction();
+            if (Intent.ACTION_CLOSE_SYSTEM_DIALOGS.equals(action)) {
+                if (mNotificationPanelViewController.isPanelExpanded()) {
+                    mNotificationPanelViewController.toggle();
+                }
+            }
+        }
+    };
+
+    @Inject
     public NotificationPanelViewMediator(
             CarNavigationBarController carNavigationBarController,
             NotificationPanelViewController notificationPanelViewController,
 
             PowerManagerHelper powerManagerHelper,
+            BroadcastDispatcher broadcastDispatcher,
 
             CarDeviceProvisionedController carDeviceProvisionedController,
             ConfigurationController configurationController
@@ -48,6 +81,7 @@ public abstract class NotificationPanelViewMediator implements OverlayViewMediat
         mCarNavigationBarController = carNavigationBarController;
         mNotificationPanelViewController = notificationPanelViewController;
         mPowerManagerHelper = powerManagerHelper;
+        mBroadcastDispatcher = broadcastDispatcher;
         mCarDeviceProvisionedController = carDeviceProvisionedController;
         mConfigurationController = configurationController;
     }
@@ -76,6 +110,9 @@ public abstract class NotificationPanelViewMediator implements OverlayViewMediat
                         return mNotificationPanelViewController.isPanelExpanded();
                     }
                 });
+
+        mBroadcastDispatcher.registerReceiver(mBroadcastReceiver,
+                new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS), null, UserHandle.ALL);
     }
 
     @Override

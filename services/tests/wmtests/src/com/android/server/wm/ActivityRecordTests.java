@@ -35,6 +35,7 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.doAnswer;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doCallRealMethod;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.eq;
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.reset;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.times;
@@ -69,6 +70,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 
+import android.app.ActivityManager.TaskSnapshot;
 import android.app.ActivityOptions;
 import android.app.WindowConfiguration;
 import android.app.servertransaction.ActivityConfigurationChangeItem;
@@ -82,14 +84,18 @@ import android.content.res.Resources;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.PersistableBundle;
+import android.os.RemoteException;
 import android.platform.test.annotations.Presubmit;
 import android.util.MergedConfiguration;
 import android.util.MutableBoolean;
 import android.view.DisplayInfo;
 import android.view.IRemoteAnimationFinishedCallback;
 import android.view.IRemoteAnimationRunner.Stub;
+import android.view.IWindowSession;
 import android.view.RemoteAnimationAdapter;
 import android.view.RemoteAnimationTarget;
+import android.view.WindowManager;
+import android.view.WindowManagerGlobal;
 
 import androidx.test.filters.MediumTest;
 
@@ -121,8 +127,7 @@ public class ActivityRecordTests extends ActivityTestsBase {
         mTask = mStack.getBottomMostTask();
         mActivity = mTask.getTopNonFinishingActivity();
 
-        doReturn(false).when(mService).isBooting();
-        doReturn(true).when(mService).isBooted();
+        setBooted(mService);
     }
 
     @Test
@@ -488,6 +493,16 @@ public class ActivityRecordTests extends ActivityTestsBase {
     }
 
     @Test
+    public void testShouldMakeActive_nonTopVisible() {
+        ActivityRecord finishingActivity = new ActivityBuilder(mService).setTask(mTask).build();
+        finishingActivity.finishing = true;
+        ActivityRecord topActivity = new ActivityBuilder(mService).setTask(mTask).build();
+        mActivity.setState(ActivityStack.ActivityState.STOPPED, "Testing");
+
+        assertEquals(false, mActivity.shouldMakeActive(null /* activeActivity */));
+    }
+
+    @Test
     public void testShouldResume_stackVisibility() {
         mActivity.setState(ActivityStack.ActivityState.STOPPED, "Testing");
         spyOn(mStack);
@@ -746,8 +761,8 @@ public class ActivityRecordTests extends ActivityTestsBase {
         assertTrue(mStack.isTopStackInDisplayArea());
 
         mActivity.setState(RESUMED, "test");
-        mActivity.finishIfPossible(0 /* resultCode */, null /* resultData */, "test",
-                false /* oomAdj */);
+        mActivity.finishIfPossible(0 /* resultCode */, null /* resultData */,
+                null /* resultGrants */, "test", false /* oomAdj */);
 
         assertTrue(stack1.isTopStackInDisplayArea());
     }
@@ -772,9 +787,42 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
         // Finish top activity and verify the next focusable rootable task has adjusted to top.
         topActivity.setState(RESUMED, "test");
-        topActivity.finishIfPossible(0 /* resultCode */, null /* resultData */, "test",
-                false /* oomAdj */);
+        topActivity.finishIfPossible(0 /* resultCode */, null /* resultData */,
+                null /* resultGrants */, "test", false /* oomAdj */);
         assertEquals(mTask, mStack.getTopMostTask());
+    }
+
+    /**
+     * Verify that when top focused activity is on secondary display, when finishing the top focused
+     * activity on default display, the preferred top stack on default display should be changed by
+     * adjusting focus.
+     */
+    @Test
+    public void testFinishActivityIfPossible_PreferredTopStackChanged() {
+        final ActivityRecord topActivityOnNonTopDisplay =
+                createActivityOnDisplay(true /* defaultDisplay */, null /* process */);
+        ActivityStack topRootableTask = topActivityOnNonTopDisplay.getRootTask();
+        topRootableTask.moveToFront("test");
+        assertTrue(topRootableTask.isTopStackInDisplayArea());
+        assertEquals(topRootableTask, topActivityOnNonTopDisplay.getDisplayArea()
+                .mPreferredTopFocusableStack);
+
+        final ActivityRecord secondaryDisplayActivity =
+                createActivityOnDisplay(false /* defaultDisplay */, null /* process */);
+        topRootableTask = secondaryDisplayActivity.getRootTask();
+        topRootableTask.moveToFront("test");
+        assertTrue(topRootableTask.isTopStackInDisplayArea());
+        assertEquals(topRootableTask,
+                secondaryDisplayActivity.getDisplayArea().mPreferredTopFocusableStack);
+
+        // The global top focus activity is on secondary display now.
+        // Finish top activity on default display and verify the next preferred top focusable stack
+        // on default display has changed.
+        topActivityOnNonTopDisplay.setState(RESUMED, "test");
+        topActivityOnNonTopDisplay.finishIfPossible(0 /* resultCode */, null /* resultData */,
+                null /* resultGrants */, "test", false /* oomAdj */);
+        assertEquals(mTask, mStack.getTopMostTask());
+        assertEquals(mStack, mActivity.getDisplayArea().mPreferredTopFocusableStack);
     }
 
     /**
@@ -1374,7 +1422,6 @@ public class ActivityRecordTests extends ActivityTestsBase {
 
     @Test
     public void testActivityOnCancelFixedRotationTransform() {
-        mService.mWindowManager.mIsFixedRotationTransformEnabled = true;
         final DisplayRotation displayRotation = mActivity.mDisplayContent.getDisplayRotation();
         spyOn(displayRotation);
 
@@ -1389,10 +1436,14 @@ public class ActivityRecordTests extends ActivityTestsBase {
         mActivity.setVisibility(true);
 
         display.rotateInDifferentOrientationIfNeeded(mActivity);
-        display.mFixedRotationLaunchingApp = mActivity;
+        display.setFixedRotationLaunchingAppUnchecked(mActivity);
         displayRotation.updateRotationUnchecked(true /* forceUpdate */);
 
         assertTrue(displayRotation.isRotatingSeamlessly());
+
+        // The launching rotated app should not be cleared when waiting for remote rotation.
+        display.continueUpdateOrientationForDiffOrienLaunchingApp();
+        assertTrue(display.isFixedRotationLaunchingApp(mActivity));
 
         // Simulate the rotation has been updated to previous one, e.g. sensor updates before the
         // remote rotation is completed.
@@ -1418,11 +1469,77 @@ public class ActivityRecordTests extends ActivityTestsBase {
         displayRotation.updateRotationUnchecked(true /* forceUpdate */);
         doReturn(false).when(displayRotation).isWaitingForRemoteRotation();
         clearInvocations(mActivity);
-        display.mFixedRotationLaunchingApp = mActivity;
+        display.setFixedRotationLaunchingAppUnchecked(mActivity);
         display.sendNewConfiguration();
 
-        assertNull(display.mFixedRotationLaunchingApp);
+        assertFalse(display.hasTopFixedRotationLaunchingApp());
         assertFalse(mActivity.hasFixedRotationTransform());
+    }
+
+    @Test
+    public void testIsSnapshotCompatible() {
+        final TaskSnapshot snapshot = new TaskSnapshotPersisterTestBase.TaskSnapshotBuilder()
+                .setRotation(mActivity.getWindowConfiguration().getRotation())
+                .build();
+
+        assertTrue(mActivity.isSnapshotCompatible(snapshot));
+
+        setRotatedScreenOrientationSilently(mActivity);
+
+        assertFalse(mActivity.isSnapshotCompatible(snapshot));
+    }
+
+    @Test
+    public void testFixedRotationSnapshotStartingWindow() {
+        // TaskSnapshotSurface requires a fullscreen opaque window.
+        final WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.TYPE_APPLICATION_STARTING);
+        params.width = params.height = WindowManager.LayoutParams.MATCH_PARENT;
+        final WindowTestUtils.TestWindowState w = new WindowTestUtils.TestWindowState(
+                mService.mWindowManager, mock(Session.class), new TestIWindow(), params, mActivity);
+        mActivity.addWindow(w);
+
+        // Assume the activity is launching in different rotation, and there was an available
+        // snapshot accepted by {@link Activity#isSnapshotCompatible}.
+        final TaskSnapshot snapshot = new TaskSnapshotPersisterTestBase.TaskSnapshotBuilder()
+                .setRotation((mActivity.getWindowConfiguration().getRotation() + 1) % 4)
+                .build();
+        setRotatedScreenOrientationSilently(mActivity);
+        mActivity.setVisible(false);
+
+        final IWindowSession session = WindowManagerGlobal.getWindowSession();
+        spyOn(session);
+        try {
+            // Return error to skip unnecessary operation.
+            doReturn(WindowManagerGlobal.ADD_STARTING_NOT_NEEDED).when(session).addToDisplay(
+                    any() /* window */, anyInt() /* seq */, any() /* attrs */,
+                    anyInt() /* viewVisibility */, anyInt() /* displayId */, any() /* outFrame */,
+                    any() /* outContentInsets */, any() /* outStableInsets */,
+                    any() /* outDisplayCutout */, any() /* outInputChannel */,
+                    any() /* outInsetsState */, any() /* outActiveControls */);
+            TaskSnapshotSurface.create(mService.mWindowManager, mActivity, snapshot);
+        } catch (RemoteException ignored) {
+        } finally {
+            reset(session);
+        }
+
+        // Because the rotation of snapshot and the corresponding top activity are different, fixed
+        // rotation should be applied when creating snapshot surface if the display rotation may be
+        // changed according to the activity orientation.
+        assertTrue(mActivity.hasFixedRotationTransform());
+        assertTrue(mActivity.mDisplayContent.isFixedRotationLaunchingApp(mActivity));
+    }
+
+    /**
+     * Sets orientation without notifying the parent to simulate that the display has not applied
+     * the requested orientation yet.
+     */
+    static void setRotatedScreenOrientationSilently(ActivityRecord r) {
+        final int rotatedOrentation = r.getConfiguration().orientation == ORIENTATION_PORTRAIT
+                ? SCREEN_ORIENTATION_LANDSCAPE
+                : SCREEN_ORIENTATION_PORTRAIT;
+        doReturn(false).when(r).onDescendantOrientationChanged(any(), any());
+        r.setOrientation(rotatedOrentation);
     }
 
     @Test

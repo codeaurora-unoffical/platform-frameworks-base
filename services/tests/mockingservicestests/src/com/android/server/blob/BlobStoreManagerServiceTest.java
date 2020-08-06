@@ -19,7 +19,7 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.doCallRealM
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mock;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
-import static com.android.server.blob.BlobStoreConfig.SESSION_EXPIRY_TIMEOUT_MILLIS;
+import static com.android.server.blob.BlobStoreConfig.DeviceConfigProperties.SESSION_EXPIRY_TIMEOUT_MS;
 
 import static com.google.common.truth.Truth.assertThat;
 
@@ -93,6 +93,7 @@ public class BlobStoreManagerServiceTest {
         doReturn(true).when(mBlobsDir).exists();
         doReturn(new File[0]).when(mBlobsDir).listFiles();
         doReturn(true).when(() -> BlobStoreConfig.hasLeaseWaitTimeElapsed(anyLong()));
+        doCallRealMethod().when(() -> BlobStoreConfig.hasSessionExpired(anyLong()));
 
         mContext = InstrumentationRegistry.getTargetContext();
         mHandler = new TestHandler(Looper.getMainLooper());
@@ -173,10 +174,10 @@ public class BlobStoreManagerServiceTest {
         mService.handlePackageRemoved(TEST_PKG1, TEST_UID1);
 
         // Verify sessions are removed
-        verify(sessionFile1).delete();
-        verify(sessionFile2, never()).delete();
-        verify(sessionFile3, never()).delete();
-        verify(sessionFile4).delete();
+        verify(session1).destroy();
+        verify(session2, never()).destroy();
+        verify(session3, never()).destroy();
+        verify(session4).destroy();
 
         assertThat(mUserSessions.size()).isEqualTo(2);
         assertThat(mUserSessions.get(sessionId1)).isNull();
@@ -192,9 +193,9 @@ public class BlobStoreManagerServiceTest {
         verify(blobMetadata3).removeCommitter(TEST_PKG1, TEST_UID1);
         verify(blobMetadata3).removeLeasee(TEST_PKG1, TEST_UID1);
 
-        verify(blobFile1, never()).delete();
-        verify(blobFile2).delete();
-        verify(blobFile3).delete();
+        verify(blobMetadata1, never()).destroy();
+        verify(blobMetadata2).destroy();
+        verify(blobMetadata3).destroy();
 
         assertThat(mUserBlobs.size()).isEqualTo(1);
         assertThat(mUserBlobs.get(blobHandle1)).isNotNull();
@@ -236,7 +237,7 @@ public class BlobStoreManagerServiceTest {
     public void testHandleIdleMaintenance_deleteStaleSessions() throws Exception {
         // Setup sessions
         final File sessionFile1 = mock(File.class);
-        doReturn(System.currentTimeMillis() - SESSION_EXPIRY_TIMEOUT_MILLIS + 1000)
+        doReturn(System.currentTimeMillis() - SESSION_EXPIRY_TIMEOUT_MS + 1000)
                 .when(sessionFile1).lastModified();
         final long sessionId1 = 342;
         final BlobHandle blobHandle1 = BlobHandle.createWithSha256("digest1".getBytes(),
@@ -256,7 +257,7 @@ public class BlobStoreManagerServiceTest {
         mUserSessions.append(sessionId2, session2);
 
         final File sessionFile3 = mock(File.class);
-        doReturn(System.currentTimeMillis() - SESSION_EXPIRY_TIMEOUT_MILLIS - 2000)
+        doReturn(System.currentTimeMillis() - SESSION_EXPIRY_TIMEOUT_MS - 2000)
                 .when(sessionFile3).lastModified();
         final long sessionId3 = 9484;
         final BlobHandle blobHandle3 = BlobHandle.createWithSha256("digest3".getBytes(),
@@ -271,9 +272,9 @@ public class BlobStoreManagerServiceTest {
         mService.handleIdleMaintenanceLocked();
 
         // Verify stale sessions are removed
-        verify(sessionFile1).delete();
-        verify(sessionFile2, never()).delete();
-        verify(sessionFile3).delete();
+        verify(session1).destroy();
+        verify(session2, never()).destroy();
+        verify(session3).destroy();
 
         assertThat(mUserSessions.size()).isEqualTo(1);
         assertThat(mUserSessions.get(sessionId2)).isNotNull();
@@ -316,9 +317,9 @@ public class BlobStoreManagerServiceTest {
         mService.handleIdleMaintenanceLocked();
 
         // Verify stale blobs are removed
-        verify(blobFile1).delete();
-        verify(blobFile2, never()).delete();
-        verify(blobFile3).delete();
+        verify(blobMetadata1).destroy();
+        verify(blobMetadata2, never()).destroy();
+        verify(blobMetadata3).destroy();
 
         assertThat(mUserBlobs.size()).isEqualTo(1);
         assertThat(mUserBlobs.get(blobHandle2)).isNotNull();
@@ -371,15 +372,16 @@ public class BlobStoreManagerServiceTest {
         doReturn(sessionId).when(session).getSessionId();
         doReturn(sessionFile).when(session).getSessionFile();
         doReturn(blobHandle).when(session).getBlobHandle();
+        doCallRealMethod().when(session).isExpired();
         return session;
     }
 
     private BlobMetadata createBlobMetadataMock(long blobId, File blobFile,
-            BlobHandle blobHandle, boolean hasLeases) {
+            BlobHandle blobHandle, boolean hasValidLeases) {
         final BlobMetadata blobMetadata = mock(BlobMetadata.class);
         doReturn(blobId).when(blobMetadata).getBlobId();
         doReturn(blobFile).when(blobMetadata).getBlobFile();
-        doReturn(hasLeases).when(blobMetadata).hasLeases();
+        doReturn(hasValidLeases).when(blobMetadata).hasValidLeases();
         doReturn(blobHandle).when(blobMetadata).getBlobHandle();
         doCallRealMethod().when(blobMetadata).shouldBeDeleted(anyBoolean());
         doReturn(true).when(blobMetadata).hasLeaseWaitTimeElapsedForAll();

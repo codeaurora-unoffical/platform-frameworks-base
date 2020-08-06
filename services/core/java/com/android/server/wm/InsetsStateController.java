@@ -29,6 +29,8 @@ import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD;
 import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR;
 import static android.view.WindowManager.LayoutParams.TYPE_STATUS_BAR;
 
+import static com.android.server.wm.ProtoLogGroup.WM_DEBUG_IME;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.WindowConfiguration;
@@ -41,6 +43,8 @@ import android.view.InsetsSourceControl;
 import android.view.InsetsState;
 import android.view.InsetsState.InternalInsetsType;
 import android.view.WindowManager;
+
+import com.android.server.protolog.common.ProtoLog;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -174,6 +178,7 @@ class InsetsStateController {
             if (imeSource != null && imeSource.isVisible()) {
                 imeSource = new InsetsSource(imeSource);
                 imeSource.setVisible(false);
+                imeSource.setFrame(0, 0, 0, 0);
                 state = new InsetsState(state);
                 state.addSource(imeSource);
             }
@@ -241,7 +246,7 @@ class InsetsStateController {
             // (e.g., z-order) have changed. They can affect the insets states that we dispatch to
             // the clients.
             for (int i = winInsetsChanged.size() - 1; i >= 0; i--) {
-                winInsetsChanged.get(i).notifyInsetsChanged();
+                mDispatchInsetsChanged.accept(winInsetsChanged.get(i));
             }
         }
         winInsetsChanged.clear();
@@ -249,8 +254,9 @@ class InsetsStateController {
 
     void onInsetsModified(InsetsControlTarget windowState, InsetsState state) {
         boolean changed = false;
-        for (int i = state.getSourcesCount() - 1; i >= 0; i--) {
-            final InsetsSource source = state.sourceAt(i);
+        for (int i = 0; i < InsetsState.SIZE; i++) {
+            final InsetsSource source = state.peekSource(i);
+            if (source == null) continue;
             final InsetsSourceProvider provider = mProviders.get(source.getType());
             if (provider == null) {
                 continue;
@@ -289,7 +295,10 @@ class InsetsStateController {
 
         // Make sure that we always have a control target for the IME, even if the IME target is
         // null. Otherwise there is no leash that will hide it and IME becomes "randomly" visible.
-        onControlChanged(ITYPE_IME, imeTarget != null ? imeTarget : mEmptyImeControlTarget);
+        InsetsControlTarget target = imeTarget != null ? imeTarget : mEmptyImeControlTarget;
+        onControlChanged(ITYPE_IME, target);
+        ProtoLog.d(WM_DEBUG_IME, "onImeControlTargetChanged %s",
+                target != null ? target.getWindow() : "null");
         notifyPendingInsetsControlChanged();
     }
 
@@ -439,6 +448,12 @@ class InsetsStateController {
             pw.print(prefix + "  ");
             pw.println(InsetsState.typeToString(mTypeControlTargetMap.keyAt(i)) + " -> "
                     + mTypeControlTargetMap.valueAt(i));
+        }
+        pw.println(prefix + "  " + "InsetsSourceProviders map:");
+        for (int i = mProviders.size() - 1; i >= 0; i--) {
+            pw.print(prefix + "  ");
+            pw.println(InsetsState.typeToString(mProviders.keyAt(i)) + " -> ");
+            mProviders.valueAt(i).dump(pw, prefix);
         }
     }
 }

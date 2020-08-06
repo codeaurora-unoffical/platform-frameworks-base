@@ -1,6 +1,7 @@
 ## used by service-wifi ##
 
 # Network Stack AIDL interface.
+rule android.net.DataStallReportParcelable* com.android.wifi.x.@0
 rule android.net.DhcpResultsParcelable* com.android.wifi.x.@0
 rule android.net.IIpMemoryStore* com.android.wifi.x.@0
 rule android.net.IIpMemoryStoreCallbacks* com.android.wifi.x.@0
@@ -14,6 +15,7 @@ rule android.net.Layer2InformationParcelable* com.android.wifi.x.@0
 rule android.net.Layer2PacketParcelable* com.android.wifi.x.@0
 rule android.net.MarkMaskParcel* com.android.wifi.x.@0
 rule android.net.NattKeepalivePacketDataParcelable* com.android.wifi.x.@0
+rule android.net.NetworkTestResultParcelable* com.android.wifi.x.@0
 rule android.net.PrivateDnsConfigParcel* com.android.wifi.x.@0
 rule android.net.ProvisioningConfigurationParcelable* com.android.wifi.x.@0
 rule android.net.ResolverParamsParcel* com.android.wifi.x.@0
@@ -29,6 +31,7 @@ rule android.net.ip.IIpClient* com.android.wifi.x.@0
 rule android.net.ip.IIpClientCallbacks* com.android.wifi.x.@0
 rule android.net.ipmemorystore.Blob* com.android.wifi.x.@0
 rule android.net.ipmemorystore.IOnBlobRetrievedListener* com.android.wifi.x.@0
+rule android.net.ipmemorystore.IOnStatusAndCountListener* com.android.wifi.x.@0
 rule android.net.ipmemorystore.IOnStatusListener* com.android.wifi.x.@0
 rule android.net.ipmemorystore.NetworkAttributesParcelable* com.android.wifi.x.@0
 rule android.net.ipmemorystore.SameL3NetworkResponseParcelable* com.android.wifi.x.@0
@@ -44,7 +47,9 @@ rule android.net.NetworkFactory* com.android.wifi.x.@0
 rule android.net.ip.IpClientCallbacks* com.android.wifi.x.@0
 rule android.net.ip.IpClientManager* com.android.wifi.x.@0
 rule android.net.ip.IpClientUtil* com.android.wifi.x.@0
+rule android.net.ipmemorystore.NetworkAttributes* com.android.wifi.x.@0
 rule android.net.ipmemorystore.OnBlobRetrievedListener* com.android.wifi.x.@0
+rule android.net.ipmemorystore.OnDeleteStatusListener* com.android.wifi.x.@0
 rule android.net.ipmemorystore.OnStatusListener* com.android.wifi.x.@0
 rule android.net.ipmemorystore.Status* com.android.wifi.x.@0
 rule android.net.networkstack.ModuleNetworkStackClient* com.android.wifi.x.@0
@@ -109,7 +114,6 @@ rule fi.iki.elonen.** com.android.wifi.x.@0
 ## used by both framework-wifi and service-wifi ##
 rule android.content.pm.BaseParceledListSlice* com.android.wifi.x.@0
 rule android.content.pm.ParceledListSlice* com.android.wifi.x.@0
-rule android.net.shared.Inet4AddressUtils* com.android.wifi.x.@0
 rule android.net.util.MacAddressUtils* com.android.wifi.x.@0
 rule android.net.util.nsd.DnsSdTxtRecord* com.android.wifi.x.@0
 rule android.os.HandlerExecutor* com.android.wifi.x.@0
@@ -118,3 +122,5 @@ rule com.android.internal.util.AsyncChannel* com.android.wifi.x.@0
 rule com.android.internal.util.AsyncService* com.android.wifi.x.@0
 rule com.android.internal.util.Preconditions* com.android.wifi.x.@0
 rule com.android.internal.util.Protocol* com.android.wifi.x.@0
+
+rule com.android.net.module.util.** com.android.wifi.x.@0

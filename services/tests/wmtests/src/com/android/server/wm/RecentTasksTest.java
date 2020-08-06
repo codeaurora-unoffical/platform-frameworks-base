@@ -46,6 +46,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -276,6 +277,31 @@ public class RecentTasksTest extends ActivityTestsBase {
     }
 
     @Test
+    public void testAddTasksInVisibilityUpdate_expectNoTrim() {
+        mRecentTasks.setOnlyTestVisibleRange();
+        mRecentTasks.setParameters(-1 /* min */, 1 /* max */, -1 /* ms */);
+        mRecentTasks.add(mTasks.get(0));
+
+        doAnswer(invocation -> {
+            assertTrue(mSupervisor.inActivityVisibilityUpdate());
+            // Simulate an activity is resumed by EnsureActivitiesVisibleHelper. If its state is
+            // change to RESUMED, it will also be added to recents.
+            mRecentTasks.add(mTasks.get(1));
+            invocation.callRealMethod();
+            return null;
+        }).when(mSupervisor).endActivityVisibilityUpdate();
+
+        mTaskContainer.ensureActivitiesVisible(null /* starting */, 0 /* configChanges */,
+                false /* preserveWindows */, false /* notifyClients */);
+
+        assertFalse(mSupervisor.inActivityVisibilityUpdate());
+        assertThat(mCallbacksRecorder.mAdded).hasSize(2);
+        // Expect nothing is trimmed because we don't want the loop of ensure-visibility to be
+        // impacted by the arbitrary number of task removals.
+        assertNoTasksTrimmed();
+    }
+
+    @Test
     public void testAddTasksMultipleTasks_expectRemovedNoTrim() {
         // Add multiple same-affinity non-document tasks, ensure that it removes the other task,
         // but that it does not trim it
@@ -438,15 +464,19 @@ public class RecentTasksTest extends ActivityTestsBase {
         mRecentTasks.add(task1);
         final Task task2 = taskBuilder.apply(true /* visible */);
         mRecentTasks.add(task2);
-        // Only the last task is kept in recents and the previous 2 tasks will becomes untracked
+        final Task task3 = createTaskBuilder(className).build();
+        mRecentTasks.add(task3);
+        // Only the last added task is kept in recents and the previous 2 tasks will become hidden
         // tasks because their intents are identical.
-        mRecentTasks.add(createTaskBuilder(className).build());
+        mRecentTasks.add(task1);
         // Go home to trigger the removal of untracked tasks.
         mRecentTasks.add(createTaskBuilder(".Home").setStack(mTaskContainer.getRootHomeTask())
                 .build());
 
+        // The task was added into recents again so it is not hidden and shouldn't be removed.
+        assertNotNull(task1.getTopNonFinishingActivity());
         // All activities in the invisible task should be finishing or removed.
-        assertNull(task1.getTopNonFinishingActivity());
+        assertNull(task3.getTopNonFinishingActivity());
         // The visible task should not be affected.
         assertNotNull(task2.getTopNonFinishingActivity());
     }

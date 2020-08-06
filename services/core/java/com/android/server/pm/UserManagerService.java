@@ -491,6 +491,7 @@ public class UserManagerService extends IUserManager.Stub {
         final SparseIntArray states;
         public WatchedUserStates() {
             states = new SparseIntArray();
+            invalidateIsUserUnlockedCache();
         }
         public int get(int userId) {
             return states.get(userId);
@@ -750,13 +751,19 @@ public class UserManagerService extends IUserManager.Stub {
     }
 
     public @NonNull List<UserInfo> getUsers(boolean excludeDying) {
-        return getUsers(/*excludePartial= */ true, excludeDying, /* excludePreCreated= */ true);
+        return getUsers(/*excludePartial= */ true, excludeDying, /* excludePreCreated= */
+                true);
     }
 
     @Override
     public @NonNull List<UserInfo> getUsers(boolean excludePartial, boolean excludeDying,
             boolean excludePreCreated) {
         checkManageOrCreateUsersPermission("query users");
+        return getUsersInternal(excludePartial, excludeDying, excludePreCreated);
+    }
+
+    private @NonNull List<UserInfo> getUsersInternal(boolean excludePartial, boolean excludeDying,
+            boolean excludePreCreated) {
         synchronized (mUsersLock) {
             ArrayList<UserInfo> users = new ArrayList<UserInfo>(mUsers.size());
             final int userSize = mUsers.size();
@@ -988,6 +995,15 @@ public class UserManagerService extends IUserManager.Stub {
 
         ensureCanModifyQuietMode(
                 callingPackage, Binder.getCallingUid(), userId, target != null, dontAskCredential);
+
+        if (onlyIfCredentialNotRequired && callingPackage.equals(
+                getPackageManagerInternal().getSystemUiServiceComponent().getPackageName())) {
+            // This is to prevent SysUI from accidentally allowing the profile to turned on
+            // without password when keyguard is still locked.
+            throw new SecurityException("SystemUI is not allowed to set "
+                    + "QUIET_MODE_DISABLE_ONLY_IF_CREDENTIAL_NOT_REQUIRED");
+        }
+
         final long identity = Binder.clearCallingIdentity();
         try {
             if (enableQuietMode) {
@@ -995,7 +1011,17 @@ public class UserManagerService extends IUserManager.Stub {
                         userId, true /* enableQuietMode */, target, callingPackage);
                 return true;
             }
-            mLockPatternUtils.tryUnlockWithCachedUnifiedChallenge(userId);
+            if (mLockPatternUtils.isManagedProfileWithUnifiedChallenge(userId)) {
+                KeyguardManager km = mContext.getSystemService(KeyguardManager.class);
+                // Normally only attempt to auto-unlock unified challenge if keyguard is not showing
+                // (to stop turning profile on automatically via the QS tile), except when we
+                // are called with QUIET_MODE_DISABLE_ONLY_IF_CREDENTIAL_NOT_REQUIRED, in which
+                // case always attempt to auto-unlock.
+                if (!km.isDeviceLocked(mLocalService.getProfileParentId(userId))
+                        || onlyIfCredentialNotRequired) {
+                    mLockPatternUtils.tryUnlockWithCachedUnifiedChallenge(userId);
+                }
+            }
             final boolean needToShowConfirmCredential = !dontAskCredential
                     && mLockPatternUtils.isSecure(userId)
                     && !StorageManager.isUserKeyUnlocked(userId);
@@ -1028,6 +1054,8 @@ public class UserManagerService extends IUserManager.Stub {
      */
     private void ensureCanModifyQuietMode(String callingPackage, int callingUid,
             @UserIdInt int targetUserId, boolean startIntent, boolean dontAskCredential) {
+        verifyCallingPackage(callingPackage, callingUid);
+
         if (hasManageUsersPermission()) {
             return;
         }
@@ -1049,7 +1077,6 @@ public class UserManagerService extends IUserManager.Stub {
             return;
         }
 
-        verifyCallingPackage(callingPackage, callingUid);
         final ShortcutServiceInternal shortcutInternal =
                 LocalServices.getService(ShortcutServiceInternal.class);
         if (shortcutInternal != null) {
@@ -1330,6 +1357,9 @@ public class UserManagerService extends IUserManager.Stub {
         return userTypeDetails.getBadgeLabel(badgeIndex);
     }
 
+    /**
+     * @return the color (not the resource ID) to be used for the user's badge in light theme
+     */
     @Override
     public @ColorRes int getUserBadgeColorResId(@UserIdInt int userId) {
         checkManageOrInteractPermissionIfCallerInOtherProfileGroup(userId,
@@ -1337,11 +1367,26 @@ public class UserManagerService extends IUserManager.Stub {
         final UserInfo userInfo = getUserInfoNoChecks(userId);
         final UserTypeDetails userTypeDetails = getUserTypeDetails(userInfo);
         if (userInfo == null || userTypeDetails == null || !userTypeDetails.hasBadge()) {
+            Slog.e(LOG_TAG, "Requested badge dark color for non-badged user " + userId);
+            return Resources.ID_NULL;
+        }
+        return userTypeDetails.getBadgeColor(userInfo.profileBadge);
+    }
+
+    /**
+     * @return the color (not the resource ID) to be used for the user's badge in dark theme
+     */
+    @Override
+    public @ColorRes int getUserBadgeDarkColorResId(@UserIdInt int userId) {
+        checkManageOrInteractPermissionIfCallerInOtherProfileGroup(userId,
+                "getUserBadgeDarkColorResId");
+        final UserInfo userInfo = getUserInfoNoChecks(userId);
+        final UserTypeDetails userTypeDetails = getUserTypeDetails(userInfo);
+        if (userInfo == null || userTypeDetails == null || !userTypeDetails.hasBadge()) {
             Slog.e(LOG_TAG, "Requested badge color for non-badged user " + userId);
             return Resources.ID_NULL;
         }
-        final int badgeIndex = userInfo.profileBadge;
-        return userTypeDetails.getBadgeColor(badgeIndex);
+        return userTypeDetails.getDarkThemeBadgeColor(userInfo.profileBadge);
     }
 
     @Override
@@ -2231,9 +2276,6 @@ public class UserManagerService extends IUserManager.Stub {
         // Managed profiles have their own specific rules.
         final boolean isManagedProfile = type.isManagedProfile();
         if (isManagedProfile) {
-            if (ActivityManager.isLowRamDeviceStatic()) {
-                return false;
-            }
             if (!mContext.getPackageManager().hasSystemFeature(
                     PackageManager.FEATURE_MANAGED_USERS)) {
                 return false;
@@ -3255,11 +3297,13 @@ public class UserManagerService extends IUserManager.Stub {
         final TimingsTraceAndSlog t = new TimingsTraceAndSlog();
         t.traceBegin("createUser-" + flags);
         final long sessionId = logUserCreateJourneyBegin(nextProbableUserId, userType, flags);
+        UserInfo newUser = null;
         try {
-            return createUserInternalUncheckedNoTracing(name, userType, flags, parentId,
-                    preCreate, disallowedPackages, t);
+            newUser = createUserInternalUncheckedNoTracing(name, userType, flags, parentId,
+                        preCreate, disallowedPackages, t);
+            return newUser;
         } finally {
-            logUserCreateJourneyFinish(sessionId, nextProbableUserId);
+            logUserCreateJourneyFinish(sessionId, nextProbableUserId, newUser != null);
             t.traceEnd();
         }
     }
@@ -3278,10 +3322,11 @@ public class UserManagerService extends IUserManager.Stub {
         return sessionId;
     }
 
-    private void logUserCreateJourneyFinish(long sessionId, @UserIdInt int userId) {
+    private void logUserCreateJourneyFinish(long sessionId, @UserIdInt int userId, boolean finish) {
         FrameworkStatsLog.write(FrameworkStatsLog.USER_LIFECYCLE_EVENT_OCCURRED, sessionId, userId,
                 FrameworkStatsLog.USER_LIFECYCLE_EVENT_OCCURRED__EVENT__CREATE_USER,
-                FrameworkStatsLog.USER_LIFECYCLE_EVENT_OCCURRED__STATE__FINISH);
+                finish ? FrameworkStatsLog.USER_LIFECYCLE_EVENT_OCCURRED__STATE__FINISH
+                       : FrameworkStatsLog.USER_LIFECYCLE_EVENT_OCCURRED__STATE__NONE);
     }
 
     private UserInfo createUserInternalUncheckedNoTracing(@Nullable String name,
@@ -3489,7 +3534,7 @@ public class UserManagerService extends IUserManager.Stub {
                     Slog.w(LOG_TAG, "could not start pre-created user " + userId, e);
                 }
             } else {
-                dispatchUserAddedIntent(userInfo);
+                dispatchUserAdded(userInfo);
             }
 
         } finally {
@@ -3550,7 +3595,7 @@ public class UserManagerService extends IUserManager.Stub {
             // Could not read the existing permissions, re-grant them.
             mPm.onNewUserCreated(preCreatedUser.id);
         }
-        dispatchUserAddedIntent(preCreatedUser);
+        dispatchUserAdded(preCreatedUser);
         return preCreatedUser;
     }
 
@@ -3582,7 +3627,7 @@ public class UserManagerService extends IUserManager.Stub {
         return (now > EPOCH_PLUS_30_YEARS) ? now : 0;
     }
 
-    private void dispatchUserAddedIntent(@NonNull UserInfo userInfo) {
+    private void dispatchUserAdded(@NonNull UserInfo userInfo) {
         Intent addedIntent = new Intent(Intent.ACTION_USER_ADDED);
         addedIntent.putExtra(Intent.EXTRA_USER_HANDLE, userInfo.id);
         // Also, add the UserHandle for mainline modules which can't use the @hide
@@ -3592,6 +3637,15 @@ public class UserManagerService extends IUserManager.Stub {
                 android.Manifest.permission.MANAGE_USERS);
         MetricsLogger.count(mContext, userInfo.isGuest() ? TRON_GUEST_CREATED
                 : (userInfo.isDemo() ? TRON_DEMO_CREATED : TRON_USER_CREATED), 1);
+
+        if (!userInfo.isProfile()) {
+            // If the user switch hasn't been explicitly toggled on or off by the user, turn it on.
+            if (android.provider.Settings.Global.getString(mContext.getContentResolver(),
+                    android.provider.Settings.Global.USER_SWITCHER_ENABLED) == null) {
+                android.provider.Settings.Global.putInt(mContext.getContentResolver(),
+                        android.provider.Settings.Global.USER_SWITCHER_ENABLED, 1);
+            }
+        }
     }
 
     /**
@@ -4516,8 +4570,8 @@ public class UserManagerService extends IUserManager.Stub {
             switch(cmd) {
                 case "list":
                     return runList(pw, shell);
-                case "list-missing-system-packages":
-                    return runListMissingSystemPackages(pw, shell);
+                case "report-system-user-package-whitelist-problems":
+                    return runReportPackageWhitelistProblems(pw, shell);
                 default:
                     return shell.handleDefaultCommands(cmd);
             }
@@ -4584,17 +4638,22 @@ public class UserManagerService extends IUserManager.Stub {
         }
     }
 
-    private int runListMissingSystemPackages(PrintWriter pw, Shell shell) {
+    private int runReportPackageWhitelistProblems(PrintWriter pw, Shell shell) {
         boolean verbose = false;
-        boolean force = false;
+        boolean criticalOnly = false;
+        int mode = UserSystemPackageInstaller.USER_TYPE_PACKAGE_WHITELIST_MODE_NONE;
         String opt;
         while ((opt = shell.getNextOption()) != null) {
             switch (opt) {
                 case "-v":
+                case "--verbose":
                     verbose = true;
                     break;
-                case "--force":
-                    force = true;
+                case "--critical-only":
+                    criticalOnly = true;
+                    break;
+                case "--mode":
+                    mode = Integer.parseInt(shell.getNextArgRequired());
                     break;
                 default:
                     pw.println("Invalid option: " + opt);
@@ -4602,8 +4661,12 @@ public class UserManagerService extends IUserManager.Stub {
             }
         }
 
+        Slog.d(LOG_TAG, "runReportPackageWhitelistProblems(): verbose=" + verbose
+                + ", criticalOnly=" + criticalOnly
+                + ", mode=" + UserSystemPackageInstaller.modeToString(mode));
+
         try (IndentingPrintWriter ipw = new IndentingPrintWriter(pw, "  ")) {
-            mSystemPackageInstaller.dumpMissingSystemPackages(ipw, force, verbose);
+            mSystemPackageInstaller.dumpPackageWhitelistProblems(ipw, mode, verbose, criticalOnly);
         }
         return 0;
     }
@@ -4988,6 +5051,12 @@ public class UserManagerService extends IUserManager.Stub {
         }
 
         @Override
+        public @NonNull List<UserInfo> getUsers(boolean excludeDying) {
+            return UserManagerService.this.getUsersInternal(/*excludePartial= */ true,
+                    excludeDying, /* excludePreCreated= */ true);
+        }
+
+        @Override
         public boolean isUserUnlockingOrUnlocked(@UserIdInt int userId) {
             int state;
             synchronized (mUserStates) {
@@ -5176,13 +5245,18 @@ public class UserManagerService extends IUserManager.Stub {
             final PrintWriter pw = getOutPrintWriter();
             pw.println("User manager (user) commands:");
             pw.println("  help");
-            pw.println("    Print this help text.");
+            pw.println("    Prints this help text.");
             pw.println("");
             pw.println("  list [-v] [-all]");
             pw.println("    Prints all users on the system.");
-            pw.println("  list-missing-system-packages [-v] [--force]");
-            pw.println("    Prints all system packages that were not explicitly configured to be "
-                    + "installed.");
+            pw.println("  report-system-user-package-whitelist-problems [-v | --verbose] "
+                    + "[--critical-only] [--mode MODE]");
+            pw.println("    Reports all issues on user-type package whitelist XML files. Options:");
+            pw.println("    -v | --verbose : shows extra info, like number of issues");
+            pw.println("    --critical-only: show only critical issues, excluding warnings");
+            pw.println("    --mode MODE: shows what errors would be if device used mode MODE (where"
+                    + " MODE is the whitelist mode integer as defined by "
+                    + "config_userTypePackageWhitelistMode)");
         }
     }
 

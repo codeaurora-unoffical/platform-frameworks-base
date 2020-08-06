@@ -2742,6 +2742,9 @@ final public class MediaCodec {
          * See {@link MediaCodec.CryptoInfo.Pattern}.
          */
         public void setPattern(Pattern newPattern) {
+            if (newPattern == null) {
+                newPattern = zeroPattern;
+            }
             pattern = newPattern;
         }
 
@@ -2759,7 +2762,7 @@ final public class MediaCodec {
                 builder.append(hexdigits.charAt(key[i] & 0x0f));
             }
             builder.append("], iv [");
-            for (int i = 0; i < key.length; i++) {
+            for (int i = 0; i < iv.length; i++) {
                 builder.append(hexdigits.charAt((iv[i] & 0xf0) >> 4));
                 builder.append(hexdigits.charAt(iv[i] & 0x0f));
             }
@@ -2767,6 +2770,11 @@ final public class MediaCodec {
             builder.append(Arrays.toString(numBytesOfClearData));
             builder.append(", encrypted ");
             builder.append(Arrays.toString(numBytesOfEncryptedData));
+            builder.append(", pattern (encrypt: ");
+            builder.append(pattern.mEncryptBlocks);
+            builder.append(", skip: ");
+            builder.append(pattern.mSkipBlocks);
+            builder.append(")");
             return builder.toString();
         }
     };

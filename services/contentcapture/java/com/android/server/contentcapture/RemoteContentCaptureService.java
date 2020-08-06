@@ -54,7 +54,9 @@ final class RemoteContentCaptureService
             boolean verbose, int idleUnbindTimeoutMs) {
         super(context, serviceInterface, serviceComponentName, userId, perUserService,
                 context.getMainThreadHandler(),
-                bindInstantServiceAllowed ? Context.BIND_ALLOW_INSTANT : 0, verbose,
+                Context.BIND_INCLUDE_CAPABILITIES
+                        | (bindInstantServiceAllowed ? Context.BIND_ALLOW_INSTANT : 0),
+                verbose,
                 /* initialCapacity= */ 2);
         mPerUserService = perUserService;
         mServerCallback = callback.asBinder();
@@ -154,6 +156,9 @@ final class RemoteContentCaptureService
     public void onDataShareRequest(@NonNull DataShareRequest request,
             @NonNull IDataShareCallback.Stub dataShareCallback) {
         scheduleAsyncRequest((s) -> s.onDataShared(request, dataShareCallback));
+        writeServiceEvent(
+                FrameworkStatsLog.CONTENT_CAPTURE_SERVICE_EVENTS__EVENT__ON_DATA_SHARE_REQUEST,
+                mComponentName, request.getPackageName());
     }
 
     /**

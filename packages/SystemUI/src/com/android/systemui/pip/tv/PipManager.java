@@ -233,6 +233,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
     @Inject
     public PipManager(Context context, BroadcastDispatcher broadcastDispatcher,
             PipBoundsHandler pipBoundsHandler,
+            PipTaskOrganizer pipTaskOrganizer,
             PipSurfaceTransactionHelper surfaceTransactionHelper,
             Divider divider) {
         if (mInitialized) {
@@ -250,8 +251,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
 
         mResizeAnimationDuration = context.getResources()
                 .getInteger(R.integer.config_pipResizeAnimationDuration);
-        mPipTaskOrganizer = new PipTaskOrganizer(mContext, mPipBoundsHandler,
-                surfaceTransactionHelper, divider);
+        mPipTaskOrganizer = pipTaskOrganizer;
         mPipTaskOrganizer.registerPipTransitionCallback(this);
         mActivityTaskManager = ActivityTaskManager.getService();
         ActivityManagerWrapper.getInstance().registerTaskStackListener(mTaskStackListener);
@@ -468,7 +468,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
             mPipTaskOrganizer.scheduleAnimateResizePip(mCurrentPipBounds, mResizeAnimationDuration,
                     null);
         } else {
-            mPipTaskOrganizer.dismissPip(mResizeAnimationDuration);
+            mPipTaskOrganizer.exitPip(mResizeAnimationDuration);
         }
     }
 
@@ -716,7 +716,7 @@ public class PipManager implements BasePipManager, PipTaskOrganizer.PipTransitio
         @Override
         public void onActivityRestartAttempt(RunningTaskInfo task, boolean homeTaskVisible,
                 boolean clearedTask, boolean wasVisible) {
-            if (!wasVisible || task.configuration.windowConfiguration.getWindowingMode()
+            if (task.configuration.windowConfiguration.getWindowingMode()
                     != WINDOWING_MODE_PINNED) {
                 return;
             }

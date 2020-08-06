@@ -23,6 +23,7 @@ import android.os.Looper;
 import android.os.Process;
 
 import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.dagger.qualifiers.LongRunning;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.dagger.qualifiers.UiBackground;
 
@@ -45,6 +46,17 @@ public abstract class ConcurrencyModule {
     @Background
     public static Looper provideBgLooper() {
         HandlerThread thread = new HandlerThread("SysUiBg",
+                Process.THREAD_PRIORITY_BACKGROUND);
+        thread.start();
+        return thread.getLooper();
+    }
+
+    /** Long running tasks Looper */
+    @Provides
+    @Singleton
+    @LongRunning
+    public static Looper provideLongRunningLooper() {
+        HandlerThread thread = new HandlerThread("SysUiLng",
                 Process.THREAD_PRIORITY_BACKGROUND);
         thread.start();
         return thread.getLooper();
@@ -80,11 +92,30 @@ public abstract class ConcurrencyModule {
     }
 
     /**
+     * @deprecated Please specify @Main or @Background when injecting a Handler or use an Executor.
+     */
+    @Deprecated
+    @Provides
+    public static Handler provideHandler() {
+        return new Handler();
+    }
+
+    /**
      * Provide a Background-Thread Executor by default.
      */
     @Provides
     @Singleton
     public static Executor provideExecutor(@Background Looper looper) {
+        return new ExecutorImpl(looper);
+    }
+
+    /**
+     * Provide a Long running Executor by default.
+     */
+    @Provides
+    @Singleton
+    @LongRunning
+    public static Executor provideLongRunningExecutor(@LongRunning Looper looper) {
         return new ExecutorImpl(looper);
     }
 

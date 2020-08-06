@@ -19,7 +19,6 @@ package com.android.server.wm;
 import static android.app.ActivityManager.START_SUCCESS;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
-import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
 import static android.os.FactoryTest.FACTORY_TEST_LOW_LEVEL;
 
@@ -53,6 +52,7 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.ArrayUtils;
 import com.android.server.am.ActivityManagerService;
 import com.android.server.am.PendingIntentRecord;
+import com.android.server.uri.NeededUriGrants;
 import com.android.server.wm.ActivityStackSupervisor.PendingActivityLaunch;
 import com.android.server.wm.ActivityStarter.DefaultFactory;
 import com.android.server.wm.ActivityStarter.Factory;
@@ -193,9 +193,7 @@ public class ActivityStartController {
         final ActivityStack homeStack;
         try {
             // Make sure home stack exists on display area.
-            // TODO(b/153624902): Replace with TaskDisplayArea#getOrCreateRootHomeTask()
-            homeStack = taskDisplayArea.getOrCreateStack(WINDOWING_MODE_UNDEFINED,
-                    ACTIVITY_TYPE_HOME, ON_TOP);
+            homeStack = taskDisplayArea.getOrCreateRootHomeTask(ON_TOP);
         } finally {
             mSupervisor.endDeferResume();
         }
@@ -405,6 +403,7 @@ public class ActivityStartController {
             // potentially acquire activity manager lock that leads to deadlock.
             for (int i = 0; i < intents.length; i++) {
                 Intent intent = intents[i];
+                NeededUriGrants intentGrants = null;
 
                 // Refuse possible leaked file descriptors.
                 if (intent.hasFileDescriptors()) {
@@ -421,6 +420,14 @@ public class ActivityStartController {
                         0 /* startFlags */, null /* profilerInfo */, userId, filterCallingUid);
                 aInfo = mService.mAmInternal.getActivityInfoForUser(aInfo, userId);
 
+                // Carefully collect grants without holding lock
+                if (aInfo != null) {
+                    intentGrants = mSupervisor.mService.mUgmInternal
+                            .checkGrantUriPermissionFromIntent(intent, filterCallingUid,
+                                    aInfo.applicationInfo.packageName,
+                                    UserHandle.getUserId(aInfo.applicationInfo.uid));
+                }
+
                 if (aInfo != null) {
                     if ((aInfo.applicationInfo.privateFlags
                             & ApplicationInfo.PRIVATE_FLAG_CANT_SAVE_STATE) != 0) {
@@ -436,6 +443,7 @@ public class ActivityStartController {
                         ? options
                         : null;
                 starters[i] = obtainStarter(intent, reason)
+                        .setIntentGrants(intentGrants)
                         .setCaller(caller)
                         .setResolvedType(resolvedTypes[i])
                         .setActivityInfo(aInfo)
@@ -470,28 +478,33 @@ public class ActivityStartController {
             final ActivityRecord[] outActivity = new ActivityRecord[1];
             // Lock the loop to ensure the activities launched in a sequence.
             synchronized (mService.mGlobalLock) {
-                for (int i = 0; i < starters.length; i++) {
-                    final int startResult = starters[i].setResultTo(resultTo)
-                            .setOutActivity(outActivity).execute();
-                    if (startResult < START_SUCCESS) {
-                        // Abort by error result and recycle unused starters.
-                        for (int j = i + 1; j < starters.length; j++) {
-                            mFactory.recycle(starters[j]);
+                mService.deferWindowLayout();
+                try {
+                    for (int i = 0; i < starters.length; i++) {
+                        final int startResult = starters[i].setResultTo(resultTo)
+                                .setOutActivity(outActivity).execute();
+                        if (startResult < START_SUCCESS) {
+                            // Abort by error result and recycle unused starters.
+                            for (int j = i + 1; j < starters.length; j++) {
+                                mFactory.recycle(starters[j]);
+                            }
+                            return startResult;
                         }
-                        return startResult;
-                    }
-                    final ActivityRecord started = outActivity[0];
-                    if (started != null && started.getUid() == filterCallingUid) {
-                        // Only the started activity which has the same uid as the source caller can
-                        // be the caller of next activity.
-                        resultTo = started.appToken;
-                    } else {
-                        resultTo = sourceResultTo;
-                        // Different apps not adjacent to the caller are forced to be new task.
-                        if (i < starters.length - 1) {
-                            starters[i + 1].getIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        final ActivityRecord started = outActivity[0];
+                        if (started != null && started.getUid() == filterCallingUid) {
+                            // Only the started activity which has the same uid as the source caller
+                            // can be the caller of next activity.
+                            resultTo = started.appToken;
+                        } else {
+                            resultTo = sourceResultTo;
+                            // Different apps not adjacent to the caller are forced to be new task.
+                            if (i < starters.length - 1) {
+                                starters[i + 1].getIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            }
                         }
                     }
+                } finally {
+                    mService.continueWindowLayout();
                 }
             }
         } finally {
@@ -515,7 +528,7 @@ public class ActivityStartController {
                     "pendingActivityLaunch");
             try {
                 starter.startResolvedActivity(pal.r, pal.sourceRecord, null, null, pal.startFlags,
-                        resume, pal.r.pendingOptions, null);
+                        resume, pal.r.pendingOptions, null, pal.intentGrants);
             } catch (Exception e) {
                 Slog.e(TAG, "Exception during pending activity launch pal=" + pal, e);
                 pal.sendErrorResult(e.getMessage());

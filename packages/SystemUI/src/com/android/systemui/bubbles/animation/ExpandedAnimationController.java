@@ -32,6 +32,7 @@ import androidx.dynamicanimation.animation.SpringForce;
 
 import com.android.systemui.Interpolators;
 import com.android.systemui.R;
+import com.android.systemui.util.animation.PhysicsAnimator;
 import com.android.systemui.util.magnetictarget.MagnetizedObject;
 
 import com.google.android.collect.Sets;
@@ -55,7 +56,7 @@ public class ExpandedAnimationController
     private static final int ANIMATE_TRANSLATION_FACTOR = 4;
 
     /** Duration of the expand/collapse target path animation. */
-    private static final int EXPAND_COLLAPSE_TARGET_ANIM_DURATION = 175;
+    public static final int EXPAND_COLLAPSE_TARGET_ANIM_DURATION = 175;
 
     /** Stiffness for the expand/collapse path-following animation. */
     private static final int EXPAND_COLLAPSE_ANIM_STIFFNESS = 1000;
@@ -68,6 +69,10 @@ public class ExpandedAnimationController
      * target.
      */
     private static final float FLING_TO_DISMISS_MIN_VELOCITY = 6000f;
+
+    private final PhysicsAnimator.SpringConfig mAnimateOutSpringConfig =
+            new PhysicsAnimator.SpringConfig(
+                    EXPAND_COLLAPSE_ANIM_STIFFNESS, SpringForce.DAMPING_RATIO_NO_BOUNCY);
 
     /** Horizontal offset between bubbles, which we need to know to re-stack them. */
     private float mStackOffsetPx;
@@ -87,6 +92,14 @@ public class ExpandedAnimationController
     private int mScreenOrientation;
 
     private boolean mAnimatingExpand = false;
+
+    /**
+     * Whether we are animating other Bubbles UI elements out in preparation for a call to
+     * {@link #collapseBackToStack}. If true, we won't animate bubbles in response to adds or
+     * reorders.
+     */
+    private boolean mPreparingToCollapse = false;
+
     private boolean mAnimatingCollapse = false;
     private @Nullable Runnable mAfterExpand;
     private Runnable mAfterCollapse;
@@ -116,10 +129,17 @@ public class ExpandedAnimationController
 
     private int mExpandedViewPadding;
 
+    /**
+     * Callback to run whenever any bubble is animated out. The BubbleStackView will check if the
+     * end of this animation means we have no bubbles left, and notify the BubbleController.
+     */
+    private Runnable mOnBubbleAnimatedOutAction;
+
     public ExpandedAnimationController(Point displaySize, int expandedViewPadding,
-            int orientation) {
-        updateOrientation(orientation, displaySize);
+            int orientation, Runnable onBubbleAnimatedOutAction) {
+        updateResources(orientation, displaySize);
         mExpandedViewPadding = expandedViewPadding;
+        mOnBubbleAnimatedOutAction = onBubbleAnimatedOutAction;
     }
 
     /**
@@ -138,6 +158,7 @@ public class ExpandedAnimationController
      */
     public void expandFromStack(
             @Nullable Runnable after, @Nullable Runnable leadBubbleEndAction) {
+        mPreparingToCollapse = false;
         mAnimatingCollapse = false;
         mAnimatingExpand = true;
         mAfterExpand = after;
@@ -153,9 +174,20 @@ public class ExpandedAnimationController
         expandFromStack(after, null /* leadBubbleEndAction */);
     }
 
+    /**
+     * Sets that we're animating the stack collapsed, but haven't yet called
+     * {@link #collapseBackToStack}. This will temporarily suspend animations for bubbles that are
+     * added or re-ordered, since the upcoming collapse animation will handle positioning those
+     * bubbles in the collapsed stack.
+     */
+    public void notifyPreparingToCollapse() {
+        mPreparingToCollapse = true;
+    }
+
     /** Animate collapsing the bubbles back to their stacked position. */
     public void collapseBackToStack(PointF collapsePoint, Runnable after) {
         mAnimatingExpand = false;
+        mPreparingToCollapse = false;
         mAnimatingCollapse = true;
         mAfterCollapse = after;
         mCollapsePoint = collapsePoint;
@@ -168,15 +200,25 @@ public class ExpandedAnimationController
      * @param orientation Landscape or portrait.
      * @param displaySize Updated display size.
      */
-    public void updateOrientation(int orientation, Point displaySize) {
+    public void updateResources(int orientation, Point displaySize) {
         mScreenOrientation = orientation;
         mDisplaySize = displaySize;
-        if (mLayout != null) {
-            Resources res = mLayout.getContext().getResources();
-            mBubblePaddingTop = res.getDimensionPixelSize(R.dimen.bubble_padding_top);
-            mStatusBarHeight = res.getDimensionPixelSize(
-                    com.android.internal.R.dimen.status_bar_height);
+        if (mLayout == null) {
+            return;
         }
+        Resources res = mLayout.getContext().getResources();
+        mBubblePaddingTop = res.getDimensionPixelSize(R.dimen.bubble_padding_top);
+        mStatusBarHeight = res.getDimensionPixelSize(
+                com.android.internal.R.dimen.status_bar_height);
+        mStackOffsetPx = res.getDimensionPixelSize(R.dimen.bubble_stack_offset);
+        mBubblePaddingTop = res.getDimensionPixelSize(R.dimen.bubble_padding_top);
+        mBubbleSizePx = res.getDimensionPixelSize(R.dimen.individual_bubble_size);
+        mBubblesMaxRendered = res.getInteger(R.integer.bubbles_max_rendered);
+
+        // Includes overflow button.
+        float totalGapWidth = getWidthForDisplayingBubbles() - (mExpandedViewPadding * 2)
+                - (mBubblesMaxRendered + 1) * mBubbleSizePx;
+        mSpaceBetweenBubbles = totalGapWidth / mBubblesMaxRendered;
     }
 
     /**
@@ -195,6 +237,10 @@ public class ExpandedAnimationController
                 }
 
                 mAfterExpand = null;
+
+                // Update bubble positions in case any bubbles were added or removed during the
+                // expansion animation.
+                updateBubblePositions();
             };
         } else {
             after = () -> {
@@ -355,8 +401,8 @@ public class ExpandedAnimationController
         }
         animationForChild(bubble)
                 .withStiffness(SpringForce.STIFFNESS_HIGH)
-                .scaleX(1.1f)
-                .scaleY(1.1f)
+                .scaleX(0f)
+                .scaleY(0f)
                 .translationY(bubble.getTranslationY() + translationYBy)
                 .alpha(0f, after)
                 .start();
@@ -432,18 +478,7 @@ public class ExpandedAnimationController
 
     @Override
     void onActiveControllerForLayout(PhysicsAnimationLayout layout) {
-        final Resources res = layout.getResources();
-        mStackOffsetPx = res.getDimensionPixelSize(R.dimen.bubble_stack_offset);
-        mBubblePaddingTop = res.getDimensionPixelSize(R.dimen.bubble_padding_top);
-        mBubbleSizePx = res.getDimensionPixelSize(R.dimen.individual_bubble_size);
-        mStatusBarHeight =
-                res.getDimensionPixelSize(com.android.internal.R.dimen.status_bar_height);
-        mBubblesMaxRendered = res.getInteger(R.integer.bubbles_max_rendered);
-
-        // Includes overflow button.
-        float totalGapWidth = getWidthForDisplayingBubbles() - (mExpandedViewPadding * 2)
-                - (mBubblesMaxRendered + 1) * mBubbleSizePx;
-        mSpaceBetweenBubbles = totalGapWidth / mBubblesMaxRendered;
+        updateResources(mScreenOrientation, mDisplaySize);
 
         // Ensure that all child views are at 1x scale, and visible, in case they were animating
         // in.
@@ -489,29 +524,34 @@ public class ExpandedAnimationController
             startOrUpdatePathAnimation(false /* expanding */);
         } else {
             child.setTranslationX(getBubbleLeft(index));
-            animationForChild(child)
-                    .translationY(
-                            getExpandedY() - mBubbleSizePx * ANIMATE_TRANSLATION_FACTOR, /* from */
-                            getExpandedY() /* to */)
-                    .start();
-            updateBubblePositions();
+
+            // If we're preparing to collapse, don't start animations since the collapse animation
+            // will take over and animate the new bubble into the correct (stacked) position.
+            if (!mPreparingToCollapse) {
+                animationForChild(child)
+                        .translationY(
+                                getExpandedY()
+                                        - mBubbleSizePx * ANIMATE_TRANSLATION_FACTOR, /* from */
+                                getExpandedY() /* to */)
+                        .start();
+                updateBubblePositions();
+            }
         }
     }
 
     @Override
     void onChildRemoved(View child, int index, Runnable finishRemoval) {
-        final PhysicsAnimationLayout.PhysicsPropertyAnimator animator = animationForChild(child);
-
         // If we're removing the dragged-out bubble, that means it got dismissed.
         if (child.equals(getDraggedOutBubble())) {
             mMagnetizedBubbleDraggingOut = null;
             finishRemoval.run();
+            mOnBubbleAnimatedOutAction.run();
         } else {
-            animator.alpha(0f, finishRemoval /* endAction */)
-                    .withStiffness(SpringForce.STIFFNESS_HIGH)
-                    .withDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY)
-                    .scaleX(1.1f)
-                    .scaleY(1.1f)
+            PhysicsAnimator.getInstance(child)
+                    .spring(DynamicAnimation.ALPHA, 0f)
+                    .spring(DynamicAnimation.SCALE_X, 0f, mAnimateOutSpringConfig)
+                    .spring(DynamicAnimation.SCALE_Y, 0f, mAnimateOutSpringConfig)
+                    .withEndActions(finishRemoval, mOnBubbleAnimatedOutAction)
                     .start();
         }
 
@@ -521,12 +561,20 @@ public class ExpandedAnimationController
 
     @Override
     void onChildReordered(View child, int oldIndex, int newIndex) {
-        updateBubblePositions();
+        if (mPreparingToCollapse) {
+            // If a re-order is received while we're preparing to collapse, ignore it. Once started,
+            // the collapse animation will animate all of the bubbles to their correct (stacked)
+            // position.
+            return;
+        }
 
-        // We expect reordering during collapse, since we'll put the last selected bubble on top.
-        // Update the collapse animation so they end up in the right stacked positions.
         if (mAnimatingCollapse) {
+            // If a re-order is received during collapse, update the animation so that the bubbles
+            // end up in the correct (stacked) position.
             startOrUpdatePathAnimation(false /* expanding */);
+        } else {
+            // Otherwise, animate the bubbles around to reflect their new order.
+            updateBubblePositions();
         }
     }
 

@@ -125,6 +125,11 @@ public class SystemActions extends SystemUI {
     public static final int SYSTEM_ACTION_ID_ACCESSIBILITY_BUTTON_CHOOSER =
             AccessibilityService.GLOBAL_ACTION_ACCESSIBILITY_BUTTON_CHOOSER; // 12
 
+    public static final int SYSTEM_ACTION_ID_ACCESSIBILITY_SHORTCUT =
+            AccessibilityService.GLOBAL_ACTION_ACCESSIBILITY_SHORTCUT; // 13
+
+    private static final String PERMISSION_SELF = "com.android.systemui.permission.SELF";
+
     private Recents mRecents;
     private StatusBar mStatusBar;
     private SystemActionsBroadcastReceiver mReceiver;
@@ -144,7 +149,11 @@ public class SystemActions extends SystemUI {
 
     @Override
     public void start() {
-        mContext.registerReceiverForAllUsers(mReceiver, mReceiver.createIntentFilter(), null, null);
+        mContext.registerReceiverForAllUsers(
+                mReceiver,
+                mReceiver.createIntentFilter(),
+                PERMISSION_SELF,
+                null);
         registerActions();
     }
 
@@ -191,6 +200,10 @@ public class SystemActions extends SystemUI {
                 R.string.accessibility_system_action_screenshot_label,
                 SystemActionsBroadcastReceiver.INTENT_ACTION_TAKE_SCREENSHOT);
 
+        RemoteAction actionAccessibilityShortcut = createRemoteAction(
+                R.string.accessibility_system_action_hardware_a11y_shortcut_label,
+                SystemActionsBroadcastReceiver.INTENT_ACTION_ACCESSIBILITY_SHORTCUT);
+
         mA11yManager.registerSystemAction(actionBack, SYSTEM_ACTION_ID_BACK);
         mA11yManager.registerSystemAction(actionHome, SYSTEM_ACTION_ID_HOME);
         mA11yManager.registerSystemAction(actionRecents, SYSTEM_ACTION_ID_RECENTS);
@@ -199,6 +212,8 @@ public class SystemActions extends SystemUI {
         mA11yManager.registerSystemAction(actionPowerDialog, SYSTEM_ACTION_ID_POWER_DIALOG);
         mA11yManager.registerSystemAction(actionLockScreen, SYSTEM_ACTION_ID_LOCK_SCREEN);
         mA11yManager.registerSystemAction(actionTakeScreenshot, SYSTEM_ACTION_ID_TAKE_SCREENSHOT);
+        mA11yManager.registerSystemAction(
+                actionAccessibilityShortcut, SYSTEM_ACTION_ID_ACCESSIBILITY_SHORTCUT);
     }
 
     /**
@@ -242,12 +257,17 @@ public class SystemActions extends SystemUI {
                 intent = SystemActionsBroadcastReceiver.INTENT_ACTION_TAKE_SCREENSHOT;
                 break;
             case SYSTEM_ACTION_ID_ACCESSIBILITY_BUTTON:
-                labelId = R.string.accessibility_system_action_accessibility_button_label;
+                labelId = R.string.accessibility_system_action_on_screen_a11y_shortcut_label;
                 intent = SystemActionsBroadcastReceiver.INTENT_ACTION_ACCESSIBILITY_BUTTON;
                 break;
             case SYSTEM_ACTION_ID_ACCESSIBILITY_BUTTON_CHOOSER:
-                labelId = R.string.accessibility_system_action_accessibility_button_chooser_label;
+                labelId =
+                        R.string.accessibility_system_action_on_screen_a11y_shortcut_chooser_label;
                 intent = SystemActionsBroadcastReceiver.INTENT_ACTION_ACCESSIBILITY_BUTTON_CHOOSER;
+                break;
+            case  SYSTEM_ACTION_ID_ACCESSIBILITY_SHORTCUT:
+                labelId = R.string.accessibility_system_action_hardware_a11y_shortcut_label;
+                intent = SystemActionsBroadcastReceiver.INTENT_ACTION_ACCESSIBILITY_SHORTCUT;
                 break;
             default:
                 return;
@@ -349,6 +369,10 @@ public class SystemActions extends SystemUI {
         mContext.startActivityAsUser(intent, UserHandle.CURRENT);
     }
 
+    private void handleAccessibilityShortcut() {
+        mA11yManager.performAccessibilityShortcut();
+    }
+
     private class SystemActionsBroadcastReceiver extends BroadcastReceiver {
         private static final String INTENT_ACTION_BACK = "SYSTEM_ACTION_BACK";
         private static final String INTENT_ACTION_HOME = "SYSTEM_ACTION_HOME";
@@ -362,6 +386,8 @@ public class SystemActions extends SystemUI {
                 "SYSTEM_ACTION_ACCESSIBILITY_BUTTON";
         private static final String INTENT_ACTION_ACCESSIBILITY_BUTTON_CHOOSER =
                 "SYSTEM_ACTION_ACCESSIBILITY_BUTTON_MENU";
+        private static final String INTENT_ACTION_ACCESSIBILITY_SHORTCUT =
+                "SYSTEM_ACTION_ACCESSIBILITY_SHORTCUT";
 
         private PendingIntent createPendingIntent(Context context, String intentAction) {
             switch (intentAction) {
@@ -374,8 +400,10 @@ public class SystemActions extends SystemUI {
                 case INTENT_ACTION_LOCK_SCREEN:
                 case INTENT_ACTION_TAKE_SCREENSHOT:
                 case INTENT_ACTION_ACCESSIBILITY_BUTTON:
-                case INTENT_ACTION_ACCESSIBILITY_BUTTON_CHOOSER: {
+                case INTENT_ACTION_ACCESSIBILITY_BUTTON_CHOOSER:
+                case INTENT_ACTION_ACCESSIBILITY_SHORTCUT: {
                     Intent intent = new Intent(intentAction);
+                    intent.setPackage(context.getPackageName());
                     return PendingIntent.getBroadcast(context, 0, intent, 0);
                 }
                 default:
@@ -396,6 +424,7 @@ public class SystemActions extends SystemUI {
             intentFilter.addAction(INTENT_ACTION_TAKE_SCREENSHOT);
             intentFilter.addAction(INTENT_ACTION_ACCESSIBILITY_BUTTON);
             intentFilter.addAction(INTENT_ACTION_ACCESSIBILITY_BUTTON_CHOOSER);
+            intentFilter.addAction(INTENT_ACTION_ACCESSIBILITY_SHORTCUT);
             return intentFilter;
         }
 
@@ -441,6 +470,10 @@ public class SystemActions extends SystemUI {
                 }
                 case INTENT_ACTION_ACCESSIBILITY_BUTTON_CHOOSER: {
                     handleAccessibilityButtonChooser();
+                    break;
+                }
+                case INTENT_ACTION_ACCESSIBILITY_SHORTCUT: {
+                    handleAccessibilityShortcut();
                     break;
                 }
                 default:

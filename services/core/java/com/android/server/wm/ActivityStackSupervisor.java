@@ -45,7 +45,6 @@ import static android.os.Process.SYSTEM_UID;
 import static android.os.Trace.TRACE_TAG_WINDOW_MANAGER;
 import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.Display.TYPE_VIRTUAL;
-import static android.view.WindowManager.TRANSIT_DOCK_TASK_FROM_RECENTS;
 
 import static com.android.server.wm.ActivityStack.ActivityState.PAUSED;
 import static com.android.server.wm.ActivityStack.ActivityState.PAUSING;
@@ -70,10 +69,11 @@ import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_WITH_CLAS
 import static com.android.server.wm.ActivityTaskManagerService.ANIMATE;
 import static com.android.server.wm.ActivityTaskManagerService.H.FIRST_SUPERVISOR_STACK_MSG;
 import static com.android.server.wm.ActivityTaskManagerService.RELAUNCH_REASON_NONE;
-import static com.android.server.wm.RootWindowContainer.MATCH_TASK_IN_STACKS_ONLY;
 import static com.android.server.wm.RootWindowContainer.MATCH_TASK_IN_STACKS_OR_RECENT_TASKS;
 import static com.android.server.wm.RootWindowContainer.MATCH_TASK_IN_STACKS_OR_RECENT_TASKS_AND_RESTORE;
 import static com.android.server.wm.RootWindowContainer.TAG_STATES;
+import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_APP_TRANSITION;
+import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_RECENTS;
 import static com.android.server.wm.Task.FLAG_FORCE_HIDDEN_FOR_PINNED_TASK;
 import static com.android.server.wm.Task.LOCK_TASK_AUTH_LAUNCHABLE;
 import static com.android.server.wm.Task.LOCK_TASK_AUTH_LAUNCHABLE_PRIV;
@@ -126,7 +126,6 @@ import android.os.UserManager;
 import android.os.WorkSource;
 import android.provider.MediaStore;
 import android.util.ArrayMap;
-import android.util.ArraySet;
 import android.util.MergedConfiguration;
 import android.util.Slog;
 import android.util.SparseArray;
@@ -142,6 +141,7 @@ import com.android.internal.util.function.pooled.PooledConsumer;
 import com.android.internal.util.function.pooled.PooledLambda;
 import com.android.server.am.ActivityManagerService;
 import com.android.server.am.UserState;
+import com.android.server.uri.NeededUriGrants;
 import com.android.server.wm.ActivityMetricsLogger.LaunchingState;
 
 import java.io.FileDescriptor;
@@ -332,11 +332,10 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
     PowerManager.WakeLock mGoingToSleepWakeLock;
 
     /**
-     * Temporary rect used during docked stack resize calculation so we don't need to create a new
-     * object each time.
+     * Used to keep {@link RootWindowContainer#ensureActivitiesVisible} from being entered
+     * recursively. And only update keyguard states once the nested updates are done.
      */
-    private final Rect tempRect = new Rect();
-    private final ActivityOptions mTmpOptions = ActivityOptions.makeBasic();
+    private int mVisibilityTransactionDepth;
 
     private ActivityMetricsLogger mActivityMetricsLogger;
 
@@ -366,11 +365,6 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
      */
     boolean mAppVisibilitiesChangedSinceLastPause;
 
-    /**
-     * Set of tasks that are in resizing mode during an app transition to fill the "void".
-     */
-    private final ArraySet<Integer> mResizingTasksDuringAnimation = new ArraySet<>();
-
     private KeyguardController mKeyguardController;
 
     private PowerManager mPowerManager;
@@ -388,14 +382,17 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
         final int startFlags;
         final ActivityStack stack;
         final WindowProcessController callerApp;
+        final NeededUriGrants intentGrants;
 
-        PendingActivityLaunch(ActivityRecord _r, ActivityRecord _sourceRecord,
-                int _startFlags, ActivityStack _stack, WindowProcessController app) {
-            r = _r;
-            sourceRecord = _sourceRecord;
-            startFlags = _startFlags;
-            stack = _stack;
-            callerApp = app;
+        PendingActivityLaunch(ActivityRecord r, ActivityRecord sourceRecord,
+                int startFlags, ActivityStack stack, WindowProcessController callerApp,
+                NeededUriGrants intentGrants) {
+            this.r = r;
+            this.sourceRecord = sourceRecord;
+            this.startFlags = startFlags;
+            this.stack = stack;
+            this.callerApp = callerApp;
+            this.intentGrants = intentGrants;
         }
 
         void sendErrorResult(String message) {
@@ -784,6 +781,7 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
 
             r.launchCount++;
             r.lastLaunchTime = SystemClock.uptimeMillis();
+            proc.setLastActivityLaunchTime(r.lastLaunchTime);
 
             if (DEBUG_ALL) Slog.v(TAG, "Launching: " + r);
 
@@ -850,7 +848,7 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
                         r.launchedFromPackage, task.voiceInteractor, proc.getReportedProcState(),
                         r.getSavedState(), r.getPersistentSavedState(), results, newIntents,
                         dc.isNextTransitionForward(), proc.createProfilerInfoIfNeeded(),
-                                r.assistToken));
+                        r.assistToken, r.createFixedRotationAdjustmentsIfNeeded()));
 
                 // Set desired final state.
                 final ActivityLifecycleItem lifecycleItem;
@@ -915,6 +913,7 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
             if (DEBUG_STATES) Slog.v(TAG_STATES,
                     "Moving to PAUSED: " + r + " (starting in paused state)");
             r.setState(PAUSED, "realStartActivityLocked");
+            mRootWindowContainer.executeAppTransitionForAllDisplay();
         }
         // Perform OOM scoring after the activity state is set, so the process can be updated with
         // the latest state.
@@ -1010,7 +1009,7 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
                 || actionRestriction == ACTIVITY_RESTRICTION_PERMISSION) {
             if (resultRecord != null) {
                 resultRecord.sendResult(INVALID_UID, resultWho, requestCode,
-                        Activity.RESULT_CANCELED, null /* data */);
+                        Activity.RESULT_CANCELED, null /* data */, null /* dataGrants */);
             }
             final String msg;
             if (actionRestriction == ACTIVITY_RESTRICTION_PERMISSION) {
@@ -1415,29 +1414,6 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
         return mLaunchParamsController;
     }
 
-    private void deferUpdateRecentsHomeStackBounds() {
-        mRootWindowContainer.deferUpdateBounds(ACTIVITY_TYPE_RECENTS);
-        mRootWindowContainer.deferUpdateBounds(ACTIVITY_TYPE_HOME);
-    }
-
-    private void continueUpdateRecentsHomeStackBounds() {
-        mRootWindowContainer.continueUpdateBounds(ACTIVITY_TYPE_RECENTS);
-        mRootWindowContainer.continueUpdateBounds(ACTIVITY_TYPE_HOME);
-    }
-
-    void notifyAppTransitionDone() {
-        continueUpdateRecentsHomeStackBounds();
-        for (int i = mResizingTasksDuringAnimation.size() - 1; i >= 0; i--) {
-            final int taskId = mResizingTasksDuringAnimation.valueAt(i);
-            final Task task =
-                    mRootWindowContainer.anyTaskForId(taskId, MATCH_TASK_IN_STACKS_ONLY);
-            if (task != null) {
-                task.setTaskDockedResizing(false);
-            }
-        }
-        mResizingTasksDuringAnimation.clear();
-    }
-
     void setSplitScreenResizing(boolean resizing) {
         if (resizing == mDockedStackResizing) {
             return;
@@ -1470,11 +1446,8 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
         mService.deferWindowLayout();
         try {
             stack.setWindowingMode(WINDOWING_MODE_UNDEFINED);
-            if (toDisplay.getDisplayId() != stack.getDisplayId()) {
-                stack.reparent(toDisplay.getDefaultTaskDisplayArea(), false /* onTop */);
-            } else {
-                toDisplay.getDefaultTaskDisplayArea().positionStackAtBottom(stack);
-            }
+            stack.setBounds(null);
+            toDisplay.getDefaultTaskDisplayArea().positionTaskBehindHome(stack);
 
             // Follow on the workaround: activities are kept force hidden till the new windowing
             // mode is set.
@@ -1531,12 +1504,21 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
     }
 
     void removeTask(Task task, boolean killProcess, boolean removeFromRecents, String reason) {
-        task.removeTaskActivitiesLocked(reason);
-        cleanUpRemovedTaskLocked(task, killProcess, removeFromRecents);
-        mService.getLockTaskController().clearLockedTask(task);
-        mService.getTaskChangeNotificationController().notifyTaskStackChanged();
-        if (task.isPersistable) {
-            mService.notifyTaskPersisterLocked(null, true);
+        if (task.mInRemoveTask) {
+            // Prevent recursion.
+            return;
+        }
+        task.mInRemoveTask = true;
+        try {
+            task.performClearTask(reason);
+            cleanUpRemovedTaskLocked(task, killProcess, removeFromRecents);
+            mService.getLockTaskController().clearLockedTask(task);
+            mService.getTaskChangeNotificationController().notifyTaskStackChanged();
+            if (task.isPersistable) {
+                mService.notifyTaskPersisterLocked(null, true);
+            }
+        } finally {
+            task.mInRemoveTask = false;
         }
     }
 
@@ -1836,15 +1818,11 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
         ArrayList<ActivityRecord> readyToStopActivities = null;
         for (int i = mStoppingActivities.size() - 1; i >= 0; --i) {
             final ActivityRecord s = mStoppingActivities.get(i);
-            final boolean animating = s.isAnimating(TRANSITION | PARENTS);
+            final boolean animating = s.isAnimating(TRANSITION | PARENTS,
+                    ANIMATION_TYPE_APP_TRANSITION | ANIMATION_TYPE_RECENTS);
             if (DEBUG_STATES) Slog.v(TAG, "Stopping " + s + ": nowVisible=" + s.nowVisible
                     + " animating=" + animating + " finishing=" + s.finishing);
-
-            final ActivityStack stack = s.getRootTask();
-            final boolean shouldSleepOrShutDown = stack != null
-                    ? stack.shouldSleepOrShutDownActivities()
-                    : mService.isSleepingOrShuttingDownLocked();
-            if (!animating || shouldSleepOrShutDown) {
+            if (!animating || mService.mShuttingDown) {
                 if (!processPausingActivities && s.isState(PAUSING)) {
                     // Defer processing pausing activities in this iteration and reschedule
                     // a delayed idle to reprocess it again
@@ -1918,12 +1896,13 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
     public void dump(PrintWriter pw, String prefix) {
         pw.println();
         pw.println("ActivityStackSupervisor state:");
-        mRootWindowContainer.dump(pw, prefix);
+        mRootWindowContainer.dump(pw, prefix, true /* dumpAll */);
         getKeyguardController().dump(pw, prefix);
         mService.getLockTaskController().dump(pw, prefix);
         pw.print(prefix);
         pw.println("mCurTaskIdForUser=" + mCurTaskIdForUser);
         pw.println(prefix + "mUserStackInFront=" + mRootWindowContainer.mUserStackInFront);
+        pw.println(prefix + "mVisibilityTransactionDepth=" + mVisibilityTransactionDepth);
         if (!mWaitingForActivityVisible.isEmpty()) {
             pw.println(prefix + "mWaitingForActivityVisible=");
             for (int i = 0; i < mWaitingForActivityVisible.size(); ++i) {
@@ -2207,7 +2186,7 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
                 // split-screen in split-screen.
                 mService.getTaskChangeNotificationController()
                         .notifyActivityDismissingDockedStack();
-                taskDisplayArea.onSplitScreenModeDismissed(task.getStack());
+                taskDisplayArea.onSplitScreenModeDismissed((ActivityStack) task);
                 taskDisplayArea.mDisplayContent.ensureActivitiesVisible(null, 0, PRESERVE_WINDOWS,
                         true /* notifyClients */);
             }
@@ -2310,6 +2289,24 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
     void wakeUp(String reason) {
         mPowerManager.wakeUp(SystemClock.uptimeMillis(), PowerManager.WAKE_REASON_APPLICATION,
                 "android.server.am:TURN_ON:" + reason);
+    }
+
+    /** Starts a batch of visibility updates. */
+    void beginActivityVisibilityUpdate() {
+        mVisibilityTransactionDepth++;
+    }
+
+    /** Ends a batch of visibility updates. */
+    void endActivityVisibilityUpdate() {
+        mVisibilityTransactionDepth--;
+        if (mVisibilityTransactionDepth == 0) {
+            getKeyguardController().visibilitiesUpdated();
+        }
+    }
+
+    /** Returns {@code true} if the caller is on the path to update visibility. */
+    boolean inActivityVisibilityUpdate() {
+        return mVisibilityTransactionDepth > 0;
     }
 
     /**
@@ -2452,16 +2449,6 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
         }
     }
 
-    /**
-     * Puts a task into resizing mode during the next app transition.
-     *
-     * @param task The task to put into resizing mode
-     */
-    void setResizingDuringAnimation(Task task) {
-        mResizingTasksDuringAnimation.add(task.mTaskId);
-        task.setTaskDockedResizing(true);
-    }
-
     int startActivityFromRecents(int callingPid, int callingUid, int taskId,
             SafeActivityOptions options) {
         Task task = null;
@@ -2489,29 +2476,12 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
 
         mService.deferWindowLayout();
         try {
-            if (windowingMode == WINDOWING_MODE_SPLIT_SCREEN_PRIMARY) {
-                // Defer updating the stack in which recents is until the app transition is done, to
-                // not run into issues where we still need to draw the task in recents but the
-                // docked stack is already created.
-                deferUpdateRecentsHomeStackBounds();
-                // TODO(multi-display): currently recents animation only support default display.
-                mWindowManager.prepareAppTransition(TRANSIT_DOCK_TASK_FROM_RECENTS, false);
-                // TODO(task-hierarchy): Remove when tiles are in hierarchy.
-                // Unset launching windowing mode to prevent creating split-screen-primary stack
-                // in RWC#anyTaskForId() below.
-                activityOptions.setLaunchWindowingMode(WINDOWING_MODE_UNDEFINED);
-            }
-
             task = mRootWindowContainer.anyTaskForId(taskId,
                     MATCH_TASK_IN_STACKS_OR_RECENT_TASKS_AND_RESTORE, activityOptions, ON_TOP);
             if (task == null) {
-                continueUpdateRecentsHomeStackBounds();
                 mWindowManager.executeAppTransition();
                 throw new IllegalArgumentException(
                         "startActivityFromRecents: Task " + taskId + " not found.");
-            } else if (windowingMode == WINDOWING_MODE_SPLIT_SCREEN_PRIMARY
-                    && task.getWindowingMode() != windowingMode) {
-                mService.moveTaskToSplitScreenPrimaryTask(task, true /* toTop */);
             }
 
             if (windowingMode != WINDOWING_MODE_SPLIT_SCREEN_PRIMARY) {
@@ -2535,7 +2505,7 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
                         mActivityMetricsLogger.notifyActivityLaunching(task.intent);
                 try {
                     mService.moveTaskToFrontLocked(null /* appThread */, null /* callingPackage */,
-                            task.mTaskId, 0, options, true /* fromRecents */);
+                            task.mTaskId, 0, options);
                     // Apply options to prevent pendingOptions be taken by client to make sure
                     // the override pending app transition will be applied immediately.
                     targetActivity.applyOptionsLocked();
@@ -2560,12 +2530,6 @@ public class ActivityStackSupervisor implements RecentTasks.Callbacks {
                     false /* validateIncomingUser */, null /* originatingPendingIntent */,
                     false /* allowBackgroundActivityStart */);
         } finally {
-            if (windowingMode == WINDOWING_MODE_SPLIT_SCREEN_PRIMARY && task != null) {
-                // If we are launching the task in the docked stack, put it into resizing mode so
-                // the window renders full-screen with the background filling the void. Also only
-                // call this at the end to make sure that tasks exists on the window manager side.
-                setResizingDuringAnimation(task);
-            }
             mService.continueWindowLayout();
         }
     }

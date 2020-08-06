@@ -24,7 +24,9 @@ import static android.view.MotionEvent.ACTION_POINTER_DOWN;
 import static android.view.MotionEvent.ACTION_POINTER_UP;
 import static android.view.MotionEvent.ACTION_UP;
 
+import static com.android.internal.accessibility.util.AccessibilityStatsLogUtils.logMagnificationTripleTap;
 import static com.android.server.accessibility.gestures.GestureUtils.distance;
+import static com.android.server.accessibility.gestures.GestureUtils.distanceClosestPointerToPoint;
 
 import static java.lang.Math.abs;
 import static java.util.Arrays.asList;
@@ -36,6 +38,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.PointF;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -614,6 +617,7 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
 
         private static final int MESSAGE_ON_TRIPLE_TAP_AND_HOLD = 1;
         private static final int MESSAGE_TRANSITION_TO_DELEGATING_STATE = 2;
+        private static final int MESSAGE_TRANSITION_TO_PANNINGSCALING_STATE = 3;
 
         final int mLongTapMinDelay;
         final int mSwipeMinDistance;
@@ -625,6 +629,7 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
         private MotionEvent mPreLastDown;
         private MotionEvent mLastUp;
         private MotionEvent mPreLastUp;
+        private PointF mSecondPointerDownLocation = new PointF(Float.NaN, Float.NaN);
 
         private long mLastDetectingDownEventTime;
 
@@ -653,6 +658,10 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
                 break;
                 case MESSAGE_TRANSITION_TO_DELEGATING_STATE: {
                     transitionToDelegatingStateAndClear();
+                }
+                break;
+                case MESSAGE_TRANSITION_TO_PANNINGSCALING_STATE: {
+                    transitToPanningScalingStateAndClear();
                 }
                 break;
                 default: {
@@ -701,12 +710,18 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
                 }
                 break;
                 case ACTION_POINTER_DOWN: {
-                    if (mMagnificationController.isMagnifying(mDisplayId)) {
-                        transitionTo(mPanningScalingState);
-                        clear();
+                    if (mMagnificationController.isMagnifying(mDisplayId)
+                            && event.getPointerCount() == 2) {
+                        storeSecondPointerDownLocation(event);
+                        mHandler.sendEmptyMessageDelayed(MESSAGE_TRANSITION_TO_PANNINGSCALING_STATE,
+                                ViewConfiguration.getTapTimeout());
                     } else {
                         transitionToDelegatingStateAndClear();
                     }
+                }
+                break;
+                case ACTION_POINTER_UP: {
+                    transitionToDelegatingStateAndClear();
                 }
                 break;
                 case ACTION_MOVE: {
@@ -718,11 +733,19 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
                         // For convenience, viewport dragging takes precedence
                         // over insta-delegating on 3tap&swipe
                         // (which is a rare combo to be used aside from magnification)
-                        if (isMultiTapTriggered(2 /* taps */)) {
+                        if (isMultiTapTriggered(2 /* taps */) && event.getPointerCount() == 1) {
                             transitionToViewportDraggingStateAndClear(event);
+                        } else if (isMagnifying() && event.getPointerCount() == 2) {
+                            //Primary pointer is swiping, so transit to PanningScalingState
+                            transitToPanningScalingStateAndClear();
                         } else {
                             transitionToDelegatingStateAndClear();
                         }
+                    } else if (isMagnifying() && secondPointerDownValid()
+                            && distanceClosestPointerToPoint(
+                            mSecondPointerDownLocation, /* move */ event) > mSwipeMinDistance) {
+                        //Second pointer is swiping, so transit to PanningScalingState
+                        transitToPanningScalingStateAndClear();
                     }
                 }
                 break;
@@ -754,15 +777,37 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
             }
         }
 
+        private void storeSecondPointerDownLocation(MotionEvent event) {
+            final int index = event.getActionIndex();
+            mSecondPointerDownLocation.set(event.getX(index), event.getY(index));
+        }
+
+        private boolean secondPointerDownValid() {
+            return !(Float.isNaN(mSecondPointerDownLocation.x) && Float.isNaN(
+                    mSecondPointerDownLocation.y));
+        }
+
+        private void transitToPanningScalingStateAndClear() {
+            transitionTo(mPanningScalingState);
+            clear();
+        }
+
         public boolean isMultiTapTriggered(int numTaps) {
 
             // Shortcut acts as the 2 initial taps
             if (mShortcutTriggered) return tapCount() + 2 >= numTaps;
 
-            return mDetectTripleTap
+            final boolean multitapTriggered = mDetectTripleTap
                     && tapCount() >= numTaps
                     && isMultiTap(mPreLastDown, mLastDown)
                     && isMultiTap(mPreLastUp, mLastUp);
+
+            // Only log the triple tap event, use numTaps to filter.
+            if (multitapTriggered && numTaps > 2) {
+                final boolean enabled = mMagnificationController.isMagnifying(mDisplayId);
+                logMagnificationTripleTap(enabled);
+            }
+            return multitapTriggered;
         }
 
         private boolean isMultiTap(MotionEvent first, MotionEvent second) {
@@ -814,11 +859,13 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
             setShortcutTriggered(false);
             removePendingDelayedMessages();
             clearDelayedMotionEvents();
+            mSecondPointerDownLocation.set(Float.NaN, Float.NaN);
         }
 
         private void removePendingDelayedMessages() {
             mHandler.removeMessages(MESSAGE_ON_TRIPLE_TAP_AND_HOLD);
             mHandler.removeMessages(MESSAGE_TRANSITION_TO_DELEGATING_STATE);
+            mHandler.removeMessages(MESSAGE_TRANSITION_TO_PANNINGSCALING_STATE);
         }
 
         private void cacheDelayedMotionEvent(MotionEvent event, MotionEvent rawEvent,
@@ -882,10 +929,10 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
             transitionTo(mDelegatingState);
             sendDelayedMotionEvents();
             removePendingDelayedMessages();
+            mSecondPointerDownLocation.set(Float.NaN, Float.NaN);
         }
 
         private void onTripleTap(MotionEvent up) {
-
             if (DEBUG_DETECTING) {
                 Slog.i(LOG_TAG, "onTripleTap(); delayed: "
                         + MotionEventInfo.toString(mDelayedEventQueue));
@@ -900,6 +947,10 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
             }
         }
 
+        private boolean isMagnifying() {
+            return mMagnificationController.isMagnifying(mDisplayId);
+        }
+
         void transitionToViewportDraggingStateAndClear(MotionEvent down) {
 
             if (DEBUG_DETECTING) Slog.i(LOG_TAG, "onTripleTapAndHold()");
@@ -907,6 +958,10 @@ class FullScreenMagnificationGestureHandler extends MagnificationGestureHandler 
 
             mViewportDraggingState.mZoomedInBeforeDrag =
                     mMagnificationController.isMagnifying(mDisplayId);
+
+            // Triple tap and hold also belongs to triple tap event.
+            final boolean enabled = !mViewportDraggingState.mZoomedInBeforeDrag;
+            logMagnificationTripleTap(enabled);
 
             zoomOn(down.getX(), down.getY());
 

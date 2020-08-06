@@ -17,6 +17,7 @@
 package com.android.server.inputmethod;
 
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.os.IBinder;
 import android.view.inputmethod.InlineSuggestionsRequest;
@@ -43,6 +44,12 @@ public abstract class InputMethodManagerInternal {
          */
         void onInputMethodListUpdated(List<InputMethodInfo> info, @UserIdInt int userId);
     }
+
+    /**
+     * Called by the power manager to tell the input method manager whether it
+     * should start watching for wake events.
+     */
+    public abstract void setInteractive(boolean interactive);
 
     /**
      * Hides the current input method, if visible.
@@ -103,10 +110,24 @@ public abstract class InputMethodManagerInternal {
             int displayId);
 
     /**
+     * Reports that IME control has transferred to the given window token, or if null that
+     * control has been taken away from client windows (and is instead controlled by the policy
+     * or SystemUI).
+     *
+     * @param windowToken the window token that is now in control, or {@code null} if no client
+     *                   window is in control of the IME.
+     */
+    public abstract void reportImeControl(@Nullable IBinder windowToken);
+
+    /**
      * Fake implementation of {@link InputMethodManagerInternal}.  All the methods do nothing.
      */
     private static final InputMethodManagerInternal NOP =
             new InputMethodManagerInternal() {
+                @Override
+                public void setInteractive(boolean interactive) {
+                }
+
                 @Override
                 public void hideCurrentInputMethod(@SoftInputShowHideReason int reason) {
                 }
@@ -140,6 +161,10 @@ public abstract class InputMethodManagerInternal {
                 public boolean transferTouchFocusToImeWindow(@NonNull IBinder sourceInputToken,
                         int displayId) {
                     return false;
+                }
+
+                @Override
+                public void reportImeControl(@Nullable IBinder windowToken) {
                 }
             };
 

@@ -31,7 +31,6 @@ import android.app.AlarmManager;
 import android.hardware.Sensor;
 import android.hardware.display.AmbientDisplayConfiguration;
 import android.os.Handler;
-import android.os.Looper;
 import android.testing.AndroidTestingRunner;
 import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
@@ -71,6 +70,8 @@ public class DozeTriggersTest extends SysuiTestCase {
     private BroadcastDispatcher mBroadcastDispatcher;
     @Mock
     private DockManager mDockManager;
+    @Mock
+    private ProximitySensor.ProximityCheck mProximityCheck;
     private DozeTriggers mTriggers;
     private FakeSensorManager mSensors;
     private Sensor mTapSensor;
@@ -89,8 +90,8 @@ public class DozeTriggersTest extends SysuiTestCase {
         mProximitySensor = new FakeProximitySensor(getContext().getResources(), asyncSensorManager);
 
         mTriggers = new DozeTriggers(mContext, mMachine, mHost, mAlarmManager, config, parameters,
-                asyncSensorManager, Handler.createAsync(Looper.myLooper()), wakeLock, true,
-                mDockManager, mProximitySensor, mock(DozeLog.class), mBroadcastDispatcher);
+                asyncSensorManager, wakeLock, true, mDockManager, mProximitySensor,
+                mProximityCheck, mock(DozeLog.class), mBroadcastDispatcher);
         waitForSensorManager();
     }
 
@@ -111,9 +112,8 @@ public class DozeTriggersTest extends SysuiTestCase {
         verify(mMachine, never()).requestState(any());
         verify(mMachine, never()).requestPulse(anyInt());
 
-        captor.getValue().onNotificationAlerted(null /* pulseSuppressedListener */);
-        waitForSensorManager();
         mProximitySensor.setLastEvent(new ProximitySensor.ProximityEvent(false, 2));
+        captor.getValue().onNotificationAlerted(null /* pulseSuppressedListener */);
         mProximitySensor.alertListeners();
 
         verify(mMachine).requestPulse(anyInt());

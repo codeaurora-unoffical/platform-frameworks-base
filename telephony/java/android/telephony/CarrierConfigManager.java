@@ -132,13 +132,39 @@ public class CarrierConfigManager {
      *
      * {@code true}: Call forwarding option "When unreachable" is supported.
      * {@code false}: Call forwarding option "When unreachable" is not supported. Option will be
-     * greyed out in the UI.
+     * removed in the UI.
      *
      * By default this value is true.
      * @hide
      */
     public static final String KEY_CALL_FORWARDING_WHEN_UNREACHABLE_SUPPORTED_BOOL =
             "call_forwarding_when_unreachable_supported_bool";
+
+     /**
+      * Boolean indicating if carrier supports call forwarding option "When unanswered".
+      *
+      * {@code true}: Call forwarding option "When unanswered" is supported.
+      * {@code false}: Call forwarding option "When unanswered" is not supported. Option will be
+      * removed in the UI.
+      *
+      * By default this value is true.
+      * @hide
+      */
+    public static final String KEY_CALL_FORWARDING_WHEN_UNANSWERED_SUPPORTED_BOOL =
+            "call_forwarding_when_unanswered_supported_bool";
+
+     /**
+      * Boolean indicating if carrier supports call forwarding option "When busy".
+      *
+      * {@code true}: Call forwarding option "When busy" is supported.
+      * {@code false}: Call forwarding option "When busy" is not supported. Option will be
+      * removed in the UI.
+      *
+      * By default this value is true.
+      * @hide
+      */
+    public static final String KEY_CALL_FORWARDING_WHEN_BUSY_SUPPORTED_BOOL =
+            "call_forwarding_when_busy_supported_bool";
 
     /**
      * Boolean indicating if the "Caller ID" item is visible in the Additional Settings menu.
@@ -1359,6 +1385,14 @@ public class CarrierConfigManager {
     public static final String KEY_CARRIER_NAME_STRING = "carrier_name_string";
 
     /**
+     * To override wifi calling's carrier name string using ef_pnn from sim card when SPN in empty.
+     *
+     * @hide
+     */
+    public static final String KEY_WFC_CARRIER_NAME_OVERRIDE_BY_PNN_BOOL =
+            "wfc_carrier_name_override_by_pnn_bool";
+
+    /**
      * Override the SPN Display Condition 2 integer bits (lsb). B2, B1 is the last two bits of the
      * spn display condition coding.
      *
@@ -1630,6 +1664,12 @@ public class CarrierConfigManager {
      */
     public static final String KEY_SHOW_PRECISE_FAILED_CAUSE_BOOL =
             "show_precise_failed_cause_bool";
+
+    /**
+     * Boolean to decide whether NR is enabled.
+     * @hide
+     */
+    public static final String KEY_NR_ENABLED_BOOL = "nr_enabled_bool";
 
     /**
      * Boolean to decide whether LTE is enabled.
@@ -2797,14 +2837,12 @@ public class CarrierConfigManager {
     /**
      * A list of 4 customized LTE Reference Signal Signal to Noise Ratio (RSSNR) thresholds.
      *
-     * 4 threshold integers must be within the boundaries [-200, 300], and the levels are:
-     *     "NONE: [-200, threshold1)"
+     * 4 threshold integers must be within the boundaries [-20 dB, 30 dB], and the levels are:
+     *     "NONE: [-20, threshold1)"
      *     "POOR: [threshold1, threshold2)"
      *     "MODERATE: [threshold2, threshold3)"
      *     "GOOD:  [threshold3, threshold4)"
-     *     "EXCELLENT:  [threshold4, 300]"
-     * Note: the unit of the values is 10*db; it is derived by multiplying 10 on the original dB
-     * value reported by modem.
+     *     "EXCELLENT:  [threshold4, 30]"
      *
      * This key is considered invalid if the format is violated. If the key is invalid or
      * not configured, a default value set will apply.
@@ -3851,6 +3889,8 @@ public class CarrierConfigManager {
         sDefaults.putBoolean(KEY_CALL_BARRING_SUPPORTS_DEACTIVATE_ALL_BOOL, true);
         sDefaults.putBoolean(KEY_CALL_FORWARDING_VISIBILITY_BOOL, true);
         sDefaults.putBoolean(KEY_CALL_FORWARDING_WHEN_UNREACHABLE_SUPPORTED_BOOL, true);
+        sDefaults.putBoolean(KEY_CALL_FORWARDING_WHEN_UNANSWERED_SUPPORTED_BOOL, true);
+        sDefaults.putBoolean(KEY_CALL_FORWARDING_WHEN_BUSY_SUPPORTED_BOOL, true);
         sDefaults.putBoolean(KEY_ADDITIONAL_SETTINGS_CALLER_ID_VISIBILITY_BOOL, true);
         sDefaults.putBoolean(KEY_ADDITIONAL_SETTINGS_CALL_WAITING_VISIBILITY_BOOL, true);
         sDefaults.putBoolean(KEY_DISABLE_SUPPLEMENTARY_SERVICES_IN_AIRPLANE_MODE_BOOL, false);
@@ -3976,6 +4016,7 @@ public class CarrierConfigManager {
         sDefaults.putBoolean(KEY_CONFIG_WIFI_DISABLE_IN_ECBM, false);
         sDefaults.putBoolean(KEY_CARRIER_NAME_OVERRIDE_BOOL, false);
         sDefaults.putString(KEY_CARRIER_NAME_STRING, "");
+        sDefaults.putBoolean(KEY_WFC_CARRIER_NAME_OVERRIDE_BY_PNN_BOOL, false);
         sDefaults.putInt(KEY_SPN_DISPLAY_CONDITION_OVERRIDE_INT, -1);
         sDefaults.putStringArray(KEY_SPDI_OVERRIDE_STRING_ARRAY, null);
         sDefaults.putStringArray(KEY_PNN_OVERRIDE_STRING_ARRAY, null);
@@ -4139,6 +4180,7 @@ public class CarrierConfigManager {
         sDefaults.putString(KEY_OPERATOR_NAME_FILTER_PATTERN_STRING, "");
         sDefaults.putString(KEY_SHOW_CARRIER_DATA_ICON_PATTERN_STRING, "");
         sDefaults.putBoolean(KEY_HIDE_LTE_PLUS_DATA_ICON_BOOL, true);
+        sDefaults.putBoolean(KEY_NR_ENABLED_BOOL, true);
         sDefaults.putBoolean(KEY_LTE_ENABLED_BOOL, true);
         sDefaults.putBoolean(KEY_SUPPORT_TDSCDMA_BOOL, false);
         sDefaults.putStringArray(KEY_SUPPORT_TDSCDMA_ROAMING_NETWORKS_STRING_ARRAY, null);
@@ -4156,17 +4198,17 @@ public class CarrierConfigManager {
                 });
         sDefaults.putIntArray(KEY_LTE_RSRQ_THRESHOLDS_INT_ARRAY,
                 new int[] {
-                        -19, /* SIGNAL_STRENGTH_POOR */
+                        -20, /* SIGNAL_STRENGTH_POOR */
                         -17, /* SIGNAL_STRENGTH_MODERATE */
                         -14, /* SIGNAL_STRENGTH_GOOD */
-                        -12  /* SIGNAL_STRENGTH_GREAT */
+                        -11  /* SIGNAL_STRENGTH_GREAT */
                 });
         sDefaults.putIntArray(KEY_LTE_RSSNR_THRESHOLDS_INT_ARRAY,
                 new int[] {
-                        -30, /* SIGNAL_STRENGTH_POOR */
-                        10,  /* SIGNAL_STRENGTH_MODERATE */
-                        45,  /* SIGNAL_STRENGTH_GOOD */
-                        130  /* SIGNAL_STRENGTH_GREAT */
+                        -3, /* SIGNAL_STRENGTH_POOR */
+                        1,  /* SIGNAL_STRENGTH_MODERATE */
+                        5,  /* SIGNAL_STRENGTH_GOOD */
+                        13  /* SIGNAL_STRENGTH_GREAT */
                 });
         sDefaults.putIntArray(KEY_WCDMA_RSCP_THRESHOLDS_INT_ARRAY,
                 new int[] {
@@ -4187,9 +4229,9 @@ public class CarrierConfigManager {
                 // Boundaries: [-20 dB, -3 dB]
                 new int[] {
                     -16, /* SIGNAL_STRENGTH_POOR */
-                    -11, /* SIGNAL_STRENGTH_MODERATE */
+                    -12, /* SIGNAL_STRENGTH_MODERATE */
                     -9, /* SIGNAL_STRENGTH_GOOD */
-                    -7  /* SIGNAL_STRENGTH_GREAT */
+                    -6  /* SIGNAL_STRENGTH_GREAT */
                 });
         sDefaults.putIntArray(KEY_5G_NR_SSSINR_THRESHOLDS_INT_ARRAY,
                 // Boundaries: [-23 dB, 40 dB]
@@ -4206,8 +4248,8 @@ public class CarrierConfigManager {
                 "GPRS:24,24", "EDGE:70,18", "UMTS:115,115", "CDMA-IS95A:14,14", "CDMA-IS95B:14,14",
                 "1xRTT:30,30", "EvDo-rev.0:750,48", "EvDo-rev.A:950,550", "HSDPA:4300,620",
                 "HSUPA:4300,1800", "HSPA:4300,1800", "EvDo-rev.B:1500,550", "eHRPD:750,48",
-                "HSPAP:13000,3400", "TD-SCDMA:115,115", "LTE:30000,15000", "NR_NSA:47000,15000",
-                "NR_NSA_MMWAVE:145000,15000", "NR_SA:145000,15000"});
+                "HSPAP:13000,3400", "TD-SCDMA:115,115", "LTE:30000,15000", "NR_NSA:47000,18000",
+                "NR_NSA_MMWAVE:145000,60000", "NR_SA:145000,60000"});
         sDefaults.putBoolean(KEY_BANDWIDTH_NR_NSA_USE_LTE_VALUE_FOR_UPSTREAM_BOOL, false);
         sDefaults.putString(KEY_WCDMA_DEFAULT_SIGNAL_STRENGTH_MEASUREMENT_STRING, "rssi");
         sDefaults.putBoolean(KEY_CONFIG_SHOW_ORIG_DIAL_STRING_FOR_CDMA_BOOL, false);

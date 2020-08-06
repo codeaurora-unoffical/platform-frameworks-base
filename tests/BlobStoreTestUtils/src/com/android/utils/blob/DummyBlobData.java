@@ -42,6 +42,7 @@ public class DummyBlobData {
     private final File mFile;
     private final long mFileSize;
     private final CharSequence mLabel;
+    private final long mExpiryDurationMs;
 
     byte[] mFileDigest;
     long mExpiryTimeMs;
@@ -51,6 +52,7 @@ public class DummyBlobData {
         mFile = new File(builder.getContext().getFilesDir(), builder.getFileName());
         mFileSize = builder.getFileSize();
         mLabel = builder.getLabel();
+        mExpiryDurationMs = builder.getExpiryDurationMs();
     }
 
     public static class Builder {
@@ -59,6 +61,7 @@ public class DummyBlobData {
         private long mFileSize = DEFAULT_SIZE_BYTES;
         private CharSequence mLabel = "Test label";
         private String mFileName = "blob_" + System.nanoTime();
+        private long mExpiryDurationMs = TimeUnit.DAYS.toMillis(1);
 
         public Builder(Context context) {
             mContext = context;
@@ -104,6 +107,15 @@ public class DummyBlobData {
             return mFileName;
         }
 
+        public Builder setExpiryDurationMs(long durationMs) {
+            mExpiryDurationMs = durationMs;
+            return this;
+        }
+
+        public long getExpiryDurationMs() {
+            return mExpiryDurationMs;
+        }
+
         public DummyBlobData build() {
             return new DummyBlobData(this);
         }
@@ -114,7 +126,7 @@ public class DummyBlobData {
             writeRandomData(file, mFileSize);
         }
         mFileDigest = FileUtils.digest(mFile, "SHA-256");
-        mExpiryTimeMs = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(1);
+        mExpiryTimeMs = System.currentTimeMillis() + mExpiryDurationMs;
     }
 
     public BlobHandle getBlobHandle() throws Exception {
@@ -141,7 +153,14 @@ public class DummyBlobData {
     public void writeToSession(BlobStoreManager.Session session,
             long offsetBytes, long lengthBytes) throws Exception {
         try (FileInputStream in = new FileInputStream(mFile)) {
-            Utils.writeToSession(session, in, offsetBytes, lengthBytes);
+            Utils.writeToSession(session, in, offsetBytes, lengthBytes, lengthBytes);
+        }
+    }
+
+    public void writeToSession(BlobStoreManager.Session session,
+            long offsetBytes, long lengthBytes, long allocateBytes) throws Exception {
+        try (FileInputStream in = new FileInputStream(mFile)) {
+            Utils.writeToSession(session, in, offsetBytes, lengthBytes, allocateBytes);
         }
     }
 

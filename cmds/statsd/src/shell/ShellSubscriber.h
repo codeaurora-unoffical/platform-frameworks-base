@@ -38,11 +38,11 @@ namespace statsd {
  *
  * A shell subscription lasts *until shell exits*. Unlike config based clients, a shell client
  * communicates with statsd via file descriptors. They can subscribe pushed and pulled atoms.
- * The atoms are sent back to the client in real time, as opposed to
- * keeping the data in memory. Shell clients do not subscribe aggregated metrics, as they are
- * responsible for doing the aggregation after receiving the atom events.
+ * The atoms are sent back to the client in real time, as opposed to keeping the data in memory.
+ * Shell clients do not subscribe aggregated metrics, as they are responsible for doing the
+ * aggregation after receiving the atom events.
  *
- * Shell client pass ShellSubscription in the proto binary format. Client can update the
+ * Shell clients pass ShellSubscription in the proto binary format. Clients can update the
  * subscription by sending a new subscription. The new subscription would replace the old one.
  * Input data stream format is:
  *
@@ -54,7 +54,7 @@ namespace statsd {
  * The stream would be in the following format:
  * |size_t|shellData proto|size_t|shellData proto|....
  *
- * Only one shell subscriber allowed at a time, because each shell subscriber blocks one thread
+ * Only one shell subscriber is allowed at a time because each shell subscriber blocks one thread
  * until it exits.
  */
 class ShellSubscriber : public virtual RefBase {
@@ -92,7 +92,6 @@ private:
         int mOutputFd;
         std::vector<SimpleAtomMatcher> mPushedMatchers;
         std::vector<PullInfo> mPulledInfo;
-        int mPullIntervalMin;
         bool mClientAlive;
     };
 
@@ -100,10 +99,25 @@ private:
 
     bool readConfig(std::shared_ptr<SubscriptionInfo> subscriptionInfo);
 
-    void startPull(int64_t myToken);
+    void spawnHelperThread(int myToken);
 
-    bool writePulledAtomsLocked(const vector<std::shared_ptr<LogEvent>>& data,
+    void waitForSubscriptionToEndLocked(std::shared_ptr<SubscriptionInfo> myInfo,
+                                        int myToken,
+                                        std::unique_lock<std::mutex>& lock,
+                                        int timeoutSec);
+
+    // Helper thread that pulls atoms at a regular frequency and sends
+    // heartbeats to perfd if statsd hasn't recently sent any data. Statsd must
+    // send heartbeats for perfd to escape a blocking read call and recheck if
+    // the user has terminated the subscription.
+    void pullAndSendHeartbeats(int myToken);
+
+    void writePulledAtomsLocked(const vector<std::shared_ptr<LogEvent>>& data,
                                 const SimpleAtomMatcher& matcher);
+
+    void getUidsForPullAtom(vector<int32_t>* uids, const PullInfo& pullInfo);
+
+    void attemptWriteToPipeLocked(size_t dataSize);
 
     sp<UidMap> mUidMap;
 
@@ -120,6 +134,11 @@ private:
     int mToken = 0;
 
     const int32_t DEFAULT_PULL_UID = AID_SYSTEM;
+
+    // Tracks when we last send data to perfd. We need that time to determine
+    // when next to send a heartbeat.
+    int64_t mLastWriteMs = 0;
+    const int64_t kMsBetweenHeartbeats = 1000;
 };
 
 }  // namespace statsd

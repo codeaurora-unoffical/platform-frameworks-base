@@ -395,6 +395,16 @@ static void nativeSetEarlyWakeup(JNIEnv* env, jclass clazz, jlong transactionObj
     transaction->setEarlyWakeup();
 }
 
+static void nativeSetEarlyWakeupStart(JNIEnv* env, jclass clazz, jlong transactionObj) {
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+    transaction->setExplicitEarlyWakeupStart();
+}
+
+static void nativeSetEarlyWakeupEnd(JNIEnv* env, jclass clazz, jlong transactionObj) {
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+    transaction->setExplicitEarlyWakeupEnd();
+}
+
 static void nativeSetLayer(JNIEnv* env, jclass clazz, jlong transactionObj,
         jlong nativeObject, jint zorder) {
     auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
@@ -643,6 +653,14 @@ static jlong nativeAcquireFrameRateFlexibilityToken(JNIEnv* env, jclass clazz) {
 static void nativeReleaseFrameRateFlexibilityToken(JNIEnv* env, jclass clazz, jlong tokenLong) {
     sp<IBinder> token(reinterpret_cast<IBinder*>(tokenLong));
     token->decStrong((void*)nativeAcquireFrameRateFlexibilityToken);
+}
+
+static void nativeSetFixedTransformHint(JNIEnv* env, jclass clazz, jlong transactionObj,
+                                        jlong nativeObject, jint transformHint) {
+    auto transaction = reinterpret_cast<SurfaceComposerClient::Transaction*>(transactionObj);
+
+    SurfaceControl* const ctrl = reinterpret_cast<SurfaceControl*>(nativeObject);
+    transaction->setFixedTransformHint(ctrl, transformHint);
 }
 
 static jlongArray nativeGetPhysicalDisplayIds(JNIEnv* env, jclass clazz) {
@@ -1493,6 +1511,10 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeSetAnimationTransaction },
     {"nativeSetEarlyWakeup", "(J)V",
             (void*)nativeSetEarlyWakeup },
+    {"nativeSetEarlyWakeupStart", "(J)V",
+            (void*)nativeSetEarlyWakeupStart },
+    {"nativeSetEarlyWakeupEnd", "(J)V",
+            (void*)nativeSetEarlyWakeupEnd },
     {"nativeSetLayer", "(JJI)V",
             (void*)nativeSetLayer },
     {"nativeSetRelativeLayer", "(JJJI)V",
@@ -1644,6 +1666,7 @@ static const JNINativeMethod sSurfaceControlMethods[] = {
             (void*)nativeSetGlobalShadowSettings },
     {"nativeGetHandle", "(J)J",
             (void*)nativeGetHandle },
+    {"nativeSetFixedTransformHint", "(JJI)V", (void*)nativeSetFixedTransformHint},
 };
 
 int register_android_view_SurfaceControl(JNIEnv* env)

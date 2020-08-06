@@ -20,14 +20,19 @@
         },
         {
             "file_patterns": ["(/|^)AppOpsManager.java"],
-            "name": "UidAtomTests:testAppOps"
-        },
-        {
-            "file_patterns": ["(/|^)AppOpsManager.java"],
             "name": "FrameworksServicesTests",
             "options": [
                 {
                     "include-filter": "com.android.server.appop"
+                }
+            ]
+        },
+        {
+            "file_patterns": ["(/|^)AppOpsManager.java"],
+            "name": "CtsStatsdHostTestCases",
+            "options": [
+                {
+                    "include-filter": "android.cts.statsd.atom.UidAtomTests#testAppOps"
                 }
             ]
         },
@@ -54,7 +59,7 @@
             "file_patterns": ["INotificationManager\\.aidl"]
         },
         {
-            "name": "FrameworksInstantAppResolverTests",
+            "name": "CtsInstantAppTests",
             "file_patterns": ["(/|^)InstantAppResolve[^/]*"]
         }
     ],

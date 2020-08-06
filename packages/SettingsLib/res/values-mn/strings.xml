@@ -211,8 +211,8 @@
     <string name="adb_wireless_error" msgid="721958772149779856">"Алдаа"</string>
     <string name="adb_wireless_settings" msgid="2295017847215680229">"Wireless debugging"</string>
     <string name="adb_wireless_list_empty_off" msgid="1713707973837255490">"Боломжтой төхөөрөмжүүдийг харах болох ашиглахын тулд wireless debugging-г асаана уу"</string>
-    <string name="adb_pair_method_qrcode_title" msgid="6982904096137468634">"Хурдан хариу үйлдлийн кодоор төхөөрөмжийг хослуул"</string>
-    <string name="adb_pair_method_qrcode_summary" msgid="7130694277228970888">"Хурдан хариу үйлдлийн кодын сканнер ашиглан шинэ төхөөрөмжүүдийг хослуулна уу"</string>
+    <string name="adb_pair_method_qrcode_title" msgid="6982904096137468634">"QR кодоор төхөөрөмжийг хослуул"</string>
+    <string name="adb_pair_method_qrcode_summary" msgid="7130694277228970888">"QR кодын сканнер ашиглан шинэ төхөөрөмжүүдийг хослуулна уу"</string>
     <string name="adb_pair_method_code_title" msgid="1122590300445142904">"Хослуулах кодоор төхөөрөмжийг хослуулна уу"</string>
     <string name="adb_pair_method_code_summary" msgid="6370414511333685185">"Зургаан оронтой кодыг ашиглан шинэ төхөөрөмжүүдийг хослуулна уу"</string>
     <string name="adb_paired_devices_title" msgid="5268997341526217362">"Хослуулсан төхөөрөмжүүд"</string>
@@ -226,12 +226,12 @@
     <string name="adb_pairing_device_dialog_pairing_code_label" msgid="3639239786669722731">"Wi‑Fi хослуулах код"</string>
     <string name="adb_pairing_device_dialog_failed_title" msgid="3426758947882091735">"Хослуулалт амжилтгүй боллоо"</string>
     <string name="adb_pairing_device_dialog_failed_msg" msgid="6611097519661997148">"Төхөөрөмжийг ижил сүлжээнд холбосон эсэхийг шалгана уу."</string>
-    <string name="adb_wireless_qrcode_summary" msgid="8051414549011801917">"Хурдан хариу үйлдлийн кодыг скан хийж Wi-Fi-р төхөөрөмжийг хослуулна уу"</string>
+    <string name="adb_wireless_qrcode_summary" msgid="8051414549011801917">"QR кодыг скан хийж Wi-Fi-р төхөөрөмжийг хослуулна уу"</string>
     <string name="adb_wireless_verifying_qrcode_text" msgid="6123192424916029207">"Төхөөрөмжийг хослуулж байна…"</string>
-    <string name="adb_qrcode_pairing_device_failed_msg" msgid="6936292092592914132">"Төхөөрөмжийг хослуулж чадсангүй. Хурдан хариу үйлдлийн код буруу эсвэл төхөөрөмжийг ижил сүлжээнд холбоогүй байна."</string>
+    <string name="adb_qrcode_pairing_device_failed_msg" msgid="6936292092592914132">"Төхөөрөмжийг хослуулж чадсангүй. QR код буруу эсвэл төхөөрөмжийг ижил сүлжээнд холбоогүй байна."</string>
     <string name="adb_wireless_ip_addr_preference_title" msgid="8335132107715311730">"IP хаяг ба порт"</string>
-    <string name="adb_wireless_qrcode_pairing_title" msgid="1906409667944674707">"Хурдан хариу үйлдлийн кодыг скан хийх"</string>
-    <string name="adb_wireless_qrcode_pairing_description" msgid="6014121407143607851">"Хурдан хариу үйлдлийн кодыг скан хийж Wi-Fi-р төхөөрөмжийг хослуулна уу"</string>
+    <string name="adb_wireless_qrcode_pairing_title" msgid="1906409667944674707">"QR кодыг скан хийх"</string>
+    <string name="adb_wireless_qrcode_pairing_description" msgid="6014121407143607851">"QR кодыг скан хийж Wi-Fi-р төхөөрөмжийг хослуулна уу"</string>
     <string name="adb_wireless_no_network_msg" msgid="2365795244718494658">"Wi-Fi сүлжээнд холбогдоно уу"</string>
     <string name="keywords_adb_wireless" msgid="6507505581882171240">"adb, дебаг хийх, dev"</string>
     <string name="bugreport_in_power" msgid="8664089072534638709">"Алдаа мэдээлэх товчлол"</string>
@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"Утасгүй дэлгэцийн сертификатын сонголтыг харуулах"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"Wi‑Fi лог-н түвшинг нэмэгдүүлэх, Wi‑Fi Сонгогч дээрх SSID-д ногдох RSSI-г харуулах"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"Батарей зарцуулалтыг бууруулж, сүлжээний гүйцэтгэлийг сайжруулдаг"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"Энэ горимыг идэхвжүүлсэн үед энэ төхөөрөмжийг MAC-н санамсаргүй байдлаар эмхлэх явцыг идэвхжүүлсэн сүлжээнд холбогдох бүрд үүний MAC хаягийг өөрчилж болзошгүй."</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"Хязгаартай"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"Хязгааргүй"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"Логгерын буферын хэмжээ"</string>
@@ -420,7 +419,7 @@
     <string name="daltonizer_mode_protanomaly" msgid="7805583306666608440">"Протаномаль (улаан-ногоон)"</string>
     <string name="daltonizer_mode_tritanomaly" msgid="7135266249220732267">"Тританомаль (цэнхэр-шар)"</string>
     <string name="accessibility_display_daltonizer_preference_title" msgid="1810693571332381974">"Өнгө тохируулах"</string>
-    <string name="accessibility_display_daltonizer_preference_subtitle" msgid="1284746051652993443">"Өнгө залруулга нь төхөөрөмж дээрээ өнгийг хэрхэн үзүүлэхийг тохируулах боломжийг танд олгодог"</string>
+    <string name="accessibility_display_daltonizer_preference_subtitle" msgid="1284746051652993443">"Өнгө тохируулга нь танд төхөөрөмж дээрээ өнгө хэрхэн харагдахыг тохируулах боломжийг олгодог"</string>
     <string name="daltonizer_type_overridden" msgid="4509604753672535721">"Давхарласан <xliff:g id="TITLE">%1$s</xliff:g>"</string>
     <string name="power_remaining_settings_home_page" msgid="4885165789445462557">"<xliff:g id="PERCENTAGE">%1$s</xliff:g> - <xliff:g id="TIME_STRING">%2$s</xliff:g>"</string>
     <string name="power_remaining_duration_only" msgid="8264199158671531431">"Ойролцоогоор <xliff:g id="TIME_REMAINING">%1$s</xliff:g> үлдсэн"</string>
@@ -550,4 +549,9 @@
     <string name="guest_new_guest" msgid="3482026122932643557">"Зочин нэмэх"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"Зочин хасах"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"Зочин"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"Төхөөрөмжийн өгөгдмөл"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"Идэвхгүй болгосон"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"Идэвхжүүлсэн"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"Энэ өөрчлөлтийг хэрэгжүүлэхийн тулд таны төхөөрөмжийг дахин асаах ёстой. Одоо дахин асаах эсвэл цуцлана уу."</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"Утастай чихэвч"</string>
 </resources>

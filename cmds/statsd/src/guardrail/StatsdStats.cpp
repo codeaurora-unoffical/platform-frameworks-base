@@ -38,6 +38,7 @@ using android::util::ProtoOutputStream;
 using std::lock_guard;
 using std::shared_ptr;
 using std::string;
+using std::to_string;
 using std::vector;
 
 const int FIELD_ID_BEGIN_TIME = 1;
@@ -436,9 +437,18 @@ void StatsdStats::notePullDataError(int pullAtomId) {
     mPulledAtomStats[pullAtomId].dataError++;
 }
 
-void StatsdStats::notePullTimeout(int pullAtomId) {
+void StatsdStats::notePullTimeout(int pullAtomId,
+                                  int64_t pullUptimeMillis,
+                                  int64_t pullElapsedMillis) {
     lock_guard<std::mutex> lock(mLock);
-    mPulledAtomStats[pullAtomId].pullTimeout++;
+    PulledAtomStats& pulledAtomStats = mPulledAtomStats[pullAtomId];
+    pulledAtomStats.pullTimeout++;
+
+    if (pulledAtomStats.pullTimeoutMetadata.size() == kMaxTimestampCount) {
+        pulledAtomStats.pullTimeoutMetadata.pop_front();
+    }
+
+    pulledAtomStats.pullTimeoutMetadata.emplace_back(pullUptimeMillis, pullElapsedMillis);
 }
 
 void StatsdStats::notePullExceedMaxDelay(int pullAtomId) {
@@ -472,14 +482,19 @@ void StatsdStats::notePullFailed(int atomId) {
     mPulledAtomStats[atomId].pullFailed++;
 }
 
-void StatsdStats::noteStatsCompanionPullFailed(int atomId) {
+void StatsdStats::notePullUidProviderNotFound(int atomId) {
     lock_guard<std::mutex> lock(mLock);
-    mPulledAtomStats[atomId].statsCompanionPullFailed++;
+    mPulledAtomStats[atomId].pullUidProviderNotFound++;
 }
 
-void StatsdStats::noteStatsCompanionPullBinderTransactionFailed(int atomId) {
+void StatsdStats::notePullerNotFound(int atomId) {
     lock_guard<std::mutex> lock(mLock);
-    mPulledAtomStats[atomId].statsCompanionPullBinderTransactionFailed++;
+    mPulledAtomStats[atomId].pullerNotFound++;
+}
+
+void StatsdStats::notePullBinderCallFailed(int atomId) {
+    lock_guard<std::mutex> lock(mLock);
+    mPulledAtomStats[atomId].binderCallFailCount++;
 }
 
 void StatsdStats::noteEmptyData(int atomId) {
@@ -608,6 +623,7 @@ void StatsdStats::resetInternalLocked() {
     for (auto& pullStats : mPulledAtomStats) {
         pullStats.second.totalPull = 0;
         pullStats.second.totalPullFromCache = 0;
+        pullStats.second.minPullIntervalSec = LONG_MAX;
         pullStats.second.avgPullTimeNs = 0;
         pullStats.second.maxPullTimeNs = 0;
         pullStats.second.numPullTime = 0;
@@ -617,9 +633,14 @@ void StatsdStats::resetInternalLocked() {
         pullStats.second.dataError = 0;
         pullStats.second.pullTimeout = 0;
         pullStats.second.pullExceedMaxDelay = 0;
+        pullStats.second.pullFailed = 0;
+        pullStats.second.pullUidProviderNotFound = 0;
+        pullStats.second.pullerNotFound = 0;
         pullStats.second.registeredCount = 0;
         pullStats.second.unregisteredCount = 0;
         pullStats.second.atomErrorCount = 0;
+        pullStats.second.binderCallFailCount = 0;
+        pullStats.second.pullTimeoutMetadata.clear();
     }
     mAtomMetricStats.clear();
     mActivationBroadcastGuardrailStats.clear();
@@ -764,16 +785,32 @@ void StatsdStats::dumpStats(int out) const {
                 "  (average pull time nanos)%lld, (max pull time nanos)%lld, (average pull delay "
                 "nanos)%lld, "
                 "  (max pull delay nanos)%lld, (data error)%ld\n"
-                "  (pull timeout)%ld, (pull exceed max delay)%ld\n"
-                "  (registered count) %ld, (unregistered count) %ld\n"
+                "  (pull timeout)%ld, (pull exceed max delay)%ld"
+                "  (no uid provider count)%ld, (no puller found count)%ld\n"
+                "  (registered count) %ld, (unregistered count) %ld"
                 "  (atom error count) %d\n",
                 (int)pair.first, (long)pair.second.totalPull, (long)pair.second.totalPullFromCache,
                 (long)pair.second.pullFailed, (long)pair.second.minPullIntervalSec,
                 (long long)pair.second.avgPullTimeNs, (long long)pair.second.maxPullTimeNs,
                 (long long)pair.second.avgPullDelayNs, (long long)pair.second.maxPullDelayNs,
                 pair.second.dataError, pair.second.pullTimeout, pair.second.pullExceedMaxDelay,
+                pair.second.pullUidProviderNotFound, pair.second.pullerNotFound,
                 pair.second.registeredCount, pair.second.unregisteredCount,
                 pair.second.atomErrorCount);
+        if (pair.second.pullTimeoutMetadata.size() > 0) {
+            string uptimeMillis = "(pull timeout system uptime millis) ";
+            string pullTimeoutMillis = "(pull timeout elapsed time millis) ";
+            for (const auto& stats : pair.second.pullTimeoutMetadata) {
+                uptimeMillis.append(to_string(stats.pullTimeoutUptimeMillis)).append(",");;
+                pullTimeoutMillis.append(to_string(stats.pullTimeoutElapsedMillis)).append(",");
+            }
+            uptimeMillis.pop_back();
+            uptimeMillis.push_back('\n');
+            pullTimeoutMillis.pop_back();
+            pullTimeoutMillis.push_back('\n');
+            dprintf(out, "%s", uptimeMillis.c_str());
+            dprintf(out, "%s", pullTimeoutMillis.c_str());
+        }
     }
 
     if (mAnomalyAlarmRegisteredStats > 0) {

@@ -66,6 +66,7 @@ import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsNotedCallback;
 import com.android.internal.app.IAppOpsService;
+import com.android.internal.app.IAppOpsStartedCallback;
 import com.android.internal.app.MessageSamplingConfig;
 import com.android.internal.os.RuntimeInit;
 import com.android.internal.os.ZygoteInit;
@@ -181,6 +182,8 @@ public class AppOpsManager {
     @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
     public static final long CALL_BACK_ON_CHANGED_LISTENER_WITH_SWITCHED_OP_CHANGE = 148180766L;
 
+    private static final int MAX_UNFORWARDED_OPS = 10;
+
     final Context mContext;
 
     @UnsupportedAppUsage
@@ -201,6 +204,10 @@ public class AppOpsManager {
     private final ArrayMap<OnOpActiveChangedListener, IAppOpsActiveCallback> mActiveWatchers =
             new ArrayMap<>();
 
+    @GuardedBy("mStartedWatchers")
+    private final ArrayMap<OnOpStartedListener, IAppOpsStartedCallback> mStartedWatchers =
+            new ArrayMap<>();
+
     @GuardedBy("mNotedWatchers")
     private final ArrayMap<OnOpNotedListener, IAppOpsNotedCallback> mNotedWatchers =
             new ArrayMap<>();
@@ -210,6 +217,17 @@ public class AppOpsManager {
     /** Current {@link OnOpNotedCallback}. Change via {@link #setOnOpNotedCallback} */
     @GuardedBy("sLock")
     private static @Nullable OnOpNotedCallback sOnOpNotedCallback;
+
+    /**
+     * Sync note-ops collected from {@link #readAndLogNotedAppops(Parcel)} that have not been
+     * delivered to a callback yet.
+     *
+     * Similar to {@link com.android.server.appop.AppOpsService#mUnforwardedAsyncNotedOps} for
+     * {@link COLLECT_ASYNC}. Used in situation when AppOpsManager asks to collect stacktrace with
+     * {@link #sMessageCollector}, which forces {@link COLLECT_SYNC} mode.
+     */
+    @GuardedBy("sLock")
+    private static ArrayList<AsyncNotedAppOp> sUnforwardedOps = new ArrayList<>();
 
     /**
      * Additional collector that collect accesses and forwards a few of them them via
@@ -243,8 +261,9 @@ public class AppOpsManager {
                             < SystemClock.elapsedRealtime()) {
                         String stackTrace = getFormattedStackTrace();
                         try {
+                            String packageName = ActivityThread.currentOpPackageName();
                             sConfig = getService().reportRuntimeAppOpAccessMessageAndGetConfig(
-                                    ActivityThread.currentOpPackageName(), op, stackTrace);
+                                    packageName == null ? "" : packageName, op, stackTrace);
                         } catch (RemoteException e) {
                             e.rethrowFromSystemServer();
                         }
@@ -1103,8 +1122,11 @@ public class AppOpsManager {
             AppProtoEnums.APP_OP_AUTO_REVOKE_MANAGED_BY_INSTALLER;
 
     /** @hide */
+    public static final int OP_NO_ISOLATED_STORAGE = AppProtoEnums.APP_OP_NO_ISOLATED_STORAGE;
+
+    /** @hide */
     @UnsupportedAppUsage
-    public static final int _NUM_OP = 99;
+    public static final int _NUM_OP = 100;
 
     /** Access to coarse location information. */
     public static final String OPSTR_COARSE_LOCATION = "android:coarse_location";
@@ -1415,6 +1437,12 @@ public class AppOpsManager {
     @SystemApi
     public static final String OPSTR_LOADER_USAGE_STATS = "android:loader_usage_stats";
 
+    /**
+     * AppOp granted to apps that we are started via {@code am instrument -e --no-isolated-storage}
+     *
+     * @hide
+     */
+    public static final String OPSTR_NO_ISOLATED_STORAGE = "android:no_isolated_storage";
 
     /** {@link #sAppOpsToNote} not initialized yet for this op */
     private static final byte SHOULD_COLLECT_NOTE_OP_NOT_INITIALIZED = 0;
@@ -1604,6 +1632,7 @@ public class AppOpsManager {
             OP_DEPRECATED_1,                    // deprecated
             OP_AUTO_REVOKE_PERMISSIONS_IF_UNUSED, //AUTO_REVOKE_PERMISSIONS_IF_UNUSED
             OP_AUTO_REVOKE_MANAGED_BY_INSTALLER, //OP_AUTO_REVOKE_MANAGED_BY_INSTALLER
+            OP_NO_ISOLATED_STORAGE,             // NO_ISOLATED_STORAGE
     };
 
     /**
@@ -1709,6 +1738,7 @@ public class AppOpsManager {
             "", // deprecated
             OPSTR_AUTO_REVOKE_PERMISSIONS_IF_UNUSED,
             OPSTR_AUTO_REVOKE_MANAGED_BY_INSTALLER,
+            OPSTR_NO_ISOLATED_STORAGE,
     };
 
     /**
@@ -1815,6 +1845,7 @@ public class AppOpsManager {
             "deprecated",
             "AUTO_REVOKE_PERMISSIONS_IF_UNUSED",
             "AUTO_REVOKE_MANAGED_BY_INSTALLER",
+            "NO_ISOLATED_STORAGE",
     };
 
     /**
@@ -1922,6 +1953,7 @@ public class AppOpsManager {
             null, // deprecated operation
             null, // no permission for OP_AUTO_REVOKE_PERMISSIONS_IF_UNUSED
             null, // no permission for OP_AUTO_REVOKE_MANAGED_BY_INSTALLER
+            null, // no permission for OP_NO_ISOLATED_STORAGE
     };
 
     /**
@@ -2029,6 +2061,7 @@ public class AppOpsManager {
             null, // deprecated operation
             null, // AUTO_REVOKE_PERMISSIONS_IF_UNUSED
             null, // AUTO_REVOKE_MANAGED_BY_INSTALLER
+            null, // NO_ISOLATED_STORAGE
     };
 
     /**
@@ -2135,6 +2168,7 @@ public class AppOpsManager {
             null, // deprecated operation
             null, // AUTO_REVOKE_PERMISSIONS_IF_UNUSED
             null, // AUTO_REVOKE_MANAGED_BY_INSTALLER
+            null, // NO_ISOLATED_STORAGE
     };
 
     /**
@@ -2240,6 +2274,7 @@ public class AppOpsManager {
             AppOpsManager.MODE_IGNORED, // deprecated operation
             AppOpsManager.MODE_DEFAULT, // OP_AUTO_REVOKE_PERMISSIONS_IF_UNUSED
             AppOpsManager.MODE_ALLOWED, // OP_AUTO_REVOKE_MANAGED_BY_INSTALLER
+            AppOpsManager.MODE_ERRORED, // OP_NO_ISOLATED_STORAGE
     };
 
     /**
@@ -2349,6 +2384,7 @@ public class AppOpsManager {
             false, // deprecated operation
             false, // AUTO_REVOKE_PERMISSIONS_IF_UNUSED
             false, // AUTO_REVOKE_MANAGED_BY_INSTALLER
+            true, // NO_ISOLATED_STORAGE
     };
 
     /**
@@ -3683,7 +3719,7 @@ public class AppOpsManager {
         /**
          * @hide
          */
-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+        @UnsupportedAppUsage(/*maxTargetSdk = Build.VERSION_CODES.R,*/ publicAlternatives = "{@code "
                 + "#getOpStr()}")
         public int getOp() {
             return mOp;
@@ -3702,7 +3738,7 @@ public class AppOpsManager {
          * @deprecated Use {@link #getLastAccessTime(int)} instead
          */
         @Deprecated
-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+        @UnsupportedAppUsage(/*maxTargetSdk = Build.VERSION_CODES.R,*/ publicAlternatives = "{@code "
                 + "#getLastAccessTime(int)}")
         public long getTime() {
             return getLastAccessTime(OP_FLAGS_ALL);
@@ -3817,7 +3853,7 @@ public class AppOpsManager {
          * @deprecated Use {@link #getLastRejectTime(int)} instead
          */
         @Deprecated
-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.Q, publicAlternatives = "{@code "
+        @UnsupportedAppUsage(/*maxTargetSdk = Build.VERSION_CODES.R,*/ publicAlternatives = "{@code "
                 + "#getLastRejectTime(int)}")
         public long getRejectTime() {
             return getLastRejectTime(OP_FLAGS_ALL);
@@ -6367,6 +6403,25 @@ public class AppOpsManager {
         default void onOpActiveChanged(int op, int uid, String packageName, boolean active) { }
     }
 
+    /**
+     * Callback for notification of an op being started.
+     *
+     * @hide
+     */
+    public interface OnOpStartedListener {
+        /**
+         * Called when an op was started.
+         *
+         * Note: This is only for op starts. It is not called when an op is noted or stopped.
+         *
+         * @param op The op code.
+         * @param uid The UID performing the operation.
+         * @param packageName The package performing the operation.
+         * @param result The result of the start.
+         */
+        void onOpStarted(int op, int uid, String packageName, int result);
+    }
+
     AppOpsManager(Context context, IAppOpsService service) {
         mContext = context;
         mService = service;
@@ -6922,6 +6977,73 @@ public class AppOpsManager {
     }
 
     /**
+     * Start watching for started app-ops.
+     * An app-op may be long running and it has a clear start delimiter.
+     * If an op start is attempted by any package, you will get a callback.
+     * To change the watched ops for a registered callback you need to unregister and register it
+     * again.
+     *
+     * <p> If you don't hold the {@code android.Manifest.permission#WATCH_APPOPS} permission
+     * you can watch changes only for your UID.
+     *
+     * @param ops The operations to watch.
+     * @param callback Where to report changes.
+     *
+     * @see #stopWatchingStarted(OnOpStartedListener)
+     * @see #startWatchingActive(int[], OnOpActiveChangedListener)
+     * @see #startWatchingNoted(int[], OnOpNotedListener)
+     * @see #startOp(int, int, String, boolean, String, String)
+     * @see #finishOp(int, int, String, String)
+     *
+     * @hide
+     */
+     @RequiresPermission(value=Manifest.permission.WATCH_APPOPS, conditional=true)
+     public void startWatchingStarted(@NonNull int[] ops, @NonNull OnOpStartedListener callback) {
+         IAppOpsStartedCallback cb;
+         synchronized (mStartedWatchers) {
+             if (mStartedWatchers.containsKey(callback)) {
+                 return;
+             }
+             cb = new IAppOpsStartedCallback.Stub() {
+                 @Override
+                 public void opStarted(int op, int uid, String packageName, int mode) {
+                     callback.onOpStarted(op, uid, packageName, mode);
+                 }
+             };
+             mStartedWatchers.put(callback, cb);
+         }
+         try {
+             mService.startWatchingStarted(ops, cb);
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+    }
+
+    /**
+     * Stop watching for started app-ops.
+     * An app-op may be long running and it has a clear start delimiter.
+     * Henceforth, if an op start is attempted by any package, you will not get a callback.
+     * Unregistering a non-registered callback has no effect.
+     *
+     * @see #startWatchingStarted(int[], OnOpStartedListener)
+     * @see #startOp(int, int, String, boolean, String, String)
+     *
+     * @hide
+     */
+    public void stopWatchingStarted(@NonNull OnOpStartedListener callback) {
+        synchronized (mStartedWatchers) {
+            final IAppOpsStartedCallback cb = mStartedWatchers.remove(callback);
+            if (cb != null) {
+                try {
+                    mService.stopWatchingStarted(cb);
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
+            }
+        }
+    }
+
+    /**
      * Start watching for noted app ops. An app op may be immediate or long running.
      * Immediate ops are noted while long running ones are started and stopped. This
      * method allows registering a listener to be notified when an app op is noted. If
@@ -6935,6 +7057,7 @@ public class AppOpsManager {
      * @param callback Where to report changes.
      *
      * @see #startWatchingActive(int[], OnOpActiveChangedListener)
+     * @see #startWatchingStarted(int[], OnOpStartedListener)
      * @see #stopWatchingNoted(OnOpNotedListener)
      * @see #noteOp(String, int, String, String, String)
      *
@@ -6974,7 +7097,7 @@ public class AppOpsManager {
      */
     public void stopWatchingNoted(@NonNull OnOpNotedListener callback) {
         synchronized (mNotedWatchers) {
-            final IAppOpsNotedCallback cb = mNotedWatchers.get(callback);
+            final IAppOpsNotedCallback cb = mNotedWatchers.remove(callback);
             if (cb != null) {
                 try {
                     mService.stopWatchingNoted(cb);
@@ -7247,15 +7370,17 @@ public class AppOpsManager {
         try {
             collectNoteOpCallsForValidation(op);
             int collectionMode = getNotedOpCollectionMode(uid, packageName, op);
+            boolean shouldCollectMessage = Process.myUid() == Process.SYSTEM_UID ? true : false;
             if (collectionMode == COLLECT_ASYNC) {
                 if (message == null) {
                     // Set stack trace as default message
                     message = getFormattedStackTrace();
+                    shouldCollectMessage = true;
                 }
             }
 
             int mode = mService.noteOperation(op, uid, packageName, attributionTag,
-                    collectionMode == COLLECT_ASYNC, message);
+                    collectionMode == COLLECT_ASYNC, message, shouldCollectMessage);
 
             if (mode == MODE_ALLOWED) {
                 if (collectionMode == COLLECT_SELF) {
@@ -7408,16 +7533,19 @@ public class AppOpsManager {
         try {
             collectNoteOpCallsForValidation(op);
             int collectionMode = getNotedOpCollectionMode(proxiedUid, proxiedPackageName, op);
+            boolean shouldCollectMessage = myUid == Process.SYSTEM_UID ? true : false;
             if (collectionMode == COLLECT_ASYNC) {
                 if (message == null) {
                     // Set stack trace as default message
                     message = getFormattedStackTrace();
+                    shouldCollectMessage = true;
                 }
             }
 
             int mode = mService.noteProxyOperation(op, proxiedUid, proxiedPackageName,
                     proxiedAttributionTag, myUid, mContext.getOpPackageName(),
-                    mContext.getAttributionTag(), collectionMode == COLLECT_ASYNC, message);
+                    mContext.getAttributionTag(), collectionMode == COLLECT_ASYNC, message,
+                    shouldCollectMessage);
 
             if (mode == MODE_ALLOWED) {
                 if (collectionMode == COLLECT_SELF) {
@@ -7732,15 +7860,18 @@ public class AppOpsManager {
         try {
             collectNoteOpCallsForValidation(op);
             int collectionMode = getNotedOpCollectionMode(uid, packageName, op);
+            boolean shouldCollectMessage = Process.myUid() == Process.SYSTEM_UID ? true : false;
             if (collectionMode == COLLECT_ASYNC) {
                 if (message == null) {
                     // Set stack trace as default message
                     message = getFormattedStackTrace();
+                    shouldCollectMessage = true;
                 }
             }
 
             int mode = mService.startOperation(getClientId(), op, uid, packageName,
-                    attributionTag, startIfModeDefault, collectionMode == COLLECT_ASYNC, message);
+                    attributionTag, startIfModeDefault, collectionMode == COLLECT_ASYNC, message,
+                    shouldCollectMessage);
 
             if (mode == MODE_ALLOWED) {
                 if (collectionMode == COLLECT_SELF) {
@@ -8071,6 +8202,14 @@ public class AppOpsManager {
                             code = notedAppOps.nextSetBit(code + 1)) {
                         if (sOnOpNotedCallback != null) {
                             sOnOpNotedCallback.onNoted(new SyncNotedAppOp(code, attributionTag));
+                        } else {
+                            String message = getFormattedStackTrace();
+                            sUnforwardedOps.add(
+                                    new AsyncNotedAppOp(code, Process.myUid(), attributionTag,
+                                            message, System.currentTimeMillis()));
+                            if (sUnforwardedOps.size() > MAX_UNFORWARDED_OPS) {
+                                sUnforwardedOps.remove(0);
+                            }
                         }
                     }
                 }
@@ -8136,6 +8275,17 @@ public class AppOpsManager {
                                     () -> sOnOpNotedCallback.onAsyncNoted(asyncNotedAppOp));
                         }
                     }
+                }
+                synchronized (this) {
+                    int numMissedSyncOps = sUnforwardedOps.size();
+                    for (int i = 0; i < numMissedSyncOps; i++) {
+                        final AsyncNotedAppOp syncNotedAppOp = sUnforwardedOps.get(i);
+                        if (sOnOpNotedCallback != null) {
+                            sOnOpNotedCallback.getAsyncNotedExecutor().execute(
+                                    () -> sOnOpNotedCallback.onAsyncNoted(syncNotedAppOp));
+                        }
+                    }
+                    sUnforwardedOps.clear();
                 }
             }
         }
@@ -8479,6 +8629,25 @@ public class AppOpsManager {
     public void clearHistory() {
         try {
             mService.clearHistory();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Reboots the ops history.
+     *
+     * @param offlineDurationMillis The duration to wait between
+     * tearing down and initializing the history. Must be greater
+     * than or equal to zero.
+     *
+     * @hide
+     */
+    @TestApi
+    @RequiresPermission(Manifest.permission.MANAGE_APPOPS)
+    public void rebootHistory(long offlineDurationMillis) {
+        try {
+            mService.rebootHistory(offlineDurationMillis);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

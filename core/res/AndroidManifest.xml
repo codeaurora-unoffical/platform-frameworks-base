@@ -96,7 +96,6 @@
     <protected-broadcast android:name="android.intent.action.OVERLAY_PRIORITY_CHANGED" />
     <protected-broadcast android:name="android.intent.action.MY_PACKAGE_SUSPENDED" />
     <protected-broadcast android:name="android.intent.action.MY_PACKAGE_UNSUSPENDED" />
-    <protected-broadcast android:name="android.intent.action.LOAD_DATA" />
 
     <protected-broadcast android:name="android.os.action.POWER_SAVE_MODE_CHANGED" />
     <protected-broadcast android:name="android.os.action.POWER_SAVE_MODE_CHANGING" />
@@ -2437,7 +2436,7 @@
 
     <!-- Allows interaction across profiles in the same profile group. -->
     <permission android:name="android.permission.INTERACT_ACROSS_PROFILES"
-        android:protectionLevel="signature|appop|documenter|wellbeing" />
+        android:protectionLevel="signature|appop" />
 
     <!-- Allows configuring apps to have the INTERACT_ACROSS_PROFILES permission so that they can
          interact across profiles in the same profile group.
@@ -3159,7 +3158,7 @@
          @hide
     -->
     <permission android:name="android.permission.HIDE_NON_SYSTEM_OVERLAY_WINDOWS"
-                android:protectionLevel="signature|installer" />
+                android:protectionLevel="signature|preinstalled" />
 
     <!-- @SystemApi Allows an application to manage (create, destroy,
          Z-order) application tokens in the window manager.
@@ -3535,6 +3534,8 @@
          @hide -->
     <permission android:name="android.permission.MEDIA_RESOURCE_OVERRIDE_PID"
          android:protectionLevel="signature" />
+    <uses-permission android:name="android.permission.MEDIA_RESOURCE_OVERRIDE_PID" />
+
 
     <!-- Must be required by a {@link android.media.routing.MediaRouteService}
          to ensure that only the system can interact with it.
@@ -3657,7 +3658,8 @@
          <p>The package installer v2 APIs are still a work in progress and we're
          currently validating they work in all scenarios.
          <p>Not for use by third-party applications.
-         TODO(b/152310230): remove this permission once the APIs are confirmed to be sufficient.
+         TODO(b/152310230): use this permission to protect only Incremental installations
+         once the APIs are confirmed to be sufficient.
          @hide
     -->
     <permission android:name="com.android.permission.USE_INSTALLER_V2"
@@ -4848,7 +4850,7 @@
     <!-- @SystemApi Allows an application to turn on / off quiet mode.
          @hide -->
     <permission android:name="android.permission.MODIFY_QUIET_MODE"
-                android:protectionLevel="signature|privileged|wellbeing" />
+                android:protectionLevel="signature|privileged|wellbeing|development" />
 
     <!-- Allows internal management of the camera framework
          @hide -->
@@ -5001,7 +5003,8 @@
     <permission android:name="android.permission.ASSOCIATE_INPUT_DEVICE_TO_DISPLAY_BY_PORT"
                 android:protectionLevel="signature" />
 
-    <!-- Allows query of any normal app on the device, regardless of manifest declarations. -->
+    <!-- Allows query of any normal app on the device, regardless of manifest declarations.
+        <p>Protection level: normal -->
     <permission android:name="android.permission.QUERY_ALL_PACKAGES"
                 android:protectionLevel="normal" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
@@ -5024,6 +5027,10 @@
          @hide -->
     <permission android:name="android.permission.ACCESS_TV_DESCRAMBLER"
         android:protectionLevel="signature|privileged|vendorPrivileged" />
+
+    <!-- Allows an application to create trusted displays. @hide -->
+    <permission android:name="android.permission.ADD_TRUSTED_DISPLAY"
+                android:protectionLevel="signature" />
 
     <!-- @hide @SystemApi Allows an application to access locusId events in the usage stats. -->
     <permission android:name="android.permission.ACCESS_LOCUS_ID_USAGE_STATS"
@@ -5053,7 +5060,7 @@
                  android:forceQueryable="true"
                  android:directBootAware="true">
         <activity android:name="com.android.internal.app.ChooserActivity"
-                android:theme="@style/Theme.DeviceDefault.Resolver"
+                android:theme="@style/Theme.DeviceDefault.Chooser"
                 android:finishOnCloseSystemDialogs="true"
                 android:excludeFromRecents="true"
                 android:documentLaunchMode="never"
@@ -5099,7 +5106,7 @@
         </activity>
         <activity android:name="com.android.internal.app.IntentForwarderActivity"
                 android:finishOnCloseSystemDialogs="true"
-                android:theme="@style/Theme.NoDisplay"
+                android:theme="@style/Theme.Translucent.NoTitleBar"
                 android:excludeFromRecents="true"
                 android:label="@string/user_owner_label"
                 android:exported="true"
@@ -5227,7 +5234,7 @@
         </activity>
 
         <activity android:name="com.android.internal.app.SuspendedAppActivity"
-                  android:theme="@style/Theme.Dialog.Confirmation"
+                  android:theme="@style/Theme.DeviceDefault.Dialog.Alert.DayNight"
                   android:excludeFromRecents="true"
                   android:process=":ui">
         </activity>
@@ -5474,15 +5481,17 @@
                  android:permission="android.permission.BIND_JOB_SERVICE">
         </service>
 
-        <service android:name="com.android.server.pm.PackageManagerShellCommandDataLoader">
+        <service android:name="com.android.server.pm.PackageManagerShellCommandDataLoader"
+            android:exported="false">
             <intent-filter>
-                <action android:name="android.intent.action.LOAD_DATA" />
+                <action android:name="android.intent.action.LOAD_DATA"/>
             </intent-filter>
         </service>
 
         <provider
             android:name="com.android.server.textclassifier.IconsContentProvider"
             android:authorities="com.android.textclassifier.icons"
+            android:singleUser="true"
             android:enabled="true"
             android:exported="true">
         </provider>

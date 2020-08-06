@@ -38,14 +38,17 @@ StatsPuller::StatsPuller(const int tagId, const int64_t coolDownNs, const int64_
       mPullTimeoutNs(pullTimeoutNs),
       mCoolDownNs(coolDownNs),
       mAdditiveFields(additiveFields),
-      mLastPullTimeNs(0) {
+      mLastPullTimeNs(0),
+      mLastEventTimeNs(0) {
 }
 
-bool StatsPuller::Pull(std::vector<std::shared_ptr<LogEvent>>* data) {
+bool StatsPuller::Pull(const int64_t eventTimeNs, std::vector<std::shared_ptr<LogEvent>>* data) {
     lock_guard<std::mutex> lock(mLock);
-    int64_t elapsedTimeNs = getElapsedRealtimeNs();
+    const int64_t elapsedTimeNs = getElapsedRealtimeNs();
+    const int64_t systemUptimeMillis = getSystemUptimeMillis();
     StatsdStats::getInstance().notePull(mTagId);
-    const bool shouldUseCache = elapsedTimeNs - mLastPullTimeNs < mCoolDownNs;
+    const bool shouldUseCache =
+            (mLastEventTimeNs == eventTimeNs) || (elapsedTimeNs - mLastPullTimeNs < mCoolDownNs);
     if (shouldUseCache) {
         if (mHasGoodData) {
             (*data) = mCachedData;
@@ -54,32 +57,39 @@ bool StatsPuller::Pull(std::vector<std::shared_ptr<LogEvent>>* data) {
         }
         return mHasGoodData;
     }
-
     if (mLastPullTimeNs > 0) {
         StatsdStats::getInstance().updateMinPullIntervalSec(
                 mTagId, (elapsedTimeNs - mLastPullTimeNs) / NS_PER_SEC);
     }
     mCachedData.clear();
     mLastPullTimeNs = elapsedTimeNs;
+    mLastEventTimeNs = eventTimeNs;
     mHasGoodData = PullInternal(&mCachedData);
     if (!mHasGoodData) {
         return mHasGoodData;
     }
-    const int64_t pullDurationNs = getElapsedRealtimeNs() - elapsedTimeNs;
-    StatsdStats::getInstance().notePullTime(mTagId, pullDurationNs);
-    const bool pullTimeOut = pullDurationNs > mPullTimeoutNs;
+    const int64_t pullElapsedDurationNs = getElapsedRealtimeNs() - elapsedTimeNs;
+    const int64_t pullSystemUptimeDurationMillis = getSystemUptimeMillis() - systemUptimeMillis;
+    StatsdStats::getInstance().notePullTime(mTagId, pullElapsedDurationNs);
+    const bool pullTimeOut = pullElapsedDurationNs > mPullTimeoutNs;
     if (pullTimeOut) {
         // Something went wrong. Discard the data.
-        clearCacheLocked();
+        mCachedData.clear();
         mHasGoodData = false;
-        StatsdStats::getInstance().notePullTimeout(mTagId);
+        StatsdStats::getInstance().notePullTimeout(
+                mTagId, pullSystemUptimeDurationMillis, NanoToMillis(pullElapsedDurationNs));
         ALOGW("Pull for atom %d exceeds timeout %lld nano seconds.", mTagId,
-              (long long)pullDurationNs);
+              (long long)pullElapsedDurationNs);
         return mHasGoodData;
     }
 
     if (mCachedData.size() > 0) {
         mapAndMergeIsolatedUidsToHostUid(mCachedData, mUidMap, mTagId, mAdditiveFields);
+    }
+
+    if (mCachedData.empty()) {
+        VLOG("Data pulled is empty");
+        StatsdStats::getInstance().noteEmptyData(mTagId);
     }
 
     (*data) = mCachedData;
@@ -99,6 +109,7 @@ int StatsPuller::clearCacheLocked() {
     int ret = mCachedData.size();
     mCachedData.clear();
     mLastPullTimeNs = 0;
+    mLastEventTimeNs = 0;
     return ret;
 }
 

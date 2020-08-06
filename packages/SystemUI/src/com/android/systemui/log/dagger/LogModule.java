@@ -61,6 +61,18 @@ public class LogModule {
         return buffer;
     }
 
+    /** Provides a logging buffer for all logs related to managing notification sections. */
+    @Provides
+    @Singleton
+    @NotificationSectionLog
+    public static LogBuffer provideNotificationSectionLogBuffer(
+            LogcatEchoTracker bufferFilter,
+            DumpManager dumpManager) {
+        LogBuffer buffer = new LogBuffer("NotifSectionLog", 1000, 10, bufferFilter);
+        buffer.attach(dumpManager);
+        return buffer;
+    }
+
     /** Provides a logging buffer for all logs related to the data layer of notifications. */
     @Provides
     @Singleton
@@ -81,6 +93,18 @@ public class LogModule {
             LogcatEchoTracker bufferFilter,
             DumpManager dumpManager) {
         LogBuffer buffer = new LogBuffer("QSLog", 500, 10, bufferFilter);
+        buffer.attach(dumpManager);
+        return buffer;
+    }
+
+    /** Provides a logging buffer for {@link com.android.systemui.broadcast.BroadcastDispatcher} */
+    @Provides
+    @Singleton
+    @BroadcastDispatcherLog
+    public static LogBuffer provideBroadcastDispatcherLogBuffer(
+            LogcatEchoTracker bufferFilter,
+            DumpManager dumpManager) {
+        LogBuffer buffer = new LogBuffer("BroadcastDispatcherLog", 500, 10, bufferFilter);
         buffer.attach(dumpManager);
         return buffer;
     }

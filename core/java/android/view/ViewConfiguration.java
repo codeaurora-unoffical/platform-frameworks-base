@@ -416,7 +416,7 @@ public class ViewConfiguration {
                 com.android.internal.R.dimen.config_ambiguousGestureMultiplier,
                 multiplierValue,
                 true /*resolveRefs*/);
-        mAmbiguousGestureMultiplier = multiplierValue.getFloat();
+        mAmbiguousGestureMultiplier = Math.max(1.0f, multiplierValue.getFloat());
 
         // Size of the screen in bytes, in ARGB_8888 format
         final WindowManager windowManager = context.getSystemService(WindowManager.class);
@@ -500,12 +500,13 @@ public class ViewConfiguration {
      */
     public static ViewConfiguration get(Context context) {
         if (!context.isUiContext() && vmIncorrectContextUseEnabled()) {
-            final String errorMessage = "Tried to access UI constants from a non-visual Context.";
+            final String errorMessage = "Tried to access UI constants from a non-visual Context:"
+                    + context;
             final String message = "UI constants, such as display metrics or window metrics, "
                     + "must be accessed from Activity or other visual Context. "
                     + "Use an Activity or a Context created with "
                     + "Context#createWindowContext(int, Bundle), which are adjusted to the "
-                    + "configuration and visual bounds of an area on screen.";
+                    + "configuration and visual bounds of an area on screen";
             final Exception exception = new IllegalArgumentException(errorMessage);
             StrictMode.onIncorrectContextUsed(message, exception);
             Log.e(TAG, errorMessage + message, exception);

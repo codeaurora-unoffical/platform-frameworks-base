@@ -57,7 +57,7 @@
     <string name="osu_sign_up_complete" msgid="7640183358878916847">"Anmeldung abgeschlossen. Verbindung wird hergestellt…"</string>
     <string name="speed_label_very_slow" msgid="8526005255731597666">"Sehr langsam"</string>
     <string name="speed_label_slow" msgid="6069917670665664161">"Langsam"</string>
-    <string name="speed_label_okay" msgid="1253594383880810424">"Ok"</string>
+    <string name="speed_label_okay" msgid="1253594383880810424">"Mittel"</string>
     <string name="speed_label_medium" msgid="9078405312828606976">"Mittel"</string>
     <string name="speed_label_fast" msgid="2677719134596044051">"Schnell"</string>
     <string name="speed_label_very_fast" msgid="8215718029533182439">"Sehr schnell"</string>
@@ -222,16 +222,16 @@
     <string name="adb_device_fingerprint_title_format" msgid="291504822917843701">"Fingerabdruck des Geräts: <xliff:g id="FINGERPRINT_PARAM">%1$s</xliff:g>"</string>
     <string name="adb_wireless_connection_failed_title" msgid="664211177427438438">"Verbindung fehlgeschlagen"</string>
     <string name="adb_wireless_connection_failed_message" msgid="9213896700171602073">"Prüfe, ob <xliff:g id="DEVICE_NAME">%1$s</xliff:g> mit dem richtigen Netzwerk verbunden ist"</string>
-    <string name="adb_pairing_device_dialog_title" msgid="7141739231018530210">"Mit einem Gerät koppeln"</string>
+    <string name="adb_pairing_device_dialog_title" msgid="7141739231018530210">"Mit Gerät koppeln"</string>
     <string name="adb_pairing_device_dialog_pairing_code_label" msgid="3639239786669722731">"WLAN-Kopplungscode"</string>
     <string name="adb_pairing_device_dialog_failed_title" msgid="3426758947882091735">"Kopplung fehlgeschlagen"</string>
     <string name="adb_pairing_device_dialog_failed_msg" msgid="6611097519661997148">"Prüfe, ob das Gerät mit demselben Netzwerk verbunden ist."</string>
-    <string name="adb_wireless_qrcode_summary" msgid="8051414549011801917">"Scanne einen QR-Code, um ein Gerät über WLAN zu koppeln"</string>
+    <string name="adb_wireless_qrcode_summary" msgid="8051414549011801917">"Scanne einen QR-Code, um das Gerät über WLAN zu koppeln"</string>
     <string name="adb_wireless_verifying_qrcode_text" msgid="6123192424916029207">"Gerät wird gekoppelt…"</string>
     <string name="adb_qrcode_pairing_device_failed_msg" msgid="6936292092592914132">"Das Gerät konnte nicht gekoppelt werden. Der QR-Code war nicht korrekt oder das Gerät ist nicht mit demselben Netzwerk verbunden."</string>
     <string name="adb_wireless_ip_addr_preference_title" msgid="8335132107715311730">"IP-Adresse &amp; Port"</string>
     <string name="adb_wireless_qrcode_pairing_title" msgid="1906409667944674707">"QR-Code scannen"</string>
-    <string name="adb_wireless_qrcode_pairing_description" msgid="6014121407143607851">"Scanne einen QR-Code, um ein Gerät über WLAN zu koppeln"</string>
+    <string name="adb_wireless_qrcode_pairing_description" msgid="6014121407143607851">"Scanne einen QR-Code, um das Gerät über WLAN zu koppeln"</string>
     <string name="adb_wireless_no_network_msg" msgid="2365795244718494658">"Bitte stell eine WLAN-Verbindung her"</string>
     <string name="keywords_adb_wireless" msgid="6507505581882171240">"ADB, Debug, Dev"</string>
     <string name="bugreport_in_power" msgid="8664089072534638709">"Verknüpfung zu Fehlerbericht"</string>
@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"Optionen zur Zertifizierung für kabellose Übertragung anzeigen"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"WLAN-Protokollierungsebene erhöhen, pro SSID RSSI in WiFi Picker anzeigen"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"Verringert den Akkuverbrauch und verbessert die Netzwerkleistung"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"Wenn dieser Modus aktiviert ist, kann sich die MAC-Adresse dieses Geräts bei jeder Verbindung mit einem Netzwerk ändern, bei dem die MAC-Adressen randomisiert werden."</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"Kostenpflichtig"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"Kostenlos"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"Logger-Puffergrößen"</string>
@@ -508,7 +507,7 @@
     <string name="zen_mode_duration_settings_title" msgid="1553451650289651489">"Dauer"</string>
     <string name="zen_mode_duration_always_prompt_title" msgid="3212996860498119555">"Jedes Mal fragen"</string>
     <string name="zen_mode_forever" msgid="3339224497605461291">"Bis zur Deaktivierung"</string>
-    <string name="time_unit_just_now" msgid="3006134267292728099">"gerade eben"</string>
+    <string name="time_unit_just_now" msgid="3006134267292728099">"Gerade eben"</string>
     <string name="media_transfer_this_device_name" msgid="2716555073132169240">"Smartphone-Lautsprecher"</string>
     <string name="profile_connect_timeout_subtext" msgid="4043408193005851761">"Verbindung kann nicht hergestellt werden. Schalte das Gerät aus &amp; und wieder ein."</string>
     <string name="media_transfer_wired_device_name" msgid="4447880899964056007">"Netzbetriebenes Audiogerät"</string>
@@ -550,4 +549,9 @@
     <string name="guest_new_guest" msgid="3482026122932643557">"Gast hinzufügen"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"Gast entfernen"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"Gast"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"Gerätestandard"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"Deaktiviert"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"Aktiviert"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"Damit diese Änderung übernommen wird, musst du dein Gerät neu starten. Du kannst es jetzt neu starten oder den Vorgang abbrechen."</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"Kabelgebundene Kopfhörer"</string>
 </resources>

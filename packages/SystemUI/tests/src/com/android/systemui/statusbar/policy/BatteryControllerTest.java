@@ -55,6 +55,12 @@ public class BatteryControllerTest extends SysuiTestCase {
         MockitoAnnotations.initMocks(this);
         mBatteryController = new BatteryControllerImpl(getContext(), mock(EnhancedEstimates.class),
                 mPowerManager, mBroadcastDispatcher, new Handler(), new Handler());
+        mBatteryController.init();
+    }
+
+    @Test
+    public void testBatteryInitialized() {
+        Assert.assertTrue(mBatteryController.mHasReceivedBattery);
     }
 
     @Test

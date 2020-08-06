@@ -1951,7 +1951,8 @@ public class LocationManager {
         }
 
         try {
-            return mGnssStatusListenerManager.addListener(listener, Runnable::run);
+            return mGnssStatusListenerManager.addListener(listener,
+                    new HandlerExecutor(new Handler()));
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2086,7 +2087,7 @@ public class LocationManager {
     @Deprecated
     @RequiresPermission(ACCESS_FINE_LOCATION)
     public boolean addNmeaListener(@NonNull OnNmeaMessageListener listener) {
-        return addNmeaListener(Runnable::run, listener);
+        return addNmeaListener(listener, null);
     }
 
     /**
@@ -2583,9 +2584,15 @@ public class LocationManager {
         }
 
         public void cancel() {
+            remove();
+        }
+
+        private Consumer<Location> remove() {
+            Consumer<Location> consumer;
             ICancellationSignal cancellationSignal;
             synchronized (this) {
                 mExecutor = null;
+                consumer = mConsumer;
                 mConsumer = null;
 
                 if (mAlarmManager != null) {
@@ -2605,6 +2612,8 @@ public class LocationManager {
                     // ignore
                 }
             }
+
+            return consumer;
         }
 
         public void fail() {
@@ -2663,16 +2672,10 @@ public class LocationManager {
         }
 
         private void acceptResult(Location location) {
-            Consumer<Location> consumer;
-            synchronized (this) {
-                if (mConsumer == null) {
-                    return;
-                }
-                consumer = mConsumer;
-                cancel();
+            Consumer<Location> consumer = remove();
+            if (consumer != null) {
+                consumer.accept(location);
             }
-
-            consumer.accept(location);
         }
     }
 
@@ -2954,10 +2957,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.unregisterGnssStatusCallback(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.unregisterGnssStatusCallback(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         private class GnssStatusListener extends IGnssStatusListener.Stub {
@@ -3020,22 +3023,22 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssMeasurementsListener(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssMeasurementsListener(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         @Override
         @Nullable
-        protected GnssRequest merge(@NonNull GnssRequest[] requests) {
-            Preconditions.checkArgument(requests.length > 0);
+        protected GnssRequest merge(@NonNull List<GnssRequest> requests) {
+            Preconditions.checkArgument(!requests.isEmpty());
             for (GnssRequest request : requests) {
                 if (request.isFullTracking()) {
                     return request;
                 }
             }
-            return requests[0];
+            return requests.get(0);
         }
 
         private class GnssMeasurementsListener extends IGnssMeasurementsListener.Stub {
@@ -3073,10 +3076,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssNavigationMessageListener(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssNavigationMessageListener(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         private class GnssNavigationMessageListener extends IGnssNavigationMessageListener.Stub {
@@ -3114,10 +3117,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssAntennaInfoListener(mListenerTransport);
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssAntennaInfoListener(mListenerTransport);
+                mListenerTransport = null;
+            }
         }
 
         private class GnssAntennaInfoListener extends IGnssAntennaInfoListener.Stub {
@@ -3151,10 +3154,10 @@ public class LocationManager {
 
         @Override
         protected void unregisterService() throws RemoteException {
-            Preconditions.checkState(mListenerTransport != null);
-
-            mService.removeGnssBatchingCallback();
-            mListenerTransport = null;
+            if (mListenerTransport != null) {
+                mService.removeGnssBatchingCallback();
+                mListenerTransport = null;
+            }
         }
 
         private class BatchedLocationCallback extends IBatchedLocationCallback.Stub {

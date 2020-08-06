@@ -26,6 +26,7 @@
 #include <binder/Status.h>
 #include <incfs.h>
 #include <jni.h>
+#include <utils/Looper.h>
 
 #include <memory>
 #include <span>
@@ -33,6 +34,11 @@
 #include <string_view>
 
 namespace android::incremental {
+
+using Clock = std::chrono::steady_clock;
+using TimePoint = std::chrono::time_point<Clock>;
+using Milliseconds = std::chrono::milliseconds;
+using Job = std::function<void()>;
 
 // --- Wrapper interfaces ---
 
@@ -68,6 +74,7 @@ public:
     using Control = incfs::Control;
     using FileId = incfs::FileId;
     using ErrorCode = incfs::ErrorCode;
+    using WaitResult = incfs::WaitResult;
 
     using ExistingMountCallback =
             std::function<void(std::string_view root, std::string_view backingDir,
@@ -89,6 +96,9 @@ public:
     virtual ErrorCode unlink(const Control& control, std::string_view path) const = 0;
     virtual base::unique_fd openForSpecialOps(const Control& control, FileId id) const = 0;
     virtual ErrorCode writeBlocks(std::span<const incfs::DataBlock> blocks) const = 0;
+    virtual WaitResult waitForPendingReads(
+            const Control& control, std::chrono::milliseconds timeout,
+            std::vector<incfs::ReadInfo>* pendingReadsBuffer) const = 0;
 };
 
 class AppOpsManagerWrapper {
@@ -106,6 +116,24 @@ public:
     virtual void initializeForCurrentThread() const = 0;
 };
 
+class LooperWrapper {
+public:
+    virtual ~LooperWrapper() = default;
+    virtual int addFd(int fd, int ident, int events, android::Looper_callbackFunc callback,
+                      void* data) = 0;
+    virtual int removeFd(int fd) = 0;
+    virtual void wake() = 0;
+    virtual int pollAll(int timeoutMillis) = 0;
+};
+
+class TimedQueueWrapper {
+public:
+    virtual ~TimedQueueWrapper() = default;
+    virtual void addJob(MountId id, Milliseconds after, Job what) = 0;
+    virtual void removeJobs(MountId id) = 0;
+    virtual void stop() = 0;
+};
+
 class ServiceManagerWrapper {
 public:
     virtual ~ServiceManagerWrapper() = default;
@@ -114,6 +142,8 @@ public:
     virtual std::unique_ptr<IncFsWrapper> getIncFs() = 0;
     virtual std::unique_ptr<AppOpsManagerWrapper> getAppOpsManager() = 0;
     virtual std::unique_ptr<JniWrapper> getJni() = 0;
+    virtual std::unique_ptr<LooperWrapper> getLooper() = 0;
+    virtual std::unique_ptr<TimedQueueWrapper> getTimedQueue() = 0;
 };
 
 // --- Real stuff ---
@@ -127,6 +157,8 @@ public:
     std::unique_ptr<IncFsWrapper> getIncFs() final;
     std::unique_ptr<AppOpsManagerWrapper> getAppOpsManager() final;
     std::unique_ptr<JniWrapper> getJni() final;
+    std::unique_ptr<LooperWrapper> getLooper() final;
+    std::unique_ptr<TimedQueueWrapper> getTimedQueue() final;
 
 private:
     template <class INTERFACE>

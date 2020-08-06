@@ -45,6 +45,7 @@ import com.android.systemui.statusbar.KeyguardIndicationController;
 import com.android.systemui.statusbar.StatusBarState;
 import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator;
 import com.android.systemui.statusbar.notification.NotificationWakeUpCoordinator.WakeUpListener;
+import com.android.systemui.statusbar.phone.LockscreenGestureLogger.LockscreenUiEvent;
 import com.android.systemui.statusbar.policy.AccessibilityController;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.ConfigurationController.ConfigurationListener;
@@ -76,8 +77,6 @@ public class LockscreenLockIconController {
     private boolean mKeyguardShowing;
     private boolean mKeyguardJustShown;
     private boolean mBlockUpdates;
-    private boolean mPulsing;
-    private boolean mDozing;
     private boolean mSimLocked;
     private boolean mTransientBiometricsError;
     private boolean mDocked;
@@ -121,6 +120,11 @@ public class LockscreenLockIconController {
                 @Override
                 public void onDozingChanged(boolean isDozing) {
                     setDozing(isDozing);
+                }
+
+                @Override
+                public void onPulsingChanged(boolean pulsing) {
+                    setPulsing(pulsing);
                 }
 
                 @Override
@@ -378,8 +382,7 @@ public class LockscreenLockIconController {
     /**
      * Propagate {@link StatusBar} pulsing state.
      */
-    public void setPulsing(boolean pulsing) {
-        mPulsing = pulsing;
+    private void setPulsing(boolean pulsing) {
         update();
     }
 
@@ -434,6 +437,7 @@ public class LockscreenLockIconController {
     private boolean handleLongClick(View view) {
         mLockscreenGestureLogger.write(MetricsProto.MetricsEvent.ACTION_LS_LOCK,
                 0 /* lengthDp - N/A */, 0 /* velocityDp - N/A */);
+        mLockscreenGestureLogger.log(LockscreenUiEvent.LOCKSCREEN_LOCK_TAP);
         mKeyguardIndicationController.showTransientIndication(
                 R.string.keyguard_indication_trust_disabled);
         mKeyguardUpdateMonitor.onLockIconPressed();
@@ -461,7 +465,8 @@ public class LockscreenLockIconController {
             shouldUpdate = false;
         }
         if (shouldUpdate && mLockIcon != null) {
-            mLockIcon.update(state, mPulsing, mDozing, mKeyguardJustShown);
+            mLockIcon.update(state, mStatusBarStateController.isPulsing(),
+                    mStatusBarStateController.isDozing(), mKeyguardJustShown);
         }
         mLastState = state;
         mKeyguardJustShown = false;
@@ -477,7 +482,8 @@ public class LockscreenLockIconController {
             return STATE_LOCK_OPEN;
         } else if (mTransientBiometricsError) {
             return STATE_BIOMETRICS_ERROR;
-        } else if (mKeyguardUpdateMonitor.isFaceDetectionRunning() && !mPulsing) {
+        } else if (mKeyguardUpdateMonitor.isFaceDetectionRunning()
+                && !mStatusBarStateController.isPulsing()) {
             return STATE_SCANNING_FACE;
         } else {
             return STATE_LOCKED;
@@ -489,7 +495,6 @@ public class LockscreenLockIconController {
     }
 
     private void setDozing(boolean isDozing) {
-        mDozing = isDozing;
         update();
     }
 
@@ -504,7 +509,8 @@ public class LockscreenLockIconController {
      * @return true if the visibility changed
      */
     private boolean updateIconVisibility() {
-        boolean onAodNotPulsingOrDocked = mDozing && (!mPulsing || mDocked);
+        boolean onAodNotPulsingOrDocked = mStatusBarStateController.isDozing()
+                && (!mStatusBarStateController.isPulsing() || mDocked);
         boolean invisible = onAodNotPulsingOrDocked || mWakeAndUnlockRunning
                 || mShowingLaunchAffordance;
         if (mKeyguardBypassController.getBypassEnabled() && !mBouncerShowingScrimmed) {

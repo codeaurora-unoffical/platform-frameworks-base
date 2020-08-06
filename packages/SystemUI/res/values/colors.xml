@@ -200,6 +200,11 @@
     <color name="global_screenshot_button_icon">@color/GM2_blue_500</color>
     <color name="global_screenshot_dismiss_background">#FFFFFF</color>
     <color name="global_screenshot_dismiss_foreground">@color/GM2_grey_500</color>
+    <color name="global_screenshot_background_protection_start">#40000000</color> <!-- 25% black -->
+
+    <!-- Bubbles -->
+    <color name="bubbles_light">#FFFFFF</color>
+    <color name="bubbles_dark">@color/GM2_grey_800</color>
 
     <!-- GM2 colors -->
     <color name="GM2_grey_50">#F8F9FA</color>
@@ -238,9 +243,17 @@
 
     <color name="magnification_border_color">#FF9900</color>
 
+    <!-- media -->
+    <color name="media_primary_text">@android:color/white</color>
+    <color name="media_secondary_text">#99ffffff</color> <!-- 60% -->
+    <color name="media_seekbar_progress">#c0ffffff</color>
+    <color name="media_disabled">#80ffffff</color>
+    <color name="media_seamless_border">#26ffffff</color> <!-- 15% -->
+    <color name="media_divider">#1d000000</color>
+
     <!-- controls -->
-    <color name="control_primary_text">@color/GM2_grey_100</color>
-    <color name="control_secondary_text">@color/GM2_grey_500</color>
+    <color name="control_primary_text">#E6FFFFFF</color>
+    <color name="control_secondary_text">#99FFFFFF</color>
     <color name="control_default_foreground">@color/GM2_grey_500</color>
     <color name="control_default_background">@color/GM2_grey_900</color>
     <color name="control_list_popup_background">@*android:color/background_floating_material_dark</color>
@@ -256,4 +269,6 @@
 
     <!-- Docked misalignment message -->
     <color name="misalignment_text_color">#F28B82</color>
+
+    <color name="screenrecord_status_color">#E94235</color>
 </resources>

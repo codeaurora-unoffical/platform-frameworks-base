@@ -26,7 +26,6 @@ import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.UserInfo;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
@@ -89,7 +88,6 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
     private final ScreenshotNotificationSmartActionsProvider mSmartActionsProvider;
     private final String mScreenshotId;
     private final boolean mSmartActionsEnabled;
-    private final boolean mCreateDeleteAction;
     private final Random mRandom = new Random();
 
     SaveImageInBackgroundTask(Context context, GlobalScreenshot.SaveImageInBackgroundData data) {
@@ -102,8 +100,6 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
         String imageDate = new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date(mImageTime));
         mImageFileName = String.format(SCREENSHOT_FILE_NAME_TEMPLATE, imageDate);
         mScreenshotId = String.format(SCREENSHOT_ID_TEMPLATE, UUID.randomUUID());
-
-        mCreateDeleteAction = data.createDeleteAction;
 
         // Initialize screenshot notification smart actions provider.
         mSmartActionsEnabled = DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_SYSTEMUI,
@@ -124,6 +120,7 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
         if (isCancelled()) {
             return null;
         }
+        Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
 
         ContentResolver resolver = mContext.getContentResolver();
         Bitmap image = mParams.image;
@@ -146,7 +143,7 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
             CompletableFuture<List<Notification.Action>> smartActionsFuture =
                     ScreenshotSmartActions.getSmartActionsFuture(
                             mScreenshotId, uri, image, mSmartActionsProvider,
-                            mSmartActionsEnabled, isManagedProfile(mContext));
+                            mSmartActionsEnabled, getUserHandle(mContext));
 
             try {
                 // First, write the actual data for our screenshot
@@ -215,6 +212,7 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
             mImageData.deleteAction = createDeleteAction(mContext, mContext.getResources(), uri);
 
             mParams.mActionsReadyListener.onActionsReady(mImageData);
+            mParams.finisher.accept(mImageData.uri);
             mParams.image = null;
             mParams.errorMsgResId = 0;
         } catch (Exception e) {
@@ -225,22 +223,18 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
             mParams.errorMsgResId = R.string.screenshot_failed_to_save_text;
             mImageData.reset();
             mParams.mActionsReadyListener.onActionsReady(mImageData);
+            mParams.finisher.accept(null);
         }
 
         return null;
     }
 
     /**
-     * If we get a new screenshot request while this one is saving, we want to continue saving in
-     * the background but not return anything.
+     * Update the listener run when the saving task completes. Used to avoid showing UI for the
+     * first screenshot when a second one is taken.
      */
-    void ignoreResult() {
-        mParams.mActionsReadyListener = new GlobalScreenshot.ActionsReadyListener() {
-            @Override
-            void onActionsReady(GlobalScreenshot.SavedImageData imageData) {
-                // do nothing
-            }
-        };
+    void setActionsReadyListener(GlobalScreenshot.ActionsReadyListener listener) {
+        mParams.mActionsReadyListener = listener;
     }
 
     @Override
@@ -288,10 +282,14 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
                         .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK)
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
+        // cancel current pending intent (if any) since clipData isn't used for matching
+        PendingIntent pendingIntent = PendingIntent.getActivityAsUser(context, 0,
+                sharingChooserIntent, PendingIntent.FLAG_CANCEL_CURRENT, null, UserHandle.CURRENT);
+
         // Create a share action for the notification
         PendingIntent shareAction = PendingIntent.getBroadcastAsUser(context, requestCode,
                 new Intent(context, GlobalScreenshot.ActionProxyReceiver.class)
-                        .putExtra(GlobalScreenshot.EXTRA_ACTION_INTENT, sharingChooserIntent)
+                        .putExtra(GlobalScreenshot.EXTRA_ACTION_INTENT, pendingIntent)
                         .putExtra(GlobalScreenshot.EXTRA_DISALLOW_ENTER_PIP, true)
                         .putExtra(GlobalScreenshot.EXTRA_ID, mScreenshotId)
                         .putExtra(GlobalScreenshot.EXTRA_SMART_ACTIONS_ENABLED,
@@ -326,6 +324,9 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
         editIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         editIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
+        PendingIntent pendingIntent = PendingIntent.getActivityAsUser(context, 0,
+                editIntent, 0, null, UserHandle.CURRENT);
+
         // Make sure pending intents for the system user are still unique across users
         // by setting the (otherwise unused) request code to the current user id.
         int requestCode = mContext.getUserId();
@@ -333,7 +334,7 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
         // Create a edit action
         PendingIntent editAction = PendingIntent.getBroadcastAsUser(context, requestCode,
                 new Intent(context, GlobalScreenshot.ActionProxyReceiver.class)
-                        .putExtra(GlobalScreenshot.EXTRA_ACTION_INTENT, editIntent)
+                        .putExtra(GlobalScreenshot.EXTRA_ACTION_INTENT, pendingIntent)
                         .putExtra(GlobalScreenshot.EXTRA_CANCEL_NOTIFICATION,
                                 editIntent.getComponent() != null)
                         .putExtra(GlobalScreenshot.EXTRA_ID, mScreenshotId)
@@ -382,10 +383,9 @@ class SaveImageInBackgroundTask extends AsyncTask<Void, Void, Void> {
         }
     }
 
-    private boolean isManagedProfile(Context context) {
+    private UserHandle getUserHandle(Context context) {
         UserManager manager = UserManager.get(context);
-        UserInfo info = manager.getUserInfo(getUserHandleOfForegroundApplication(context));
-        return info.isManagedProfile();
+        return manager.getUserInfo(getUserHandleOfForegroundApplication(context)).getUserHandle();
     }
 
     private List<Notification.Action> buildSmartActions(

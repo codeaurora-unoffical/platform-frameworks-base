@@ -56,6 +56,7 @@ import android.widget.TextView;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
@@ -71,6 +72,7 @@ import java.util.Set;
  */
 public class NotificationInfo extends LinearLayout implements NotificationGuts.GutsContent {
     private static final String TAG = "InfoGuts";
+    private int mActualHeight;
 
     @IntDef(prefix = { "ACTION_" }, value = {
             ACTION_NONE,
@@ -121,6 +123,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
     private OnAppSettingsClickListener mAppSettingsClickListener;
     private NotificationGuts mGutsContainer;
     private Drawable mPkgIcon;
+    private UiEventLogger mUiEventLogger;
 
     @VisibleForTesting
     boolean mSkipPost = false;
@@ -140,7 +143,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
     // used by standard ui
     private OnClickListener mOnDismissSettings = v -> {
         mPressedApply = true;
-        closeControls(v, true);
+        mGutsContainer.closeControls(v, true);
     };
 
     public NotificationInfo(Context context, AttributeSet attrs) {
@@ -181,6 +184,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
             NotificationEntry entry,
             OnSettingsClickListener onSettingsClick,
             OnAppSettingsClickListener onAppSettingsClick,
+            UiEventLogger uiEventLogger,
             boolean isDeviceProvisioned,
             boolean isNonblockable,
             boolean wasShownHighPriority)
@@ -204,6 +208,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
         mAppUid = mSbn.getUid();
         mDelegatePkg = mSbn.getOpPkg();
         mIsDeviceProvisioned = isDeviceProvisioned;
+        mUiEventLogger = uiEventLogger;
 
         int numTotalChannels = mINotificationManager.getNumNotificationChannelsForPackage(
                 pkg, mAppUid, false /* includeDeleted */);
@@ -222,6 +227,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
 
         bindInlineControls();
 
+        logUiEvent(NotificationControlsEvent.NOTIFICATION_CONTROLS_OPEN);
         mMetricsLogger.write(notificationControlsLogMaker());
     }
 
@@ -249,7 +255,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
 
         View done = findViewById(R.id.done);
         done.setOnClickListener(mOnDismissSettings);
-
+        done.setAccessibilityDelegate(mGutsContainer.getAccessibilityDelegate());
 
         View silent = findViewById(R.id.silence);
         View alert = findViewById(R.id.alert);
@@ -329,7 +335,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
                         mUniqueChannelsInRow, mPkgIcon, mOnSettingsClickListener);
                 mChannelEditorDialogController.setOnFinishListener(() -> {
                     mPresentingChannelEditorDialog = false;
-                    closeControls(this, false);
+                    mGutsContainer.closeControls(this, false);
                 });
                 mChannelEditorDialogController.show();
             }
@@ -374,14 +380,11 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
             }
         }
         TextView groupNameView = findViewById(R.id.group_name);
-        View divider = findViewById(R.id.group_divider);
         if (groupName != null) {
             groupNameView.setText(groupName);
             groupNameView.setVisibility(VISIBLE);
-            divider.setVisibility(VISIBLE);
         } else {
             groupNameView.setVisibility(GONE);
-            divider.setVisibility(GONE);
         }
     }
 
@@ -399,6 +402,7 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
      */
     private void updateImportance() {
         if (mChosenImportance != null) {
+            logUiEvent(NotificationControlsEvent.NOTIFICATION_CONTROLS_SAVE_IMPORTANCE);
             mMetricsLogger.write(importanceChangeLogMaker());
 
             int newImportance = mChosenImportance;
@@ -485,7 +489,13 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
 
         bindInlineControls();
 
+        logUiEvent(NotificationControlsEvent.NOTIFICATION_CONTROLS_CLOSE);
         mMetricsLogger.write(notificationControlsLogMaker().setType(MetricsEvent.TYPE_CLOSE));
+    }
+
+    @Override
+    public boolean needsFalsingProtection() {
+        return true;
     }
 
     @Override
@@ -523,25 +533,6 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
         intent.putExtra(Notification.EXTRA_NOTIFICATION_ID, id);
         intent.putExtra(Notification.EXTRA_NOTIFICATION_TAG, tag);
         return intent;
-    }
-
-    /**
-     * Closes the controls and commits the updated importance values (indirectly).
-     *
-     * <p><b>Note,</b> this will only get called once the view is dismissing. This means that the
-     * user does not have the ability to undo the action anymore.
-     */
-    @VisibleForTesting
-    void closeControls(View v, boolean save) {
-        int[] parentLoc = new int[2];
-        int[] targetLoc = new int[2];
-        mGutsContainer.getLocationOnScreen(parentLoc);
-        v.getLocationOnScreen(targetLoc);
-        final int centerX = v.getWidth() / 2;
-        final int centerY = v.getHeight() / 2;
-        final int x = targetLoc[0] - parentLoc[0] + centerX;
-        final int y = targetLoc[1] - parentLoc[1] + centerY;
-        mGutsContainer.closeControls(x, y, save, false /* force */);
     }
 
     @Override
@@ -583,7 +574,15 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
 
     @Override
     public int getActualHeight() {
-        return getHeight();
+        // Because we're animating the bounds, getHeight will return the small height at the
+        // beginning of the animation. Instead we'd want it to already return the end value
+        return mActualHeight;
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        super.onLayout(changed, l, t, r, b);
+        mActualHeight = getHeight();
     }
 
     @VisibleForTesting
@@ -632,6 +631,13 @@ public class NotificationInfo extends LinearLayout implements NotificationGuts.G
             } catch (RemoteException e) {
                 Log.e(TAG, "Unable to update notification importance", e);
             }
+        }
+    }
+
+    private void logUiEvent(NotificationControlsEvent event) {
+        if (mSbn != null) {
+            mUiEventLogger.logWithInstanceId(event,
+                    mSbn.getUid(), mSbn.getPackageName(), mSbn.getInstanceId());
         }
     }
 

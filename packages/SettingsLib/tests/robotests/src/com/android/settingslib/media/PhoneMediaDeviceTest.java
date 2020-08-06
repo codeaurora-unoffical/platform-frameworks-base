@@ -21,6 +21,10 @@ import static android.media.MediaRoute2Info.TYPE_USB_DEVICE;
 import static android.media.MediaRoute2Info.TYPE_WIRED_HEADPHONES;
 import static android.media.MediaRoute2Info.TYPE_WIRED_HEADSET;
 
+import static com.android.settingslib.media.PhoneMediaDevice.PHONE_ID;
+import static com.android.settingslib.media.PhoneMediaDevice.USB_HEADSET_ID;
+import static com.android.settingslib.media.PhoneMediaDevice.WIRED_HEADSET_ID;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.mockito.Mockito.when;
@@ -75,13 +79,11 @@ public class PhoneMediaDeviceTest {
     public void getDrawableResId_returnCorrectResId() {
         when(mInfo.getType()).thenReturn(TYPE_WIRED_HEADPHONES);
 
-        assertThat(mPhoneMediaDevice.getDrawableResId())
-                .isEqualTo(com.android.internal.R.drawable.ic_bt_headphones_a2dp);
+        assertThat(mPhoneMediaDevice.getDrawableResId()).isEqualTo(R.drawable.ic_headphone);
 
         when(mInfo.getType()).thenReturn(TYPE_WIRED_HEADSET);
 
-        assertThat(mPhoneMediaDevice.getDrawableResId())
-                .isEqualTo(com.android.internal.R.drawable.ic_bt_headphones_a2dp);
+        assertThat(mPhoneMediaDevice.getDrawableResId()).isEqualTo(R.drawable.ic_headphone);
 
         when(mInfo.getType()).thenReturn(TYPE_BUILTIN_SPEAKER);
 
@@ -96,16 +98,34 @@ public class PhoneMediaDeviceTest {
         when(mInfo.getName()).thenReturn(deviceName);
 
         assertThat(mPhoneMediaDevice.getName())
-                .isEqualTo(mContext.getString(R.string.media_transfer_wired_device_name));
+                .isEqualTo(mContext.getString(R.string.media_transfer_wired_usb_device_name));
 
         when(mInfo.getType()).thenReturn(TYPE_USB_DEVICE);
 
         assertThat(mPhoneMediaDevice.getName())
-                .isEqualTo(deviceName);
+                .isEqualTo(mContext.getString(R.string.media_transfer_wired_usb_device_name));
 
         when(mInfo.getType()).thenReturn(TYPE_BUILTIN_SPEAKER);
 
         assertThat(mPhoneMediaDevice.getName())
                 .isEqualTo(mContext.getString(R.string.media_transfer_this_device_name));
+    }
+
+    @Test
+    public void getId_returnCorrectId() {
+        when(mInfo.getType()).thenReturn(TYPE_WIRED_HEADPHONES);
+
+        assertThat(mPhoneMediaDevice.getId())
+                .isEqualTo(WIRED_HEADSET_ID);
+
+        when(mInfo.getType()).thenReturn(TYPE_USB_DEVICE);
+
+        assertThat(mPhoneMediaDevice.getId())
+                .isEqualTo(USB_HEADSET_ID);
+
+        when(mInfo.getType()).thenReturn(TYPE_BUILTIN_SPEAKER);
+
+        assertThat(mPhoneMediaDevice.getId())
+                .isEqualTo(PHONE_ID);
     }
 }

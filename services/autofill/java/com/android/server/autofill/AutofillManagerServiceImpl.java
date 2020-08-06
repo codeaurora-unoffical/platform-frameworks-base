@@ -260,7 +260,7 @@ final class AutofillManagerServiceImpl
         if (isEnabledLocked()) return FLAG_ADD_CLIENT_ENABLED;
 
         // Check if it's enabled for augmented autofill
-        if (isAugmentedAutofillServiceAvailableLocked()
+        if (componentName != null && isAugmentedAutofillServiceAvailableLocked()
                 && isWhitelistedForAugmentedAutofillLocked(componentName)) {
             return FLAG_ADD_CLIENT_ENABLED_FOR_AUGMENTED_AUTOFILL_ONLY;
         }
@@ -815,6 +815,19 @@ final class AutofillManagerServiceImpl
         }
     }
 
+    void logAugmentedAutofillAuthenticationSelected(int sessionId, @Nullable String selectedDataset,
+            @Nullable Bundle clientState) {
+        synchronized (mLock) {
+            if (mAugmentedAutofillEventHistory == null
+                    || mAugmentedAutofillEventHistory.getSessionId() != sessionId) {
+                return;
+            }
+            mAugmentedAutofillEventHistory.addEvent(
+                    new Event(Event.TYPE_DATASET_AUTHENTICATION_SELECTED, selectedDataset,
+                            clientState, null, null, null, null, null, null, null, null));
+        }
+    }
+
     void logAugmentedAutofillSelected(int sessionId, @Nullable String suggestionId,
             @Nullable Bundle clientState) {
         synchronized (mLock) {
@@ -1199,6 +1212,14 @@ final class AutofillManagerServiceImpl
                         }
 
                         @Override
+                        public void logAugmentedAutofillAuthenticationSelected(int sessionId,
+                                String suggestionId, Bundle clientState) {
+                            AutofillManagerServiceImpl.this
+                                    .logAugmentedAutofillAuthenticationSelected(
+                                            sessionId, suggestionId, clientState);
+                        }
+
+                        @Override
                         public void onServiceDied(@NonNull RemoteAugmentedAutofillService service) {
                             Slog.w(TAG, "remote augmented autofill service died");
                             final RemoteAugmentedAutofillService remoteService =
@@ -1561,6 +1582,16 @@ final class AutofillManagerServiceImpl
             // Don't do anything; eventually the system will bind to it again...
             Slog.w(TAG, "remote service died: " + service);
             mRemoteInlineSuggestionRenderService = null;
+        }
+    }
+
+    void onSwitchInputMethod() {
+        synchronized (mLock) {
+            final int sessionCount = mSessions.size();
+            for (int i = 0; i < sessionCount; i++) {
+                final Session session = mSessions.valueAt(i);
+                session.onSwitchInputMethodLocked();
+            }
         }
     }
 

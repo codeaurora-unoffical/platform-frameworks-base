@@ -40,6 +40,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageInstaller.SessionInfo;
 import android.content.pm.PackageInstaller.SessionParams;
+import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.VersionedPackage;
@@ -126,8 +127,10 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
     private static final long MAX_AGE_MILLIS = 3 * DateUtils.DAY_IN_MILLIS;
     /** Automatically destroy staged sessions that have not changed state in this time */
     private static final long MAX_TIME_SINCE_UPDATE_MILLIS = 7 * DateUtils.DAY_IN_MILLIS;
-    /** Upper bound on number of active sessions for a UID */
-    private static final long MAX_ACTIVE_SESSIONS = 1024;
+    /** Upper bound on number of active sessions for a UID that has INSTALL_PACKAGES */
+    private static final long MAX_ACTIVE_SESSIONS_WITH_PERMISSION = 1024;
+    /** Upper bound on number of active sessions for a UID without INSTALL_PACKAGES */
+    private static final long MAX_ACTIVE_SESSIONS_NO_PERMISSION = 50;
     /** Upper bound on number of historical sessions for a UID */
     private static final long MAX_HISTORICAL_SESSIONS = 1048576;
 
@@ -503,12 +506,25 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
                     + "to use a data loader");
         }
 
-        String requestedInstallerPackageName = params.installerPackageName != null
+        // App package name and label length is restricted so that really long strings aren't
+        // written to disk.
+        if (params.appPackageName != null
+                && params.appPackageName.length() > SessionParams.MAX_PACKAGE_NAME_LENGTH) {
+            params.appPackageName = null;
+        }
+
+        params.appLabel = TextUtils.trimToSize(params.appLabel,
+                PackageItemInfo.MAX_SAFE_LABEL_LENGTH);
+
+        String requestedInstallerPackageName = (params.installerPackageName != null
+                && params.installerPackageName.length() < SessionParams.MAX_PACKAGE_NAME_LENGTH)
                 ? params.installerPackageName : installerPackageName;
 
         if ((callingUid == Process.SHELL_UID) || (callingUid == Process.ROOT_UID)) {
             params.installFlags |= PackageManager.INSTALL_FROM_ADB;
-
+            // adb installs can override the installingPackageName, but not the
+            // initiatingPackageName
+            installerPackageName = null;
         } else {
             if (callingUid != Process.SYSTEM_UID) {
                 // The supplied installerPackageName must always belong to the calling app.
@@ -635,12 +651,23 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
+        if (params.whitelistedRestrictedPermissions != null) {
+            mPermissionManager.retainHardAndSoftRestrictedPermissions(
+                    params.whitelistedRestrictedPermissions);
+        }
+
         final int sessionId;
         final PackageInstallerSession session;
         synchronized (mSessions) {
             // Sanity check that installer isn't going crazy
             final int activeCount = getSessionCount(mSessions, callingUid);
-            if (activeCount >= MAX_ACTIVE_SESSIONS) {
+            if (mContext.checkCallingOrSelfPermission(Manifest.permission.INSTALL_PACKAGES)
+                    == PackageManager.PERMISSION_GRANTED) {
+                if (activeCount >= MAX_ACTIVE_SESSIONS_WITH_PERMISSION) {
+                    throw new IllegalStateException(
+                            "Too many active sessions for UID " + callingUid);
+                }
+            } else if (activeCount >= MAX_ACTIVE_SESSIONS_NO_PERMISSION) {
                 throw new IllegalStateException(
                         "Too many active sessions for UID " + callingUid);
             }
@@ -676,7 +703,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         session = new PackageInstallerSession(mInternalCallback, mContext, mPm, this,
                 mInstallThread.getLooper(), mStagingManager, sessionId, userId, callingUid,
                 installSource, params, createdMillis,
-                stageDir, stageCid, null, false, false, false, null, SessionInfo.INVALID_ID,
+                stageDir, stageCid, null, false, false, false, false, null, SessionInfo.INVALID_ID,
                 false, false, false, SessionInfo.STAGED_SESSION_NO_ERROR, "");
 
         synchronized (mSessions) {
@@ -830,7 +857,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         synchronized (mSessions) {
             final PackageInstallerSession session = mSessions.get(sessionId);
 
-            return session != null
+            return (session != null && !(session.isStaged() && session.isDestroyed()))
                     ? session.generateInfoForCaller(true /*withIcon*/, Binder.getCallingUid())
                     : null;
         }
@@ -851,7 +878,8 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         synchronized (mSessions) {
             for (int i = 0; i < mSessions.size(); i++) {
                 final PackageInstallerSession session = mSessions.valueAt(i);
-                if (session.userId == userId && !session.hasParentSessionId()) {
+                if (session.userId == userId && !session.hasParentSessionId()
+                        && !(session.isStaged() && session.isDestroyed())) {
                     result.add(session.generateInfoForCaller(false, callingUid));
                 }
             }
@@ -930,6 +958,21 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             intent.putExtra(PackageInstaller.EXTRA_CALLBACK, adapter.getBinder().asBinder());
             adapter.onUserActionRequired(intent);
         }
+    }
+
+    @Override
+    public void uninstallExistingPackage(VersionedPackage versionedPackage,
+            String callerPackageName, IntentSender statusReceiver, int userId) {
+        final int callingUid = Binder.getCallingUid();
+        mContext.enforceCallingOrSelfPermission(Manifest.permission.DELETE_PACKAGES, null);
+        mPermissionManager.enforceCrossUserPermission(callingUid, userId, true, true, "uninstall");
+        if ((callingUid != Process.SHELL_UID) && (callingUid != Process.ROOT_UID)) {
+            mAppOps.checkPackage(callingUid, callerPackageName);
+        }
+
+        final PackageDeleteObserverAdapter adapter = new PackageDeleteObserverAdapter(mContext,
+                statusReceiver, versionedPackage.getPackageName(), false, userId);
+        mPm.deleteExistingPackageAsUser(versionedPackage, adapter.getBinder(), userId);
     }
 
     @Override
@@ -1269,7 +1312,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         public void onStagedSessionChanged(PackageInstallerSession session) {
             session.markUpdated();
             writeSessionsAsync();
-            if (mOkToSendBroadcasts) {
+            if (mOkToSendBroadcasts && !session.isDestroyed()) {
                 // we don't scrub the data here as this is sent only to the installer several
                 // privileged system packages
                 mPm.sendSessionUpdatedBroadcast(

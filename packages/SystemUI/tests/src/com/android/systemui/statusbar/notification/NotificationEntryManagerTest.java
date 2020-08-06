@@ -26,6 +26,7 @@ import static junit.framework.Assert.assertNull;
 import static junit.framework.Assert.assertTrue;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -93,6 +94,7 @@ import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -208,6 +210,28 @@ public class NotificationEntryManagerTest extends SysuiTestCase {
     }
 
     @Test
+    public void testAddNotification_noDuplicateEntriesCreated() {
+        // GIVEN a notification has been added
+        mEntryManager.addNotification(mSbn, mRankingMap);
+
+        // WHEN the same notification is added multiple times before the previous entry (with
+        // the same key) didn't finish inflating
+        mEntryManager.addNotification(mSbn, mRankingMap);
+        mEntryManager.addNotification(mSbn, mRankingMap);
+        mEntryManager.addNotification(mSbn, mRankingMap);
+
+        // THEN getAllNotifs() only contains exactly one notification with this key
+        int count = 0;
+        for (NotificationEntry entry : mEntryManager.getAllNotifs()) {
+            if (entry.getKey().equals(mSbn.getKey())) {
+                count++;
+            }
+        }
+        assertEquals("Should only be one entry with key=" + mSbn.getKey() + " in mAllNotifs. "
+                        + "Instead there are " + count, 1, count);
+    }
+
+    @Test
     public void testAddNotification_setsUserSentiment() {
         mEntryManager.addNotification(mSbn, mRankingMap);
 
@@ -241,7 +265,7 @@ public class NotificationEntryManagerTest extends SysuiTestCase {
         // Ensure that update callbacks happen in correct order
         InOrder order = inOrder(mEntryListener, mPresenter, mEntryListener);
         order.verify(mEntryListener).onPreEntryUpdated(mEntry);
-        order.verify(mPresenter).updateNotificationViews();
+        order.verify(mPresenter).updateNotificationViews(any());
         order.verify(mEntryListener).onPostEntryUpdated(mEntry);
     }
 
@@ -252,12 +276,25 @@ public class NotificationEntryManagerTest extends SysuiTestCase {
 
         mEntryManager.removeNotification(mSbn.getKey(), mRankingMap, UNDEFINED_DISMISS_REASON);
 
-        verify(mPresenter).updateNotificationViews();
+        verify(mPresenter).updateNotificationViews(any());
         verify(mEntryListener).onEntryRemoved(
                 eq(mEntry), any(), eq(false) /* removedByUser */, eq(UNDEFINED_DISMISS_REASON));
         verify(mRow).setRemoved();
 
         assertNull(mEntryManager.getActiveNotificationUnfiltered(mSbn.getKey()));
+    }
+
+    @Test
+    public void testRemoveUninflatedNotification_removesNotificationFromAllNotifsList() {
+        // GIVEN an uninflated entry is added
+        mEntryManager.addNotification(mSbn, mRankingMap);
+        assertTrue(entriesContainKey(mEntryManager.getAllNotifs(), mSbn.getKey()));
+
+        // WHEN the uninflated entry is removed
+        mEntryManager.performRemoveNotification(mSbn, UNDEFINED_DISMISS_REASON);
+
+        // THEN the entry is still removed from the allNotifications list
+        assertFalse(entriesContainKey(mEntryManager.getAllNotifs(), mSbn.getKey()));
     }
 
     @Test
@@ -544,6 +581,15 @@ public class NotificationEntryManagerTest extends SysuiTestCase {
     }
 
     /* End annex */
+
+    private boolean entriesContainKey(Collection<NotificationEntry> entries, String key) {
+        for (NotificationEntry entry : entries) {
+            if (entry.getSbn().getKey().equals(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private Notification.Action createAction() {
         return new Notification.Action.Builder(

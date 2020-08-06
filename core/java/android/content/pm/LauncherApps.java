@@ -155,6 +155,26 @@ public class LauncherApps {
     public static final String EXTRA_PIN_ITEM_REQUEST =
             "android.content.pm.extra.PIN_ITEM_REQUEST";
 
+    /**
+     * Cache shortcuts which are used in notifications.
+     * @hide
+     */
+    public static final int FLAG_CACHE_NOTIFICATION_SHORTCUTS = 0;
+
+    /**
+     * Cache shortcuts which are used in bubbles.
+     * @hide
+     */
+    public static final int FLAG_CACHE_BUBBLE_SHORTCUTS = 1;
+
+    /** @hide */
+    @IntDef(flag = false, prefix = { "FLAG_CACHE_" }, value = {
+            FLAG_CACHE_NOTIFICATION_SHORTCUTS,
+            FLAG_CACHE_BUBBLE_SHORTCUTS,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface ShortcutCacheFlags {}
+
     private final Context mContext;
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
     private final ILauncherApps mService;
@@ -1109,6 +1129,11 @@ public class LauncherApps {
      * @param packageName The target package name.
      * @param shortcutIds The IDs of the shortcut to be cached.
      * @param user The UserHandle of the profile.
+     * @param cacheFlags One of the values in:
+     * <ul>
+     *     <li>{@link #FLAG_CACHE_NOTIFICATION_SHORTCUTS}
+     *     <li>{@link #FLAG_CACHE_BUBBLE_SHORTCUTS}
+     * </ul>
      * @throws IllegalStateException when the user is locked, or when the {@code user} user
      * is locked or not running.
      *
@@ -1118,10 +1143,11 @@ public class LauncherApps {
      */
     @RequiresPermission(android.Manifest.permission.ACCESS_SHORTCUTS)
     public void cacheShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
-            @NonNull UserHandle user) {
+            @NonNull UserHandle user, @ShortcutCacheFlags int cacheFlags) {
         logErrorForInvalidProfileAccess(user);
         try {
-            mService.cacheShortcuts(mContext.getPackageName(), packageName, shortcutIds, user);
+            mService.cacheShortcuts(
+                    mContext.getPackageName(), packageName, shortcutIds, user, cacheFlags);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1133,6 +1159,11 @@ public class LauncherApps {
      * @param packageName The target package name.
      * @param shortcutIds The IDs of the shortcut to be uncached.
      * @param user The UserHandle of the profile.
+     * @param cacheFlags One of the values in:
+     * <ul>
+     *     <li>{@link #FLAG_CACHE_NOTIFICATION_SHORTCUTS}
+     *     <li>{@link #FLAG_CACHE_BUBBLE_SHORTCUTS}
+     * </ul>
      * @throws IllegalStateException when the user is locked, or when the {@code user} user
      * is locked or not running.
      *
@@ -1142,10 +1173,11 @@ public class LauncherApps {
      */
     @RequiresPermission(android.Manifest.permission.ACCESS_SHORTCUTS)
     public void uncacheShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
-            @NonNull UserHandle user) {
+            @NonNull UserHandle user, @ShortcutCacheFlags int cacheFlags) {
         logErrorForInvalidProfileAccess(user);
         try {
-            mService.uncacheShortcuts(mContext.getPackageName(), packageName, shortcutIds, user);
+            mService.uncacheShortcuts(
+                    mContext.getPackageName(), packageName, shortcutIds, user, cacheFlags);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1211,14 +1243,7 @@ public class LauncherApps {
 
     private ParcelFileDescriptor getUriShortcutIconFd(@NonNull String packageName,
             @NonNull String shortcutId, int userId) {
-        String uri = null;
-        try {
-            uri = mService.getShortcutIconUri(mContext.getPackageName(), packageName, shortcutId,
-                    userId);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-
+        String uri = getShortcutIconUri(packageName, shortcutId, userId);
         if (uri == null) {
             return null;
         }
@@ -1228,6 +1253,18 @@ public class LauncherApps {
             Log.e(TAG, "Icon file not found: " + uri);
             return null;
         }
+    }
+
+    private String getShortcutIconUri(@NonNull String packageName,
+            @NonNull String shortcutId, int userId) {
+        String uri = null;
+        try {
+            uri = mService.getShortcutIconUri(mContext.getPackageName(), packageName, shortcutId,
+                    userId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+        return uri;
     }
 
     /**
@@ -1324,6 +1361,17 @@ public class LauncherApps {
                     pfd.close();
                 } catch (IOException ignore) {
                 }
+            }
+        } else if (shortcut.hasIconUri()) {
+            String uri = getShortcutIconUri(shortcut.getPackage(), shortcut.getId(),
+                    shortcut.getUserId());
+            if (uri == null) {
+                return null;
+            }
+            if (shortcut.hasAdaptiveBitmap()) {
+                return Icon.createWithAdaptiveBitmapContentUri(uri);
+            } else {
+                return Icon.createWithContentUri(uri);
             }
         } else if (shortcut.hasIconResource()) {
             return Icon.createWithResource(shortcut.getPackage(), shortcut.getIconResourceId());
@@ -1870,7 +1918,7 @@ public class LauncherApps {
      * an {@link #ACTION_CONFIRM_PIN_SHORTCUT} or {@link #ACTION_CONFIRM_PIN_APPWIDGET} intent
      * respectively to the default launcher app.
      *
-     * <h3>Request of the {@link #REQUEST_TYPE_SHORTCUT} type.
+     * <h3>Request of the {@link #REQUEST_TYPE_SHORTCUT} type.</h3>
      *
      * <p>A {@link #REQUEST_TYPE_SHORTCUT} request represents a request to pin a
      * {@link ShortcutInfo}.  If the launcher accepts a request, call {@link #accept()},
@@ -1887,7 +1935,7 @@ public class LauncherApps {
      *
      * <p>See also {@link ShortcutManager} for more details.
      *
-     * <h3>Request of the {@link #REQUEST_TYPE_APPWIDGET} type.
+     * <h3>Request of the {@link #REQUEST_TYPE_APPWIDGET} type.</h3>
      *
      * <p>A {@link #REQUEST_TYPE_SHORTCUT} request represents a request to pin a
      * an AppWidget.  If the launcher accepts a request, call {@link #accept(Bundle)} with

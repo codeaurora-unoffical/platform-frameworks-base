@@ -37,15 +37,19 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
     private static final int SINGLE_CELL_SPAN_SIZE = 1;
 
     private final ChooserProfileDescriptor[] mItems;
+    private final boolean mIsSendAction;
+    private int mBottomOffset;
 
     ChooserMultiProfilePagerAdapter(Context context,
             ChooserActivity.ChooserGridAdapter adapter,
             UserHandle personalProfileUserHandle,
-            UserHandle workProfileUserHandle) {
+            UserHandle workProfileUserHandle,
+            boolean isSendAction) {
         super(context, /* currentPage */ 0, personalProfileUserHandle, workProfileUserHandle);
         mItems = new ChooserProfileDescriptor[] {
                 createProfileDescriptor(adapter)
         };
+        mIsSendAction = isSendAction;
     }
 
     ChooserMultiProfilePagerAdapter(Context context,
@@ -53,13 +57,15 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
             ChooserActivity.ChooserGridAdapter workAdapter,
             @Profile int defaultProfile,
             UserHandle personalProfileUserHandle,
-            UserHandle workProfileUserHandle) {
+            UserHandle workProfileUserHandle,
+            boolean isSendAction) {
         super(context, /* currentPage */ defaultProfile, personalProfileUserHandle,
                 workProfileUserHandle);
         mItems = new ChooserProfileDescriptor[] {
                 createProfileDescriptor(personalAdapter),
                 createProfileDescriptor(workAdapter)
         };
+        mIsSendAction = isSendAction;
     }
 
     private ChooserProfileDescriptor createProfileDescriptor(
@@ -182,34 +188,72 @@ public class ChooserMultiProfilePagerAdapter extends AbstractMultiProfilePagerAd
 
     @Override
     protected void showNoPersonalToWorkIntentsEmptyState(ResolverListAdapter activeListAdapter) {
-        showEmptyState(activeListAdapter,
-                R.drawable.ic_sharing_disabled,
-                R.string.resolver_cant_share_with_work_apps,
-                R.string.resolver_cant_share_with_work_apps_explanation);
+        if (mIsSendAction) {
+            showEmptyState(activeListAdapter,
+                    R.drawable.ic_sharing_disabled,
+                    R.string.resolver_cant_share_with_work_apps,
+                    R.string.resolver_cant_share_with_work_apps_explanation);
+        } else {
+            showEmptyState(activeListAdapter,
+                    R.drawable.ic_sharing_disabled,
+                    R.string.resolver_cant_access_work_apps,
+                    R.string.resolver_cant_access_work_apps_explanation);
+        }
     }
 
     @Override
     protected void showNoWorkToPersonalIntentsEmptyState(ResolverListAdapter activeListAdapter) {
-        showEmptyState(activeListAdapter,
-                R.drawable.ic_sharing_disabled,
-                R.string.resolver_cant_share_with_personal_apps,
-                R.string.resolver_cant_share_with_personal_apps_explanation);
+        if (mIsSendAction) {
+            showEmptyState(activeListAdapter,
+                    R.drawable.ic_sharing_disabled,
+                    R.string.resolver_cant_share_with_personal_apps,
+                    R.string.resolver_cant_share_with_personal_apps_explanation);
+        } else {
+            showEmptyState(activeListAdapter,
+                    R.drawable.ic_sharing_disabled,
+                    R.string.resolver_cant_access_personal_apps,
+                    R.string.resolver_cant_access_personal_apps_explanation);
+        }
     }
 
     @Override
     protected void showNoPersonalAppsAvailableEmptyState(ResolverListAdapter listAdapter) {
-        showEmptyState(listAdapter,
-                R.drawable.ic_no_apps,
-                R.string.resolver_no_personal_apps_available_share,
-                /* subtitleRes */ 0);
+        if (mIsSendAction) {
+            showEmptyState(listAdapter,
+                    R.drawable.ic_no_apps,
+                    R.string.resolver_no_personal_apps_available_share,
+                    /* subtitleRes */ 0);
+        } else {
+            showEmptyState(listAdapter,
+                    R.drawable.ic_no_apps,
+                    R.string.resolver_no_personal_apps_available_resolve,
+                    /* subtitleRes */ 0);
+        }
     }
 
     @Override
     protected void showNoWorkAppsAvailableEmptyState(ResolverListAdapter listAdapter) {
-        showEmptyState(listAdapter,
-                R.drawable.ic_no_apps,
-                R.string.resolver_no_work_apps_available_share,
-                /* subtitleRes */ 0);
+        if (mIsSendAction) {
+            showEmptyState(listAdapter,
+                    R.drawable.ic_no_apps,
+                    R.string.resolver_no_work_apps_available_share,
+                    /* subtitleRes */ 0);
+        } else {
+            showEmptyState(listAdapter,
+                    R.drawable.ic_no_apps,
+                    R.string.resolver_no_work_apps_available_resolve,
+                    /* subtitleRes */ 0);
+        }
+    }
+
+    void setEmptyStateBottomOffset(int bottomOffset) {
+        mBottomOffset = bottomOffset;
+    }
+
+    @Override
+    protected void setupContainerPadding(View container) {
+        container.setPadding(container.getPaddingLeft(), container.getPaddingTop(),
+                container.getPaddingRight(), container.getPaddingBottom() + mBottomOffset);
     }
 
     class ChooserProfileDescriptor extends ProfileDescriptor {

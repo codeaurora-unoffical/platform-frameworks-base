@@ -37,6 +37,7 @@ import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.statusbar.notification.ActivityLaunchAnimator
 import com.android.systemui.statusbar.phone.BiometricUnlockController
 import com.android.systemui.statusbar.phone.BiometricUnlockController.MODE_WAKE_AND_UNLOCK
+import com.android.systemui.statusbar.phone.DozeParameters
 import com.android.systemui.statusbar.phone.NotificationShadeWindowController
 import com.android.systemui.statusbar.phone.PanelExpansionListener
 import com.android.systemui.statusbar.phone.ScrimController
@@ -60,6 +61,7 @@ class NotificationShadeDepthController @Inject constructor(
     private val choreographer: Choreographer,
     private val wallpaperManager: WallpaperManager,
     private val notificationShadeWindowController: NotificationShadeWindowController,
+    private val dozeParameters: DozeParameters,
     dumpManager: DumpManager
 ) : PanelExpansionListener, Dumpable {
     companion object {
@@ -82,6 +84,7 @@ class NotificationShadeDepthController @Inject constructor(
     private var isClosed: Boolean = true
     private var isOpen: Boolean = false
     private var isBlurred: Boolean = false
+    private var listeners = mutableListOf<DepthListener>()
 
     private var prevTracking: Boolean = false
     private var prevTimestamp: Long = -1
@@ -185,11 +188,14 @@ class NotificationShadeDepthController @Inject constructor(
         }
 
         blurUtils.applyBlur(blurRoot?.viewRootImpl ?: root.viewRootImpl, blur)
+        val zoomOut = blurUtils.ratioOfBlurRadius(blur)
         try {
-            wallpaperManager.setWallpaperZoomOut(root.windowToken,
-                    blurUtils.ratioOfBlurRadius(blur))
+            wallpaperManager.setWallpaperZoomOut(root.windowToken, zoomOut)
         } catch (e: IllegalArgumentException) {
             Log.w(TAG, "Can't set zoom. Window is gone: ${root.windowToken}", e)
+        }
+        listeners.forEach {
+            it.onWallpaperZoomOutChanged(zoomOut)
         }
         notificationShadeWindowController.setBackgroundBlurRadius(blur)
     }
@@ -206,9 +212,12 @@ class NotificationShadeDepthController @Inject constructor(
 
             keyguardAnimator?.cancel()
             keyguardAnimator = ValueAnimator.ofFloat(1f, 0f).apply {
-                duration = keyguardStateController.keyguardFadingAwayDuration
+                // keyguardStateController.keyguardFadingAwayDuration might be zero when unlock by
+                // fingerprint due to there is no window container, see AppTransition#goodToGo.
+                // We use DozeParameters.wallpaperFadeOutDuration as an alternative.
+                duration = dozeParameters.wallpaperFadeOutDuration
                 startDelay = keyguardStateController.keyguardFadingAwayDelay
-                interpolator = Interpolators.DECELERATE_QUINT
+                interpolator = Interpolators.FAST_OUT_SLOW_IN
                 addUpdateListener { animation: ValueAnimator ->
                     wakeAndUnlockBlurRadius =
                             blurUtils.blurRadiusOfRatio(animation.animatedValue as Float)
@@ -264,6 +273,14 @@ class NotificationShadeDepthController @Inject constructor(
         }
         shadeAnimation.setStiffness(SpringForce.STIFFNESS_LOW)
         shadeAnimation.setDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY)
+    }
+
+    fun addListener(listener: DepthListener) {
+        listeners.add(listener)
+    }
+
+    fun removeListener(listener: DepthListener) {
+        listeners.remove(listener)
     }
 
     /**
@@ -476,5 +493,15 @@ class NotificationShadeDepthController @Inject constructor(
         fun setStartVelocity(velocity: Float) {
             springAnimation.setStartVelocity(velocity)
         }
+    }
+
+    /**
+     * Invoked when changes are needed in z-space
+     */
+    interface DepthListener {
+        /**
+         * Current wallpaper zoom out, where 0 is the closest, and 1 the farthest
+         */
+        fun onWallpaperZoomOutChanged(zoomOut: Float)
     }
 }

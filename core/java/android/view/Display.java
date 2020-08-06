@@ -104,6 +104,14 @@ public final class Display {
     private int mCachedAppHeightCompat;
 
     /**
+     * Indicates that the application is started in a different rotation than the real display, so
+     * the display information may be adjusted. That ensures the methods {@link #getRotation},
+     * {@link #getRealSize}, {@link #getRealMetrics}, and {@link #getCutout} are consistent with how
+     * the application window is laid out.
+     */
+    private boolean mMayAdjustByFixedRotation;
+
+    /**
      * The default Display id, which is the id of the primary display assuming there is one.
      */
     public static final int DEFAULT_DISPLAY = 0;
@@ -233,11 +241,24 @@ public final class Display {
      * This flag identifies secondary displays that should show system decorations, such as status
      * bar, navigation bar, home activity or IME.
      * </p>
+     * <p>Note that this flag doesn't work without {@link #FLAG_TRUSTED}</p>
      *
+     * @see #getFlags()
      * @hide
      */
     // TODO (b/114338689): Remove the flag and use IWindowManager#setShouldShowSystemDecors
     public static final int FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS = 1 << 6;
+
+    /**
+     * Flag: The display is trusted to show system decorations and receive inputs without users'
+     * touch.
+     * @see #FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
+     *
+     * @see #getFlags()
+     * @hide
+     */
+    @TestApi
+    public static final int FLAG_TRUSTED = 1 << 7;
 
     /**
      * Display flag: Indicates that the contents of the display should not be scaled
@@ -556,6 +577,7 @@ public final class Display {
      * @see #FLAG_SUPPORTS_PROTECTED_BUFFERS
      * @see #FLAG_SECURE
      * @see #FLAG_PRIVATE
+     * @see #FLAG_ROUND
      */
     public int getFlags() {
         return mFlags;
@@ -804,7 +826,9 @@ public final class Display {
     public int getRotation() {
         synchronized (this) {
             updateDisplayInfoLocked();
-            return mDisplayInfo.rotation;
+            return mMayAdjustByFixedRotation
+                    ? getDisplayAdjustments().getRotation(mDisplayInfo.rotation)
+                    : mDisplayInfo.rotation;
         }
     }
 
@@ -828,7 +852,9 @@ public final class Display {
     public DisplayCutout getCutout() {
         synchronized (this) {
             updateDisplayInfoLocked();
-            return mDisplayInfo.displayCutout;
+            return mMayAdjustByFixedRotation
+                    ? getDisplayAdjustments().getDisplayCutout(mDisplayInfo.displayCutout)
+                    : mDisplayInfo.displayCutout;
         }
     }
 
@@ -1140,6 +1166,9 @@ public final class Display {
             updateDisplayInfoLocked();
             outSize.x = mDisplayInfo.logicalWidth;
             outSize.y = mDisplayInfo.logicalHeight;
+            if (mMayAdjustByFixedRotation) {
+                getDisplayAdjustments().adjustSize(outSize, mDisplayInfo.rotation);
+            }
         }
     }
 
@@ -1159,6 +1188,9 @@ public final class Display {
             updateDisplayInfoLocked();
             mDisplayInfo.getLogicalMetrics(outMetrics,
                     CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO, null);
+            if (mMayAdjustByFixedRotation) {
+                getDisplayAdjustments().adjustMetrics(outMetrics, mDisplayInfo.rotation);
+            }
         }
     }
 
@@ -1204,6 +1236,16 @@ public final class Display {
                 Display.FLAG_PRESENTATION;
     }
 
+    /**
+     * @return {@code true} if the display is a trusted display.
+     *
+     * @see #FLAG_TRUSTED
+     * @hide
+     */
+    public boolean isTrusted() {
+        return (mFlags & FLAG_TRUSTED) == FLAG_TRUSTED;
+    }
+
     private void updateDisplayInfoLocked() {
         // Note: The display manager caches display info objects on our behalf.
         DisplayInfo newInfo = mGlobal.getDisplayInfo(mDisplayId);
@@ -1225,6 +1267,9 @@ public final class Display {
                 }
             }
         }
+
+        mMayAdjustByFixedRotation = mResources != null
+                && mResources.hasOverrideDisplayAdjustments();
     }
 
     private void updateCachedAppSizeIfNeededLocked() {
@@ -1243,9 +1288,12 @@ public final class Display {
     public String toString() {
         synchronized (this) {
             updateDisplayInfoLocked();
-            mDisplayInfo.getAppMetrics(mTempMetrics, getDisplayAdjustments());
+            final DisplayAdjustments adjustments = getDisplayAdjustments();
+            mDisplayInfo.getAppMetrics(mTempMetrics, adjustments);
             return "Display id " + mDisplayId + ": " + mDisplayInfo
-                    + ", " + mTempMetrics + ", isValid=" + mIsValid;
+                    + (mMayAdjustByFixedRotation
+                            ? (", " + adjustments.getFixedRotationAdjustments() + ", ") : ", ")
+                    + mTempMetrics + ", isValid=" + mIsValid;
         }
     }
 

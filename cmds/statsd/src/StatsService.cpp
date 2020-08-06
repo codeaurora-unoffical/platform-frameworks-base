@@ -267,8 +267,11 @@ void StatsService::dumpIncidentSection(int out) {
     for (const ConfigKey& configKey : mConfigManager->GetAllConfigKeys()) {
         uint64_t reportsListToken =
                 proto.start(FIELD_TYPE_MESSAGE | FIELD_COUNT_REPEATED | FIELD_ID_REPORTS_LIST);
+        // Don't include the current bucket to avoid skipping buckets.
+        // If we need to include the current bucket later, consider changing to NO_TIME_CONSTRAINTS
+        // or other alternatives to avoid skipping buckets for pulled metrics.
         mProcessor->onDumpReport(configKey, getElapsedRealtimeNs(),
-                                 true /* includeCurrentBucket */, false /* erase_data */,
+                                 false /* includeCurrentBucket */, false /* erase_data */,
                                  ADB_DUMP,
                                  FAST,
                                  &proto);
@@ -343,9 +346,11 @@ status_t StatsService::handleShellCommand(int in, int out, int err, const char**
         if (!utf8Args[0].compare(String8("print-logs"))) {
             return cmd_print_logs(out, utf8Args);
         }
+
         if (!utf8Args[0].compare(String8("send-active-configs"))) {
             return cmd_trigger_active_config_broadcast(out, utf8Args);
         }
+
         if (!utf8Args[0].compare(String8("data-subscribe"))) {
             {
                 std::lock_guard<std::mutex> lock(mShellSubscriberMutex);
@@ -824,7 +829,7 @@ status_t StatsService::cmd_print_pulled_metrics(int out, const Vector<String8>& 
         uids.push_back(AID_SYSTEM);
     }
     vector<shared_ptr<LogEvent>> stats;
-    if (mPullerManager->Pull(s, uids, &stats)) {
+    if (mPullerManager->Pull(s, uids, getElapsedRealtimeNs(), &stats)) {
         for (const auto& it : stats) {
             dprintf(out, "Pull from %d: %s\n", s, it->ToString().c_str());
         }
@@ -1295,7 +1300,6 @@ Status StatsService::getRegisteredExperimentIds(std::vector<int64_t>* experiment
     }
     return Status::ok();
 }
-
 
 void StatsService::statsCompanionServiceDied(void* cookie) {
     auto thiz = static_cast<StatsService*>(cookie);

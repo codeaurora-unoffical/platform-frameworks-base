@@ -34,6 +34,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -65,6 +66,7 @@ import com.android.internal.statusbar.IStatusBarService;
 import com.android.internal.statusbar.NotificationVisibility;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.dump.DumpManager;
+import com.android.systemui.dump.LogBufferEulogizer;
 import com.android.systemui.statusbar.FeatureFlags;
 import com.android.systemui.statusbar.RankingBuilder;
 import com.android.systemui.statusbar.notification.collection.NoManSimulator.NotifEvent;
@@ -78,6 +80,7 @@ import com.android.systemui.statusbar.notification.collection.notifcollection.No
 import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionLogger;
 import com.android.systemui.statusbar.notification.collection.notifcollection.NotifDismissInterceptor;
 import com.android.systemui.statusbar.notification.collection.notifcollection.NotifLifetimeExtender;
+import com.android.systemui.util.time.FakeSystemClock;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -100,11 +103,13 @@ import java.util.Map;
 public class NotifCollectionTest extends SysuiTestCase {
 
     @Mock private IStatusBarService mStatusBarService;
+    @Mock private FeatureFlags mFeatureFlags;
     @Mock private NotifCollectionLogger mLogger;
+    @Mock private LogBufferEulogizer mEulogizer;
+
     @Mock private GroupCoalescer mGroupCoalescer;
     @Spy private RecordingCollectionListener mCollectionListener;
     @Mock private CollectionReadyForBuildListener mBuildListener;
-    @Mock private FeatureFlags mFeatureFlags;
 
     @Spy private RecordingLifetimeExtender mExtender1 = new RecordingLifetimeExtender("Extender1");
     @Spy private RecordingLifetimeExtender mExtender2 = new RecordingLifetimeExtender("Extender2");
@@ -127,6 +132,7 @@ public class NotifCollectionTest extends SysuiTestCase {
     private InOrder mListenerInOrder;
 
     private NoManSimulator mNoMan;
+    private FakeSystemClock mClock = new FakeSystemClock();
 
     @Before
     public void setUp() {
@@ -136,13 +142,17 @@ public class NotifCollectionTest extends SysuiTestCase {
         when(mFeatureFlags.isNewNotifPipelineRenderingEnabled()).thenReturn(true);
         when(mFeatureFlags.isNewNotifPipelineEnabled()).thenReturn(true);
 
+        when(mEulogizer.record(any(Exception.class))).thenAnswer(i -> i.getArguments()[0]);
+
         mListenerInOrder = inOrder(mCollectionListener);
 
         mCollection = new NotifCollection(
                 mStatusBarService,
-                mock(DumpManager.class),
+                mClock,
                 mFeatureFlags,
-                mLogger);
+                mLogger,
+                mEulogizer,
+                mock(DumpManager.class));
         mCollection.attach(mGroupCoalescer);
         mCollection.addCollectionListener(mCollectionListener);
         mCollection.setBuildListener(mBuildListener);
@@ -154,6 +164,8 @@ public class NotifCollectionTest extends SysuiTestCase {
 
         mNoMan = new NoManSimulator();
         mNoMan.addListener(mNotifHandler);
+
+        mNotifHandler.onNotificationsInitialized();
     }
 
     @Test
@@ -1259,6 +1271,43 @@ public class NotifCollectionTest extends SysuiTestCase {
         verify(mInterceptor1, never()).shouldInterceptDismissal(clearable);
         verify(mInterceptor2, never()).shouldInterceptDismissal(clearable);
         verify(mInterceptor3, never()).shouldInterceptDismissal(clearable);
+    }
+
+    @Test
+    public void testClearNotificationDoesntThrowIfMissing() {
+        // GIVEN that enough time has passed that we're beyond the forgiveness window
+        mClock.advanceTime(5001);
+
+        // WHEN we get a remove event for a notification we don't know about
+        final NotificationEntry container = new NotificationEntryBuilder()
+                .setPkg(TEST_PACKAGE)
+                .setId(47)
+                .build();
+        mNotifHandler.onNotificationRemoved(
+                container.getSbn(),
+                new RankingMap(new Ranking[]{ container.getRanking() }));
+
+        // THEN the event is ignored
+        verify(mCollectionListener, never()).onEntryRemoved(any(NotificationEntry.class), anyInt());
+    }
+
+    @Test
+    public void testClearNotificationDoesntThrowIfInForgivenessWindow() {
+        // GIVEN that some time has passed but we're still within the initialization forgiveness
+        // window
+        mClock.advanceTime(4999);
+
+        // WHEN we get a remove event for a notification we don't know about
+        final NotificationEntry container = new NotificationEntryBuilder()
+                .setPkg(TEST_PACKAGE)
+                .setId(47)
+                .build();
+        mNotifHandler.onNotificationRemoved(
+                container.getSbn(),
+                new RankingMap(new Ranking[]{ container.getRanking() }));
+
+        // THEN no exception is thrown, but no event is fired
+        verify(mCollectionListener, never()).onEntryRemoved(any(NotificationEntry.class), anyInt());
     }
 
     private static NotificationEntryBuilder buildNotif(String pkg, int id, String tag) {

@@ -19,6 +19,7 @@ package com.android.server.wm;
 import static android.os.Process.INVALID_UID;
 import static android.view.Display.INVALID_DISPLAY;
 import static android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER;
+import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_STARTING;
 import static android.view.WindowManager.LayoutParams.TYPE_DOCK_DIVIDER;
 import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR;
 
@@ -40,13 +41,16 @@ import static com.android.server.wm.WindowTokenProto.WINDOW_CONTAINER;
 
 import android.annotation.CallSuper;
 import android.app.IWindowToken;
+import android.app.servertransaction.FixedRotationAdjustmentsItem;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Debug;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Slog;
+import android.util.SparseArray;
 import android.util.proto.ProtoOutputStream;
+import android.view.DisplayAdjustments.FixedRotationAdjustments;
 import android.view.DisplayInfo;
 import android.view.InsetsState;
 import android.view.SurfaceControl;
@@ -121,27 +125,27 @@ class WindowToken extends WindowContainer<WindowState> {
     private static class FixedRotationTransformState {
         final DisplayInfo mDisplayInfo;
         final DisplayFrames mDisplayFrames;
-        final InsetsState mInsetsState;
+        final InsetsState mInsetsState = new InsetsState();
         final Configuration mRotatedOverrideConfiguration;
         final SeamlessRotator mRotator;
         /**
-         * The tokens that share the same transform. Their end time of transform are the same as
-         * {@link #mOwner}.
+         * The tokens that share the same transform. Their end time of transform are the same. The
+         * list should at least contain the token who creates this state.
          */
-        final ArrayList<WindowToken> mAssociatedTokens = new ArrayList<>(1);
+        final ArrayList<WindowToken> mAssociatedTokens = new ArrayList<>(3);
         final ArrayList<WindowContainer<?>> mRotatedContainers = new ArrayList<>(3);
+        final SparseArray<Rect> mBarContentFrames = new SparseArray<>();
         boolean mIsTransforming = true;
 
         FixedRotationTransformState(DisplayInfo rotatedDisplayInfo,
-                DisplayFrames rotatedDisplayFrames, InsetsState rotatedInsetsState,
-                Configuration rotatedConfig, int currentRotation) {
+                DisplayFrames rotatedDisplayFrames, Configuration rotatedConfig,
+                int currentRotation) {
             mDisplayInfo = rotatedDisplayInfo;
             mDisplayFrames = rotatedDisplayFrames;
-            mInsetsState = rotatedInsetsState;
             mRotatedOverrideConfiguration = rotatedConfig;
             // This will use unrotate as rotate, so the new and old rotation are inverted.
             mRotator = new SeamlessRotator(rotatedDisplayInfo.rotation, currentRotation,
-                    rotatedDisplayInfo);
+                    rotatedDisplayInfo, true /* applyFixedTransformationHint */);
         }
 
         /**
@@ -513,6 +517,12 @@ class WindowToken extends WindowContainer<WindowState> {
                 : null;
     }
 
+    Rect getFixedRotationBarContentFrame(int windowType) {
+        return isFixedRotationTransforming()
+                ? mFixedRotationTransformState.mBarContentFrames.get(windowType)
+                : null;
+    }
+
     InsetsState getFixedRotationTransformInsetsState() {
         return isFixedRotationTransforming() ? mFixedRotationTransformState.mInsetsState : null;
     }
@@ -523,12 +533,14 @@ class WindowToken extends WindowContainer<WindowState> {
         if (mFixedRotationTransformState != null) {
             return;
         }
-        final InsetsState insetsState = new InsetsState();
-        mDisplayContent.getDisplayPolicy().simulateLayoutDisplay(displayFrames, insetsState,
-                mDisplayContent.getConfiguration().uiMode);
         mFixedRotationTransformState = new FixedRotationTransformState(info, displayFrames,
-                insetsState, new Configuration(config), mDisplayContent.getRotation());
+                new Configuration(config), mDisplayContent.getRotation());
+        mFixedRotationTransformState.mAssociatedTokens.add(this);
+        mDisplayContent.getDisplayPolicy().simulateLayoutDisplay(displayFrames,
+                mFixedRotationTransformState.mInsetsState,
+                mFixedRotationTransformState.mBarContentFrames);
         onConfigurationChanged(getParent().getConfiguration());
+        notifyFixedRotationTransform(true /* enabled */);
     }
 
     /**
@@ -546,6 +558,26 @@ class WindowToken extends WindowContainer<WindowState> {
         mFixedRotationTransformState = fixedRotationState;
         fixedRotationState.mAssociatedTokens.add(this);
         onConfigurationChanged(getParent().getConfiguration());
+        notifyFixedRotationTransform(true /* enabled */);
+    }
+
+    /**
+     * Return {@code true} if one of the associated activity is still animating. Otherwise,
+     * return {@code false}.
+     */
+    boolean hasAnimatingFixedRotationTransition() {
+        if (mFixedRotationTransformState == null) {
+            return false;
+        }
+
+        for (int i = mFixedRotationTransformState.mAssociatedTokens.size() - 1; i >= 0; i--) {
+            final ActivityRecord r =
+                    mFixedRotationTransformState.mAssociatedTokens.get(i).asActivityRecord();
+            if (r != null && r.isAnimating(TRANSITION | PARENTS)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void finishFixedRotationTransform() {
@@ -573,14 +605,55 @@ class WindowToken extends WindowContainer<WindowState> {
             for (int i = state.mAssociatedTokens.size() - 1; i >= 0; i--) {
                 state.mAssociatedTokens.get(i).cancelFixedRotationTransform();
             }
-            cancelFixedRotationTransform();
         }
         // The state is cleared at the end, because it is used to indicate that other windows can
         // use seamless rotation when applying rotation to display.
         for (int i = state.mAssociatedTokens.size() - 1; i >= 0; i--) {
-            state.mAssociatedTokens.get(i).mFixedRotationTransformState = null;
+            state.mAssociatedTokens.get(i).cleanUpFixedRotationTransformState();
         }
+    }
+
+    private void cleanUpFixedRotationTransformState() {
         mFixedRotationTransformState = null;
+        notifyFixedRotationTransform(false /* enabled */);
+    }
+
+    /** Notifies application side to enable or disable the rotation adjustment of display info. */
+    private void notifyFixedRotationTransform(boolean enabled) {
+        FixedRotationAdjustments adjustments = null;
+        // A token may contain windows of the same processes or different processes. The list is
+        // used to avoid sending the same adjustments to a process multiple times.
+        ArrayList<WindowProcessController> notifiedProcesses = null;
+        for (int i = mChildren.size() - 1; i >= 0; i--) {
+            final WindowState w = mChildren.get(i);
+            final WindowProcessController app;
+            if (w.mAttrs.type == TYPE_APPLICATION_STARTING) {
+                // Use the host activity because starting window is controlled by window manager.
+                final ActivityRecord r = asActivityRecord();
+                if (r == null) {
+                    continue;
+                }
+                app = r.app;
+            } else {
+                app = mWmService.mAtmService.mProcessMap.getProcess(w.mSession.mPid);
+            }
+            if (app == null || !app.hasThread()) {
+                continue;
+            }
+            if (notifiedProcesses == null) {
+                notifiedProcesses = new ArrayList<>(2);
+                adjustments = enabled ? createFixedRotationAdjustmentsIfNeeded() : null;
+            } else if (notifiedProcesses.contains(app)) {
+                continue;
+            }
+            notifiedProcesses.add(app);
+            try {
+                mWmService.mAtmService.getLifecycleManager().scheduleTransaction(
+                        app.getThread(), FixedRotationAdjustmentsItem.obtain(token, adjustments));
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Failed to schedule DisplayAdjustmentsItem to " + app, e);
+            }
+        }
     }
 
     /** Restores the changes that applies to this container. */
@@ -590,6 +663,7 @@ class WindowToken extends WindowContainer<WindowState> {
             // The window may be detached or detaching.
             return;
         }
+        notifyFixedRotationTransform(false /* enabled */);
         final int originalRotation = getWindowConfiguration().getRotation();
         onConfigurationChanged(parent.getConfiguration());
         onCancelFixedRotationTransform(originalRotation);
@@ -601,6 +675,14 @@ class WindowToken extends WindowContainer<WindowState> {
      * sensor is updated to previous direction.
      */
     void onCancelFixedRotationTransform(int originalDisplayRotation) {
+    }
+
+    FixedRotationAdjustments createFixedRotationAdjustmentsIfNeeded() {
+        if (!isFixedRotationTransforming()) {
+            return null;
+        }
+        return new FixedRotationAdjustments(mFixedRotationTransformState.mDisplayInfo.rotation,
+                mFixedRotationTransformState.mDisplayInfo.displayCutout);
     }
 
     @Override
@@ -671,6 +753,11 @@ class WindowToken extends WindowContainer<WindowState> {
             pw.print(" waitingToShow=true");
         }
         pw.println();
+        if (hasFixedRotationTransform()) {
+            pw.print(prefix);
+            pw.print("fixedRotationConfig=");
+            pw.println(mFixedRotationTransformState.mRotatedOverrideConfiguration);
+        }
     }
 
     @Override

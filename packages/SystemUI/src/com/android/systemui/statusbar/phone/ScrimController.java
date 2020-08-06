@@ -113,11 +113,17 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, OnCo
      * Scrim opacity when the phone is about to wake-up.
      */
     public static final float WAKE_SENSOR_SCRIM_ALPHA = 0.6f;
+
+    /**
+     * Scrim opacity when bubbles are expanded.
+     */
+    public static final float BUBBLE_SCRIM_ALPHA = 0.6f;
+
     /**
      * The default scrim under the shade and dialogs.
      * This should not be lower than 0.54, otherwise we won't pass GAR.
      */
-    public static final float BUSY_SCRIM_ALPHA = 0.75f;
+    public static final float BUSY_SCRIM_ALPHA = 0.85f;
 
     /**
      * Same as above, but when blur is supported.
@@ -440,24 +446,7 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, OnCo
             if (!(relevantState && mExpansionAffectsAlpha)) {
                 return;
             }
-            applyExpansionToAlpha();
-            if (mUpdatePending) {
-                return;
-            }
-            setOrAdaptCurrentAnimation(mScrimBehind);
-            setOrAdaptCurrentAnimation(mScrimInFront);
-            setOrAdaptCurrentAnimation(mScrimForBubble);
-            dispatchScrimState(mScrimBehind.getViewAlpha());
-
-            // Reset wallpaper timeout if it's already timeout like expanding panel while PULSING
-            // and docking.
-            if (mWallpaperVisibilityTimedOut) {
-                mWallpaperVisibilityTimedOut = false;
-                DejankUtils.postAfterTraversal(() -> {
-                    mTimeTicker.schedule(mDozeParameters.getWallpaperAodDuration(),
-                            AlarmTimeout.MODE_IGNORE_IF_SCHEDULED);
-                });
-            }
+            applyAndDispatchExpansion();
         }
     }
 
@@ -510,6 +499,27 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, OnCo
         if (isNaN(mBehindAlpha) || isNaN(mInFrontAlpha)) {
             throw new IllegalStateException("Scrim opacity is NaN for state: " + mState
                     + ", front: " + mInFrontAlpha + ", back: " + mBehindAlpha);
+        }
+    }
+
+    private void applyAndDispatchExpansion() {
+        applyExpansionToAlpha();
+        if (mUpdatePending) {
+            return;
+        }
+        setOrAdaptCurrentAnimation(mScrimBehind);
+        setOrAdaptCurrentAnimation(mScrimInFront);
+        setOrAdaptCurrentAnimation(mScrimForBubble);
+        dispatchScrimState(mScrimBehind.getViewAlpha());
+
+        // Reset wallpaper timeout if it's already timeout like expanding panel while PULSING
+        // and docking.
+        if (mWallpaperVisibilityTimedOut) {
+            mWallpaperVisibilityTimedOut = false;
+            DejankUtils.postAfterTraversal(() -> {
+                mTimeTicker.schedule(mDozeParameters.getWallpaperAodDuration(),
+                        AlarmTimeout.MODE_IGNORE_IF_SCHEDULED);
+            });
         }
     }
 
@@ -1006,6 +1016,9 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, OnCo
 
     public void setExpansionAffectsAlpha(boolean expansionAffectsAlpha) {
         mExpansionAffectsAlpha = expansionAffectsAlpha;
+        if (expansionAffectsAlpha) {
+            applyAndDispatchExpansion();
+        }
     }
 
     public void setKeyguardOccluded(boolean keyguardOccluded) {

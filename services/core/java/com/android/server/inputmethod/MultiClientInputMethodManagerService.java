@@ -171,6 +171,11 @@ public final class MultiClientInputMethodManagerService {
             LocalServices.addService(InputMethodManagerInternal.class,
                     new InputMethodManagerInternal() {
                         @Override
+                        public void setInteractive(boolean interactive) {
+                            reportNotSupported();
+                        }
+
+                        @Override
                         public void hideCurrentInputMethod(@SoftInputShowHideReason int reason) {
                             reportNotSupported();
                         }
@@ -215,6 +220,10 @@ public final class MultiClientInputMethodManagerService {
                                 @NonNull IBinder sourceInputToken, int displayId) {
                             reportNotSupported();
                             return false;
+                        }
+
+                        @Override
+                        public void reportImeControl(@Nullable IBinder windowToken) {
                         }
                     });
         }
@@ -1342,13 +1351,14 @@ public final class MultiClientInputMethodManagerService {
                 for (WindowInfo windowInfo : clientInfo.mWindowMap.values()) {
                     if (windowInfo.mWindowHandle == targetWindowHandle) {
                         final IBinder targetWindowToken = windowInfo.mWindowToken;
-                        // TODO(yukawa): Report targetWindowToken and targetWindowToken to WMS.
                         if (DEBUG) {
                             Slog.v(TAG, "reportImeWindowTarget"
                                     + " clientId=" + clientId
                                     + " imeWindowToken=" + imeWindowToken
                                     + " targetWindowToken=" + targetWindowToken);
                         }
+                        mIWindowManagerInternal.updateInputMethodTargetWindow(
+                                imeWindowToken, targetWindowToken);
                     }
                 }
                 // not found.
@@ -1457,6 +1467,12 @@ public final class MultiClientInputMethodManagerService {
 
         @BinderThread
         @Override
+        public void removeImeSurface() {
+            reportNotSupported();
+        }
+
+        @BinderThread
+        @Override
         public boolean showSoftInput(
                 IInputMethodClient client, IBinder token, int flags,
                 ResultReceiver resultReceiver) {
@@ -1485,6 +1501,9 @@ public final class MultiClientInputMethodManagerService {
                     case InputMethodClientState.ALREADY_SENT_BIND_RESULT:
                         try {
                             clientInfo.mMSInputMethodSession.showSoftInput(flags, resultReceiver);
+
+                            // Forcing WM to show IME on imeTargetWindow
+                            mWindowManagerInternal.showImePostLayout(token);
                         } catch (RemoteException e) {
                         }
                         break;
@@ -1733,6 +1752,12 @@ public final class MultiClientInputMethodManagerService {
         @Override
         public void reportActivityView(IInputMethodClient parentClient, int childDisplayId,
                 float[] matrixValues) {
+            reportNotSupported();
+        }
+
+        @BinderThread
+        @Override
+        public void reportPerceptible(IBinder windowClient, boolean perceptible) {
             reportNotSupported();
         }
 
