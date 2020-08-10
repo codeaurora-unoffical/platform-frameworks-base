@@ -194,6 +194,8 @@ public class Camera {
 
     private static final int NO_ERROR = 0;
 
+    public boolean mHasPermission = true;
+
     /**
      * Broadcast Action:  A new picture is taken by the camera, and the entry of
      * the picture has been added to the media store.
