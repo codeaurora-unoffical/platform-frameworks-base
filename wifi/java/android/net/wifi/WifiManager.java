@@ -283,14 +283,36 @@ public class WifiManager {
     *
     * @hide
     **/
-    public static final String  WIFI_DATA_STALL = "com.qualcomm.qti.net.wifi.WIFI_DATA_STALL";
+    public static final String  WIFI_ALERT = "com.qualcomm.qti.net.wifi.WIFI_ALERT";
 
     /**
     *
-    * see data stall reason code
+    *
     * @hide
     **/
-    public static final String  EXTRA_WIFI_DATA_STALL_REASON = "data_stall_reasoncode";
+    public static final String  WIFI_NETWORK_DISCONNECTION = "com.qualcomm.qti.net.wifi.WIFI_NETWORK_DISCONNECTION";
+
+    /**
+    *
+    * see alert reason code
+    * @hide
+    **/
+    public static final String  EXTRA_WIFI_ALERT_REASON = "alert_reasoncode";
+
+    /**
+    *
+    * see wifi network disconnection arg 1
+    * @hide
+    **/
+    public static final String  EXTRA_WIFI_NETWORK_DISCONNECTION_ARG1 = "network_disconnection_arg1";
+
+    /**
+    *
+    * see wifi network disconnection arg 2
+    * @hide
+    **/
+    public static final String  EXTRA_WIFI_NETWORK_DISCONNECTION_ARG2 = "network_disconnection_arg2";
+
     /**
      * Broadcast intent action indicating that the credential of a Wi-Fi network
      * has been changed. One extra provides the ssid of the network. Another
@@ -615,7 +637,6 @@ public class WifiManager {
      *
      * @hide
      */
-    @SystemApi
     public static final String EXTRA_WIFI_AP_FAILURE_DESCRIPTION = "wifi_ap_error_description";
     /**
      *  If Wi-Fi AP start failed with SAP_START_FAILURE_NO_CHANNEL reason code and has this
@@ -623,7 +644,6 @@ public class WifiManager {
      *
      *  @hide
      */
-    @SystemApi
     public static final String WIFI_AP_FAILURE_DESC_NO_5GHZ_SUPPORT = "wifi_ap_error_no_5g_support";
     /**
      * The previous Wi-Fi state.
@@ -1195,7 +1215,6 @@ public class WifiManager {
      *
      * @hide
      */
-    @SystemApi
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String WIFI_COUNTRY_CODE_CHANGED_ACTION =
             "android.net.wifi.COUNTRY_CODE_CHANGED";
@@ -1697,7 +1716,6 @@ public class WifiManager {
       *
       * @hide no intent to publish
       */
-      @SystemApi
       public boolean isExtendingWifi() {
           try {
               return mService.isExtendingWifi();
@@ -1713,7 +1731,6 @@ public class WifiManager {
       *
       * @hide no intent to publish
       */
-      @SystemApi
       public boolean isWifiCoverageExtendFeatureEnabled() {
           try {
               return mService.isWifiCoverageExtendFeatureEnabled();
@@ -1727,7 +1744,6 @@ public class WifiManager {
       *
       * @hide no intent to publish
       */
-      @SystemApi
       public void enableWifiCoverageExtendFeature(boolean enable) {
           try {
               mService.enableWifiCoverageExtendFeature(enable);
@@ -1743,7 +1759,6 @@ public class WifiManager {
       *
       * @hide no intent to publish
       */
-      @SystemApi
       public int getSoftApWifiStandard() {
           try {
               return mService.getSoftApWifiStandard();
@@ -5418,7 +5433,6 @@ public class WifiManager {
      * @return String of capabilities from driver for type capaParameter.
      * {@hide}
      */
-    @SystemApi
     @NonNull
     public String getCapabilities(@NonNull String capaType) {
         try {
@@ -6560,10 +6574,22 @@ public class WifiManager {
       *
       * @hide no intent to publish
       */
-    @SystemApi
     public boolean isVht8ssCapableDevice() {
         try {
             return mService.isVht8ssCapableDevice();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Run driver command from user space
+     * @hide
+     */
+    public String doDriverCmd(String command)
+    {
+        try {
+            return mService.doDriverCmd(command);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
