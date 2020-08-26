@@ -227,7 +227,7 @@ public class WifiManager {
     *
     * @hide
     **/
-    public static final String  WIFI_DATA_STALL = "com.qualcomm.qti.net.wifi.WIFI_DATA_STALL";
+    public static final String  WIFI_ALERT = "com.qualcomm.qti.net.wifi.WIFI_ALERT";
 
     /**
     *
@@ -245,10 +245,10 @@ public class WifiManager {
 
     /**
     *
-    * see data stall reason code
+    * see alert reason code
     * @hide
     **/
-    public static final String  EXTRA_WIFI_DATA_STALL_REASON = "data_stall_reasoncode";
+    public static final String  EXTRA_WIFI_ALERT_REASON = "alert_reasoncode";
     /**
     *
     * see wifi network disconnection arg 1
@@ -2590,6 +2590,19 @@ public class WifiManager {
     public boolean isDualBandSupported() {
         try {
             return mService.isDualBandSupported();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Check if the chipset supports 6 GHz band
+     * @return {@code true} if supported, {@code false} otherwise.
+     * @hide
+     */
+    public boolean is6GHzBandSupported() {
+        try {
+            return mService.is6GHzBandSupported();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
