@@ -35,7 +35,10 @@ import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.CancellationSignal;
 import android.os.Handler;
+import android.os.IBinder;
+import android.os.Trace;
 import android.util.ArraySet;
+import android.util.Log;
 import android.util.Pair;
 import android.util.SparseArray;
 import android.view.InsetsSourceConsumer.ShowResult;
@@ -67,6 +70,8 @@ import java.util.function.BiFunction;
  * @hide
  */
 public class InsetsController implements WindowInsetsController, InsetsAnimationControlCallbacks {
+
+    private int mTypesBeingCancelled;
 
     public interface Host {
 
@@ -151,8 +156,25 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
          * Obtains {@link InputMethodManager} instance from host.
          */
         InputMethodManager getInputMethodManager();
+
+        /**
+         * @return title of the rootView, if it has one.
+         * Note: this method is for debugging purposes only.
+         */
+        @Nullable
+        String getRootViewTitle();
+
+        /** @see ViewRootImpl#dipToPx */
+        int dipToPx(int dips);
+
+        /**
+         * @return token associated with the host, if it has one.
+         */
+        @Nullable
+        IBinder getWindowToken();
     }
 
+    private static final String TAG = "InsetsController";
     private static final int ANIMATION_DURATION_SHOW_MS = 275;
     private static final int ANIMATION_DURATION_HIDE_MS = 340;
 
@@ -169,6 +191,9 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             new PathInterpolator(0, 0, 0.2f, 1f);
     private static final Interpolator FAST_OUT_LINEAR_IN_INTERPOLATOR =
             new PathInterpolator(0.4f, 0f, 1f, 1f);
+
+    static final boolean DEBUG = false;
+    static final boolean WARN = false;
 
     /**
      * Layout mode during insets animation: The views should be laid out as if the changing inset
@@ -239,12 +264,17 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     public static class InternalAnimationControlListener
             implements WindowInsetsAnimationControlListener {
 
+        /** The amount IME will move up/down when animating in floating mode. */
+        protected static final int FLOATING_IME_BOTTOM_INSET = -80;
+
         private WindowInsetsAnimationController mController;
         private ValueAnimator mAnimator;
         private final boolean mShow;
         private final boolean mHasAnimationCallbacks;
         private final @InsetsType int mRequestedTypes;
         private final long mDurationMs;
+        private final boolean mDisable;
+        private final int mFloatingImeBottomInset;
 
         private ThreadLocal<AnimationHandler> mSfAnimationHandlerThreadLocal =
                 new ThreadLocal<AnimationHandler>() {
@@ -257,26 +287,40 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
         };
 
         public InternalAnimationControlListener(boolean show, boolean hasAnimationCallbacks,
-                int requestedTypes) {
+                int requestedTypes, boolean disable, int floatingImeBottomInset) {
             mShow = show;
             mHasAnimationCallbacks = hasAnimationCallbacks;
             mRequestedTypes = requestedTypes;
             mDurationMs = calculateDurationMs();
+            mDisable = disable;
+            mFloatingImeBottomInset = floatingImeBottomInset;
         }
 
         @Override
         public void onReady(WindowInsetsAnimationController controller, int types) {
             mController = controller;
+            if (DEBUG) Log.d(TAG, "default animation onReady types: " + types);
 
+            if (mDisable) {
+                onAnimationFinish();
+                return;
+            }
             mAnimator = ValueAnimator.ofFloat(0f, 1f);
             mAnimator.setDuration(mDurationMs);
             mAnimator.setInterpolator(new LinearInterpolator());
+            Insets hiddenInsets = controller.getHiddenStateInsets();
+            // IME with zero insets is a special case: it will animate-in from offscreen and end
+            // with final insets of zero and vice-versa.
+            hiddenInsets = controller.hasZeroInsetsIme()
+                    ? Insets.of(hiddenInsets.left, hiddenInsets.top, hiddenInsets.right,
+                            mFloatingImeBottomInset)
+                    : hiddenInsets;
             Insets start = mShow
-                    ? controller.getHiddenStateInsets()
+                    ? hiddenInsets
                     : controller.getShownStateInsets();
             Insets end = mShow
                     ? controller.getShownStateInsets()
-                    : controller.getHiddenStateInsets();
+                    : hiddenInsets;
             Interpolator insetsInterpolator = getInterpolator();
             Interpolator alphaInterpolator = getAlphaInterpolator();
             mAnimator.addUpdateListener(animation -> {
@@ -289,6 +333,8 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                         sEvaluator.evaluate(insetsFraction, start, end),
                         alphaInterpolator.getInterpolation(alphaFraction),
                         rawFraction);
+                if (DEBUG) Log.d(TAG, "Default animation setInsetsAndAlpha fraction: "
+                        + insetsFraction);
             });
             mAnimator.addListener(new AnimatorListenerAdapter() {
 
@@ -305,6 +351,8 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
         @Override
         public void onFinished(WindowInsetsAnimationController controller) {
+            if (DEBUG) Log.d(TAG, "InternalAnimationControlListener onFinished types:"
+                    + Type.toString(mRequestedTypes));
         }
 
         @Override
@@ -313,6 +361,8 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             if (mAnimator != null) {
                 mAnimator.cancel();
             }
+            if (DEBUG) Log.d(TAG, "InternalAnimationControlListener onCancelled types:"
+                    + mRequestedTypes);
         }
 
         Interpolator getInterpolator() {
@@ -347,6 +397,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
         protected void onAnimationFinish() {
             mController.finish(mShow);
+            if (DEBUG) Log.d(TAG, "onAnimationFinish showOnFinish: " + mShow);
         }
 
         /**
@@ -419,8 +470,6 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
         final boolean useInsetsAnimationThread;
     }
 
-    private final String TAG = "InsetsControllerImpl";
-
     /** The local state */
     private final InsetsState mState = new InsetsState();
 
@@ -456,6 +505,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     private DisplayCutout mLastDisplayCutout;
     private boolean mStartingAnimation;
     private int mCaptionInsetsHeight = 0;
+    private boolean mAnimationsDisabled;
 
     private Runnable mPendingControlTimeout = this::abortPendingImeControlRequest;
     private final ArrayList<OnControllableInsetsChangedListener> mControllableInsetsChangedListeners
@@ -463,6 +513,12 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
     /** Set of inset types for which an animation was started since last resetting this field */
     private @InsetsType int mLastStartedAnimTypes;
+
+    /** Set of inset types which cannot be controlled by the user animation */
+    private @InsetsType int mDisabledUserAnimationInsetsTypes;
+
+    private Runnable mInvokeControllableInsetsChangedListeners =
+            this::invokeControllableInsetsChangedListeners;
 
     public InsetsController(Host host) {
         this(host, (controller, type) -> {
@@ -493,6 +549,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             InsetsState state = new InsetsState(mState, true /* copySources */);
             for (int i = mRunningAnimations.size() - 1; i >= 0; i--) {
                 RunningAnimation runningAnimation = mRunningAnimations.get(i);
+                if (DEBUG) Log.d(TAG, "Running animation type: " + runningAnimation.type);
                 InsetsAnimationControlRunner runner = runningAnimation.runner;
                 if (runner instanceof InsetsAnimationControlImpl) {
                     InsetsAnimationControlImpl control = (InsetsAnimationControlImpl) runner;
@@ -515,6 +572,12 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                     mLastDisplayCutout, mLastLegacySoftInputMode, mLastLegacySystemUiFlags,
                     null /* typeSideMap */);
             mHost.dispatchWindowInsetsAnimationProgress(insets, mUnmodifiableTmpRunningAnims);
+            if (DEBUG) {
+                for (WindowInsetsAnimation anim : mUnmodifiableTmpRunningAnims) {
+                    Log.d(TAG, String.format("Running animation type: %d, progress: %f",
+                            anim.getTypeMask(), anim.getInterpolatedFraction()));
+                }
+            }
 
             for (int i = mTmpFinishedControls.size() - 1; i >= 0; i--) {
                 dispatchAnimationEnd(mTmpFinishedControls.get(i).getAnimation());
@@ -547,18 +610,23 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
     @VisibleForTesting
     public boolean onStateChanged(InsetsState state) {
-        boolean localStateChanged = !mState.equals(state, true /* excludingCaptionInsets */)
+        boolean stateChanged = !mState.equals(state, true /* excludingCaptionInsets */,
+                        false /* excludeInvisibleIme */)
                 || !captionInsetsUnchanged();
-        if (!localStateChanged && mLastDispatchedState.equals(state)) {
+        if (!stateChanged && mLastDispatchedState.equals(state)) {
             return false;
         }
+        if (DEBUG) Log.d(TAG, "onStateChanged: " + state);
         updateState(state);
+
+        boolean localStateChanged = !mState.equals(mLastDispatchedState,
+                true /* excludingCaptionInsets */, true /* excludeInvisibleIme */);
         mLastDispatchedState.set(state, true /* copySources */);
+
         applyLocalVisibilityOverride();
         if (localStateChanged) {
+            if (DEBUG) Log.d(TAG, "onStateChanged, notifyInsetsChanged, send state to WM: " + mState);
             mHost.notifyInsetsChanged();
-        }
-        if (!mState.equals(mLastDispatchedState, true /* excludingCaptionInsets */)) {
             updateRequestedState();
         }
         return true;
@@ -566,19 +634,56 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
     private void updateState(InsetsState newState) {
         mState.setDisplayFrame(newState.getDisplayFrame());
-        for (int i = newState.getSourcesCount() - 1; i >= 0; i--) {
-            InsetsSource source = newState.sourceAt(i);
-            getSourceConsumer(source.getType()).updateSource(source);
+        @InsetsType int disabledUserAnimationTypes = 0;
+        @InsetsType int[] cancelledUserAnimationTypes = {0};
+        for (@InternalInsetsType int type = 0; type < InsetsState.SIZE; type++) {
+            InsetsSource source = newState.peekSource(type);
+            if (source == null) continue;
+            @AnimationType int animationType = getAnimationType(type);
+            if (!source.isUserControllable()) {
+                @InsetsType int insetsType = toPublicType(type);
+                // The user animation is not allowed when visible frame is empty.
+                disabledUserAnimationTypes |= insetsType;
+                if (animationType == ANIMATION_TYPE_USER) {
+                    // Existing user animation needs to be cancelled.
+                    animationType = ANIMATION_TYPE_NONE;
+                    cancelledUserAnimationTypes[0] |= insetsType;
+                }
+            }
+            getSourceConsumer(type).updateSource(source, animationType);
         }
-        for (int i = mState.getSourcesCount() - 1; i >= 0; i--) {
-            InsetsSource source = mState.sourceAt(i);
-            if (newState.peekSource(source.getType()) == null) {
-                mState.removeSource(source.getType());
+        for (@InternalInsetsType int type = 0; type < InsetsState.SIZE; type++) {
+            InsetsSource source = mState.peekSource(type);
+            if (source == null) continue;
+            if (newState.peekSource(type) == null) {
+                mState.removeSource(type);
             }
         }
         if (mCaptionInsetsHeight != 0) {
             mState.getSource(ITYPE_CAPTION_BAR).setFrame(new Rect(mFrame.left, mFrame.top,
                     mFrame.right, mFrame.top + mCaptionInsetsHeight));
+        }
+
+        updateDisabledUserAnimationTypes(disabledUserAnimationTypes);
+
+        if (cancelledUserAnimationTypes[0] != 0) {
+            mHandler.post(() -> show(cancelledUserAnimationTypes[0]));
+        }
+    }
+
+    private void updateDisabledUserAnimationTypes(@InsetsType int disabledUserAnimationTypes) {
+        @InsetsType int diff = mDisabledUserAnimationInsetsTypes ^ disabledUserAnimationTypes;
+        if (diff != 0) {
+            for (int i = mSourceConsumers.size() - 1; i >= 0; i--) {
+                InsetsSourceConsumer consumer = mSourceConsumers.valueAt(i);
+                if (consumer.getControl() != null
+                        && (toPublicType(consumer.getType()) & diff) != 0) {
+                    mHandler.removeCallbacks(mInvokeControllableInsetsChangedListeners);
+                    mHandler.post(mInvokeControllableInsetsChangedListeners);
+                    break;
+                }
+            }
+            mDisabledUserAnimationInsetsTypes = disabledUserAnimationTypes;
         }
     }
 
@@ -667,7 +772,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
         if (hideTypes[0] != 0) {
             applyAnimation(hideTypes[0], false /* show */, false /* fromIme */);
         }
-        if (hasControl) {
+        if (hasControl && mRequestedState.hasSources()) {
             // We might have changed our requested visibilities while we don't have the control,
             // so we need to update our requested state once we have control. Otherwise, our
             // requested state at the server side might be incorrect.
@@ -682,7 +787,6 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
     @VisibleForTesting
     public void show(@InsetsType int types, boolean fromIme) {
-
         // Handle pending request ready in case there was one set.
         if (fromIme && mPendingImeControlRequest != null) {
             PendingControlRequest pendingRequest = mPendingImeControlRequest;
@@ -710,10 +814,18 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                     || animationType == ANIMATION_TYPE_SHOW) {
                 // no-op: already shown or animating in (because window visibility is
                 // applied before starting animation).
+                if (DEBUG) Log.d(TAG, String.format(
+                        "show ignored for type: %d animType: %d requestedVisible: %s",
+                        consumer.getType(), animationType, consumer.isRequestedVisible()));
+                continue;
+            }
+            if (fromIme && animationType == ANIMATION_TYPE_USER) {
+                // App is already controlling the IME, don't cancel it.
                 continue;
             }
             typesReady |= InsetsState.toPublicType(consumer.getType());
         }
+        if (DEBUG) Log.d(TAG, "show typesReady: " + typesReady);
         applyAnimation(typesReady, true /* show */, fromIme);
     }
 
@@ -753,7 +865,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             WindowInsetsAnimationControlListener listener,
             boolean fromIme, long durationMs, @Nullable Interpolator interpolator,
             @AnimationType int animationType) {
-        if (!checkDisplayFramesForControlling()) {
+        if ((mState.calculateUncontrollableInsetsFromFrame(mFrame) & types) != 0) {
             listener.onCancelled(null);
             return;
         }
@@ -763,13 +875,6 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                 false /* useInsetsAnimationThread */);
     }
 
-    private boolean checkDisplayFramesForControlling() {
-
-        // If the frame of our window doesn't span the entire display, the control API makes very
-        // little sense, as we don't deal with negative insets. So just cancel immediately.
-        return mState.getDisplayFrame().equals(mFrame);
-    }
-
     private void controlAnimationUnchecked(@InsetsType int types,
             @Nullable CancellationSignal cancellationSignal,
             WindowInsetsAnimationControlListener listener, Rect frame, boolean fromIme,
@@ -777,12 +882,32 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             @AnimationType int animationType,
             @LayoutInsetsDuringAnimation int layoutInsetsDuringAnimation,
             boolean useInsetsAnimationThread) {
+        if ((types & mTypesBeingCancelled) != 0) {
+            throw new IllegalStateException("Cannot start a new insets animation of "
+                    + Type.toString(types)
+                    + " while an existing " + Type.toString(mTypesBeingCancelled)
+                    + " is being cancelled.");
+        }
+        if (animationType == ANIMATION_TYPE_USER) {
+            final @InsetsType int disabledTypes = types & mDisabledUserAnimationInsetsTypes;
+            if (DEBUG) Log.d(TAG, "user animation disabled types: " + disabledTypes);
+            types &= ~mDisabledUserAnimationInsetsTypes;
+
+            if (fromIme && (disabledTypes & ime()) != 0
+                    && !mState.getSource(ITYPE_IME).isVisible()) {
+                // We've requested IMM to show IME, but the IME is not controllable. We need to
+                // cancel the request.
+                getSourceConsumer(ITYPE_IME).hide(true, animationType);
+            }
+        }
         if (types == 0) {
             // nothing to animate.
             listener.onCancelled(null);
+            if (DEBUG) Log.d(TAG, "no types to animate in controlAnimationUnchecked");
             return;
         }
         cancelExistingControllers(types);
+        if (DEBUG) Log.d(TAG, "controlAnimation types: " + types);
         mLastStartedAnimTypes |= types;
 
         final ArraySet<Integer> internalTypes = InsetsState.toInternalType(types);
@@ -792,6 +917,8 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                 fromIme, internalTypes, controls, animationType);
         int typesReady = typesReadyPair.first;
         boolean imeReady = typesReadyPair.second;
+        if (DEBUG) Log.d(TAG, String.format(
+                "controlAnimationUnchecked, typesReady: %s imeReady: %s", typesReady, imeReady));
         if (!imeReady) {
             // IME isn't ready, all requested types will be animated once IME is ready
             abortPendingImeControlRequest();
@@ -801,9 +928,12 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                     useInsetsAnimationThread);
             mPendingImeControlRequest = request;
             mHandler.postDelayed(mPendingControlTimeout, PENDING_CONTROL_TIMEOUT_MS);
+            if (DEBUG) Log.d(TAG, "Ime not ready. Create pending request");
             if (cancellationSignal != null) {
                 cancellationSignal.setOnCancelListener(() -> {
                     if (mPendingImeControlRequest == request) {
+                        if (DEBUG) Log.d(TAG,
+                                "Cancellation signal abortPendingImeControlRequest");
                         abortPendingImeControlRequest();
                     }
                 });
@@ -812,6 +942,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
         }
 
         if (typesReady == 0) {
+            if (DEBUG) Log.d(TAG, "No types ready. onCancelled()");
             listener.onCancelled(null);
             return;
         }
@@ -825,8 +956,12 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                         frame, mState, listener, typesReady, this, durationMs, interpolator,
                         animationType);
         mRunningAnimations.add(new RunningAnimation(runner, animationType));
+        if (DEBUG) Log.d(TAG, "Animation added to runner. useInsetsAnimationThread: "
+                + useInsetsAnimationThread);
         if (cancellationSignal != null) {
-            cancellationSignal.setOnCancelListener(runner::cancel);
+            cancellationSignal.setOnCancelListener(() -> {
+                cancelAnimation(runner, true /* invokeCallback */);
+            });
         }
         if (layoutInsetsDuringAnimation == LAYOUT_INSETS_DURING_ANIMATION_SHOWN) {
             showDirectly(types);
@@ -856,8 +991,11 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                         break;
                     case ShowResult.IME_SHOW_DELAYED:
                         imeReady = false;
+                        if (DEBUG) Log.d(TAG, "requestShow IME_SHOW_DELAYED");
                         break;
                     case ShowResult.IME_SHOW_FAILED:
+                        if (WARN) Log.w(TAG, "requestShow IME_SHOW_FAILED. fromIme: "
+                                + fromIme);
                         // IME cannot be shown (since it didn't have focus), proceed
                         // with animation of other types.
                         break;
@@ -872,6 +1010,9 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                 canRun = true;
             }
             if (!canRun) {
+                if (WARN) Log.w(TAG, String.format(
+                        "collectSourceControls can't continue show for type: %s fromIme: %b",
+                        InsetsState.typeToString(consumer.getType()), fromIme));
                 continue;
             }
             final InsetsSourceControl control = consumer.getControl();
@@ -879,7 +1020,8 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                 controls.put(consumer.getType(), new InsetsSourceControl(control));
                 typesReady |= toPublicType(consumer.getType());
             } else if (animationType == ANIMATION_TYPE_SHOW) {
-
+                if (DEBUG) Log.d(TAG, "collectSourceControls no control for show(). fromIme: "
+                        + fromIme);
                 // We don't have a control at the moment. However, we still want to update requested
                 // visibility state such that in case we get control, we can apply show animation.
                 consumer.show(fromIme);
@@ -914,14 +1056,20 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     }
 
     private void cancelExistingControllers(@InsetsType int types) {
-        for (int i = mRunningAnimations.size() - 1; i >= 0; i--) {
-            InsetsAnimationControlRunner control = mRunningAnimations.get(i).runner;
-            if ((control.getTypes() & types) != 0) {
-                cancelAnimation(control, true /* invokeCallback */);
+        final int originalmTypesBeingCancelled = mTypesBeingCancelled;
+        mTypesBeingCancelled |= types;
+        try {
+            for (int i = mRunningAnimations.size() - 1; i >= 0; i--) {
+                InsetsAnimationControlRunner control = mRunningAnimations.get(i).runner;
+                if ((control.getTypes() & types) != 0) {
+                    cancelAnimation(control, true /* invokeCallback */);
+                }
             }
-        }
-        if ((types & ime()) != 0) {
-            abortPendingImeControlRequest();
+            if ((types & ime()) != 0) {
+                abortPendingImeControlRequest();
+            }
+        } finally {
+            mTypesBeingCancelled = originalmTypesBeingCancelled;
         }
     }
 
@@ -930,6 +1078,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             mPendingImeControlRequest.listener.onCancelled(null);
             mPendingImeControlRequest = null;
             mHandler.removeCallbacks(mPendingControlTimeout);
+            if (DEBUG) Log.d(TAG, "abortPendingImeControlRequest");
         }
     }
 
@@ -937,6 +1086,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     @Override
     public void notifyFinished(InsetsAnimationControlRunner runner, boolean shown) {
         cancelAnimation(runner, false /* invokeCallback */);
+        if (DEBUG) Log.d(TAG, "notifyFinished. shown: " + shown);
         if (shown) {
             showDirectly(runner.getTypes());
         } else {
@@ -963,6 +1113,8 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     }
 
     private void cancelAnimation(InsetsAnimationControlRunner control, boolean invokeCallback) {
+        if (DEBUG) Log.d(TAG, String.format("cancelAnimation of types: %d, animType: %d",
+                control.getTypes(), control.getAnimationType()));
         if (invokeCallback) {
             control.cancel();
         }
@@ -975,6 +1127,9 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
                     if (getSourceConsumer(types.valueAt(j)).notifyAnimationFinished()) {
                         mHost.notifyInsetsChanged();
                     }
+                }
+                if (invokeCallback && runningAnimation.startDispatched) {
+                    dispatchAnimationEnd(runningAnimation.runner.getAnimation());
                 }
                 break;
             }
@@ -1065,7 +1220,14 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
             if (consumer.getControl() != null) {
                 final InsetsSource localSource = mState.getSource(type);
                 if (!localSource.equals(mRequestedState.peekSource(type))) {
+                    // Our requested state is stale. Update it here and send it to window manager.
                     mRequestedState.addSource(new InsetsSource(localSource));
+                    changed = true;
+                }
+                if (!localSource.equals(mLastDispatchedState.peekSource(type))) {
+                    // The server state is not what we expected. This can happen while we don't have
+                    // the control. Since we have the control now, we need to send our request again
+                    // to modify the server state.
                     changed = true;
                 }
             }
@@ -1080,12 +1242,14 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     public void applyAnimation(@InsetsType final int types, boolean show, boolean fromIme) {
         if (types == 0) {
             // nothing to animate.
+            if (DEBUG) Log.d(TAG, "applyAnimation, nothing to animate");
             return;
         }
 
         boolean hasAnimationCallbacks = mHost.hasAnimationCallbacks();
-        final InternalAnimationControlListener listener =
-                new InternalAnimationControlListener(show, hasAnimationCallbacks, types);
+        final InternalAnimationControlListener listener = new InternalAnimationControlListener(
+                show, hasAnimationCallbacks, types, mAnimationsDisabled,
+                mHost.dipToPx(InternalAnimationControlListener.FLOATING_IME_BOTTOM_INSET));
 
         // Show/hide animations always need to be relative to the display frame, in order that shown
         // and hidden state insets are correct.
@@ -1117,7 +1281,7 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
      * Cancel on-going animation to show/hide {@link InsetsType}.
      */
     @VisibleForTesting
-    public void cancelExistingAnimation() {
+    public void cancelExistingAnimations() {
         cancelExistingControllers(all());
     }
 
@@ -1134,8 +1298,11 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
         mHost.dispatchWindowInsetsAnimationPrepare(animation);
         mHost.addOnPreDrawRunnable(() -> {
             if (controller.isCancelled()) {
+                if (WARN) Log.w(TAG, "startAnimation canceled before preDraw");
                 return;
             }
+            Trace.asyncTraceBegin(Trace.TRACE_TAG_VIEW,
+                    "InsetsAnimation: " + WindowInsets.Type.toString(types), types);
             for (int i = mRunningAnimations.size() - 1; i >= 0; i--) {
                 RunningAnimation runningAnimation = mRunningAnimations.get(i);
                 if (runningAnimation.runner == controller) {
@@ -1152,6 +1319,9 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
 
     @VisibleForTesting
     public void dispatchAnimationEnd(WindowInsetsAnimation animation) {
+        Trace.asyncTraceEnd(Trace.TRACE_TAG_VIEW,
+                "InsetsAnimation: " + WindowInsets.Type.toString(animation.getTypeMask()),
+                animation.getTypeMask());
         mHost.dispatchWindowInsetsAnimationEnd(animation);
     }
 
@@ -1194,24 +1364,28 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
         return mHost.getSystemBarsBehavior();
     }
 
+    @Override
+    public void setAnimationsDisabled(boolean disable) {
+        mAnimationsDisabled = disable;
+    }
+
     private @InsetsType int calculateControllableTypes() {
-        if (!checkDisplayFramesForControlling()) {
-            return 0;
-        }
         @InsetsType int result = 0;
         for (int i = mSourceConsumers.size() - 1; i >= 0; i--) {
             InsetsSourceConsumer consumer = mSourceConsumers.valueAt(i);
-            if (consumer.getControl() != null) {
+            InsetsSource source = mState.peekSource(consumer.mType);
+            if (consumer.getControl() != null && source != null && source.isUserControllable()) {
                 result |= toPublicType(consumer.mType);
             }
         }
-        return result;
+        return result & ~mState.calculateUncontrollableInsetsFromFrame(mFrame);
     }
 
     /**
      * @return The types that are now animating due to a listener invoking control/show/hide
      */
     private @InsetsType int invokeControllableInsetsChangedListeners() {
+        mHandler.removeCallbacks(mInvokeControllableInsetsChangedListeners);
         mLastStartedAnimTypes = 0;
         @InsetsType int types = calculateControllableTypes();
         int size = mControllableInsetsChangedListeners.size();
@@ -1239,6 +1413,18 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
     @Override
     public void releaseSurfaceControlFromRt(SurfaceControl sc) {
         mHost.releaseSurfaceControlFromRt(sc);
+    }
+
+    @Override
+    public void reportPerceptible(int types, boolean perceptible) {
+        final ArraySet<Integer> internalTypes = toInternalType(types);
+        final int size = mSourceConsumers.size();
+        for (int i = 0; i < size; i++) {
+            final InsetsSourceConsumer consumer = mSourceConsumers.valueAt(i);
+            if (internalTypes.contains(consumer.getType())) {
+                consumer.onPerceptible(perceptible);
+            }
+        }
     }
 
     Host getHost() {

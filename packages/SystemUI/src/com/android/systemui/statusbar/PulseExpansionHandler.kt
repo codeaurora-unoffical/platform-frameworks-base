@@ -27,7 +27,6 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
-
 import com.android.systemui.Gefingerpoken
 import com.android.systemui.Interpolators
 import com.android.systemui.R
@@ -41,7 +40,6 @@ import com.android.systemui.statusbar.notification.stack.NotificationStackScroll
 import com.android.systemui.statusbar.phone.HeadsUpManagerPhone
 import com.android.systemui.statusbar.phone.KeyguardBypassController
 import com.android.systemui.statusbar.phone.ShadeController
-
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.max
@@ -121,14 +119,14 @@ constructor(
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-        return maybeStartExpansion(event)
+        return canHandleMotionEvent() && startExpansion(event)
     }
 
-    private fun maybeStartExpansion(event: MotionEvent): Boolean {
-        if (!wakeUpCoordinator.canShowPulsingHuns || qsExpanded ||
-                bouncerShowing) {
-            return false
-        }
+    private fun canHandleMotionEvent(): Boolean {
+        return wakeUpCoordinator.canShowPulsingHuns && !qsExpanded && !bouncerShowing
+    }
+
+    private fun startExpansion(event: MotionEvent): Boolean {
         if (velocityTracker == null) {
             velocityTracker = VelocityTracker.obtain()
         }
@@ -162,10 +160,12 @@ constructor(
 
             MotionEvent.ACTION_UP -> {
                 recycleVelocityTracker()
+                isExpanding = false
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 recycleVelocityTracker()
+                isExpanding = false
             }
         }
         return false
@@ -177,8 +177,13 @@ constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!isExpanding) {
-            return maybeStartExpansion(event)
+        if (!canHandleMotionEvent()) {
+            return false
+        }
+
+        if (velocityTracker == null || !isExpanding ||
+                event.actionMasked == MotionEvent.ACTION_DOWN) {
+            return startExpansion(event)
         }
         velocityTracker!!.addMovement(event)
         val y = event.y

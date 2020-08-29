@@ -33,12 +33,17 @@ import android.os.Looper;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.util.Log;
+import android.util.LruCache;
 import android.util.Size;
 import android.view.Display;
 import android.view.SurfaceControlViewHost;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
+import java.lang.ref.WeakReference;
 
 /**
  * A service that renders an inline presentation view given the {@link InlinePresentation}.
@@ -61,9 +66,30 @@ public abstract class InlineSuggestionRenderService extends Service {
     public static final String SERVICE_INTERFACE =
             "android.service.autofill.InlineSuggestionRenderService";
 
-    private final Handler mHandler = new Handler(Looper.getMainLooper(), null, true);
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper(), null, true);
 
     private IInlineSuggestionUiCallback mCallback;
+
+
+    /**
+     * A local LRU cache keeping references to the inflated {@link SurfaceControlViewHost}s, so
+     * they can be released properly when no longer used. Each view needs to be tracked separately,
+     * therefore for simplicity we use the hash code of the value object as key in the cache.
+     */
+    private final LruCache<InlineSuggestionUiImpl, Boolean> mActiveInlineSuggestions =
+            new LruCache<InlineSuggestionUiImpl, Boolean>(30) {
+                @Override
+                public void entryRemoved(boolean evicted, InlineSuggestionUiImpl key,
+                        Boolean oldValue,
+                        Boolean newValue) {
+                    if (evicted) {
+                        Log.w(TAG,
+                                "Hit max=30 entries in the cache. Releasing oldest one to make "
+                                        + "space.");
+                        key.releaseSurfaceControlViewHost();
+                    }
+                }
+            };
 
     /**
      * If the specified {@code width}/{@code height} is an exact value, then it will be returned as
@@ -106,7 +132,7 @@ public abstract class InlineSuggestionRenderService extends Service {
 
     private void handleRenderSuggestion(IInlineSuggestionUiCallback callback,
             InlinePresentation presentation, int width, int height, IBinder hostInputToken,
-            int displayId) {
+            int displayId, int userId, int sessionId) {
         if (hostInputToken == null) {
             try {
                 callback.onError();
@@ -168,9 +194,23 @@ public abstract class InlineSuggestionRenderService extends Service {
                 }
                 return true;
             });
+            final InlineSuggestionUiImpl uiImpl = new InlineSuggestionUiImpl(host, mMainHandler,
+                    userId, sessionId);
+            mActiveInlineSuggestions.put(uiImpl, true);
 
-            sendResult(callback, host.getSurfacePackage(), measuredSize.getWidth(),
-                    measuredSize.getHeight());
+            // We post the callback invocation to the end of the main thread handler queue, to make
+            // sure the callback happens after the views are drawn. This is needed because calling
+            // {@link SurfaceControlViewHost#setView()} will post a task to the main thread
+            // to draw the view asynchronously.
+            mMainHandler.post(() -> {
+                try {
+                    callback.onContent(new InlineSuggestionUiWrapper(uiImpl),
+                            host.getSurfacePackage(),
+                            measuredSize.getWidth(), measuredSize.getHeight());
+                } catch (RemoteException e) {
+                    Log.w(TAG, "RemoteException calling onContent()");
+                }
+            });
         } finally {
             updateDisplay(Display.DEFAULT_DISPLAY);
         }
@@ -181,12 +221,114 @@ public abstract class InlineSuggestionRenderService extends Service {
         callback.sendResult(rendererInfo);
     }
 
-    private void sendResult(@NonNull IInlineSuggestionUiCallback callback,
-            @Nullable SurfaceControlViewHost.SurfacePackage surface, int width, int height) {
-        try {
-            callback.onContent(surface, width, height);
-        } catch (RemoteException e) {
-            Log.w(TAG, "RemoteException calling onContent(" + surface + ")");
+    private void handleDestroySuggestionViews(int userId, int sessionId) {
+        Log.v(TAG, "handleDestroySuggestionViews called for " + userId + ":" + sessionId);
+        for (final InlineSuggestionUiImpl inlineSuggestionUi :
+                mActiveInlineSuggestions.snapshot().keySet()) {
+            if (inlineSuggestionUi.mUserId == userId
+                    && inlineSuggestionUi.mSessionId == sessionId) {
+                Log.v(TAG, "Destroy " + inlineSuggestionUi);
+                inlineSuggestionUi.releaseSurfaceControlViewHost();
+            }
+        }
+    }
+
+    /**
+     * A wrapper class around the {@link InlineSuggestionUiImpl} to ensure it's not strongly
+     * reference by the remote system server process.
+     */
+    private static final class InlineSuggestionUiWrapper extends
+            android.service.autofill.IInlineSuggestionUi.Stub {
+
+        private final WeakReference<InlineSuggestionUiImpl> mUiImpl;
+
+        InlineSuggestionUiWrapper(InlineSuggestionUiImpl uiImpl) {
+            mUiImpl = new WeakReference<>(uiImpl);
+        }
+
+        @Override
+        public void releaseSurfaceControlViewHost() {
+            final InlineSuggestionUiImpl uiImpl = mUiImpl.get();
+            if (uiImpl != null) {
+                uiImpl.releaseSurfaceControlViewHost();
+            }
+        }
+
+        @Override
+        public void getSurfacePackage(ISurfacePackageResultCallback callback) {
+            final InlineSuggestionUiImpl uiImpl = mUiImpl.get();
+            if (uiImpl != null) {
+                uiImpl.getSurfacePackage(callback);
+            }
+        }
+    }
+
+    /**
+     * Keeps track of a SurfaceControlViewHost to ensure it's released when its lifecycle ends.
+     *
+     * <p>This class is thread safe, because all the outside calls are piped into a single
+     *  handler thread to be processed.
+     */
+    private final class InlineSuggestionUiImpl {
+
+        @Nullable
+        private SurfaceControlViewHost mViewHost;
+        @NonNull
+        private final Handler mHandler;
+        private final int mUserId;
+        private final int mSessionId;
+
+        InlineSuggestionUiImpl(SurfaceControlViewHost viewHost, Handler handler, int userId,
+                int sessionId) {
+            this.mViewHost = viewHost;
+            this.mHandler = handler;
+            this.mUserId = userId;
+            this.mSessionId = sessionId;
+        }
+
+        /**
+         * Call {@link SurfaceControlViewHost#release()} to release it. After this, this view is
+         * not usable, and any further calls to the
+         * {@link #getSurfacePackage(ISurfacePackageResultCallback)} will get {@code null} result.
+         */
+        public void releaseSurfaceControlViewHost() {
+            mHandler.post(() -> {
+                if (mViewHost == null) {
+                    return;
+                }
+                Log.v(TAG, "Releasing inline suggestion view host");
+                mViewHost.release();
+                mViewHost = null;
+                InlineSuggestionRenderService.this.mActiveInlineSuggestions.remove(
+                        InlineSuggestionUiImpl.this);
+                Log.v(TAG, "Removed the inline suggestion from the cache, current size="
+                        + InlineSuggestionRenderService.this.mActiveInlineSuggestions.size());
+            });
+        }
+
+        /**
+         * Sends back a new {@link android.view.SurfaceControlViewHost.SurfacePackage} if the view
+         * is not released, {@code null} otherwise.
+         */
+        public void getSurfacePackage(ISurfacePackageResultCallback callback) {
+            Log.d(TAG, "getSurfacePackage");
+            mHandler.post(() -> {
+                try {
+                    callback.onResult(mViewHost == null ? null : mViewHost.getSurfacePackage());
+                } catch (RemoteException e) {
+                    Log.w(TAG, "RemoteException calling onSurfacePackage");
+                }
+            });
+        }
+    }
+
+    /** @hide */
+    @Override
+    protected final void dump(@NonNull FileDescriptor fd, @NonNull PrintWriter pw,
+            @NonNull String[] args) {
+        pw.println("mActiveInlineSuggestions: " + mActiveInlineSuggestions.size());
+        for (InlineSuggestionUiImpl impl : mActiveInlineSuggestions.snapshot().keySet()) {
+            pw.printf("ui: [%s] - [%d]  [%d]\n", impl, impl.mUserId, impl.mSessionId);
         }
     }
 
@@ -199,18 +341,25 @@ public abstract class InlineSuggestionRenderService extends Service {
                 @Override
                 public void renderSuggestion(@NonNull IInlineSuggestionUiCallback callback,
                         @NonNull InlinePresentation presentation, int width, int height,
-                        @Nullable IBinder hostInputToken, int displayId) {
-                    mHandler.sendMessage(
+                        @Nullable IBinder hostInputToken, int displayId, int userId,
+                        int sessionId) {
+                    mMainHandler.sendMessage(
                             obtainMessage(InlineSuggestionRenderService::handleRenderSuggestion,
                                     InlineSuggestionRenderService.this, callback, presentation,
-                                    width, height, hostInputToken, displayId));
+                                    width, height, hostInputToken, displayId, userId, sessionId));
                 }
 
                 @Override
                 public void getInlineSuggestionsRendererInfo(@NonNull RemoteCallback callback) {
-                    mHandler.sendMessage(obtainMessage(
+                    mMainHandler.sendMessage(obtainMessage(
                             InlineSuggestionRenderService::handleGetInlineSuggestionsRendererInfo,
                             InlineSuggestionRenderService.this, callback));
+                }
+                @Override
+                public void destroySuggestionViews(int userId, int sessionId) {
+                    mMainHandler.sendMessage(obtainMessage(
+                            InlineSuggestionRenderService::handleDestroySuggestionViews,
+                            InlineSuggestionRenderService.this, userId, sessionId));
                 }
             }.asBinder();
         }

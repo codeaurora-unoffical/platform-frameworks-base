@@ -20,10 +20,12 @@ import android.os.RemoteException
 import android.service.notification.NotificationListenerService.RankingMap
 import com.android.systemui.log.LogBuffer
 import com.android.systemui.log.LogLevel.DEBUG
+import com.android.systemui.log.LogLevel.ERROR
 import com.android.systemui.log.LogLevel.INFO
 import com.android.systemui.log.LogLevel.WARNING
 import com.android.systemui.log.LogLevel.WTF
 import com.android.systemui.log.dagger.NotificationLog
+import com.android.systemui.statusbar.notification.collection.NotificationEntry
 import javax.inject.Inject
 
 class NotifCollectionLogger @Inject constructor(
@@ -63,11 +65,43 @@ class NotifCollectionLogger @Inject constructor(
         })
     }
 
+    fun logNotifReleased(key: String) {
+        buffer.log(TAG, INFO, {
+            str1 = key
+        }, {
+            "RELEASED $str1"
+        })
+    }
+
     fun logNotifDismissed(key: String) {
         buffer.log(TAG, INFO, {
             str1 = key
         }, {
             "DISMISSED $str1"
+        })
+    }
+
+    fun logChildDismissed(entry: NotificationEntry) {
+        buffer.log(TAG, DEBUG, {
+            str1 = entry.key
+        }, {
+            "CHILD DISMISSED (inferred): $str1"
+        })
+    }
+
+    fun logDismissAll(userId: Int) {
+        buffer.log(TAG, INFO, {
+            int1 = userId
+        }, {
+            "DISMISS ALL notifications for user $int1"
+        })
+    }
+
+    fun logDismissOnAlreadyCanceledEntry(entry: NotificationEntry) {
+        buffer.log(TAG, DEBUG, {
+            str1 = entry.key
+        }, {
+            "Dismiss on $str1, which was already canceled. Trying to remove..."
         })
     }
 
@@ -84,6 +118,14 @@ class NotifCollectionLogger @Inject constructor(
             str1 = key
         }, {
             "CLEAR ALL DISMISSAL INTERCEPTED $str1"
+        })
+    }
+
+    fun logNoNotificationToRemoveWithKey(key: String) {
+        buffer.log(TAG, ERROR, {
+            str1 = key
+        }, {
+            "No notification to remove with key $str1"
         })
     }
 
@@ -132,6 +174,14 @@ class NotifCollectionLogger @Inject constructor(
             int1 = totalExtenders
         }, {
             "LIFETIME EXTENSION ENDED for $str1 by '$str2'; $int1 remaining extensions"
+        })
+    }
+
+    fun logIgnoredError(message: String?) {
+        buffer.log(TAG, ERROR, {
+            str1 = message
+        }, {
+            "ERROR suppressed due to initialization forgiveness: $str1"
         })
     }
 }

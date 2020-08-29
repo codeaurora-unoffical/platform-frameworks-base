@@ -16,6 +16,7 @@
 
 package com.android.networkstack.tethering;
 
+import android.app.usage.NetworkStatsManager;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 import android.net.INetd;
@@ -25,6 +26,8 @@ import android.net.util.SharedLog;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemProperties;
+import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 
@@ -40,11 +43,32 @@ import java.util.ArrayList;
  */
 public abstract class TetheringDependencies {
     /**
+     * Get a reference to the BpfCoordinator to be used by tethering.
+     */
+    public @NonNull BpfCoordinator getBpfCoordinator(
+            @NonNull BpfCoordinator.Dependencies deps) {
+        return new BpfCoordinator(deps);
+    }
+
+    /**
      * Get a reference to the offload hardware interface to be used by tethering.
      */
     public OffloadHardwareInterface getOffloadHardwareInterface(Handler h, SharedLog log) {
         return new OffloadHardwareInterface(h, log);
     }
+
+    /**
+     * Get a reference to the offload controller to be used by tethering.
+     */
+    @NonNull
+    public OffloadController getOffloadController(@NonNull Handler h,
+            @NonNull SharedLog log, @NonNull OffloadController.Dependencies deps) {
+        final NetworkStatsManager statsManager =
+                (NetworkStatsManager) getContext().getSystemService(Context.NETWORK_STATS_SERVICE);
+        return new OffloadController(h, getOffloadHardwareInterface(h, log),
+                getContext().getContentResolver(), statsManager, log, deps);
+    }
+
 
     /**
      * Get a reference to the UpstreamNetworkMonitor to be used by tethering.
@@ -82,9 +106,9 @@ public abstract class TetheringDependencies {
     /**
      * Get a reference to the EntitlementManager to be used by tethering.
      */
-    public EntitlementManager getEntitlementManager(Context ctx, StateMachine target,
-            SharedLog log, int what) {
-        return new EntitlementManager(ctx, target, log, what);
+    public EntitlementManager getEntitlementManager(Context ctx, Handler h, SharedLog log,
+            Runnable callback) {
+        return new EntitlementManager(ctx, h, log, callback);
     }
 
     /**
@@ -125,4 +149,11 @@ public abstract class TetheringDependencies {
      * Get a reference to BluetoothAdapter to be used by tethering.
      */
     public abstract BluetoothAdapter getBluetoothAdapter();
+
+    /**
+     * Get SystemProperties which indicate whether tethering is denied.
+     */
+    public boolean isTetheringDenied() {
+        return TextUtils.equals(SystemProperties.get("ro.tether.denied"), "true");
+    }
 }

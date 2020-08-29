@@ -204,7 +204,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
     // Notification title and text for setManagedProfileMaximumTimeOff tests:
     private static final String PROFILE_OFF_SUSPENSION_TITLE = "suspension_title";
     private static final String PROFILE_OFF_SUSPENSION_TEXT = "suspension_text";
-    private static final String PROFILE_OFF_SUSPENSION_TOMORROW_TEXT = "suspension_tomorrow_text";
+    private static final String PROFILE_OFF_SUSPENSION_SOON_TEXT = "suspension_tomorrow_text";
 
     @Override
     protected void setUp() throws Exception {
@@ -254,7 +254,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
     @Override
     protected void tearDown() throws Exception {
-        flushTasks();
+        flushTasks(dpms);
         getMockTransferMetadataManager().deleteMetadataFile();
         super.tearDown();
     }
@@ -1997,20 +1997,9 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
     private static final Set<String> PROFILE_OWNER_ORGANIZATION_OWNED_GLOBAL_RESTRICTIONS =
             Sets.newSet(
-                    UserManager.DISALLOW_CONFIG_DATE_TIME,
-                    UserManager.DISALLOW_ADD_USER,
-                    UserManager.DISALLOW_BLUETOOTH_SHARING,
-                    UserManager.DISALLOW_CONFIG_CELL_BROADCASTS,
-                    UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS,
-                    UserManager.DISALLOW_CONFIG_PRIVATE_DNS,
-                    UserManager.DISALLOW_CONFIG_TETHERING,
-                    UserManager.DISALLOW_DATA_ROAMING,
-                    UserManager.DISALLOW_SAFE_BOOT,
-                    UserManager.DISALLOW_SMS,
-                    UserManager.DISALLOW_USB_FILE_TRANSFER,
                     UserManager.DISALLOW_AIRPLANE_MODE,
-                    UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
-                    UserManager.DISALLOW_UNMUTE_MICROPHONE
+                    UserManager.DISALLOW_CONFIG_DATE_TIME,
+                    UserManager.DISALLOW_CONFIG_PRIVATE_DNS
             );
 
     private static final Set<String> PROFILE_OWNER_ORGANIZATION_OWNED_LOCAL_RESTRICTIONS =
@@ -2022,7 +2011,17 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                     UserManager.DISALLOW_CONTENT_SUGGESTIONS,
                     UserManager.DISALLOW_DEBUGGING_FEATURES,
                     UserManager.DISALLOW_SHARE_LOCATION,
-                    UserManager.DISALLOW_OUTGOING_CALLS
+                    UserManager.DISALLOW_OUTGOING_CALLS,
+                    UserManager.DISALLOW_BLUETOOTH_SHARING,
+                    UserManager.DISALLOW_CONFIG_CELL_BROADCASTS,
+                    UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS,
+                    UserManager.DISALLOW_CONFIG_TETHERING,
+                    UserManager.DISALLOW_DATA_ROAMING,
+                    UserManager.DISALLOW_SAFE_BOOT,
+                    UserManager.DISALLOW_SMS,
+                    UserManager.DISALLOW_USB_FILE_TRANSFER,
+                    UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
+                    UserManager.DISALLOW_UNMUTE_MICROPHONE
             );
 
     public void testSetUserRestriction_asPoOfOrgOwnedDevice() throws Exception {
@@ -2046,8 +2045,9 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         parentDpm.setCameraDisabled(admin1, true);
         verify(getServices().userManagerInternal).setDevicePolicyUserRestrictions(
                 eq(CALLER_USER_HANDLE),
-                MockUtils.checkUserRestrictions(UserManager.DISALLOW_CAMERA),
-                MockUtils.checkUserRestrictions(CALLER_USER_HANDLE),
+                MockUtils.checkUserRestrictions(),
+                MockUtils.checkUserRestrictions(UserHandle.USER_SYSTEM,
+                        UserManager.DISALLOW_CAMERA),
                 eq(false));
         DpmTestUtils.assertRestrictions(
                 DpmTestUtils.newRestrictions(UserManager.DISALLOW_CAMERA),
@@ -4005,11 +4005,46 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         // Any caller should be able to call this method.
         assertFalse(dpm.isOrganizationOwnedDeviceWithManagedProfile());
         configureProfileOwnerOfOrgOwnedDevice(admin1, CALLER_USER_HANDLE);
+
+        verify(getServices().userManager).setUserRestriction(
+                eq(UserManager.DISALLOW_ADD_USER),
+                eq(true),
+                eq(UserHandle.of(UserHandle.USER_SYSTEM)));
+
         assertTrue(dpm.isOrganizationOwnedDeviceWithManagedProfile());
 
         // A random caller from another user should also be able to get the right result.
         mContext.binder.callingUid = DpmMockContext.ANOTHER_UID;
         assertTrue(dpm.isOrganizationOwnedDeviceWithManagedProfile());
+    }
+
+    public void testMarkOrganizationOwnedDevice_baseRestrictionsAdded() throws Exception {
+        addManagedProfile(admin1, DpmMockContext.CALLER_UID, admin1);
+
+        configureProfileOwnerOfOrgOwnedDevice(admin1, CALLER_USER_HANDLE);
+
+        // Base restriction DISALLOW_REMOVE_MANAGED_PROFILE added
+        verify(getServices().userManager).setUserRestriction(
+                eq(UserManager.DISALLOW_REMOVE_MANAGED_PROFILE),
+                eq(true),
+                eq(UserHandle.of(UserHandle.USER_SYSTEM)));
+
+        // Base restriction DISALLOW_ADD_USER added
+        verify(getServices().userManager).setUserRestriction(
+                eq(UserManager.DISALLOW_ADD_USER),
+                eq(true),
+                eq(UserHandle.of(UserHandle.USER_SYSTEM)));
+
+        // Assert base restrictions cannot be added or removed by admin
+        assertExpectException(SecurityException.class, null, () ->
+                parentDpm.addUserRestriction(admin1, UserManager.DISALLOW_REMOVE_MANAGED_PROFILE));
+        assertExpectException(SecurityException.class, null, () ->
+                parentDpm.clearUserRestriction(admin1,
+                        UserManager.DISALLOW_REMOVE_MANAGED_PROFILE));
+        assertExpectException(SecurityException.class, null, () ->
+                parentDpm.addUserRestriction(admin1, UserManager.DISALLOW_ADD_USER));
+        assertExpectException(SecurityException.class, null, () ->
+                parentDpm.clearUserRestriction(admin1, UserManager.DISALLOW_ADD_USER));
     }
 
     public void testSetTime() throws Exception {
@@ -4926,7 +4961,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         // CertificateMonitor.updateInstalledCertificates is called on the background thread,
         // let it finish with system uid, otherwise it will throw and crash.
-        flushTasks();
+        flushTasks(dpms);
 
         mContext.binder.restoreCallingIdentity(ident);
     }
@@ -5424,7 +5459,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         getServices().injectBroadcast(mServiceContext, new Intent(KeyChain.ACTION_TRUST_STORE_CHANGED)
                 .putExtra(Intent.EXTRA_USER_HANDLE, callerUser.getIdentifier()),
                 callerUser.getIdentifier());
-        flushTasks();
+        flushTasks(dpms);
 
         final List<String> ownerInstalledCaCerts = new ArrayList<>();
 
@@ -5451,7 +5486,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         getServices().injectBroadcast(mServiceContext, new Intent(KeyChain.ACTION_TRUST_STORE_CHANGED)
                 .putExtra(Intent.EXTRA_USER_HANDLE, callerUser.getIdentifier()),
                 callerUser.getIdentifier());
-        flushTasks();
+        flushTasks(dpms);
 
         // Verify that the CA cert is no longer reported as installed by the Device Owner / Profile
         // Owner.
@@ -5495,7 +5530,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         getServices().injectBroadcast(mServiceContext, new Intent(KeyChain.ACTION_TRUST_STORE_CHANGED)
                 .putExtra(Intent.EXTRA_USER_HANDLE, callerUser.getIdentifier()),
                 callerUser.getIdentifier());
-        flushTasks();
+        flushTasks(dpms);
 
         // Removing the Profile Owner should clear the information on which CA certs were installed
         runAsCaller(admin1Context, dpms, dpm -> dpm.clearProfileOwner(admin1));
@@ -6276,7 +6311,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         clearInvocations(getServices().alarmManager);
 
         setUserUnlocked(CALLER_USER_HANDLE, false);
-        sendBroadcastWithUser(Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
 
         // Verify the alarm was scheduled for time when the warning should be shown.
         verify(getServices().alarmManager, times(1))
@@ -6290,14 +6325,14 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         // Pretend the alarm went off.
         dpms.mMockInjector.setSystemCurrentTimeMillis(PROFILE_OFF_WARNING_TIME + 10);
-        sendBroadcastWithUser(ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
 
         // Verify the alarm was scheduled for the actual deadline this time.
         verify(getServices().alarmManager, times(1)).set(anyInt(), eq(PROFILE_OFF_DEADLINE), any());
         // Now the user should see a warning notification.
         verify(getServices().notificationManager, times(1))
                 .notify(anyInt(), argThat(hasExtra(EXTRA_TITLE, PROFILE_OFF_SUSPENSION_TITLE,
-                        EXTRA_TEXT, PROFILE_OFF_SUSPENSION_TOMORROW_TEXT)));
+                        EXTRA_TEXT, PROFILE_OFF_SUSPENSION_SOON_TEXT)));
         // Apps shouldn't be suspended yet.
         verifyZeroInteractions(getServices().ipackageManager);
         clearInvocations(getServices().alarmManager);
@@ -6305,7 +6340,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         // Pretend the alarm went off.
         dpms.mMockInjector.setSystemCurrentTimeMillis(PROFILE_OFF_DEADLINE + 10);
-        sendBroadcastWithUser(ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
 
         // Verify the alarm was not set.
         verifyZeroInteractions(getServices().alarmManager);
@@ -6329,10 +6364,10 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         mContext.binder.callingUid = DpmMockContext.SYSTEM_UID;
         setUserUnlocked(CALLER_USER_HANDLE, false);
-        sendBroadcastWithUser(Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
         clearInvocations(getServices().alarmManager);
         setUserUnlocked(CALLER_USER_HANDLE, true);
-        sendBroadcastWithUser(Intent.ACTION_USER_UNLOCKED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_UNLOCKED, CALLER_USER_HANDLE);
 
         // Verify that the alarm got discharged.
         verify(getServices().alarmManager, times(1)).cancel((PendingIntent) null);
@@ -6349,16 +6384,16 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         mContext.binder.callingUid = DpmMockContext.SYSTEM_UID;
         setUserUnlocked(CALLER_USER_HANDLE, false);
-        sendBroadcastWithUser(Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
 
         // Pretend the alarm went off.
         dpms.mMockInjector.setSystemCurrentTimeMillis(PROFILE_OFF_WARNING_TIME + 10);
-        sendBroadcastWithUser(ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
 
         clearInvocations(getServices().alarmManager);
         clearInvocations(getServices().notificationManager);
         setUserUnlocked(CALLER_USER_HANDLE, true);
-        sendBroadcastWithUser(Intent.ACTION_USER_UNLOCKED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_UNLOCKED, CALLER_USER_HANDLE);
 
         // Verify that the alarm got discharged.
         verify(getServices().alarmManager, times(1)).cancel((PendingIntent) null);
@@ -6378,24 +6413,24 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         mContext.binder.callingUid = DpmMockContext.SYSTEM_UID;
         setUserUnlocked(CALLER_USER_HANDLE, false);
-        sendBroadcastWithUser(Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_STOPPED, CALLER_USER_HANDLE);
 
         // Pretend the alarm went off after the deadline.
         dpms.mMockInjector.setSystemCurrentTimeMillis(PROFILE_OFF_DEADLINE + 10);
-        sendBroadcastWithUser(ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, ACTION_PROFILE_OFF_DEADLINE, CALLER_USER_HANDLE);
 
         clearInvocations(getServices().alarmManager);
         clearInvocations(getServices().notificationManager);
         clearInvocations(getServices().ipackageManager);
 
         // Pretend the user clicked on the "apps suspended" notification to turn the profile on.
-        sendBroadcastWithUser(ACTION_TURN_PROFILE_ON_NOTIFICATION, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, ACTION_TURN_PROFILE_ON_NOTIFICATION, CALLER_USER_HANDLE);
         // Verify that the profile is turned on.
         verify(getServices().userManager, times(1))
                 .requestQuietModeEnabled(eq(false), eq(UserHandle.of(CALLER_USER_HANDLE)));
 
         setUserUnlocked(CALLER_USER_HANDLE, true);
-        sendBroadcastWithUser(Intent.ACTION_USER_UNLOCKED, CALLER_USER_HANDLE);
+        sendBroadcastWithUser(dpms, Intent.ACTION_USER_UNLOCKED, CALLER_USER_HANDLE);
 
         // Verify that the notification is removed (at this point DPC should show it).
         verify(getServices().notificationManager, times(1))
@@ -6407,13 +6442,16 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         verify(mContext.spiedContext).startActivityAsUser(
                 MockUtils.checkIntentAction(ACTION_CHECK_POLICY_COMPLIANCE),
                 MockUtils.checkUserHandle(CALLER_USER_HANDLE));
-    }
 
-    private void sendBroadcastWithUser(String action, int userHandle) throws Exception {
-        final Intent intent = new Intent(action);
-        intent.putExtra(Intent.EXTRA_USER_HANDLE, userHandle);
-        getServices().injectBroadcast(mServiceContext, intent, userHandle);
-        flushTasks();
+        // Verify that correct suspension reason is reported to the DPC.
+        mContext.binder.callingUid = DpmMockContext.CALLER_UID;
+        assertThat(dpm.getPersonalAppsSuspendedReasons(admin1))
+                .isEqualTo(DevicePolicyManager.PERSONAL_APPS_SUSPENDED_PROFILE_TIMEOUT);
+
+        // Verify that rolling time back doesn't change the status.
+        dpms.mMockInjector.setSystemCurrentTimeMillis(PROFILE_OFF_START);
+        assertThat(dpm.getPersonalAppsSuspendedReasons(admin1))
+                .isEqualTo(DevicePolicyManager.PERSONAL_APPS_SUSPENDED_PROFILE_TIMEOUT);
     }
 
     private void setUserUnlocked(int userHandle, boolean unlocked) {
@@ -6426,10 +6464,6 @@ public class DevicePolicyManagerTest extends DpmTestBase {
 
         when(getServices().userManager.isUserUnlocked()).thenReturn(true);
 
-        // Pretend our admin handles CHECK_POLICY_COMPLIANCE intent.
-        final Intent intent = new Intent(ACTION_CHECK_POLICY_COMPLIANCE);
-        intent.setPackage(admin1.getPackageName());
-
         doReturn(Collections.singletonList(new ResolveInfo()))
                 .when(getServices().packageManager).queryIntentActivitiesAsUser(
                         any(Intent.class), anyInt(), eq(CALLER_USER_HANDLE));
@@ -6438,7 +6472,7 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         // To allow creation of Notification via Notification.Builder
         mContext.applicationInfo = mRealTestContext.getApplicationInfo();
 
-        // Setup notification titles.
+        // Setup resources to render notification titles and texts.
         when(mServiceContext.resources
                 .getString(R.string.personal_apps_suspension_title))
                 .thenReturn(PROFILE_OFF_SUSPENSION_TITLE);
@@ -6446,14 +6480,19 @@ public class DevicePolicyManagerTest extends DpmTestBase {
                 .getString(R.string.personal_apps_suspension_text))
                 .thenReturn(PROFILE_OFF_SUSPENSION_TEXT);
         when(mServiceContext.resources
-                .getString(R.string.personal_apps_suspension_tomorrow_text))
-                .thenReturn(PROFILE_OFF_SUSPENSION_TOMORROW_TEXT);
+                .getString(eq(R.string.personal_apps_suspension_soon_text),
+                        anyString(), anyString(), anyInt()))
+                .thenReturn(PROFILE_OFF_SUSPENSION_SOON_TEXT);
+
+        // Make locale available for date formatting:
+        when(mServiceContext.resources.getConfiguration())
+                .thenReturn(mRealTestContext.getResources().getConfiguration());
 
         clearInvocations(getServices().ipackageManager);
     }
 
     private static Matcher<Notification> hasExtra(String... extras) {
-        assertEquals("Odd numebr of extra key-values", 0, extras.length % 2);
+        assertEquals("Odd number of extra key-values", 0, extras.length % 2);
         return new BaseMatcher<Notification>() {
             @Override
             public boolean matches(Object item) {
@@ -6624,12 +6663,4 @@ public class DevicePolicyManagerTest extends DpmTestBase {
         return new StringParceledListSlice(Arrays.asList(s));
     }
 
-    private void flushTasks() throws Exception {
-        dpms.mHandler.runWithScissors(() -> {}, 0 /*now*/);
-        dpms.mBackgroundHandler.runWithScissors(() -> {}, 0 /*now*/);
-
-        // We can't let exceptions happen on the background thread. Throw them here if they happen
-        // so they still cause the test to fail despite being suppressed.
-        getServices().rethrowBackgroundBroadcastExceptions();
-    }
 }

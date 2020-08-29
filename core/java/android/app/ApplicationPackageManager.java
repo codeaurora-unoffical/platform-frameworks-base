@@ -139,6 +139,10 @@ public class ApplicationPackageManager extends PackageManager {
     public static final String APP_PERMISSION_BUTTON_ALLOW_ALWAYS =
             "app_permission_button_allow_always";
 
+    // Name of the package which the permission controller's resources are in.
+    public static final String PERMISSION_CONTROLLER_RESOURCE_PACKAGE =
+            "com.android.permissioncontroller";
+
     private final Object mLock = new Object();
 
     @GuardedBy("mLock")
@@ -759,23 +763,24 @@ public class ApplicationPackageManager extends PackageManager {
 
     @Override
     public void revokeRuntimePermission(String packageName, String permName, UserHandle user) {
-        if (DEBUG_TRACE_PERMISSION_UPDATES
-                && shouldTraceGrant(packageName, permName, user.getIdentifier())) {
-            Log.i(TAG, "App " + mContext.getPackageName() + " is revoking " + packageName + " "
-                    + permName + " for user " + user.getIdentifier(), new RuntimeException());
-        }
-        try {
-            mPermissionManager
-                    .revokeRuntimePermission(packageName, permName, user.getIdentifier());
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+        revokeRuntimePermission(packageName, permName, user, null);
     }
 
     @Override
     public void revokeRuntimePermission(String packageName, String permName, UserHandle user,
             String reason) {
-        // TODO evanseverson: impl
+        if (DEBUG_TRACE_PERMISSION_UPDATES
+                && shouldTraceGrant(packageName, permName, user.getIdentifier())) {
+            Log.i(TAG, "App " + mContext.getPackageName() + " is revoking " + packageName + " "
+                    + permName + " for user " + user.getIdentifier() + " with reason " + reason,
+                    new RuntimeException());
+        }
+        try {
+            mPermissionManager
+                    .revokeRuntimePermission(packageName, permName, user.getIdentifier(), reason);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     @Override
@@ -893,8 +898,7 @@ public class ApplicationPackageManager extends PackageManager {
                     mContext.createPackageContext(permissionController, 0);
 
             int textId = context.getResources().getIdentifier(APP_PERMISSION_BUTTON_ALLOW_ALWAYS,
-                    "string", "com.android.permissioncontroller");
-//                    permissionController); STOPSHIP b/147434671
+                    "string", PERMISSION_CONTROLLER_RESOURCE_PACKAGE);
             if (textId != 0) {
                 return context.getText(textId);
             }
@@ -1574,7 +1578,7 @@ public class ApplicationPackageManager extends PackageManager {
         }
         Drawable badge = new LauncherIcons(mContext).getBadgeDrawable(
                 getUserManager().getUserIconBadgeResId(user.getIdentifier()),
-                getUserBadgeColor(user));
+                getUserBadgeColor(user, false));
         return getBadgedDrawable(icon, badge, null, true);
     }
 
@@ -1588,8 +1592,16 @@ public class ApplicationPackageManager extends PackageManager {
         return getBadgedDrawable(drawable, badgeDrawable, badgeLocation, true);
     }
 
-    /** Returns the color of the user's actual badge (not the badge's shadow). */
-    private int getUserBadgeColor(UserHandle user) {
+    /**
+     * Returns the color of the user's actual badge (not the badge's shadow).
+     * @param checkTheme whether to check the theme to determine the badge color. This should be
+     *                   true if the background is determined by the theme. Otherwise, if
+     *                   checkTheme is false, returns the color assuming a light background.
+     */
+    private int getUserBadgeColor(UserHandle user, boolean checkTheme) {
+        if (checkTheme && mContext.getResources().getConfiguration().isNightModeActive()) {
+            return getUserManager().getUserBadgeDarkColor(user.getIdentifier());
+        }
         return getUserManager().getUserBadgeColor(user.getIdentifier());
     }
 
@@ -1603,11 +1615,14 @@ public class ApplicationPackageManager extends PackageManager {
         }
         Drawable badgeForeground = getDrawableForDensity(
                 getUserManager().getUserBadgeResId(user.getIdentifier()), density);
-        badgeForeground.setTint(getUserBadgeColor(user));
+        badgeForeground.setTint(getUserBadgeColor(user, false));
         Drawable badge = new LayerDrawable(new Drawable[] {badgeColor, badgeForeground });
         return badge;
     }
 
+    /**
+     * Returns the badge color based on whether device has dark theme enabled or not.
+     */
     @Override
     public Drawable getUserBadgeForDensityNoBackground(UserHandle user, int density) {
         if (!hasUserBadge(user.getIdentifier())) {
@@ -1616,7 +1631,7 @@ public class ApplicationPackageManager extends PackageManager {
         Drawable badge = getDrawableForDensity(
                 getUserManager().getUserBadgeNoBackgroundResId(user.getIdentifier()), density);
         if (badge != null) {
-            badge.setTint(getUserBadgeColor(user));
+            badge.setTint(getUserBadgeColor(user, true));
         }
         return badge;
     }

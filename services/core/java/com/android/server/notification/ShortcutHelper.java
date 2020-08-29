@@ -28,6 +28,7 @@ import android.content.pm.ShortcutServiceInternal;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.UserHandle;
+import android.text.TextUtils;
 import android.util.Slog;
 
 import com.android.internal.annotations.VisibleForTesting;
@@ -36,7 +37,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Helper for querying shortcuts.
@@ -99,9 +102,13 @@ public class ShortcutHelper {
             HashMap<String, String> shortcutBubbles = mActiveShortcutBubbles.get(packageName);
             ArrayList<String> bubbleKeysToRemove = new ArrayList<>();
             if (shortcutBubbles != null) {
+                // Copy to avoid a concurrent modification exception when we remove bubbles from
+                // shortcutBubbles.
+                final Set<String> shortcutIds = new HashSet<>(shortcutBubbles.keySet());
+
                 // If we can't find one of our bubbles in the shortcut list, that bubble needs
                 // to be removed.
-                for (String shortcutId : shortcutBubbles.keySet()) {
+                for (String shortcutId : shortcutIds) {
                     boolean foundShortcut = false;
                     for (int i = 0; i < shortcuts.size(); i++) {
                         if (shortcuts.get(i).getId().equals(shortcutId)) {
@@ -111,6 +118,15 @@ public class ShortcutHelper {
                     }
                     if (!foundShortcut) {
                         bubbleKeysToRemove.add(shortcutBubbles.get(shortcutId));
+                        shortcutBubbles.remove(shortcutId);
+                        if (shortcutBubbles.isEmpty()) {
+                            mActiveShortcutBubbles.remove(packageName);
+                            if (mLauncherAppsCallbackRegistered
+                                    && mActiveShortcutBubbles.isEmpty()) {
+                                mLauncherAppsService.unregisterCallback(mLauncherAppsCallback);
+                                mLauncherAppsCallbackRegistered = false;
+                            }
+                        }
                     }
                 }
             }
@@ -198,7 +214,7 @@ public class ShortcutHelper {
         if (shortcutInfo.isLongLived() && !shortcutInfo.isCached()) {
             mShortcutServiceInternal.cacheShortcuts(user.getIdentifier(), "android",
                     shortcutInfo.getPackage(), Collections.singletonList(shortcutInfo.getId()),
-                    shortcutInfo.getUserId());
+                    shortcutInfo.getUserId(), ShortcutInfo.FLAG_CACHED_NOTIFICATIONS);
         }
     }
 
@@ -209,15 +225,16 @@ public class ShortcutHelper {
      * @param removedNotification true if this notification is being removed
      * @param handler handler to register the callback with
      */
-    void maybeListenForShortcutChangesForBubbles(NotificationRecord r, boolean removedNotification,
+    void maybeListenForShortcutChangesForBubbles(NotificationRecord r,
+            boolean removedNotification,
             Handler handler) {
         final String shortcutId = r.getNotification().getBubbleMetadata() != null
                 ? r.getNotification().getBubbleMetadata().getShortcutId()
                 : null;
-        if (shortcutId == null) {
-            return;
-        }
-        if (r.getNotification().isBubbleNotification() && !removedNotification) {
+        if (!removedNotification
+                && !TextUtils.isEmpty(shortcutId)
+                && r.getShortcutInfo() != null
+                && r.getShortcutInfo().getId().equals(shortcutId)) {
             // Must track shortcut based bubbles in case the shortcut is removed
             HashMap<String, String> packageBubbles = mActiveShortcutBubbles.get(
                     r.getSbn().getPackageName());
@@ -235,10 +252,24 @@ public class ShortcutHelper {
             HashMap<String, String> packageBubbles = mActiveShortcutBubbles.get(
                     r.getSbn().getPackageName());
             if (packageBubbles != null) {
-                packageBubbles.remove(shortcutId);
-            }
-            if (packageBubbles != null && packageBubbles.isEmpty()) {
-                mActiveShortcutBubbles.remove(r.getSbn().getPackageName());
+                if (!TextUtils.isEmpty(shortcutId)) {
+                    packageBubbles.remove(shortcutId);
+                } else {
+                    // Copy the shortcut IDs to avoid a concurrent modification exception.
+                    final Set<String> shortcutIds = new HashSet<>(packageBubbles.keySet());
+
+                    // Check if there was a matching entry
+                    for (String pkgShortcutId : shortcutIds) {
+                        String entryKey = packageBubbles.get(pkgShortcutId);
+                        if (r.getKey().equals(entryKey)) {
+                            // No longer has shortcut id so remove it
+                            packageBubbles.remove(pkgShortcutId);
+                        }
+                    }
+                }
+                if (packageBubbles.isEmpty()) {
+                    mActiveShortcutBubbles.remove(r.getSbn().getPackageName());
+                }
             }
             if (mLauncherAppsCallbackRegistered && mActiveShortcutBubbles.isEmpty()) {
                 mLauncherAppsService.unregisterCallback(mLauncherAppsCallback);

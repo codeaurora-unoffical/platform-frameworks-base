@@ -84,6 +84,7 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
     private final boolean mKeyguardScreenRotation;
     private final long mLockScreenDisplayTimeout;
     private final Display.Mode mKeyguardDisplayMode;
+    private final KeyguardViewMediator mKeyguardViewMediator;
     private final KeyguardBypassController mKeyguardBypassController;
     private ViewGroup mNotificationShadeView;
     private LayoutParams mLp;
@@ -104,6 +105,7 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
             IActivityManager activityManager, DozeParameters dozeParameters,
             StatusBarStateController statusBarStateController,
             ConfigurationController configurationController,
+            KeyguardViewMediator keyguardViewMediator,
             KeyguardBypassController keyguardBypassController, SysuiColorExtractor colorExtractor,
             DumpManager dumpManager) {
         mContext = context;
@@ -113,6 +115,7 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         mDozeParameters = dozeParameters;
         mScreenBrightnessDoze = mDozeParameters.getScreenBrightnessDoze();
         mLpChanged = new LayoutParams();
+        mKeyguardViewMediator = keyguardViewMediator;
         mKeyguardBypassController = keyguardBypassController;
         mColorExtractor = colorExtractor;
         dumpManager.registerDumpable(getClass().getName(), this);
@@ -202,6 +205,11 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         mWindowManager.addView(mNotificationShadeView, mLp);
         mLpChanged.copyFrom(mLp);
         onThemeChanged();
+
+        // Make the state consistent with KeyguardViewMediator#setupLocked during initialization.
+        if (mKeyguardViewMediator.isShowingAndNotOccluded()) {
+            setKeyguardShowing(true);
+        }
     }
 
     public void setNotificationShadeView(ViewGroup view) {
@@ -279,7 +287,7 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         } else if (state.isKeyguardShowingAndNotOccluded() || panelFocusable) {
             mLpChanged.flags &= ~LayoutParams.FLAG_NOT_FOCUSABLE;
             // Make sure to remove FLAG_ALT_FOCUSABLE_IM when keyguard needs input.
-            if (state.mKeyguardNeedsInput) {
+            if (state.mKeyguardNeedsInput && state.isKeyguardShowingAndNotOccluded()) {
                 mLpChanged.flags &= ~LayoutParams.FLAG_ALT_FOCUSABLE_IM;
             } else {
                 mLpChanged.flags |= LayoutParams.FLAG_ALT_FOCUSABLE_IM;
@@ -321,7 +329,8 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
                 || state.mPanelVisible || state.mKeyguardFadingAway || state.mBouncerShowing
                 || state.mHeadsUpShowing
                 || state.mScrimsVisibility != ScrimController.TRANSPARENT)
-                || state.mBackgroundBlurRadius > 0;
+                || state.mBackgroundBlurRadius > 0
+                || state.mLaunchingActivity;
     }
 
     private void applyFitsSystemWindows(State state) {
@@ -485,6 +494,11 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         apply(mCurrentState);
     }
 
+    void setLaunchingActivity(boolean launching) {
+        mCurrentState.mLaunchingActivity = launching;
+        apply(mCurrentState);
+    }
+
     public void setScrimsVisibility(int scrimsVisibility) {
         mCurrentState.mScrimsVisibility = scrimsVisibility;
         apply(mCurrentState);
@@ -645,6 +659,7 @@ public class NotificationShadeWindowController implements Callback, Dumpable,
         boolean mForceCollapsed;
         boolean mForceDozeBrightness;
         boolean mForceUserActivity;
+        boolean mLaunchingActivity;
         boolean mBackdropShowing;
         boolean mWallpaperSupportsAmbientMode;
         boolean mNotTouchable;

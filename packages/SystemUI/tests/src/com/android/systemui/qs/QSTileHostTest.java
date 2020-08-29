@@ -122,11 +122,6 @@ public class QSTileHostTest extends SysuiTestCase {
                 mBroadcastDispatcher, mStatusBar, mQSLogger, mUiEventLogger);
         setUpTileFactory();
 
-        // Override this config so there are no unexpected tiles
-        mContext.getOrCreateTestableResources().addOverride(
-                com.android.internal.R.string.config_defaultExtraQuickSettingsTiles,
-                "");
-
         Settings.Secure.putStringForUser(mContext.getContentResolver(), QSTileHost.TILES_SETTING,
                 "", ActivityManager.getCurrentUser());
     }
@@ -210,34 +205,6 @@ public class QSTileHostTest extends SysuiTestCase {
     }
 
     @Test
-    public void testDefaultAndExtra() {
-        mContext.getOrCreateTestableResources()
-                .addOverride(R.string.quick_settings_tiles_default, "spec1");
-        mContext.getOrCreateTestableResources().addOverride(
-                com.android.internal.R.string.config_defaultExtraQuickSettingsTiles, "spec2");
-        mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, "default");
-        assertEquals(2, mQSTileHost.getTiles().size());
-        QSTile[] elements = mQSTileHost.getTiles().toArray(new QSTile[0]);
-        assertTrue(elements[0] instanceof TestTile1);
-        assertTrue(elements[1] instanceof TestTile2);
-
-        verify(mQSLogger).logTileAdded("spec1");
-        verify(mQSLogger).logTileAdded("spec2");
-    }
-
-    @Test
-    public void testExtraCustom() {
-        mContext.getOrCreateTestableResources().addOverride(
-                com.android.internal.R.string.config_defaultExtraQuickSettingsTiles,
-                CUSTOM_TILE_SPEC);
-        mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, "default");
-        assertEquals(1, mQSTileHost.getTiles().size());
-        assertEquals(mCustomTile, CollectionUtils.firstOrNull(mQSTileHost.getTiles()));
-
-        verify(mQSLogger).logTileAdded(CUSTOM_TILE_SPEC);
-    }
-
-    @Test
     public void testNoRepeatedSpecs_addTile() {
         mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, "spec1,spec2");
 
@@ -252,10 +219,40 @@ public class QSTileHostTest extends SysuiTestCase {
     public void testNoRepeatedSpecs_customTile() {
         mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, CUSTOM_TILE_SPEC);
 
-        mQSTileHost.addTile(CUSTOM_TILE);
+        mQSTileHost.addTile(CUSTOM_TILE, /* end */ false);
 
         assertEquals(1, mQSTileHost.mTileSpecs.size());
         assertEquals(CUSTOM_TILE_SPEC, mQSTileHost.mTileSpecs.get(0));
+    }
+
+    @Test
+    public void testAddedAtBeginningOnDefault_customTile() {
+        mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, "spec1"); // seed
+
+        mQSTileHost.addTile(CUSTOM_TILE);
+
+        assertEquals(2, mQSTileHost.mTileSpecs.size());
+        assertEquals(CUSTOM_TILE_SPEC, mQSTileHost.mTileSpecs.get(0));
+    }
+
+    @Test
+    public void testAddedAtBeginning_customTile() {
+        mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, "spec1"); // seed
+
+        mQSTileHost.addTile(CUSTOM_TILE, /* end */ false);
+
+        assertEquals(2, mQSTileHost.mTileSpecs.size());
+        assertEquals(CUSTOM_TILE_SPEC, mQSTileHost.mTileSpecs.get(0));
+    }
+
+    @Test
+    public void testAddedAtEnd_customTile() {
+        mQSTileHost.onTuningChanged(QSTileHost.TILES_SETTING, "spec1"); // seed
+
+        mQSTileHost.addTile(CUSTOM_TILE, /* end */ true);
+
+        assertEquals(2, mQSTileHost.mTileSpecs.size());
+        assertEquals(CUSTOM_TILE_SPEC, mQSTileHost.mTileSpecs.get(1));
     }
 
     @Test

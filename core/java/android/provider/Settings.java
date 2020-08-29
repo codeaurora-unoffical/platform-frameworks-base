@@ -24,6 +24,7 @@ import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
+import android.annotation.SuppressLint;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.annotation.UserIdInt;
@@ -1778,6 +1779,15 @@ public final class Settings {
             = "android.settings.NOTIFICATION_SETTINGS";
 
     /**
+     * Activity Action: Show conversation settings.
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_CONVERSATION_SETTINGS
+            = "android.settings.CONVERSATION_SETTINGS";
+
+    /**
      * Activity Action: Show notification history screen.
      *
      * @hide
@@ -1888,6 +1898,15 @@ public final class Settings {
             "android.settings.ACTION_DEVICE_CONTROLS_SETTINGS";
 
     /**
+     * Activity Action: Show media control settings
+     *
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_MEDIA_CONTROLS_SETTINGS =
+            "android.settings.ACTION_MEDIA_CONTROLS_SETTINGS";
+
+    /**
      * Activity Action: Show a dialog with disabled by policy message.
      * <p> If an user action is disabled by policy, this dialog can be triggered to let
      * the user know about this.
@@ -1962,6 +1981,10 @@ public final class Settings {
      * Input: Nothing.
      * <p>
      * Output: Nothing.
+     * <p class="note">
+     * In some cases, a matching Activity may not exist, so ensure you
+     * safeguard against this.
+
      */
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_WEBVIEW_SETTINGS = "android.settings.WEBVIEW_SETTINGS";
@@ -5199,8 +5222,9 @@ public final class Settings {
     /**
      * Secure system settings, containing system preferences that applications
      * can read but are not allowed to write.  These are for preferences that
-     * the user must explicitly modify through the system UI or specialized
-     * APIs for those values, not modified directly by applications.
+     * the user must explicitly modify through the UI of a system app. Normal
+     * applications cannot modify the secure settings database, either directly
+     * or by calling the "put" methods that this class contains.
      */
     public static final class Secure extends NameValueTable {
         // NOTE: If you add new settings here, be sure to add them to
@@ -6228,6 +6252,8 @@ public final class Settings {
          * determines if the IME should be shown when a hard keyboard is attached.
          * @hide
          */
+        @TestApi
+        @SuppressLint("NoSettingsProvider")
         public static final String SHOW_IME_WITH_HARD_KEYBOARD = "show_ime_with_hard_keyboard";
 
         /**
@@ -8504,14 +8530,15 @@ public final class Settings {
         public static final int VR_DISPLAY_MODE_OFF = 1;
 
         /**
-         * Whether CarrierAppUtils#disableCarrierAppsUntilPrivileged has been executed at least
-         * once.
+         * The latest SDK version that CarrierAppUtils#disableCarrierAppsUntilPrivileged has been
+         * executed for.
          *
          * <p>This is used to ensure that we only take one pass which will disable apps that are not
          * privileged (if any). From then on, we only want to enable apps (when a matching SIM is
          * inserted), to avoid disabling an app that the user might actively be using.
          *
-         * <p>Will be set to 1 once executed.
+         * <p>Will be set to {@link android.os.Build.VERSION#SDK_INT} once executed. Note that older
+         * SDK versions prior to R set 1 for this value.
          *
          * @hide
          */
@@ -8891,6 +8918,15 @@ public final class Settings {
          * @hide
          */
         public static final String PEOPLE_STRIP = "people_strip";
+
+        /**
+         * Whether or not to enable media resumption
+         * When enabled, media controls in quick settings will populate on boot and persist if
+         * resumable via a MediaBrowserService.
+         * @see Settings.Global#SHOW_MEDIA_ON_QUICK_SETTINGS
+         * @hide
+         */
+        public static final String MEDIA_CONTROLS_RESUME = "qs_media_resumption";
 
         /**
          * Controls if window magnification is enabled.
@@ -9688,6 +9724,13 @@ public final class Settings {
                 "hdmi_control_auto_device_off_enabled";
 
         /**
+         * Whether or not media is shown automatically when bypassing as a heads up.
+         * @hide
+         */
+        public static final String SHOW_MEDIA_ON_QUICK_SETTINGS =
+                "qs_media_player";
+
+        /**
          * The interval in milliseconds at which location requests will be throttled when they are
          * coming from the background.
          *
@@ -9927,6 +9970,11 @@ public final class Settings {
        /** Timeout for package verification.
         * @hide */
        public static final String PACKAGE_VERIFIER_TIMEOUT = "verifier_timeout";
+
+        /** Timeout for app integrity verification.
+         * @hide */
+        public static final String APP_INTEGRITY_VERIFICATION_TIMEOUT =
+                "app_integrity_verification_timeout";
 
        /** Default response code for package verification.
         * @hide */
@@ -11948,8 +11996,24 @@ public final class Settings {
                 "adaptive_battery_management_enabled";
 
         /**
+         * Whether or not apps are allowed into the
+         * {@link android.app.usage.UsageStatsManager#STANDBY_BUCKET_RESTRICTED} bucket.
+         * Type: int (0 for false, 1 for true)
+         * Default: {@value #DEFAULT_ENABLE_RESTRICTED_BUCKET}
+         *
+         * @hide
+         */
+        public static final String ENABLE_RESTRICTED_BUCKET = "enable_restricted_bucket";
+
+        /**
+         * @see #ENABLE_RESTRICTED_BUCKET
+         * @hide
+         */
+        public static final int DEFAULT_ENABLE_RESTRICTED_BUCKET = 0;
+
+        /**
          * Whether or not app auto restriction is enabled. When it is enabled, settings app will
-         * auto restrict the app if it has bad behavior(e.g. hold wakelock for long time).
+         * auto restrict the app if it has bad behavior (e.g. hold wakelock for long time).
          *
          * Type: boolean (0 for false, 1 for true)
          * Default: 1
@@ -14025,6 +14089,14 @@ public final class Settings {
                 "zram_enabled";
 
         /**
+         * Whether the app freezer is enabled on this device.
+         * The value of "enabled" enables the app freezer, "disabled" disables it and
+         * "device_default" will let the system decide whether to enable the freezer or not
+         * @hide
+         */
+        public static final String CACHED_APPS_FREEZER_ENABLED = "cached_apps_freezer";
+
+        /**
          * Configuration flags for smart replies in notifications.
          * This is encoded as a key=value list, separated by commas. Ex:
          *
@@ -14208,15 +14280,6 @@ public final class Settings {
         public static final String KERNEL_CPU_THREAD_READER = "kernel_cpu_thread_reader";
 
         /**
-         * Persistent user id that is last logged in to.
-         *
-         * They map to user ids, for example, 10, 11, 12.
-         *
-         * @hide
-         */
-        public static final String LAST_ACTIVE_USER_ID = "last_active_persistent_user_id";
-
-        /**
          * Whether we've enabled native flags health check on this device. Takes effect on
          * reboot. The value "1" enables native flags health check; otherwise it's disabled.
          * @hide
@@ -14326,6 +14389,21 @@ public final class Settings {
          * @hide
          */
         public static final String ADVANCED_BATTERY_USAGE_AMOUNT = "advanced_battery_usage_amount";
+
+        /**
+         * For 5G NSA capable devices, determines whether NR tracking indications are on
+         * when the screen is off.
+         *
+         * Values are:
+         * 0: off - All 5G NSA tracking indications are off when the screen is off.
+         * 1: extended - All 5G NSA tracking indications are on when the screen is off as long as
+         *    the device is camped on 5G NSA (5G icon is showing in status bar).
+         *    If the device is not camped on 5G NSA, tracking indications are off.
+         * 2: always on - All 5G NSA tracking indications are on whether the screen is on or off.
+         * @hide
+         */
+        public static final String NR_NSA_TRACKING_SCREEN_OFF_MODE =
+                "nr_nsa_tracking_screen_off_mode";
     }
 
     /**

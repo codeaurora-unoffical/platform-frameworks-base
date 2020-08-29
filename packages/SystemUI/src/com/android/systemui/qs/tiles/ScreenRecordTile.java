@@ -28,6 +28,7 @@ import com.android.systemui.plugins.qs.QSTile;
 import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.screenrecord.RecordingController;
+import com.android.systemui.statusbar.phone.KeyguardDismissUtil;
 
 import javax.inject.Inject;
 
@@ -38,17 +39,17 @@ public class ScreenRecordTile extends QSTileImpl<QSTile.BooleanState>
         implements RecordingController.RecordingStateChangeCallback {
     private static final String TAG = "ScreenRecordTile";
     private RecordingController mController;
-    private ActivityStarter mActivityStarter;
+    private KeyguardDismissUtil mKeyguardDismissUtil;
     private long mMillisUntilFinished = 0;
     private Callback mCallback = new Callback();
 
     @Inject
     public ScreenRecordTile(QSHost host, RecordingController controller,
-            ActivityStarter activityStarter) {
+            KeyguardDismissUtil keyguardDismissUtil) {
         super(host);
         mController = controller;
         mController.observe(this, mCallback);
-        mActivityStarter = activityStarter;
+        mKeyguardDismissUtil = keyguardDismissUtil;
     }
 
     @Override
@@ -66,7 +67,7 @@ public class ScreenRecordTile extends QSTileImpl<QSTile.BooleanState>
         } else if (mController.isRecording()) {
             stopRecording();
         } else {
-            startCountdown();
+            mUiHandler.post(() -> showPrompt());
         }
         refreshState();
     }
@@ -79,19 +80,15 @@ public class ScreenRecordTile extends QSTileImpl<QSTile.BooleanState>
         state.value = isRecording || isStarting;
         state.state = (isRecording || isStarting) ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE;
         state.label = mContext.getString(R.string.quick_settings_screen_record_label);
+        state.icon = ResourceIcon.get(R.drawable.ic_screenrecord);
 
         if (isRecording) {
-            state.icon = ResourceIcon.get(R.drawable.ic_qs_screenrecord);
             state.secondaryLabel = mContext.getString(R.string.quick_settings_screen_record_stop);
         } else if (isStarting) {
             // round, since the timer isn't exact
             int countdown = (int) Math.floorDiv(mMillisUntilFinished + 500, 1000);
-            // TODO update icon
-            state.icon = ResourceIcon.get(R.drawable.ic_qs_screenrecord);
             state.secondaryLabel = String.format("%d...", countdown);
         } else {
-            // TODO update icon
-            state.icon = ResourceIcon.get(R.drawable.ic_qs_screenrecord);
             state.secondaryLabel = mContext.getString(R.string.quick_settings_screen_record_start);
         }
         state.contentDescription = TextUtils.isEmpty(state.secondaryLabel)
@@ -115,12 +112,15 @@ public class ScreenRecordTile extends QSTileImpl<QSTile.BooleanState>
         return mContext.getString(R.string.quick_settings_screen_record_label);
     }
 
-    private void startCountdown() {
-        Log.d(TAG, "Starting countdown");
-        // Close QS, otherwise the permission dialog appears beneath it
+    private void showPrompt() {
+        // Close QS, otherwise the dialog appears beneath it
         getHost().collapsePanels();
         Intent intent = mController.getPromptIntent();
-        mActivityStarter.postStartActivityDismissingKeyguard(intent, 0);
+        ActivityStarter.OnDismissAction dismissAction = () -> {
+            mContext.startActivity(intent);
+            return false;
+        };
+        mKeyguardDismissUtil.executeWhenUnlocked(dismissAction, false);
     }
 
     private void cancelCountdown() {
@@ -129,7 +129,6 @@ public class ScreenRecordTile extends QSTileImpl<QSTile.BooleanState>
     }
 
     private void stopRecording() {
-        Log.d(TAG, "Stopping recording from tile");
         mController.stopRecording();
     }
 

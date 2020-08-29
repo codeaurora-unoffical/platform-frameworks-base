@@ -47,8 +47,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
-import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.dex.ArtManager;
+import android.content.pm.parsing.PackageInfoWithoutStateUtils;
+import android.content.pm.parsing.ParsingPackage;
+import android.content.pm.parsing.ParsingPackageUtils;
+import android.content.pm.parsing.result.ParseInput;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.Rect;
@@ -380,6 +385,9 @@ public abstract class PackageManager {
      * <p>
      * Note: this flag may cause less information about currently installed
      * applications to be returned.
+     * <p>
+     * Note: use of this flag requires the android.permission.QUERY_ALL_PACKAGES
+     * permission to see uninstalled packages.
      */
     public static final int MATCH_UNINSTALLED_PACKAGES = 0x00002000;
 
@@ -2024,8 +2032,16 @@ public abstract class PackageManager {
     /**
      * Feature for {@link #getSystemAvailableFeatures} and
      * {@link #hasSystemFeature}: The device's main front and back cameras can stream
-     * concurrently as described in  {@link
-     * android.hardware.camera2.CameraManager#getConcurrentCameraIds()}
+     * concurrently as described in {@link
+     * android.hardware.camera2.CameraManager#getConcurrentCameraIds()}.
+     * </p>
+     * <p>While {@link android.hardware.camera2.CameraManager#getConcurrentCameraIds()} and
+     * associated APIs are only available on API level 30 or newer, this feature flag may be
+     * advertised by devices on API levels below 30. If present on such a device, the same
+     * guarantees hold: The main front and main back camera can be used at the same time, with
+     * guaranteed stream configurations as defined in the table for concurrent streaming at
+     * {@link android.hardware.camera2.CameraDevice#createCaptureSession(android.hardware.camera2.params.SessionConfiguration)}.
+     * </p>
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_CAMERA_CONCURRENT = "android.hardware.camera.concurrent";
@@ -3044,6 +3060,16 @@ public abstract class PackageManager {
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_IPSEC_TUNNELS = "android.software.ipsec_tunnels";
+
+    /**
+     * Feature for {@link #getSystemAvailableFeatures} and
+     * {@link #hasSystemFeature}: The device supports a system interface for the user to select
+     * and bind device control services provided by applications.
+     *
+     * @see android.service.controls.ControlsProviderService
+     */
+    @SdkConstant(SdkConstantType.FEATURE)
+    public static final String FEATURE_CONTROLS = "android.software.controls";
 
     /**
      * Feature for {@link #getSystemAvailableFeatures} and {@link #hasSystemFeature}: The device has
@@ -4640,8 +4666,7 @@ public abstract class PackageManager {
      * Marks an application exempt from having its permissions be automatically revoked when
      * the app is unused for an extended period of time.
      *
-     * Only the installer on record that installed the given package, or a holder of
-     * {@code WHITELIST_AUTO_REVOKE_PERMISSIONS} is allowed to call this.
+     * Only the installer on record that installed the given package is allowed to call this.
      *
      * Packages start in whitelisted state, and it is the installer's responsibility to
      * un-whitelist the packages it installs, unless auto-revoking permissions from that package
@@ -6037,28 +6062,25 @@ public abstract class PackageManager {
     @Nullable
     public PackageInfo getPackageArchiveInfo(@NonNull String archiveFilePath,
             @PackageInfoFlags int flags) {
-        final PackageParser parser = new PackageParser();
-        parser.setCallback(new PackageParser.CallbackImpl(this));
-        final File apkFile = new File(archiveFilePath);
-        try {
-            if ((flags & (MATCH_DIRECT_BOOT_UNAWARE | MATCH_DIRECT_BOOT_AWARE)) != 0) {
-                // Caller expressed an explicit opinion about what encryption
-                // aware/unaware components they want to see, so fall through and
-                // give them what they want
-            } else {
-                // Caller expressed no opinion, so match everything
-                flags |= MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE;
-            }
+        if ((flags & (PackageManager.MATCH_DIRECT_BOOT_UNAWARE
+                | PackageManager.MATCH_DIRECT_BOOT_AWARE)) == 0) {
+            // Caller expressed no opinion about what encryption
+            // aware/unaware components they want to see, so match both
+            flags |= PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        }
 
-            PackageParser.Package pkg = parser.parseMonolithicPackage(apkFile, 0);
-            if ((flags & GET_SIGNATURES) != 0) {
-                PackageParser.collectCertificates(pkg, false /* skipVerify */);
-            }
-            PackageUserState state = new PackageUserState();
-            return PackageParser.generatePackageInfo(pkg, null, flags, 0, 0, null, state);
-        } catch (PackageParserException e) {
+        boolean collectCertificates = (flags & PackageManager.GET_SIGNATURES) != 0
+                || (flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0;
+
+        ParseInput input = ParseTypeImpl.forParsingWithoutPlatformCompat().reset();
+        ParseResult<ParsingPackage> result = ParsingPackageUtils.parseDefault(input,
+                new File(archiveFilePath), 0, collectCertificates);
+        if (result.isError()) {
             return null;
         }
+        return PackageInfoWithoutStateUtils.generate(result.getResult(), null, flags, 0, 0, null,
+                new PackageUserState(), UserHandle.getCallingUserId());
     }
 
     /**

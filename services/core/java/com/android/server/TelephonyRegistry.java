@@ -23,6 +23,7 @@ import static android.telephony.TelephonyRegistryManager.SIM_ACTIVATION_TYPE_VOI
 
 import static java.util.Arrays.copyOf;
 
+import android.Manifest;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
@@ -309,27 +310,30 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
     private List<Map<Integer, PreciseDataConnectionState>> mPreciseDataConnectionStates =
             new ArrayList<Map<Integer, PreciseDataConnectionState>>();
 
-    // Nothing here yet, but putting it here in case we want to add more in the future.
-    static final int ENFORCE_COARSE_LOCATION_PERMISSION_MASK = 0;
+    static final int ENFORCE_COARSE_LOCATION_PERMISSION_MASK =
+            PhoneStateListener.LISTEN_REGISTRATION_FAILURE
+                    | PhoneStateListener.LISTEN_BARRING_INFO;
 
     static final int ENFORCE_FINE_LOCATION_PERMISSION_MASK =
             PhoneStateListener.LISTEN_CELL_LOCATION
-                    | PhoneStateListener.LISTEN_CELL_INFO;
+                    | PhoneStateListener.LISTEN_CELL_INFO
+                    | PhoneStateListener.LISTEN_REGISTRATION_FAILURE
+                    | PhoneStateListener.LISTEN_BARRING_INFO;
 
     static final int ENFORCE_PHONE_STATE_PERMISSION_MASK =
-                PhoneStateListener.LISTEN_CALL_FORWARDING_INDICATOR
-                        | PhoneStateListener.LISTEN_MESSAGE_WAITING_INDICATOR
-                        | PhoneStateListener.LISTEN_EMERGENCY_NUMBER_LIST
-                        | PhoneStateListener.LISTEN_DISPLAY_INFO_CHANGED;
+            PhoneStateListener.LISTEN_CALL_FORWARDING_INDICATOR
+                    | PhoneStateListener.LISTEN_MESSAGE_WAITING_INDICATOR
+                    | PhoneStateListener.LISTEN_EMERGENCY_NUMBER_LIST
+                    | PhoneStateListener.LISTEN_DISPLAY_INFO_CHANGED;
 
     static final int ENFORCE_PRECISE_PHONE_STATE_PERMISSION_MASK =
-                PhoneStateListener.LISTEN_PRECISE_CALL_STATE
-                        | PhoneStateListener.LISTEN_PRECISE_DATA_CONNECTION_STATE
-                        | PhoneStateListener.LISTEN_CALL_DISCONNECT_CAUSES
-                        | PhoneStateListener.LISTEN_CALL_ATTRIBUTES_CHANGED
-                        | PhoneStateListener.LISTEN_IMS_CALL_DISCONNECT_CAUSES
-                        | PhoneStateListener.LISTEN_REGISTRATION_FAILURE
-                        | PhoneStateListener.LISTEN_BARRING_INFO;
+            PhoneStateListener.LISTEN_PRECISE_CALL_STATE
+                    | PhoneStateListener.LISTEN_PRECISE_DATA_CONNECTION_STATE
+                    | PhoneStateListener.LISTEN_CALL_DISCONNECT_CAUSES
+                    | PhoneStateListener.LISTEN_CALL_ATTRIBUTES_CHANGED
+                    | PhoneStateListener.LISTEN_IMS_CALL_DISCONNECT_CAUSES
+                    | PhoneStateListener.LISTEN_REGISTRATION_FAILURE
+                    | PhoneStateListener.LISTEN_BARRING_INFO;
 
     static final int READ_ACTIVE_EMERGENCY_SESSION_PERMISSION_MASK =
             PhoneStateListener.LISTEN_OUTGOING_EMERGENCY_CALL
@@ -337,9 +341,9 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
 
     static final int READ_PRIVILEGED_PHONE_STATE_PERMISSION_MASK =
             PhoneStateListener.LISTEN_OEM_HOOK_RAW_EVENT
-                | PhoneStateListener.LISTEN_SRVCC_STATE_CHANGED
-                | PhoneStateListener.LISTEN_RADIO_POWER_STATE_CHANGED
-                | PhoneStateListener.LISTEN_VOICE_ACTIVATION_STATE;
+                    | PhoneStateListener.LISTEN_SRVCC_STATE_CHANGED
+                    | PhoneStateListener.LISTEN_RADIO_POWER_STATE_CHANGED
+                    | PhoneStateListener.LISTEN_VOICE_ACTIVATION_STATE;
 
     private static final int MSG_USER_SWITCHED = 1;
     private static final int MSG_UPDATE_DEFAULT_SUB = 2;
@@ -1082,7 +1086,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                         if (VDBG) log("listen: call onBarringInfoChanged=" + barringInfo);
                         try {
                             r.callback.onBarringInfoChanged(
-                                    checkFineLocationAccess(r, Build.VERSION_CODES.R)
+                                    checkFineLocationAccess(r, Build.VERSION_CODES.BASE)
                                             ? barringInfo : biNoLocation);
                         } catch (RemoteException ex) {
                             remove(r.binder);
@@ -1605,7 +1609,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                 for (Record r : mRecords) {
                     if (r.matchPhoneStateListenerEvent(
                             PhoneStateListener.LISTEN_DISPLAY_INFO_CHANGED)
-                            && idMatch(r.subId, subId, phoneId)) {
+                            && idMatchWithoutDefaultPhoneCheck(r.subId, subId)) {
                         try {
                             r.callback.onDisplayInfoChanged(telephonyDisplayInfo);
                         } catch (RemoteException ex) {
@@ -2276,7 +2280,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                             && idMatch(r.subId, subId, phoneId)) {
                         try {
                             r.callback.onRegistrationFailed(
-                                    checkFineLocationAccess(r, Build.VERSION_CODES.R)
+                                    checkFineLocationAccess(r, Build.VERSION_CODES.BASE)
                                             ? cellIdentity : noLocationCi,
                                     chosenPlmn, domain, causeCode,
                                     additionalCauseCode);
@@ -2323,7 +2327,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                                         + barringInfo + " r=" + r);
                             }
                             r.callback.onBarringInfoChanged(
-                                    checkFineLocationAccess(r, Build.VERSION_CODES.R)
+                                    checkFineLocationAccess(r, Build.VERSION_CODES.BASE)
                                         ? barringInfo : biNoLocation);
                         } catch (RemoteException ex) {
                             mRemoveList.add(r.binder);
@@ -2459,7 +2463,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, subId);
         intent.putExtra(PHONE_CONSTANTS_SLOT_KEY, phoneId);
         intent.putExtra(SubscriptionManager.EXTRA_SLOT_INDEX, phoneId);
-        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL, Manifest.permission.READ_PHONE_STATE);
     }
 
     private void broadcastSignalStrengthChanged(SignalStrength signalStrength, int phoneId,
@@ -2584,7 +2588,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         intent.putExtra(PHONE_CONSTANTS_DATA_APN_TYPE_KEY,
                 ApnSetting.getApnTypesStringFromBitmask(apnType));
         intent.putExtra(PHONE_CONSTANTS_SUBSCRIPTION_KEY, subId);
-        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL, Manifest.permission.READ_PHONE_STATE);
     }
 
     private void enforceNotifyPermissionOrCarrierPrivilege(String method) {
@@ -2723,6 +2727,24 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
 
     private static void loge(String s) {
         Rlog.e(TAG, s);
+    }
+
+    /**
+     * If the registrant specified a subId, then we should only notify it if subIds match.
+     * If the registrant registered with DEFAULT subId, we should notify only when the related subId
+     * is default subId (which could be INVALID if there's no default subId).
+     *
+     * This should be the correct way to check record ID match. in idMatch the record's phoneId is
+     * speculated based on subId passed by the registrant so it's not a good reference.
+     * But to avoid triggering potential regression only replace idMatch with it when an issue with
+     * idMatch is reported. Eventually this should replace all instances of idMatch.
+     */
+    private boolean idMatchWithoutDefaultPhoneCheck(int subIdInRecord, int subIdToNotify) {
+        if (subIdInRecord == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) {
+            return (subIdToNotify == mDefaultSubId);
+        } else {
+            return (subIdInRecord == subIdToNotify);
+        }
     }
 
     boolean idMatch(int rSubId, int subId, int phoneId) {

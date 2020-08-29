@@ -53,6 +53,7 @@ import android.os.ParcelableException;
 import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManagerInternal;
 import android.os.storage.IStorageManager;
@@ -61,6 +62,7 @@ import android.text.TextUtils;
 import android.util.IntArray;
 import android.util.Slog;
 import android.util.SparseArray;
+import android.util.SparseBooleanArray;
 import android.util.SparseIntArray;
 import android.util.apk.ApkSignatureVerifier;
 
@@ -68,13 +70,19 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.content.PackageHelper;
 import com.android.internal.os.BackgroundThread;
 import com.android.server.LocalServices;
+import com.android.server.SystemService;
+import com.android.server.SystemServiceManager;
 import com.android.server.pm.parsing.PackageParser2;
 import com.android.server.pm.parsing.pkg.AndroidPackage;
 import com.android.server.pm.parsing.pkg.AndroidPackageUtils;
 import com.android.server.pm.parsing.pkg.ParsedPackage;
 import com.android.server.rollback.WatchdogRollbackLogger;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -99,6 +107,9 @@ public class StagingManager {
     private final PreRebootVerificationHandler mPreRebootVerificationHandler;
     private final Supplier<PackageParser2> mPackageParserSupplier;
 
+    private final File mFailureReasonFile = new File("/metadata/staged-install/failure_reason.txt");
+    private String mFailureReason;
+
     @GuardedBy("mStagedSessions")
     private final SparseArray<PackageInstallerSession> mStagedSessions = new SparseArray<>();
 
@@ -108,6 +119,9 @@ public class StagingManager {
     @GuardedBy("mFailedPackageNames")
     private final List<String> mFailedPackageNames = new ArrayList<>();
     private String mNativeFailureReason;
+
+    @GuardedBy("mSuccessfulStagedSessionIds")
+    private final List<Integer> mSuccessfulStagedSessionIds = new ArrayList<>();
 
     StagingManager(PackageInstallerService pi, Context context,
             Supplier<PackageParser2> packageParserSupplier) {
@@ -119,6 +133,40 @@ public class StagingManager {
         mPowerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         mPreRebootVerificationHandler = new PreRebootVerificationHandler(
                 BackgroundThread.get().getLooper());
+
+        if (mFailureReasonFile.exists()) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(mFailureReasonFile))) {
+                mFailureReason = reader.readLine();
+            } catch (Exception ignore) { }
+        }
+    }
+
+    /**
+     This class manages lifecycle events for StagingManager.
+     */
+    public static final class Lifecycle extends SystemService {
+        private static StagingManager sStagingManager;
+
+        public Lifecycle(Context context) {
+            super(context);
+        }
+
+        void startService(StagingManager stagingManager) {
+            sStagingManager = stagingManager;
+            LocalServices.getService(SystemServiceManager.class).startService(this);
+        }
+
+        @Override
+        public void onStart() {
+            // no-op
+        }
+
+        @Override
+        public void onBootPhase(int phase) {
+            if (phase == SystemService.PHASE_BOOT_COMPLETED && sStagingManager != null) {
+                sStagingManager.markStagedSessionsAsSuccessful();
+            }
+        }
     }
 
     private void updateStoredSession(@NonNull PackageInstallerSession sessionInfo) {
@@ -137,6 +185,9 @@ public class StagingManager {
         synchronized (mStagedSessions) {
             for (int i = 0; i < mStagedSessions.size(); i++) {
                 final PackageInstallerSession stagedSession = mStagedSessions.valueAt(i);
+                if (stagedSession.isDestroyed()) {
+                    continue;
+                }
                 result.add(stagedSession.generateInfoForCaller(false /*icon*/, callingUid));
             }
         }
@@ -202,7 +253,7 @@ public class StagingManager {
         final IntArray childSessionIds = new IntArray();
         if (session.isMultiPackage()) {
             for (int id : session.getChildSessionIds()) {
-                if (isApexSession(mStagedSessions.get(id))) {
+                if (isApexSession(getStagedSession(id))) {
                     childSessionIds.add(id);
                 }
             }
@@ -346,17 +397,32 @@ public class StagingManager {
     }
 
     // Reverts apex sessions and user data (if checkpoint is supported). Also reboots the device.
-    private void abortCheckpoint(String errorMsg) {
-        Slog.e(TAG, "Aborting checkpoint: " + errorMsg);
+    private void abortCheckpoint(int sessionId, String errorMsg) {
+        String failureReason = "Failed to install sessionId: " + sessionId + " Error: " + errorMsg;
+        Slog.e(TAG, failureReason);
         try {
             if (supportsCheckpoint() && needsCheckpoint()) {
-                mApexManager.revertActiveSessions();
+                // Store failure reason for next reboot
+                try (BufferedWriter writer =
+                             new BufferedWriter(new FileWriter(mFailureReasonFile))) {
+                    writer.write(failureReason);
+                } catch (Exception e) {
+                    Slog.w(TAG, "Failed to save failure reason: ", e);
+                }
+
+                // Only revert apex sessions if device supports updating apex
+                if (mApexManager.isApexSupported()) {
+                    mApexManager.revertActiveSessions();
+                }
                 PackageHelper.getStorageManager().abortChanges(
                         "StagingManager initiated", false /*retry*/);
             }
         } catch (Exception e) {
             Slog.wtf(TAG, "Failed to abort checkpoint", e);
-            mApexManager.revertActiveSessions();
+            // Only revert apex sessions if device supports updating apex
+            if (mApexManager.isApexSupported()) {
+                mApexManager.revertActiveSessions();
+            }
             mPowerManager.reboot(null);
         }
     }
@@ -549,14 +615,12 @@ public class StagingManager {
             // If checkpoint is supported, then we only resume sessions if we are in checkpointing
             // mode. If not, we fail all sessions.
             if (supportsCheckpoint() && !needsCheckpoint()) {
-                // TODO(b/146343545): Persist failure reason across checkpoint reboot
-                Slog.d(TAG, "Reverting back to safe state. Marking " + session.sessionId
-                        + " as failed.");
-                String errorMsg = "Reverting back to safe state";
-                if (!TextUtils.isEmpty(mNativeFailureReason)) {
-                    errorMsg = "Entered fs-rollback mode and reverted session due to crashing "
-                            + "native process: " + mNativeFailureReason;
+                String errorMsg = "Reverting back to safe state. Marking " + session.sessionId
+                        + " as failed";
+                if (!TextUtils.isEmpty(mFailureReason)) {
+                    errorMsg = errorMsg + ": " + mFailureReason;
                 }
+                Slog.d(TAG, errorMsg);
                 session.setStagedSessionFailed(SessionInfo.STAGED_SESSION_UNKNOWN, errorMsg);
                 return;
             }
@@ -581,7 +645,7 @@ public class StagingManager {
                         + "supposed to be activated";
                 session.setStagedSessionFailed(SessionInfo.STAGED_SESSION_ACTIVATION_FAILED,
                         errorMsg);
-                abortCheckpoint(errorMsg);
+                abortCheckpoint(session.sessionId, errorMsg);
                 return;
             }
             if (isApexSessionFailed(apexSessionInfo)) {
@@ -593,7 +657,7 @@ public class StagingManager {
                 }
                 session.setStagedSessionFailed(SessionInfo.STAGED_SESSION_ACTIVATION_FAILED,
                         errorMsg);
-                abortCheckpoint(errorMsg);
+                abortCheckpoint(session.sessionId, errorMsg);
                 return;
             }
             if (!apexSessionInfo.isActivated && !apexSessionInfo.isSuccess) {
@@ -604,7 +668,7 @@ public class StagingManager {
                         + "didn't activate nor fail. Marking it as failed anyway.";
                 session.setStagedSessionFailed(SessionInfo.STAGED_SESSION_ACTIVATION_FAILED,
                         errorMsg);
-                abortCheckpoint(errorMsg);
+                abortCheckpoint(session.sessionId, errorMsg);
                 return;
             }
         }
@@ -621,7 +685,7 @@ public class StagingManager {
             installApksInSession(session);
         } catch (PackageManagerException e) {
             session.setStagedSessionFailed(e.error, e.getMessage());
-            abortCheckpoint(e.getMessage());
+            abortCheckpoint(session.sessionId, e.getMessage());
 
             // If checkpoint is not supported, we have to handle failure for one staged session.
             if (!hasApex) {
@@ -642,7 +706,22 @@ public class StagingManager {
         Slog.d(TAG, "Marking session " + session.sessionId + " as applied");
         session.setStagedSessionApplied();
         if (hasApex) {
-            mApexManager.markStagedSessionSuccessful(session.sessionId);
+            try {
+                if (supportsCheckpoint()) {
+                    // Store the session ID, which will be marked as successful by ApexManager
+                    // upon boot completion.
+                    synchronized (mSuccessfulStagedSessionIds) {
+                        mSuccessfulStagedSessionIds.add(session.sessionId);
+                    }
+                } else {
+                    // Mark sessions as successful immediately on non-checkpointing devices.
+                    mApexManager.markStagedSessionSuccessful(session.sessionId);
+                }
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Checkpoint support unknown, marking session as successful "
+                        + "immediately.");
+                mApexManager.markStagedSessionSuccessful(session.sessionId);
+            }
         }
     }
 
@@ -797,6 +876,8 @@ public class StagingManager {
                                 + session.sessionId + " [" + errorMessage + "]");
                         session.setStagedSessionFailed(
                                 SessionInfo.STAGED_SESSION_VERIFICATION_FAILED, errorMessage);
+                        mPreRebootVerificationHandler.onPreRebootVerificationComplete(
+                                session.sessionId);
                         return;
                     }
                     mPreRebootVerificationHandler.notifyPreRebootVerification_Apk_Complete(
@@ -880,7 +961,8 @@ public class StagingManager {
         synchronized (mStagedSessions) {
             for (int i = 0; i < mStagedSessions.size(); i++) {
                 final PackageInstallerSession stagedSession = mStagedSessions.valueAt(i);
-                if (!stagedSession.isCommitted() || stagedSession.isStagedAndInTerminalState()) {
+                if (!stagedSession.isCommitted() || stagedSession.isStagedAndInTerminalState()
+                        || stagedSession.isDestroyed()) {
                     continue;
                 }
                 if (stagedSession.isMultiPackage()) {
@@ -888,18 +970,18 @@ public class StagingManager {
                     // name and the session we are checking is not a parent session either.
                     continue;
                 }
-
-                // From here on, stagedSession is a non-parent active staged session
-
                 // Check if stagedSession has an active parent session or not
                 if (stagedSession.hasParentSessionId()) {
                     int parentId = stagedSession.getParentSessionId();
                     PackageInstallerSession parentSession = mStagedSessions.get(parentId);
-                    if (parentSession == null || parentSession.isStagedAndInTerminalState()) {
+                    if (parentSession == null || parentSession.isStagedAndInTerminalState()
+                            || parentSession.isDestroyed()) {
                         // Parent session has been abandoned or terminated already
                         continue;
                     }
                 }
+
+                // From here on, stagedSession is a non-parent active staged session
 
                 // Check if session is one of the active sessions
                 if (session.sessionId == stagedSession.sessionId) {
@@ -943,27 +1025,68 @@ public class StagingManager {
         }
     }
 
-    void abortCommittedSession(@NonNull PackageInstallerSession session) {
+    /**
+     * <p>Abort committed staged session
+     *
+     * <p>This method must be called while holding {@link PackageInstallerSession.mLock}.
+     *
+     * <p>The method returns {@code false} to indicate it is not safe to clean up the session from
+     * system yet. When it is safe, the method returns {@code true}.
+     *
+     * <p> When it is safe to clean up, {@link StagingManager} will call
+     * {@link PackageInstallerSession#abandon()} on the session again.
+     *
+     * @return {@code true} if it is safe to cleanup the session resources, otherwise {@code false}.
+     */
+    boolean abortCommittedSessionLocked(@NonNull PackageInstallerSession session) {
+        int sessionId = session.sessionId;
         if (session.isStagedSessionApplied()) {
-            Slog.w(TAG, "Cannot abort applied session : " + session.sessionId);
-            return;
+            Slog.w(TAG, "Cannot abort applied session : " + sessionId);
+            return false;
         }
-        abortSession(session);
+        if (!session.isDestroyed()) {
+            throw new IllegalStateException("Committed session must be destroyed before aborting it"
+                    + " from StagingManager");
+        }
+        if (getStagedSession(sessionId) == null) {
+            Slog.w(TAG, "Session " + sessionId + " has been abandoned already");
+            return false;
+        }
 
-        boolean hasApex = sessionContainsApex(session);
-        if (hasApex) {
-            ApexSessionInfo apexSession = mApexManager.getStagedSessionInfo(session.sessionId);
-            if (apexSession == null || isApexSessionFinalized(apexSession)) {
-                Slog.w(TAG,
-                        "Cannot abort session " + session.sessionId
-                                + " because it is not active or APEXD is not reachable");
-                return;
-            }
-            try {
-                mApexManager.abortStagedSession(session.sessionId);
-            } catch (Exception ignore) {
+        // If pre-reboot verification is running, then return false. StagingManager will call
+        // abandon again when pre-reboot verification ends.
+        if (mPreRebootVerificationHandler.isVerificationRunning(sessionId)) {
+            Slog.w(TAG, "Session " + sessionId + " aborted before pre-reboot "
+                    + "verification completed.");
+            return false;
+        }
+
+        // A session could be marked ready once its pre-reboot verification ends
+        if (session.isStagedSessionReady()) {
+            if (sessionContainsApex(session)) {
+                try {
+                    ApexSessionInfo apexSession =
+                            mApexManager.getStagedSessionInfo(session.sessionId);
+                    if (apexSession == null || isApexSessionFinalized(apexSession)) {
+                        Slog.w(TAG,
+                                "Cannot abort session " + session.sessionId
+                                        + " because it is not active.");
+                    } else {
+                        mApexManager.abortStagedSession(session.sessionId);
+                    }
+                } catch (Exception e) {
+                    // Failed to contact apexd service. The apex might still be staged. We can still
+                    // safely cleanup the staged session since pre-reboot verification is complete.
+                    // Also, cleaning up the stageDir prevents the apex from being activated.
+                    Slog.w(TAG, "Could not contact apexd to abort staged session " + sessionId);
+                }
             }
         }
+
+        // Session was successfully aborted from apexd (if required) and pre-reboot verification
+        // is also complete. It is now safe to clean up the session from system.
+        abortSession(session);
+        return true;
     }
 
     private boolean isApexSessionFinalized(ApexSessionInfo session) {
@@ -1033,6 +1156,11 @@ public class StagingManager {
     }
 
     private void checkStateAndResume(@NonNull PackageInstallerSession session) {
+        // Do not resume session if boot completed already
+        if (SystemProperties.getBoolean("sys.boot_completed", false)) {
+            return;
+        }
+
         if (!session.isCommitted()) {
             // Session hasn't been committed yet, ignore.
             return;
@@ -1040,6 +1168,11 @@ public class StagingManager {
         // Check the state of the session and decide what to do next.
         if (session.isStagedSessionFailed() || session.isStagedSessionApplied()) {
             // Final states, nothing to do.
+            return;
+        }
+        if (session.isDestroyed()) {
+            // Device rebooted before abandoned session was cleaned up.
+            session.abandon();
             return;
         }
         if (!session.isStagedSessionReady()) {
@@ -1062,7 +1195,16 @@ public class StagingManager {
         }
     }
 
+    void markStagedSessionsAsSuccessful() {
+        synchronized (mSuccessfulStagedSessionIds) {
+            for (int i = 0; i < mSuccessfulStagedSessionIds.size(); i++) {
+                mApexManager.markStagedSessionSuccessful(mSuccessfulStagedSessionIds.get(i));
+            }
+        }
+    }
+
     void systemReady() {
+        new Lifecycle(mContext).startService(this);
         // Register the receiver of boot completed intent for staging manager.
         mContext.registerReceiver(new BroadcastReceiver() {
             @Override
@@ -1073,6 +1215,8 @@ public class StagingManager {
                 ctx.unregisterReceiver(this);
             }
         }, new IntentFilter(Intent.ACTION_BOOT_COMPLETED));
+
+        mFailureReasonFile.delete();
     }
 
     private static class LocalIntentReceiverAsync {
@@ -1124,10 +1268,20 @@ public class StagingManager {
         }
     }
 
+    private PackageInstallerSession getStagedSession(int sessionId) {
+        PackageInstallerSession session;
+        synchronized (mStagedSessions) {
+            session = mStagedSessions.get(sessionId);
+        }
+        return session;
+    }
+
     private final class PreRebootVerificationHandler extends Handler {
         // Hold session ids before handler gets ready to do the verification.
         private IntArray mPendingSessionIds;
         private boolean mIsReady;
+        @GuardedBy("mVerificationRunning")
+        private final SparseBooleanArray mVerificationRunning = new SparseBooleanArray();
 
         PreRebootVerificationHandler(Looper looper) {
             super(looper);
@@ -1155,13 +1309,15 @@ public class StagingManager {
         @Override
         public void handleMessage(Message msg) {
             final int sessionId = msg.arg1;
-            final PackageInstallerSession session;
-            synchronized (mStagedSessions) {
-                session = mStagedSessions.get(sessionId);
-            }
-            // Maybe session was aborted before pre-reboot verification was complete
+            final PackageInstallerSession session = getStagedSession(sessionId);
             if (session == null) {
-                Slog.d(TAG, "Stopping pre-reboot verification for sessionId: " + sessionId);
+                Slog.wtf(TAG, "Session disappeared in the middle of pre-reboot verification: "
+                        + sessionId);
+                return;
+            }
+            if (session.isDestroyed()) {
+                // No point in running verification on a destroyed session
+                onPreRebootVerificationComplete(sessionId);
                 return;
             }
             switch (msg.what) {
@@ -1200,7 +1356,38 @@ public class StagingManager {
                 mPendingSessionIds.add(sessionId);
                 return;
             }
+
+            PackageInstallerSession session = getStagedSession(sessionId);
+            synchronized (mVerificationRunning) {
+                // Do not start verification on a session that has been abandoned
+                if (session == null || session.isDestroyed()) {
+                    return;
+                }
+                Slog.d(TAG, "Starting preRebootVerification for session " + sessionId);
+                mVerificationRunning.put(sessionId, true);
+            }
             obtainMessage(MSG_PRE_REBOOT_VERIFICATION_START, sessionId, 0).sendToTarget();
+        }
+
+        // Things to do when pre-reboot verification completes for a particular sessionId
+        private void onPreRebootVerificationComplete(int sessionId) {
+            // Remove it from mVerificationRunning so that verification is considered complete
+            synchronized (mVerificationRunning) {
+                Slog.d(TAG, "Stopping preRebootVerification for session " + sessionId);
+                mVerificationRunning.delete(sessionId);
+            }
+            // Check if the session was destroyed while pre-reboot verification was running. If so,
+            // abandon it again.
+            PackageInstallerSession session = getStagedSession(sessionId);
+            if (session != null && session.isDestroyed()) {
+                session.abandon();
+            }
+        }
+
+        private boolean isVerificationRunning(int sessionId) {
+            synchronized (mVerificationRunning) {
+                return mVerificationRunning.get(sessionId);
+            }
         }
 
         private void notifyPreRebootVerification_Start_Complete(int sessionId) {
@@ -1221,8 +1408,6 @@ public class StagingManager {
          * See {@link PreRebootVerificationHandler} to see all nodes of pre reboot verification
          */
         private void handlePreRebootVerification_Start(@NonNull PackageInstallerSession session) {
-            Slog.d(TAG, "Starting preRebootVerification for session " + session.sessionId);
-
             if ((session.params.installFlags & PackageManager.INSTALL_ENABLE_ROLLBACK) != 0) {
                 // If rollback is enabled for this session, we call through to the RollbackManager
                 // with the list of sessions it must enable rollback for. Note that
@@ -1269,6 +1454,7 @@ public class StagingManager {
                     }
                 } catch (PackageManagerException e) {
                     session.setStagedSessionFailed(e.error, e.getMessage());
+                    onPreRebootVerificationComplete(session.sessionId);
                     return;
                 }
 
@@ -1301,6 +1487,7 @@ public class StagingManager {
                 // TODO(b/118865310): abort the session on apexd.
             } catch (PackageManagerException e) {
                 session.setStagedSessionFailed(e.error, e.getMessage());
+                onPreRebootVerificationComplete(session.sessionId);
             }
         }
 
@@ -1323,8 +1510,17 @@ public class StagingManager {
                 Slog.e(TAG, "Failed to get hold of StorageManager", e);
                 session.setStagedSessionFailed(SessionInfo.STAGED_SESSION_UNKNOWN,
                         "Failed to get hold of StorageManager");
+                onPreRebootVerificationComplete(session.sessionId);
                 return;
             }
+
+            // Stop pre-reboot verification before marking session ready. From this point on, if we
+            // abandon the session then it will be cleaned up immediately. If session is abandoned
+            // after this point, then even if for some reason system tries to install the session
+            // or activate its apex, there won't be any files to work with as they will be cleaned
+            // up by the system as part of abandonment. If session is abandoned before this point,
+            // then the session is already destroyed and cannot be marked ready anymore.
+            onPreRebootVerificationComplete(session.sessionId);
 
             // Proactively mark session as ready before calling apexd. Although this call order
             // looks counter-intuitive, this is the easiest way to ensure that session won't end up
@@ -1337,15 +1533,16 @@ public class StagingManager {
             // only apex part of the train will be applied, leaving device in an inconsistent state.
             Slog.d(TAG, "Marking session " + session.sessionId + " as ready");
             session.setStagedSessionReady();
-            final boolean hasApex = sessionContainsApex(session);
-            if (!hasApex) {
-                // Session doesn't contain apex, nothing to do.
-                return;
-            }
-            try {
-                mApexManager.markStagedSessionReady(session.sessionId);
-            } catch (PackageManagerException e) {
-                session.setStagedSessionFailed(e.error, e.getMessage());
+            if (session.isStagedSessionReady()) {
+                final boolean hasApex = sessionContainsApex(session);
+                if (hasApex) {
+                    try {
+                        mApexManager.markStagedSessionReady(session.sessionId);
+                    } catch (PackageManagerException e) {
+                        session.setStagedSessionFailed(e.error, e.getMessage());
+                        return;
+                    }
+                }
             }
         }
     }

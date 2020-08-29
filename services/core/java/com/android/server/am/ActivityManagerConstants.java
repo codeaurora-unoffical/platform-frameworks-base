@@ -87,6 +87,7 @@ final class ActivityManagerConstants extends ContentObserver {
     static final String KEY_PROCESS_START_ASYNC = "process_start_async";
     static final String KEY_MEMORY_INFO_THROTTLE_TIME = "memory_info_throttle_time";
     static final String KEY_TOP_TO_FGS_GRACE_DURATION = "top_to_fgs_grace_duration";
+    static final String KEY_PENDINGINTENT_WARNING_THRESHOLD = "pendingintent_warning_threshold";
 
     private static final int DEFAULT_MAX_CACHED_PROCESSES = 32;
     private static final long DEFAULT_BACKGROUND_SETTLE_TIME = 60*1000;
@@ -119,6 +120,7 @@ final class ActivityManagerConstants extends ContentObserver {
     private static final boolean DEFAULT_PROCESS_START_ASYNC = true;
     private static final long DEFAULT_MEMORY_INFO_THROTTLE_TIME = 5*60*1000;
     private static final long DEFAULT_TOP_TO_FGS_GRACE_DURATION = 15 * 1000;
+    private static final int DEFAULT_PENDINGINTENT_WARNING_THRESHOLD = 2000;
 
     // Flag stored in the DeviceConfig API.
     /**
@@ -328,6 +330,12 @@ final class ActivityManagerConstants extends ContentObserver {
      */
     public ArraySet<Integer> IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES = new ArraySet<Integer>();
 
+    /**
+     * The threshold for the amount of PendingIntent for each UID, there will be
+     * warning logs if the number goes beyond this threshold.
+     */
+    public int PENDINGINTENT_WARNING_THRESHOLD =  DEFAULT_PENDINGINTENT_WARNING_THRESHOLD;
+
     private List<String> mDefaultImperceptibleKillExemptPackages;
     private List<Integer> mDefaultImperceptibleKillExemptProcStates;
 
@@ -367,6 +375,15 @@ final class ActivityManagerConstants extends ContentObserver {
     private static final Uri ENABLE_AUTOMATIC_SYSTEM_SERVER_HEAP_DUMPS_URI =
             Settings.Global.getUriFor(Settings.Global.ENABLE_AUTOMATIC_SYSTEM_SERVER_HEAP_DUMPS);
 
+    /**
+     * The threshold to decide if a given association should be dumped into metrics.
+     */
+    private static final long DEFAULT_MIN_ASSOC_LOG_DURATION = 5 * 60 * 1000; // 5 mins
+
+    private static final String KEY_MIN_ASSOC_LOG_DURATION = "min_assoc_log_duration";
+
+    public static long MIN_ASSOC_LOG_DURATION = DEFAULT_MIN_ASSOC_LOG_DURATION;
+
     private final OnPropertiesChangedListener mOnDeviceConfigChangedListener =
             new OnPropertiesChangedListener() {
                 @Override
@@ -394,6 +411,9 @@ final class ActivityManagerConstants extends ContentObserver {
                                 break;
                             case KEY_FORCE_BACKGROUND_CHECK_ON_RESTRICTED_APPS:
                                 updateForceRestrictedBackgroundCheck();
+                                break;
+                            case KEY_MIN_ASSOC_LOG_DURATION:
+                                updateMinAssocLogDuration();
                                 break;
                             default:
                                 break;
@@ -550,6 +570,8 @@ final class ActivityManagerConstants extends ContentObserver {
                     DEFAULT_MEMORY_INFO_THROTTLE_TIME);
             TOP_TO_FGS_GRACE_DURATION = mParser.getDurationMillis(KEY_TOP_TO_FGS_GRACE_DURATION,
                     DEFAULT_TOP_TO_FGS_GRACE_DURATION);
+            PENDINGINTENT_WARNING_THRESHOLD = mParser.getInt(KEY_PENDINGINTENT_WARNING_THRESHOLD,
+                    DEFAULT_PENDINGINTENT_WARNING_THRESHOLD);
 
             // For new flags that are intended for server-side experiments, please use the new
             // DeviceConfig package.
@@ -659,6 +681,12 @@ final class ActivityManagerConstants extends ContentObserver {
         CUR_TRIM_CACHED_PROCESSES = (MAX_CACHED_PROCESSES-rawMaxEmptyProcesses)/3;
     }
 
+    private void updateMinAssocLogDuration() {
+        MIN_ASSOC_LOG_DURATION = DeviceConfig.getLong(
+                DeviceConfig.NAMESPACE_ACTIVITY_MANAGER, KEY_MIN_ASSOC_LOG_DURATION,
+                /* defaultValue */ DEFAULT_MIN_ASSOC_LOG_DURATION);
+    }
+
     void dump(PrintWriter pw) {
         pw.println("ACTIVITY MANAGER SETTINGS (dumpsys activity settings) "
                 + Settings.Global.ACTIVITY_MANAGER_CONSTANTS + ":");
@@ -729,6 +757,8 @@ final class ActivityManagerConstants extends ContentObserver {
         pw.println(Arrays.toString(IMPERCEPTIBLE_KILL_EXEMPT_PROC_STATES.toArray()));
         pw.print("  "); pw.print(KEY_IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES); pw.print("=");
         pw.println(Arrays.toString(IMPERCEPTIBLE_KILL_EXEMPT_PACKAGES.toArray()));
+        pw.print("  "); pw.print(KEY_MIN_ASSOC_LOG_DURATION); pw.print("=");
+        pw.println(MIN_ASSOC_LOG_DURATION);
 
         pw.println();
         if (mOverrideMaxCachedProcesses >= 0) {

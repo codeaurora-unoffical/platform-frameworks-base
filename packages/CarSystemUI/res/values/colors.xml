@@ -15,13 +15,12 @@
   ~ limitations under the License
   -->
 <resources xmlns:android="http://schemas.android.com/apk/res/android">
-    <color name="nav_bar_ripple_background_color">#40ffffff</color>
     <!-- colors for user switcher -->
     <color name="car_user_switcher_background_color">#000000</color>
     <color name="car_user_switcher_name_text_color">@*android:color/car_body1_light</color>
     <color name="car_user_switcher_add_user_background_color">#131313</color>
     <color name="car_user_switcher_add_user_add_sign_color">@*android:color/car_body1_light</color>
-    <color name="car_nav_icon_fill_color">#8Fffffff</color>
+    <color name="car_nav_icon_fill_color">#8F8F8F</color>
     <color name="car_nav_icon_fill_color_selected">#ffffff</color>
     <!-- colors for seekbar -->
     <color name="car_seekbar_track_background">#131315</color>
@@ -55,4 +54,7 @@
     <color name="list_divider_color">@*android:color/car_list_divider_light</color>
     <color name="car_volume_item_divider_color">@*android:color/car_list_divider</color>
     <color name="car_volume_item_background_color">@*android:color/car_card_dark</color>
+
+    <color name="car_user_switching_dialog_background_color">@android:color/black</color>
+    <color name="car_user_switching_dialog_loading_text_color">@*android:color/car_body1</color>
 </resources>

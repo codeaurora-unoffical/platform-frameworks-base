@@ -28,7 +28,6 @@ import android.os.Binder;
 import android.os.IPullAtomCallback;
 import android.os.IPullAtomResultReceiver;
 import android.os.IStatsManagerService;
-import android.os.IStatsd;
 import android.os.RemoteException;
 import android.os.StatsFrameworkInitializer;
 import android.util.AndroidException;
@@ -55,9 +54,6 @@ public final class StatsManager {
 
     private static final Object sLock = new Object();
     private final Context mContext;
-
-    @GuardedBy("sLock")
-    private IStatsd mService;
 
     @GuardedBy("sLock")
     private IStatsManagerService mStatsManagerService;
@@ -124,7 +120,7 @@ public final class StatsManager {
     /**
      * @hide
      **/
-    @VisibleForTesting public static final long DEFAULT_TIMEOUT_MILLIS = 10_000L; // 10 seconds.
+    @VisibleForTesting public static final long DEFAULT_TIMEOUT_MILLIS = 2_000L; // 2 seconds.
 
     /**
      * Constructor for StatsManagerClient.
@@ -565,7 +561,15 @@ public final class StatsManager {
                     try {
                         resultReceiver.pullFinished(atomTag, success, parcels);
                     } catch (RemoteException e) {
-                        Log.w(TAG, "StatsPullResultReceiver failed for tag " + mAtomId);
+                        Log.w(TAG, "StatsPullResultReceiver failed for tag " + mAtomId
+                                + " due to TransactionTooLarge. Calling pullFinish with no data");
+                        StatsEventParcel[] emptyData = new StatsEventParcel[0];
+                        try {
+                            resultReceiver.pullFinished(atomTag, /*success=*/false, emptyData);
+                        } catch (RemoteException nestedException) {
+                            Log.w(TAG, "StatsPullResultReceiver failed for tag " + mAtomId
+                                    + " with empty payload");
+                        }
                     }
                 });
             } finally {

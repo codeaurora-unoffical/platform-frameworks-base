@@ -45,8 +45,6 @@ public class FeatureFlagUtils {
     /** @hide */
     public static final String SETTINGS_DO_NOT_RESTORE_PRESERVED =
             "settings_do_not_restore_preserved";
-    /** @hide */
-    public static final String SETTINGS_SCHEDULES_FLAG = "settings_schedules";
 
     private static final Map<String, String> DEFAULT_FLAGS;
 
@@ -62,15 +60,13 @@ public class FeatureFlagUtils {
         DEFAULT_FLAGS.put("settings_wifi_details_datausage_header", "false");
         DEFAULT_FLAGS.put("settings_skip_direction_mutable", "true");
         DEFAULT_FLAGS.put(SETTINGS_WIFITRACKER2, "true");
-        DEFAULT_FLAGS.put("settings_controller_loading_enhancement", "false");
+        DEFAULT_FLAGS.put("settings_controller_loading_enhancement", "true");
         DEFAULT_FLAGS.put("settings_conditionals", "false");
         // This flags guards a feature introduced in R and will be removed in the next release
         // (b/148367230).
         DEFAULT_FLAGS.put(SETTINGS_DO_NOT_RESTORE_PRESERVED, "true");
 
         DEFAULT_FLAGS.put("settings_tether_all_in_one", "false");
-        DEFAULT_FLAGS.put(SETTINGS_SCHEDULES_FLAG, "false");
-        DEFAULT_FLAGS.put("settings_contextual_home2", "true");
     }
 
     /**

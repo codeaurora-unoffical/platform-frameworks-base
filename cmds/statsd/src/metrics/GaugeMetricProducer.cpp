@@ -70,14 +70,15 @@ const int FIELD_ID_END_BUCKET_ELAPSED_MILLIS = 8;
 
 GaugeMetricProducer::GaugeMetricProducer(
         const ConfigKey& key, const GaugeMetric& metric, const int conditionIndex,
-        const sp<ConditionWizard>& wizard, const int whatMatcherIndex,
-        const sp<EventMatcherWizard>& matcherWizard, const int pullTagId, const int triggerAtomId,
-        const int atomId, const int64_t timeBaseNs, const int64_t startTimeNs,
-        const sp<StatsPullerManager>& pullerManager,
+        const vector<ConditionState>& initialConditionCache, const sp<ConditionWizard>& wizard,
+        const int whatMatcherIndex, const sp<EventMatcherWizard>& matcherWizard,
+        const int pullTagId, const int triggerAtomId, const int atomId, const int64_t timeBaseNs,
+        const int64_t startTimeNs, const sp<StatsPullerManager>& pullerManager,
         const unordered_map<int, shared_ptr<Activation>>& eventActivationMap,
         const unordered_map<int, vector<shared_ptr<Activation>>>& eventDeactivationMap)
-    : MetricProducer(metric.id(), key, timeBaseNs, conditionIndex, wizard, eventActivationMap,
-                     eventDeactivationMap, /*slicedStateAtoms=*/{}, /*stateGroupMap=*/{}),
+    : MetricProducer(metric.id(), key, timeBaseNs, conditionIndex, initialConditionCache, wizard,
+                     eventActivationMap, eventDeactivationMap, /*slicedStateAtoms=*/{},
+                     /*stateGroupMap=*/{}),
       mWhatMatcherIndex(whatMatcherIndex),
       mEventMatcherWizard(matcherWizard),
       mPullerManager(pullerManager),
@@ -321,18 +322,17 @@ void GaugeMetricProducer::pullAndMatchEventsLocked(const int64_t timestampNs) {
         return;
     }
     vector<std::shared_ptr<LogEvent>> allData;
-    if (!mPullerManager->Pull(mPullTagId, mConfigKey, &allData)) {
+    if (!mPullerManager->Pull(mPullTagId, mConfigKey, timestampNs, &allData)) {
         ALOGE("Gauge Stats puller failed for tag: %d at %lld", mPullTagId, (long long)timestampNs);
         return;
     }
     const int64_t pullDelayNs = getElapsedRealtimeNs() - timestampNs;
+    StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
     if (pullDelayNs > mMaxPullDelayNs) {
         ALOGE("Pull finish too late for atom %d", mPullTagId);
         StatsdStats::getInstance().notePullExceedMaxDelay(mPullTagId);
-        StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
         return;
     }
-    StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
     for (const auto& data : allData) {
         LogEvent localCopy = data->makeCopy();
         localCopy.setElapsedTimestampNs(timestampNs);
@@ -413,6 +413,13 @@ void GaugeMetricProducer::onDataPulled(const std::vector<std::shared_ptr<LogEven
                                        bool pullSuccess, int64_t originalPullTimeNs) {
     std::lock_guard<std::mutex> lock(mMutex);
     if (!pullSuccess || allData.size() == 0) {
+        return;
+    }
+    const int64_t pullDelayNs = getElapsedRealtimeNs() - originalPullTimeNs;
+    StatsdStats::getInstance().notePullDelay(mPullTagId, pullDelayNs);
+    if (pullDelayNs > mMaxPullDelayNs) {
+        ALOGE("Pull finish too late for atom %d", mPullTagId);
+        StatsdStats::getInstance().notePullExceedMaxDelay(mPullTagId);
         return;
     }
     for (const auto& data : allData) {

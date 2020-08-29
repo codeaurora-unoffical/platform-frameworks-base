@@ -38,6 +38,7 @@ import android.service.notification.ZenModeConfig;
 import android.telecom.TelecomManager;
 import android.text.format.DateFormat;
 import android.util.Log;
+import android.view.View;
 
 import androidx.lifecycle.Observer;
 
@@ -663,6 +664,7 @@ public class PhoneStatusBarPolicy
         if (DEBUG) Log.d(TAG, "screenrecord: countdown " + millisUntilFinished);
         int countdown = (int) Math.floorDiv(millisUntilFinished + 500, 1000);
         int resourceId = R.drawable.stat_sys_screen_record;
+        String description = Integer.toString(countdown);
         switch (countdown) {
             case 1:
                 resourceId = R.drawable.stat_sys_screen_record_1;
@@ -674,22 +676,29 @@ public class PhoneStatusBarPolicy
                 resourceId = R.drawable.stat_sys_screen_record_3;
                 break;
         }
-        mIconController.setIcon(mSlotScreenRecord, resourceId, null);
+        mIconController.setIcon(mSlotScreenRecord, resourceId, description);
         mIconController.setIconVisibility(mSlotScreenRecord, true);
+        // Set as assertive so talkback will announce the countdown
+        mIconController.setIconAccessibilityLiveRegion(mSlotScreenRecord,
+                View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
     }
 
     @Override
     public void onCountdownEnd() {
         if (DEBUG) Log.d(TAG, "screenrecord: hiding icon during countdown");
         mHandler.post(() -> mIconController.setIconVisibility(mSlotScreenRecord, false));
+        // Reset talkback priority
+        mHandler.post(() -> mIconController.setIconAccessibilityLiveRegion(mSlotScreenRecord,
+                View.ACCESSIBILITY_LIVE_REGION_NONE));
     }
 
     @Override
     public void onRecordingStart() {
         if (DEBUG) Log.d(TAG, "screenrecord: showing icon");
         mIconController.setIcon(mSlotScreenRecord,
-                R.drawable.stat_sys_screen_record, null);
-        mIconController.setIconVisibility(mSlotScreenRecord, true);
+                R.drawable.stat_sys_screen_record,
+                mResources.getString(R.string.screenrecord_ongoing_screen_only));
+        mHandler.post(() -> mIconController.setIconVisibility(mSlotScreenRecord, true));
     }
 
     @Override

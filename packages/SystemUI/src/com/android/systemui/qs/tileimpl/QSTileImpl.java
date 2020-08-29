@@ -14,8 +14,8 @@
 
 package com.android.systemui.qs.tileimpl;
 
-import static androidx.lifecycle.Lifecycle.State.DESTROYED;
 import static androidx.lifecycle.Lifecycle.State.RESUMED;
+import static androidx.lifecycle.Lifecycle.State.STARTED;
 
 import static com.android.internal.logging.nano.MetricsProto.MetricsEvent.ACTION_QS_CLICK;
 import static com.android.internal.logging.nano.MetricsProto.MetricsEvent.ACTION_QS_LONG_PRESS;
@@ -68,8 +68,6 @@ import com.android.systemui.qs.QSEvent;
 import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.QuickStatusBarHeader;
 import com.android.systemui.qs.logging.QSLogger;
-import com.android.systemui.qs.tiles.QSSettingsControllerKt;
-import com.android.systemui.qs.tiles.QSSettingsPanel;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -152,19 +150,12 @@ public abstract class QSTileImpl<TState extends State> implements QSTile, Lifecy
      */
     abstract public int getMetricsCategory();
 
-    /**
-     * Experimental option on whether to use settings panels. Only loaded on creation, so the tile
-     * needs to be removed and added for this to take effect.
-     */
-    protected final QSSettingsPanel mQSSettingsPanelOption;
-
     protected QSTileImpl(QSHost host) {
         mHost = host;
         mContext = host.getContext();
         mInstanceId = host.getNewInstanceId();
         mState = newTileState();
         mTmpState = newTileState();
-        mQSSettingsPanelOption = QSSettingsControllerKt.getQSSettingsPanelOption();
         mQSLogger = host.getQSLogger();
         mUiEventLogger = host.getUiEventLogger();
     }
@@ -366,10 +357,6 @@ public abstract class QSTileImpl<TState extends State> implements QSTile, Lifecy
      * {@link QSTileImpl#getLongClickIntent}
      */
     protected void handleLongClick() {
-        if (mQSSettingsPanelOption == QSSettingsPanel.USE_DETAIL) {
-            showDetail(true);
-            return;
-        }
         Dependency.get(ActivityStarter.class).postStartActivityDismissingKeyguard(
                 getLongClickIntent(), 0);
     }
@@ -445,17 +432,19 @@ public abstract class QSTileImpl<TState extends State> implements QSTile, Lifecy
     }
 
     private void handleSetListeningInternal(Object listener, boolean listening) {
+        // This should be used to go from resumed to paused. Listening for ON_RESUME and ON_PAUSE
+        // in this lifecycle will determine the listening window.
         if (listening) {
             if (mListeners.add(listener) && mListeners.size() == 1) {
                 if (DEBUG) Log.d(TAG, "handleSetListening true");
-                mLifecycle.markState(RESUMED);
+                mLifecycle.setCurrentState(RESUMED);
                 handleSetListening(listening);
                 refreshState(); // Ensure we get at least one refresh after listening.
             }
         } else {
             if (mListeners.remove(listener) && mListeners.size() == 0) {
                 if (DEBUG) Log.d(TAG, "handleSetListening false");
-                mLifecycle.markState(DESTROYED);
+                mLifecycle.setCurrentState(STARTED);
                 handleSetListening(listening);
             }
         }

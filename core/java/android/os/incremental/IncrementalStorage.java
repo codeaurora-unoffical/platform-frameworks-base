@@ -418,6 +418,17 @@ public final class IncrementalStorage {
     private static final int INCFS_MAX_ADD_DATA_SIZE = 128;
 
     /**
+     * Permanently disable readlogs collection.
+     */
+    public void disableReadLogs() {
+        try {
+            mService.disableReadLogs(mId);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Deserialize and validate v4 signature bytes.
      */
     private static void validateV4Signature(@Nullable byte[] v4signatureBytes)
@@ -469,12 +480,15 @@ public final class IncrementalStorage {
      * @param apkFullPath Source APK to extract native libs from.
      * @param libDirRelativePath Target dir to put lib files, e.g., "lib" or "lib/arm".
      * @param abi Target ABI of the native lib files. Only extract native libs of this ABI.
+     * @param extractNativeLibs If true, extract native libraries; otherwise just setup directories
+     *                          without extracting.
      * @return Success of not.
      */
     public boolean configureNativeBinaries(String apkFullPath, String libDirRelativePath,
-            String abi) {
+            String abi, boolean extractNativeLibs) {
         try {
-            return mService.configureNativeBinaries(mId, apkFullPath, libDirRelativePath, abi);
+            return mService.configureNativeBinaries(mId, apkFullPath, libDirRelativePath, abi,
+                    extractNativeLibs);
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
             return false;

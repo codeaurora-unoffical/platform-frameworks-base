@@ -44,6 +44,7 @@ import android.window.IWindowOrganizerController;
 import android.window.WindowContainerToken;
 import android.window.WindowContainerTransaction;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.function.pooled.PooledConsumer;
 import com.android.internal.util.function.pooled.PooledLambda;
 
@@ -51,6 +52,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Server side implementation for the interface for organizing windows
@@ -138,6 +140,13 @@ class WindowOrganizerController extends IWindowOrganizerController.Stub
                             Slog.e(TAG, "Attempt to operate on detached container: " + wc);
                             continue;
                         }
+                        // Make sure we add to the syncSet before performing
+                        // operations so we don't end up splitting effects between the WM
+                        // pending transaction and the BLASTSync transaction.
+                        if (syncId >= 0) {
+                            addToSyncSet(syncId, wc);
+                        }
+
                         int containerEffect = applyWindowContainerChange(wc, entry.getValue());
                         effects |= containerEffect;
 
@@ -145,9 +154,6 @@ class WindowOrganizerController extends IWindowOrganizerController.Stub
                         if ((effects & TRANSACT_EFFECTS_LIFECYCLE) == 0
                                 && (containerEffect & TRANSACT_EFFECTS_CLIENT_CONFIG) != 0) {
                             haveConfigChanges.add(wc);
-                        }
-                        if (syncId >= 0) {
-                            mBLASTSyncEngine.addToSyncSet(syncId, wc);
                         }
                     }
                     // Hierarchy changes
@@ -159,7 +165,41 @@ class WindowOrganizerController extends IWindowOrganizerController.Stub
                             Slog.e(TAG, "Attempt to operate on detached container: " + wc);
                             continue;
                         }
+                        if (syncId >= 0) {
+                            addToSyncSet(syncId, wc);
+                        }
                         effects |= sanitizeAndApplyHierarchyOp(wc, hop);
+                    }
+                    // Queue-up bounds-change transactions for tasks which are now organized. Do
+                    // this after hierarchy ops so we have the final organized state.
+                    entries = t.getChanges().entrySet().iterator();
+                    while (entries.hasNext()) {
+                        final Map.Entry<IBinder, WindowContainerTransaction.Change> entry =
+                                entries.next();
+                        final Task task = WindowContainer.fromBinder(entry.getKey()).asTask();
+                        final Rect surfaceBounds = entry.getValue().getBoundsChangeSurfaceBounds();
+                        if (task == null || !task.isAttached() || surfaceBounds == null) {
+                            continue;
+                        }
+                        if (!task.isOrganized()) {
+                            final Task parent =
+                                    task.getParent() != null ? task.getParent().asTask() : null;
+                            // Also allow direct children of created-by-organizer tasks to be
+                            // controlled. In the future, these will become organized anyways.
+                            if (parent == null || !parent.mCreatedByOrganizer) {
+                                throw new IllegalArgumentException(
+                                        "Can't manipulate non-organized task surface " + task);
+                            }
+                        }
+                        final SurfaceControl.Transaction sft = new SurfaceControl.Transaction();
+                        final SurfaceControl sc = task.getSurfaceControl();
+                        sft.setPosition(sc, surfaceBounds.left, surfaceBounds.top);
+                        if (surfaceBounds.isEmpty()) {
+                            sft.setWindowCrop(sc, null);
+                        } else {
+                            sft.setWindowCrop(sc, surfaceBounds.width(), surfaceBounds.height());
+                        }
+                        task.setMainWindowSizeChangeTransaction(sft);
                     }
                     if ((effects & TRANSACT_EFFECTS_LIFECYCLE) != 0) {
                         // Already calls ensureActivityConfig
@@ -358,24 +398,39 @@ class WindowOrganizerController extends IWindowOrganizerController.Stub
         return mDisplayAreaOrganizerController;
     }
 
+    @VisibleForTesting
     int startSyncWithOrganizer(IWindowContainerTransactionCallback callback) {
         int id = mBLASTSyncEngine.startSyncSet(this);
         mTransactionCallbacksByPendingSyncId.put(id, callback);
         return id;
     }
 
+    @VisibleForTesting
     void setSyncReady(int id) {
         mBLASTSyncEngine.setReady(id);
     }
 
+    @VisibleForTesting
+    void addToSyncSet(int syncId, WindowContainer wc) {
+        mBLASTSyncEngine.addToSyncSet(syncId, wc);
+    }
+
     @Override
-    public void onTransactionReady(int mSyncId, SurfaceControl.Transaction mergedTransaction) {
+    public void onTransactionReady(int mSyncId, Set<WindowContainer> windowContainersReady) {
         final IWindowContainerTransactionCallback callback =
                 mTransactionCallbacksByPendingSyncId.get(mSyncId);
+
+        SurfaceControl.Transaction mergedTransaction = new SurfaceControl.Transaction();
+        for (WindowContainer container : windowContainersReady) {
+            container.mergeBlastSyncTransaction(mergedTransaction);
+        }
 
         try {
             callback.onTransactionReady(mSyncId, mergedTransaction);
         } catch (RemoteException e) {
+            // If there's an exception when trying to send the mergedTransaction to the client, we
+            // should immediately apply it here so the transactions aren't lost.
+            mergedTransaction.apply();
         }
 
         mTransactionCallbacksByPendingSyncId.remove(mSyncId);
@@ -404,6 +459,7 @@ class WindowOrganizerController extends IWindowOrganizerController.Stub
                 .setBufferSize(bounds.width(), bounds.height())
                 .setFormat(PixelFormat.TRANSLUCENT)
                 .setParent(wc.getParentSurfaceControl())
+                .setCallsite("WindowOrganizerController.takeScreenshot")
                 .build();
 
         Surface surface = new Surface();
@@ -411,7 +467,7 @@ class WindowOrganizerController extends IWindowOrganizerController.Stub
         surface.attachAndQueueBufferWithColorSpace(buffer.getGraphicBuffer(), null);
         surface.release();
 
-        outSurfaceControl.copyFrom(screenshot);
+        outSurfaceControl.copyFrom(screenshot, "WindowOrganizerController.takeScreenshot");
         return true;
     }
 

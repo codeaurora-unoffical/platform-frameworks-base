@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"Ipakita ang mga opsyon para sa certification ng wireless display"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"Pataasin ang antas ng Wi‑Fi logging, ipakita sa bawat SSID RSSI sa Wi‑Fi Picker"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"Binabawasan ang pagkaubos ng baterya at pinapahusay ang performance ng network"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"Kapag naka-enable ang mode na ito, puwedeng magbago ang MAC address ng device na ito sa tuwing kokonekta ito sa isang network na may naka-enable na MAC randomization."</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"Nakametro"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"Hindi Nakametro"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"Mga laki ng buffer ng Logger"</string>
@@ -434,7 +433,7 @@
     <string name="power_discharge_by" msgid="4113180890060388350">"Tatagal dapat nang hanggang humigit-kumulang <xliff:g id="TIME">%1$s</xliff:g> (<xliff:g id="LEVEL">%2$s</xliff:g>)"</string>
     <string name="power_discharge_by_only" msgid="92545648425937000">"Tatagal hanggang mga <xliff:g id="TIME">%1$s</xliff:g>"</string>
     <string name="power_discharge_by_only_short" msgid="5883041507426914446">"Hanggang <xliff:g id="TIME">%1$s</xliff:g>"</string>
-    <string name="power_suggestion_battery_run_out" msgid="6332089307827787087">"Posibleng maubos ang baterya sa loob ng <xliff:g id="TIME">%1$s</xliff:g>"</string>
+    <string name="power_suggestion_battery_run_out" msgid="6332089307827787087">"Baka maubos ang baterya sa loob ng <xliff:g id="TIME">%1$s</xliff:g>"</string>
     <string name="power_remaining_less_than_duration_only" msgid="8956656616031395152">"Wala nang <xliff:g id="THRESHOLD">%1$s</xliff:g> ang natitira"</string>
     <string name="power_remaining_less_than_duration" msgid="318215464914990578">"Wala nang <xliff:g id="THRESHOLD">%1$s</xliff:g> ang natitira (<xliff:g id="LEVEL">%2$s</xliff:g>)"</string>
     <string name="power_remaining_more_than_subtext" msgid="446388082266121894">"Mahigit <xliff:g id="TIME_REMAINING">%1$s</xliff:g> pa ang natitira (<xliff:g id="LEVEL">%2$s</xliff:g>)"</string>
@@ -550,4 +549,9 @@
     <string name="guest_new_guest" msgid="3482026122932643557">"Magdagdag ng bisita"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"Alisin ang bisita"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"Bisita"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"Default ng device"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"Naka-disable"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"Na-enable"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"Dapat i-reboot ang iyong device para mailapat ang pagbabagong ito. Mag-reboot ngayon o kanselahin."</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"Wired na headphone"</string>
 </resources>

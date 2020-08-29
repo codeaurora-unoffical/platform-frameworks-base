@@ -195,7 +195,7 @@
   </string-array>
     <string name="choose_profile" msgid="343803890897657450">"Pilih profil"</string>
     <string name="category_personal" msgid="6236798763159385225">"Pribadi"</string>
-    <string name="category_work" msgid="4014193632325996115">"Kantor"</string>
+    <string name="category_work" msgid="4014193632325996115">"Kerja"</string>
     <string name="development_settings_title" msgid="140296922921597393">"Opsi developer"</string>
     <string name="development_settings_enable" msgid="4285094651288242183">"Aktifkan opsi developer"</string>
     <string name="development_settings_summary" msgid="8718917813868735095">"Menyetel opsi untuk pengembangan apl"</string>
@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"Tampilkan opsi untuk sertifikasi layar nirkabel"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"Tingkatkan level pencatatan log Wi-Fi, tampilkan per SSID RSSI di Pemilih Wi‑Fi"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"Memperlambat kehabisan baterai &amp; meningkatkan performa jaringan"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"Saat mode ini diaktifkan, alamat MAC perangkat ini dapat berubah setiap kali terhubung ke jaringan yang mengaktifkan pengacakan MAC."</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"Berbayar"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"Tidak berbayar"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"Ukuran buffer pencatat log"</string>
@@ -348,8 +347,8 @@
     <string name="disable_overlays_summary" msgid="1954852414363338166">"Selalu gunakan GPU untuk pengomposisian layar"</string>
     <string name="simulate_color_space" msgid="1206503300335835151">"Simulasikan ruang warna"</string>
     <string name="enable_opengl_traces_title" msgid="4638773318659125196">"Aktifkan jejak OpenGL"</string>
-    <string name="usb_audio_disable_routing" msgid="3367656923544254975">"Perutean audio USB nonaktif"</string>
-    <string name="usb_audio_disable_routing_summary" msgid="8768242894849534699">"Perutean otomatis ke periferal audio USB nonaktif"</string>
+    <string name="usb_audio_disable_routing" msgid="3367656923544254975">"Pemilihan rute audio USB nonaktif"</string>
+    <string name="usb_audio_disable_routing_summary" msgid="8768242894849534699">"Pemilihan rute otomatis ke periferal audio USB nonaktif"</string>
     <string name="debug_layout" msgid="1659216803043339741">"Tampilkan batas tata letak"</string>
     <string name="debug_layout_summary" msgid="8825829038287321978">"Tampilkan batas klip, margin, dll."</string>
     <string name="force_rtl_layout_all_locales" msgid="8690762598501599796">"Paksa arah tata letak RTL"</string>
@@ -434,7 +433,7 @@
     <string name="power_discharge_by" msgid="4113180890060388350">"Akan bertahan kira-kira sampai pukul <xliff:g id="TIME">%1$s</xliff:g> (<xliff:g id="LEVEL">%2$s</xliff:g>)"</string>
     <string name="power_discharge_by_only" msgid="92545648425937000">"Akan bertahan kira-kira sampai pukul <xliff:g id="TIME">%1$s</xliff:g>"</string>
     <string name="power_discharge_by_only_short" msgid="5883041507426914446">"Hingga <xliff:g id="TIME">%1$s</xliff:g>"</string>
-    <string name="power_suggestion_battery_run_out" msgid="6332089307827787087">"Baterai mungkin habis pada <xliff:g id="TIME">%1$s</xliff:g>"</string>
+    <string name="power_suggestion_battery_run_out" msgid="6332089307827787087">"Baterai mungkin habis pada pukul <xliff:g id="TIME">%1$s</xliff:g>"</string>
     <string name="power_remaining_less_than_duration_only" msgid="8956656616031395152">"Tersisa kurang dari <xliff:g id="THRESHOLD">%1$s</xliff:g>"</string>
     <string name="power_remaining_less_than_duration" msgid="318215464914990578">"Tersisa kurang dari <xliff:g id="THRESHOLD">%1$s</xliff:g> (<xliff:g id="LEVEL">%2$s</xliff:g>)"</string>
     <string name="power_remaining_more_than_subtext" msgid="446388082266121894">"Tersisa lebih dari <xliff:g id="TIME_REMAINING">%1$s</xliff:g> (<xliff:g id="LEVEL">%2$s</xliff:g>)"</string>
@@ -550,4 +549,9 @@
     <string name="guest_new_guest" msgid="3482026122932643557">"Tambahkan tamu"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"Hapus tamu"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"Tamu"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"Default perangkat"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"Nonaktif"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"Aktif"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"Perangkat Anda harus di-reboot agar perubahan ini diterapkan. Reboot sekarang atau batalkan."</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"Headphone berkabel"</string>
 </resources>

@@ -31,12 +31,13 @@ import static android.media.MediaRoute2Info.TYPE_WIRED_HEADPHONES;
 import static android.media.MediaRoute2Info.TYPE_WIRED_HEADSET;
 
 import android.content.Context;
-import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffColorFilter;
 import android.graphics.drawable.Drawable;
 import android.media.MediaRoute2Info;
 import android.media.MediaRouter2Manager;
 import android.text.TextUtils;
-import android.util.Log;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
@@ -53,7 +54,8 @@ public abstract class MediaDevice implements Comparable<MediaDevice> {
     private static final String TAG = "MediaDevice";
 
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({MediaDeviceType.TYPE_USB_C_AUDIO_DEVICE,
+    @IntDef({MediaDeviceType.TYPE_UNKNOWN,
+            MediaDeviceType.TYPE_USB_C_AUDIO_DEVICE,
             MediaDeviceType.TYPE_3POINT5_MM_AUDIO_DEVICE,
             MediaDeviceType.TYPE_FAST_PAIR_BLUETOOTH_DEVICE,
             MediaDeviceType.TYPE_BLUETOOTH_DEVICE,
@@ -61,6 +63,7 @@ public abstract class MediaDevice implements Comparable<MediaDevice> {
             MediaDeviceType.TYPE_CAST_GROUP_DEVICE,
             MediaDeviceType.TYPE_PHONE_DEVICE})
     public @interface MediaDeviceType {
+        int TYPE_UNKNOWN = 0;
         int TYPE_USB_C_AUDIO_DEVICE = 1;
         int TYPE_3POINT5_MM_AUDIO_DEVICE = 2;
         int TYPE_FAST_PAIR_BLUETOOTH_DEVICE = 3;
@@ -133,6 +136,14 @@ public abstract class MediaDevice implements Comparable<MediaDevice> {
                 getId());
     }
 
+    void setColorFilter(Drawable drawable) {
+        final ColorStateList list =
+                mContext.getResources().getColorStateList(
+                        R.color.advanced_icon_color, mContext.getTheme());
+        drawable.setColorFilter(new PorterDuffColorFilter(list.getDefaultColor(),
+                PorterDuff.Mode.SRC_IN));
+    }
+
     /**
      * Get name from MediaDevice.
      *
@@ -153,6 +164,13 @@ public abstract class MediaDevice implements Comparable<MediaDevice> {
      * @return drawable of icon.
      */
     public abstract Drawable getIcon();
+
+    /**
+     * Get icon of MediaDevice without background.
+     *
+     * @return drawable of icon
+     */
+    public abstract Drawable getIconWithoutBackground();
 
     /**
      * Get unique ID that represent MediaDevice
@@ -180,7 +198,7 @@ public abstract class MediaDevice implements Comparable<MediaDevice> {
      */
 
     public void requestSetVolume(int volume) {
-        mRouterManager.requestSetVolume(mRouteInfo, volume);
+        mRouterManager.setRouteVolume(mRouteInfo, volume);
     }
 
     /**
@@ -208,30 +226,6 @@ public abstract class MediaDevice implements Comparable<MediaDevice> {
      */
     public String getClientPackageName() {
         return mRouteInfo.getClientPackageName();
-    }
-
-    /**
-     * Get application label from MediaDevice.
-     *
-     * @return application label.
-     */
-    public String getClientAppLabel() {
-        final String packageName = mRouteInfo.getClientPackageName();
-        if (TextUtils.isEmpty(packageName)) {
-            Log.d(TAG, "Client package name is empty");
-            return mContext.getResources().getString(R.string.unknown);
-        }
-        try {
-            final PackageManager packageManager = mContext.getPackageManager();
-            final String appLabel = packageManager.getApplicationLabel(
-                    packageManager.getApplicationInfo(packageName, 0)).toString();
-            if (!TextUtils.isEmpty(appLabel)) {
-                return appLabel;
-            }
-        } catch (PackageManager.NameNotFoundException e) {
-            Log.e(TAG, "unable to find " + packageName);
-        }
-        return mContext.getResources().getString(R.string.unknown);
     }
 
     /**

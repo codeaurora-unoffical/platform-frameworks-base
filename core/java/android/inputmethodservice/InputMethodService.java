@@ -90,6 +90,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.window.WindowMetricsHelper;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.inputmethod.IInputContentUriToken;
@@ -470,6 +471,10 @@ public class InputMethodService extends AbstractInputMethodService {
 
     final ViewTreeObserver.OnComputeInternalInsetsListener mInsetsComputer = info -> {
         onComputeInsets(mTmpInsets);
+        if (!mViewsCreated) {
+            // The IME views are not ready, keep visible insets untouched.
+            mTmpInsets.visibleTopInsets = 0;
+        }
         if (isExtractViewShown()) {
             // In true fullscreen mode, we just say the window isn't covering
             // any content so we don't impact whatever is behind.
@@ -1438,8 +1443,8 @@ public class InputMethodService extends AbstractInputMethodService {
      */
     public int getMaxWidth() {
         final WindowManager windowManager = getSystemService(WindowManager.class);
-        final Rect windowBounds = windowManager.getCurrentWindowMetrics().getBounds();
-        return windowBounds.width();
+        return WindowMetricsHelper.getBoundsExcludingNavigationBarAndCutout(
+                windowManager.getCurrentWindowMetrics()).width();
     }
     
     /**

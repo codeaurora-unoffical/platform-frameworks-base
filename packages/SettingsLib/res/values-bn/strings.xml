@@ -153,7 +153,7 @@
     <string name="unknown" msgid="3544487229740637809">"অজানা"</string>
     <string name="running_process_item_user_label" msgid="3988506293099805796">"ব্যবহারকারী: <xliff:g id="USER_NAME">%1$s</xliff:g>"</string>
     <string name="launch_defaults_some" msgid="3631650616557252926">"কিছু ডিফল্ট সেট করা রয়েছে"</string>
-    <string name="launch_defaults_none" msgid="8049374306261262709">"কোনো ডিফল্ট সেট করা নেই"</string>
+    <string name="launch_defaults_none" msgid="8049374306261262709">"কোনও ডিফল্ট সেট করা নেই"</string>
     <string name="tts_settings" msgid="8130616705989351312">"পাঠ্য থেকে ভাষ্য আউটপুট সেটিংস"</string>
     <string name="tts_settings_title" msgid="7602210956640483039">"টেক্সট-টু-স্পিচ"</string>
     <string name="tts_default_rate_title" msgid="3964187817364304022">"কথা বলার হার"</string>
@@ -195,7 +195,7 @@
   </string-array>
     <string name="choose_profile" msgid="343803890897657450">"প্রোফাইল বেছে নিন"</string>
     <string name="category_personal" msgid="6236798763159385225">"ব্যক্তিগত"</string>
-    <string name="category_work" msgid="4014193632325996115">"কর্মক্ষেত্র"</string>
+    <string name="category_work" msgid="4014193632325996115">"অফিস"</string>
     <string name="development_settings_title" msgid="140296922921597393">"ডেভেলপার বিকল্প"</string>
     <string name="development_settings_enable" msgid="4285094651288242183">"ডেভেলপার বিকল্প সক্ষম করুন"</string>
     <string name="development_settings_summary" msgid="8718917813868735095">"অ্যাপ্লিকেশান উন্নয়নের জন্য বিকল্পগুলি সেট করুন"</string>
@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"ওয়্যারলেস প্রদর্শন সার্টিফিকেশন জন্য বিকল্পগুলি দেখান"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"ওয়াই-ফাই লগিং স্তর বাড়ান, ওয়াই-ফাই চয়নকারীতে SSID RSSI অনুযায়ী দেখান"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"ব্যাটারির খরচ কমায় এবং নেটওয়ার্কের পারফর্ম্যান্স উন্নত করে"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"এই মোডটি চালু থাকার সময়, MAC র‍্যান্ডমাইজেশন চালু হওয়া এমন কোনও নেটওয়ার্কে কানেক্ট করার সময় এই ডিভাইসের MAC অ্যাড্রেস পরিবর্তিত হতে পারে।"</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"মিটার্ড"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"পরিমাপ করা নয়"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"লগার বাফারের আকারগুলি"</string>
@@ -486,7 +485,7 @@
     <string name="ims_reg_title" msgid="8197592958123671062">"IMS রেজিস্ট্রেশনের স্থিতি"</string>
     <string name="ims_reg_status_registered" msgid="884916398194885457">"রেজিস্টার করা"</string>
     <string name="ims_reg_status_not_registered" msgid="2989287366045704694">"রেজিস্টার করা নয়"</string>
-    <string name="status_unavailable" msgid="5279036186589861608">"অনুপলব্ধ"</string>
+    <string name="status_unavailable" msgid="5279036186589861608">"অনুপলভ্য"</string>
     <string name="wifi_status_mac_randomized" msgid="466382542497832189">"MAC র‍্যান্ডমাইজ করা হয়েছে"</string>
     <plurals name="wifi_tether_connected_summary" formatted="false" msgid="6317236306047306139">
       <item quantity="one">%1$dটি ডিভাইস কানেক্ট</item>
@@ -509,7 +508,7 @@
     <string name="zen_mode_duration_always_prompt_title" msgid="3212996860498119555">"প্রতিবার জিজ্ঞেস করা হবে"</string>
     <string name="zen_mode_forever" msgid="3339224497605461291">"যতক্ষণ না আপনি বন্ধ করছেন"</string>
     <string name="time_unit_just_now" msgid="3006134267292728099">"এখনই"</string>
-    <string name="media_transfer_this_device_name" msgid="2716555073132169240">"ফেনের স্পিকার"</string>
+    <string name="media_transfer_this_device_name" msgid="2716555073132169240">"ফোনের স্পিকার"</string>
     <string name="profile_connect_timeout_subtext" msgid="4043408193005851761">"কানেক্ট করতে সমস্যা হচ্ছে। ডিভাইস বন্ধ করে আবার চালু করুন"</string>
     <string name="media_transfer_wired_device_name" msgid="4447880899964056007">"ওয়্যার অডিও ডিভাইস"</string>
     <string name="help_label" msgid="3528360748637781274">"সহায়তা ও মতামত"</string>
@@ -550,4 +549,9 @@
     <string name="guest_new_guest" msgid="3482026122932643557">"অতিথি যোগ করুন"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"অতিথি সরান"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"অতিথি"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"ডিভাইসের ডিফল্ট"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"বন্ধ করা আছে"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"চালু করা আছে"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"এই পরিবর্তনটি প্রয়োগ করার জন্য আপনার ডিভাইসটি অবশ্যই রিবুট করতে হবে। এখনই রিবুট করুন বা বাতিল করুন।"</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"তার যুক্ত হেডফোন"</string>
 </resources>

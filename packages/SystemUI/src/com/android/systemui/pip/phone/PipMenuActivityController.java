@@ -19,6 +19,7 @@ package com.android.systemui.pip.phone;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 
+import android.annotation.Nullable;
 import android.app.ActivityManager.StackInfo;
 import android.app.ActivityOptions;
 import android.app.ActivityTaskManager;
@@ -60,11 +61,13 @@ public class PipMenuActivityController {
     public static final String EXTRA_CONTROLLER_MESSENGER = "messenger";
     public static final String EXTRA_ACTIONS = "actions";
     public static final String EXTRA_STACK_BOUNDS = "stack_bounds";
-    public static final String EXTRA_MOVEMENT_BOUNDS = "movement_bounds";
     public static final String EXTRA_ALLOW_TIMEOUT = "allow_timeout";
     public static final String EXTRA_WILL_RESIZE_MENU = "resize_menu_on_show";
     public static final String EXTRA_DISMISS_FRACTION = "dismiss_fraction";
     public static final String EXTRA_MENU_STATE = "menu_state";
+    public static final String EXTRA_SHOW_MENU_WITH_DELAY = "show_menu_with_delay";
+    public static final String EXTRA_SHOW_RESIZE_HANDLE = "show_resize_handle";
+    public static final String EXTRA_MESSAGE_CALLBACK_WHAT = "message_callback_what";
 
     public static final int MESSAGE_MENU_STATE_CHANGED = 100;
     public static final int MESSAGE_EXPAND_PIP = 101;
@@ -89,7 +92,7 @@ public class PipMenuActivityController {
          * @param menuState the current state of the menu
          * @param resize whether or not to resize the PiP with the state change
          */
-        void onPipMenuStateChanged(int menuState, boolean resize);
+        void onPipMenuStateChanged(int menuState, boolean resize, Runnable callback);
 
         /**
          * Called when the PIP requested to be expanded.
@@ -128,9 +131,10 @@ public class PipMenuActivityController {
         public void handleMessage(Message msg) {
             switch (msg.what) {
                 case MESSAGE_MENU_STATE_CHANGED: {
-                    int menuState = msg.arg1;
-                    boolean resize = msg.arg2 != 0;
-                    onMenuStateChanged(menuState, resize);
+                    final int menuState = msg.arg1;
+                    final boolean resize = msg.arg2 != 0;
+                    onMenuStateChanged(menuState, resize,
+                            getMenuStateChangeFinishedCallback(msg.replyTo, (Bundle) msg.obj));
                     break;
                 }
                 case MESSAGE_EXPAND_PIP: {
@@ -155,7 +159,7 @@ public class PipMenuActivityController {
                     // Mark the menu as invisible once the activity finishes as well
                     if (mToActivityMessenger == null) {
                         final boolean resize = msg.arg1 != 0;
-                        onMenuStateChanged(MENU_STATE_NONE, resize);
+                        onMenuStateChanged(MENU_STATE_NONE, resize, null /* callback */);
                     }
                     break;
                 }
@@ -193,7 +197,7 @@ public class PipMenuActivityController {
     }
 
     public void onActivityPinned() {
-        mInputConsumerController.registerInputConsumer();
+        mInputConsumerController.registerInputConsumer(true /* withSfVsync */);
     }
 
     public void onActivityUnpinned() {
@@ -247,21 +251,58 @@ public class PipMenuActivityController {
             // If we haven't requested the start activity, or if it previously took too long to
             // start, then start it
             startMenuActivity(MENU_STATE_NONE, null /* stackBounds */,
-                    null /* movementBounds */, false /* allowMenuTimeout */,
-                    false /* resizeMenuOnShow */);
+                    false /* allowMenuTimeout */, false /* resizeMenuOnShow */,
+                    false /* withDelay */, false /* showResizeHandle */);
         }
     }
 
     /**
-     * Shows the menu activity.
+     * Similar to {@link #showMenu(int, Rect, boolean, boolean, boolean)} but only show the menu
+     * upon PiP window transition is finished.
      */
-    public void showMenu(int menuState, Rect stackBounds, Rect movementBounds,
-            boolean allowMenuTimeout, boolean willResizeMenu) {
+    public void showMenuWithDelay(int menuState, Rect stackBounds, boolean allowMenuTimeout,
+            boolean willResizeMenu, boolean showResizeHandle) {
+        // hide all visible controls including close button and etc. first, this is to ensure
+        // menu is totally invisible during the transition to eliminate unpleasant artifacts
+        fadeOutMenu();
+        showMenuInternal(menuState, stackBounds, allowMenuTimeout, willResizeMenu,
+                true /* withDelay */, showResizeHandle);
+    }
+
+    /**
+     * Shows the menu activity immediately.
+     */
+    public void showMenu(int menuState, Rect stackBounds, boolean allowMenuTimeout,
+            boolean willResizeMenu, boolean showResizeHandle) {
+        showMenuInternal(menuState, stackBounds, allowMenuTimeout, willResizeMenu,
+                false /* withDelay */, showResizeHandle);
+    }
+
+    private Runnable getMenuStateChangeFinishedCallback(@Nullable Messenger replyTo,
+            @Nullable Bundle data) {
+        if (replyTo == null || data == null) {
+            return null;
+        }
+        return () -> {
+            try {
+                final Message m = Message.obtain();
+                m.what = data.getInt(EXTRA_MESSAGE_CALLBACK_WHAT);
+                replyTo.send(m);
+            } catch (RemoteException e) {
+                // ignored
+            }
+        };
+    }
+
+    private void showMenuInternal(int menuState, Rect stackBounds, boolean allowMenuTimeout,
+            boolean willResizeMenu, boolean withDelay, boolean showResizeHandle) {
         if (DEBUG) {
             Log.d(TAG, "showMenu() state=" + menuState
                     + " hasActivity=" + (mToActivityMessenger != null)
                     + " allowMenuTimeout=" + allowMenuTimeout
                     + " willResizeMenu=" + willResizeMenu
+                    + " withDelay=" + withDelay
+                    + " showResizeHandle=" + showResizeHandle
                     + " callers=\n" + Debug.getCallers(5, "    "));
         }
 
@@ -271,9 +312,10 @@ public class PipMenuActivityController {
             if (stackBounds != null) {
                 data.putParcelable(EXTRA_STACK_BOUNDS, stackBounds);
             }
-            data.putParcelable(EXTRA_MOVEMENT_BOUNDS, movementBounds);
             data.putBoolean(EXTRA_ALLOW_TIMEOUT, allowMenuTimeout);
             data.putBoolean(EXTRA_WILL_RESIZE_MENU, willResizeMenu);
+            data.putBoolean(EXTRA_SHOW_MENU_WITH_DELAY, withDelay);
+            data.putBoolean(EXTRA_SHOW_RESIZE_HANDLE, showResizeHandle);
             Message m = Message.obtain();
             m.what = PipMenuActivity.MESSAGE_SHOW_MENU;
             m.obj = data;
@@ -285,8 +327,8 @@ public class PipMenuActivityController {
         } else if (!mStartActivityRequested || isStartActivityRequestedElapsed()) {
             // If we haven't requested the start activity, or if it previously took too long to
             // start, then start it
-            startMenuActivity(menuState, stackBounds, movementBounds, allowMenuTimeout,
-                    willResizeMenu);
+            startMenuActivity(menuState, stackBounds, allowMenuTimeout, willResizeMenu, withDelay,
+                    showResizeHandle);
         }
     }
 
@@ -304,6 +346,23 @@ public class PipMenuActivityController {
                 mToActivityMessenger.send(m);
             } catch (RemoteException e) {
                 Log.e(TAG, "Could not notify poke menu", e);
+            }
+        }
+    }
+
+    private void fadeOutMenu() {
+        if (DEBUG) {
+            Log.d(TAG, "fadeOutMenu() state=" + mMenuState
+                    + " hasActivity=" + (mToActivityMessenger != null)
+                    + " callers=\n" + Debug.getCallers(5, "    "));
+        }
+        if (mToActivityMessenger != null) {
+            Message m = Message.obtain();
+            m.what = PipMenuActivity.MESSAGE_FADE_OUT_MENU;
+            try {
+                mToActivityMessenger.send(m);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Could not notify menu to fade out", e);
             }
         }
     }
@@ -364,7 +423,7 @@ public class PipMenuActivityController {
      * (ie. when manually expanding or dismissing).
      */
     public void hideMenuWithoutResize() {
-        onMenuStateChanged(MENU_STATE_NONE, false /* resize */);
+        onMenuStateChanged(MENU_STATE_NONE, false /* resize */, null /* callback */);
     }
 
     /**
@@ -388,8 +447,8 @@ public class PipMenuActivityController {
     /**
      * Starts the menu activity on the top task of the pinned stack.
      */
-    private void startMenuActivity(int menuState, Rect stackBounds, Rect movementBounds,
-            boolean allowMenuTimeout, boolean willResizeMenu) {
+    private void startMenuActivity(int menuState, Rect stackBounds, boolean allowMenuTimeout,
+            boolean willResizeMenu, boolean withDelay, boolean showResizeHandle) {
         try {
             StackInfo pinnedStackInfo = ActivityTaskManager.getService().getStackInfo(
                     WINDOWING_MODE_PINNED, ACTIVITY_TYPE_UNDEFINED);
@@ -402,12 +461,11 @@ public class PipMenuActivityController {
                 if (stackBounds != null) {
                     intent.putExtra(EXTRA_STACK_BOUNDS, stackBounds);
                 }
-                if (movementBounds != null) {
-                    intent.putExtra(EXTRA_MOVEMENT_BOUNDS, movementBounds);
-                }
                 intent.putExtra(EXTRA_MENU_STATE, menuState);
                 intent.putExtra(EXTRA_ALLOW_TIMEOUT, allowMenuTimeout);
                 intent.putExtra(EXTRA_WILL_RESIZE_MENU, willResizeMenu);
+                intent.putExtra(EXTRA_SHOW_MENU_WITH_DELAY, withDelay);
+                intent.putExtra(EXTRA_SHOW_RESIZE_HANDLE, showResizeHandle);
                 ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);
                 options.setLaunchTaskId(
                         pinnedStackInfo.taskIds[pinnedStackInfo.taskIds.length - 1]);
@@ -472,14 +530,15 @@ public class PipMenuActivityController {
     /**
      * Handles changes in menu visibility.
      */
-    private void onMenuStateChanged(int menuState, boolean resize) {
+    private void onMenuStateChanged(int menuState, boolean resize, Runnable callback) {
         if (DEBUG) {
             Log.d(TAG, "onMenuStateChanged() mMenuState=" + mMenuState
-                    + " menuState=" + menuState + " resize=" + resize);
+                    + " menuState=" + menuState + " resize=" + resize
+                    + " callers=\n" + Debug.getCallers(5, "    "));
         }
 
         if (menuState != mMenuState) {
-            mListeners.forEach(l -> l.onPipMenuStateChanged(menuState, resize));
+            mListeners.forEach(l -> l.onPipMenuStateChanged(menuState, resize, callback));
             if (menuState == MENU_STATE_FULL) {
                 // Once visible, start listening for media action changes. This call will trigger
                 // the menu actions to be updated again.

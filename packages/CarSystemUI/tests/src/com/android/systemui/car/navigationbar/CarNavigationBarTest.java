@@ -18,30 +18,43 @@ package com.android.systemui.car.navigationbar;
 
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
+import static android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+import static android.view.WindowInsetsController.APPEARANCE_OPAQUE_STATUS_BARS;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.graphics.Rect;
 import android.os.Handler;
+import android.os.RemoteException;
 import android.testing.AndroidTestingRunner;
 import android.testing.TestableLooper;
 import android.testing.TestableResources;
+import android.util.ArrayMap;
 import android.view.Display;
 import android.view.WindowManager;
 
 import androidx.test.filters.SmallTest;
 
 import com.android.internal.statusbar.IStatusBarService;
+import com.android.internal.statusbar.RegisterStatusBarResult;
+import com.android.internal.view.AppearanceRegion;
 import com.android.systemui.R;
 import com.android.systemui.SysuiTestCase;
 import com.android.systemui.car.CarDeviceProvisionedController;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.phone.AutoHideController;
+import com.android.systemui.statusbar.phone.LightBarController;
+import com.android.systemui.statusbar.phone.LightBarTransitionsController;
 import com.android.systemui.statusbar.phone.PhoneStatusBarPolicy;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
+import com.android.systemui.statusbar.phone.SysuiDarkIconDispatcher;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.util.concurrency.FakeExecutor;
+import com.android.systemui.util.time.FakeSystemClock;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -58,10 +71,15 @@ public class CarNavigationBarTest extends SysuiTestCase {
     private CarNavigationBar mCarNavigationBar;
     private TestableResources mTestableResources;
     private Handler mHandler;
-    private Handler mBackgroundHandler;
 
     @Mock
     private CarNavigationBarController mCarNavigationBarController;
+    @Mock
+    private LightBarController mLightBarController;
+    @Mock
+    private SysuiDarkIconDispatcher mStatusBarIconController;
+    @Mock
+    private LightBarTransitionsController mLightBarTransitionsController;
     @Mock
     private WindowManager mWindowManager;
     @Mock
@@ -70,6 +88,8 @@ public class CarNavigationBarTest extends SysuiTestCase {
     private AutoHideController mAutoHideController;
     @Mock
     private ButtonSelectionStateListener mButtonSelectionStateListener;
+    @Mock
+    private ButtonRoleHolderController mButtonRoleHolderController;
     @Mock
     private IStatusBarService mBarService;
     @Mock
@@ -81,17 +101,46 @@ public class CarNavigationBarTest extends SysuiTestCase {
     @Mock
     private StatusBarIconController mIconController;
 
+    private RegisterStatusBarResult mBarResult;
+    private AppearanceRegion[] mAppearanceRegions;
+    private FakeExecutor mUiBgExecutor;
+
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
         mTestableResources = mContext.getOrCreateTestableResources();
         mHandler = Handler.getMain();
-        mBackgroundHandler = Handler.createAsync(TestableLooper.get(this).getLooper());
+        mUiBgExecutor = new FakeExecutor(new FakeSystemClock());
+        when(mStatusBarIconController.getTransitionsController()).thenReturn(
+                mLightBarTransitionsController);
+        mAppearanceRegions = new AppearanceRegion[] {
+                new AppearanceRegion(APPEARANCE_LIGHT_STATUS_BARS, new Rect())
+        };
+        mBarResult = new RegisterStatusBarResult(
+                /* icons= */ new ArrayMap<>(),
+                /* disabledFlags1= */ 0,
+                /* appearance= */ 0,
+                mAppearanceRegions,
+                /* imeWindowVis= */ 0,
+                /* imeBackDisposition= */ 0,
+                /* showImeSwitcher= */ false,
+                /* disabledFlags2= */ 0,
+                /* imeToken= */ null,
+                /* navbarColorMangedByIme= */ false,
+                /* appFullscreen= */ false,
+                /* appImmersive= */ false,
+                /* transientBarTypes= */ new int[]{});
+        try {
+            when(mBarService.registerStatusBar(any())).thenReturn(mBarResult);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
         mCarNavigationBar = new CarNavigationBar(mContext, mTestableResources.getResources(),
-                mCarNavigationBarController, mWindowManager, mDeviceProvisionedController,
-                new CommandQueue(mContext), mAutoHideController, mButtonSelectionStateListener,
-                mHandler, mBackgroundHandler, mBarService, () -> mKeyguardStateController,
-                mButtonSelectionStateController, () -> mIconPolicy,  () -> mIconController);
+                mCarNavigationBarController, mLightBarController, mStatusBarIconController,
+                mWindowManager, mDeviceProvisionedController, new CommandQueue(mContext),
+                mAutoHideController, mButtonSelectionStateListener, mHandler, mUiBgExecutor,
+                mBarService, () -> mKeyguardStateController, () -> mIconPolicy,
+                () -> mIconController);
     }
 
     @Test
@@ -108,7 +157,7 @@ public class CarNavigationBarTest extends SysuiTestCase {
         verify(mDeviceProvisionedController).addCallback(deviceProvisionedCallbackCaptor.capture());
 
         deviceProvisionedCallbackCaptor.getValue().onUserSwitched();
-        waitForIdleSync(mBackgroundHandler);
+        waitForIdleSync(mHandler);
 
         verify(mButtonSelectionStateListener).onTaskStackChanged();
     }
@@ -128,7 +177,7 @@ public class CarNavigationBarTest extends SysuiTestCase {
         verify(mDeviceProvisionedController).addCallback(deviceProvisionedCallbackCaptor.capture());
 
         deviceProvisionedCallbackCaptor.getValue().onUserSwitched();
-        waitForIdleSync(mBackgroundHandler);
+        waitForIdleSync(mHandler);
 
         verify(mCarNavigationBarController).showAllKeyguardButtons(false);
     }
@@ -147,14 +196,34 @@ public class CarNavigationBarTest extends SysuiTestCase {
         when(mDeviceProvisionedController.isCurrentUserSetup()).thenReturn(false);
         verify(mDeviceProvisionedController).addCallback(deviceProvisionedCallbackCaptor.capture());
         deviceProvisionedCallbackCaptor.getValue().onUserSwitched();
-        waitForIdleSync(mBackgroundHandler);
+        waitForIdleSync(mHandler);
         when(mDeviceProvisionedController.isCurrentUserSetup()).thenReturn(true);
         when(mKeyguardStateController.isShowing()).thenReturn(false);
 
         deviceProvisionedCallbackCaptor.getValue().onUserSetupChanged();
-        waitForIdleSync(mBackgroundHandler);
+        waitForIdleSync(mHandler);
 
         verify(mCarNavigationBarController).hideAllKeyguardButtons(true);
+    }
+
+    @Test
+    public void restartNavBars_lightAppearance_darkensAllIcons() {
+        mAppearanceRegions[0] = new AppearanceRegion(APPEARANCE_LIGHT_STATUS_BARS, new Rect());
+
+        mCarNavigationBar.start();
+
+        verify(mLightBarTransitionsController).setIconsDark(
+                /* dark= */ true, /* animate= */ false);
+    }
+
+    @Test
+    public void restartNavBars_opaqueAppearance_lightensAllIcons() {
+        mAppearanceRegions[0] = new AppearanceRegion(APPEARANCE_OPAQUE_STATUS_BARS, new Rect());
+
+        mCarNavigationBar.start();
+
+        verify(mLightBarTransitionsController).setIconsDark(
+                /* dark= */ false, /* animate= */ false);
     }
 
     @Test

@@ -104,6 +104,7 @@ class AccessibilityUserState {
     private boolean mIsDisplayMagnificationEnabled;
     private boolean mIsFilterKeyEventsEnabled;
     private boolean mIsPerformGesturesEnabled;
+    private boolean mAccessibilityFocusOnlyInActiveWindow;
     private boolean mIsTextHighContrastEnabled;
     private boolean mIsTouchExplorationEnabled;
     private boolean mServiceHandlesDoubleTap;
@@ -631,6 +632,25 @@ class AccessibilityUserState {
     }
 
     /**
+     * Removes given shortcut target in the list.
+     *
+     * @param shortcutType The shortcut type.
+     * @param target The component name of the shortcut target.
+     * @return true if the shortcut target is removed.
+     */
+    public boolean removeShortcutTargetLocked(@ShortcutType int shortcutType,
+            ComponentName target) {
+        return getShortcutTargetsLocked(shortcutType).removeIf(name -> {
+            ComponentName componentName;
+            if (name == null
+                    || (componentName = ComponentName.unflattenFromString(name)) == null) {
+                return false;
+            }
+            return componentName.equals(target);
+        });
+    }
+
+    /**
      * Returns installed accessibility service info by the given service component name.
      */
     public AccessibilityServiceInfo getInstalledServiceInfoLocked(ComponentName componentName) {
@@ -666,6 +686,13 @@ class AccessibilityUserState {
         mIsPerformGesturesEnabled = enabled;
     }
 
+    public boolean isAccessibilityFocusOnlyInActiveWindow() {
+        return mAccessibilityFocusOnlyInActiveWindow;
+    }
+
+    public void setAccessibilityFocusOnlyInActiveWindow(boolean enabled) {
+        mAccessibilityFocusOnlyInActiveWindow = enabled;
+    }
     public ComponentName getServiceChangingSoftKeyboardModeLocked() {
         return mServiceChangingSoftKeyboardMode;
     }

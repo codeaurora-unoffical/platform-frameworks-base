@@ -22,6 +22,7 @@ import static com.android.systemui.pip.PipAnimationController.TRANSITION_DIRECTI
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import android.graphics.Matrix;
@@ -33,6 +34,7 @@ import android.view.SurfaceControl;
 import androidx.test.filters.SmallTest;
 
 import com.android.systemui.SysuiTestCase;
+import com.android.systemui.statusbar.policy.ConfigurationController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -59,7 +61,8 @@ public class PipAnimationControllerTest extends SysuiTestCase {
     @Before
     public void setUp() throws Exception {
         mPipAnimationController = new PipAnimationController(
-                mContext, new PipSurfaceTransactionHelper(mContext));
+                mContext, new PipSurfaceTransactionHelper(mContext,
+                mock(ConfigurationController.class)));
         mLeash = new SurfaceControl.Builder()
                 .setContainerLayer()
                 .setName("FakeLeash")
@@ -79,7 +82,7 @@ public class PipAnimationControllerTest extends SysuiTestCase {
     @Test
     public void getAnimator_withBounds_returnBoundsAnimator() {
         final PipAnimationController.PipTransitionAnimator animator = mPipAnimationController
-                .getAnimator(mLeash, new Rect(), new Rect());
+                .getAnimator(mLeash, new Rect(), new Rect(), null);
 
         assertEquals("Expect ANIM_TYPE_BOUNDS animation",
                 animator.getAnimationType(), PipAnimationController.ANIM_TYPE_BOUNDS);
@@ -91,12 +94,12 @@ public class PipAnimationControllerTest extends SysuiTestCase {
         final Rect endValue1 = new Rect(100, 100, 200, 200);
         final Rect endValue2 = new Rect(200, 200, 300, 300);
         final PipAnimationController.PipTransitionAnimator oldAnimator = mPipAnimationController
-                .getAnimator(mLeash, startValue, endValue1);
+                .getAnimator(mLeash, startValue, endValue1, null);
         oldAnimator.setSurfaceControlTransactionFactory(DummySurfaceControlTx::new);
         oldAnimator.start();
 
         final PipAnimationController.PipTransitionAnimator newAnimator = mPipAnimationController
-                .getAnimator(mLeash, startValue, endValue2);
+                .getAnimator(mLeash, startValue, endValue2, null);
 
         assertEquals("getAnimator with same type returns same animator",
                 oldAnimator, newAnimator);
@@ -126,7 +129,7 @@ public class PipAnimationControllerTest extends SysuiTestCase {
         final Rect endValue1 = new Rect(100, 100, 200, 200);
         final Rect endValue2 = new Rect(200, 200, 300, 300);
         final PipAnimationController.PipTransitionAnimator animator = mPipAnimationController
-                .getAnimator(mLeash, startValue, endValue1);
+                .getAnimator(mLeash, startValue, endValue1, null);
 
         animator.updateEndValue(endValue2);
 
@@ -138,7 +141,7 @@ public class PipAnimationControllerTest extends SysuiTestCase {
         final Rect startValue = new Rect(0, 0, 100, 100);
         final Rect endValue = new Rect(100, 100, 200, 200);
         final PipAnimationController.PipTransitionAnimator animator = mPipAnimationController
-                .getAnimator(mLeash, startValue, endValue);
+                .getAnimator(mLeash, startValue, endValue, null);
         animator.setSurfaceControlTransactionFactory(DummySurfaceControlTx::new);
 
         animator.setPipAnimationCallback(mPipAnimationCallback);

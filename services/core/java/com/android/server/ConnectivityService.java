@@ -67,6 +67,7 @@ import android.app.BroadcastOptions;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -1374,10 +1375,9 @@ public class ConnectivityService extends IConnectivityManager.Stub
         if (nri == null || net == null || !LOGD_BLOCKED_NETWORKINFO) {
             return;
         }
-        String action = blocked ? "BLOCKED" : "UNBLOCKED";
-        log(String.format("Blocked status changed to %s for %d(%d) on netId %d", blocked,
-                nri.mUid, nri.request.requestId, net.netId));
-        mNetworkInfoBlockingLogs.log(action + " " + nri.mUid);
+        final String action = blocked ? "BLOCKED" : "UNBLOCKED";
+        mNetworkInfoBlockingLogs.log(String.format(
+                "%s %d(%d) on netId %d", action, nri.mUid, nri.request.requestId, net.netId));
     }
 
     /**
@@ -1696,6 +1696,12 @@ public class ConnectivityService extends IConnectivityManager.Stub
         final NetworkCapabilities newNc = new NetworkCapabilities(nc);
         if (callerUid != newNc.getOwnerUid()) {
             newNc.setOwnerUid(INVALID_UID);
+            return newNc;
+        }
+
+        // Allow VPNs to see ownership of their own VPN networks - not location sensitive.
+        if (nc.hasTransport(TRANSPORT_VPN)) {
+            // Owner UIDs already checked above. No need to re-check.
             return newNc;
         }
 
@@ -2482,10 +2488,12 @@ public class ConnectivityService extends IConnectivityManager.Stub
         final List<NetworkDiagnostics> netDiags = new ArrayList<NetworkDiagnostics>();
         final long DIAG_TIME_MS = 5000;
         for (NetworkAgentInfo nai : networksSortedById()) {
+            PrivateDnsConfig privateDnsCfg = mDnsManager.getPrivateDnsConfig(nai.network);
             // Start gathering diagnostic information.
             netDiags.add(new NetworkDiagnostics(
                     nai.network,
                     new LinkProperties(nai.linkProperties),  // Must be a copy.
+                    privateDnsCfg,
                     DIAG_TIME_MS));
         }
 
@@ -2740,7 +2748,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
                         // the Messenger, but if this ever changes, not making a defensive copy
                         // here will give attack vectors to clients using this code path.
                         networkCapabilities = new NetworkCapabilities(networkCapabilities);
-                        networkCapabilities.restrictCapabilitesForTestNetwork();
+                        networkCapabilities.restrictCapabilitesForTestNetwork(nai.creatorUid);
                     }
                     updateCapabilities(nai.getCurrentScore(), nai, networkCapabilities);
                     break;
@@ -3070,7 +3078,11 @@ public class ConnectivityService extends IConnectivityManager.Stub
             // Only the system server can register notifications with package "android"
             final long token = Binder.clearCallingIdentity();
             try {
-                pendingIntent = PendingIntent.getBroadcast(mContext, 0, intent, 0);
+                pendingIntent = PendingIntent.getBroadcast(
+                        mContext,
+                        0 /* requestCode */,
+                        intent,
+                        PendingIntent.FLAG_IMMUTABLE);
             } finally {
                 Binder.restoreCallingIdentity(token);
             }
@@ -3087,30 +3099,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
         @Override
         public void notifyDataStallSuspected(DataStallReportParcelable p) {
-            final Message msg = mConnectivityDiagnosticsHandler.obtainMessage(
-                    ConnectivityDiagnosticsHandler.EVENT_DATA_STALL_SUSPECTED,
-                    p.detectionMethod, mNetId, p.timestampMillis);
-
-            final PersistableBundle extras = new PersistableBundle();
-            switch (p.detectionMethod) {
-                case DETECTION_METHOD_DNS_EVENTS:
-                    extras.putInt(KEY_DNS_CONSECUTIVE_TIMEOUTS, p.dnsConsecutiveTimeouts);
-                    break;
-                case DETECTION_METHOD_TCP_METRICS:
-                    extras.putInt(KEY_TCP_PACKET_FAIL_RATE, p.tcpPacketFailRate);
-                    extras.putInt(KEY_TCP_METRICS_COLLECTION_PERIOD_MILLIS,
-                            p.tcpMetricsCollectionPeriodMillis);
-                    break;
-                default:
-                    log("Unknown data stall detection method, ignoring: " + p.detectionMethod);
-                    return;
-            }
-            msg.setData(new Bundle(extras));
-
-            // NetworkStateTrackerHandler currently doesn't take any actions based on data
-            // stalls so send the message directly to ConnectivityDiagnosticsHandler and avoid
-            // the cost of going through two handlers.
-            mConnectivityDiagnosticsHandler.sendMessage(msg);
+            ConnectivityService.this.notifyDataStallSuspected(p, mNetId);
         }
 
         @Override
@@ -3122,6 +3111,37 @@ public class ConnectivityService extends IConnectivityManager.Stub
         public String getInterfaceHash() {
             return this.HASH;
         }
+    }
+
+    private void notifyDataStallSuspected(DataStallReportParcelable p, int netId) {
+        log("Data stall detected with methods: " + p.detectionMethod);
+
+        final PersistableBundle extras = new PersistableBundle();
+        int detectionMethod = 0;
+        if (hasDataStallDetectionMethod(p, DETECTION_METHOD_DNS_EVENTS)) {
+            extras.putInt(KEY_DNS_CONSECUTIVE_TIMEOUTS, p.dnsConsecutiveTimeouts);
+            detectionMethod |= DETECTION_METHOD_DNS_EVENTS;
+        }
+        if (hasDataStallDetectionMethod(p, DETECTION_METHOD_TCP_METRICS)) {
+            extras.putInt(KEY_TCP_PACKET_FAIL_RATE, p.tcpPacketFailRate);
+            extras.putInt(KEY_TCP_METRICS_COLLECTION_PERIOD_MILLIS,
+                    p.tcpMetricsCollectionPeriodMillis);
+            detectionMethod |= DETECTION_METHOD_TCP_METRICS;
+        }
+
+        final Message msg = mConnectivityDiagnosticsHandler.obtainMessage(
+                ConnectivityDiagnosticsHandler.EVENT_DATA_STALL_SUSPECTED, detectionMethod, netId,
+                p.timestampMillis);
+        msg.setData(new Bundle(extras));
+
+        // NetworkStateTrackerHandler currently doesn't take any actions based on data
+        // stalls so send the message directly to ConnectivityDiagnosticsHandler and avoid
+        // the cost of going through two handlers.
+        mConnectivityDiagnosticsHandler.sendMessage(msg);
+    }
+
+    private boolean hasDataStallDetectionMethod(DataStallReportParcelable p, int detectionMethod) {
+        return (p.detectionMethod & detectionMethod) != 0;
     }
 
     private boolean networkRequiresPrivateDnsValidation(NetworkAgentInfo nai) {
@@ -3918,6 +3938,15 @@ public class ConnectivityService extends IConnectivityManager.Stub
         pw.decreaseIndent();
     }
 
+    // TODO: This method is copied from TetheringNotificationUpdater. Should have a utility class to
+    // unify the method.
+    private static @NonNull String getSettingsPackageName(@NonNull final PackageManager pm) {
+        final Intent settingsIntent = new Intent(Settings.ACTION_SETTINGS);
+        final ComponentName settingsComponent = settingsIntent.resolveActivity(pm);
+        return settingsComponent != null
+                ? settingsComponent.getPackageName() : "com.android.settings";
+    }
+
     private void showNetworkNotification(NetworkAgentInfo nai, NotificationType type) {
         final String action;
         final boolean highPriority;
@@ -3952,12 +3981,20 @@ public class ConnectivityService extends IConnectivityManager.Stub
         if (type != NotificationType.PRIVATE_DNS_BROKEN) {
             intent.setData(Uri.fromParts("netId", Integer.toString(nai.network.netId), null));
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            intent.setClassName("com.android.settings",
-                    "com.android.settings.wifi.WifiNoInternetDialog");
+            // Some OEMs have their own Settings package. Thus, need to get the current using
+            // Settings package name instead of just use default name "com.android.settings".
+            final String settingsPkgName = getSettingsPackageName(mContext.getPackageManager());
+            intent.setClassName(settingsPkgName,
+                    settingsPkgName + ".wifi.WifiNoInternetDialog");
         }
 
         PendingIntent pendingIntent = PendingIntent.getActivityAsUser(
-                mContext, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT, null, UserHandle.CURRENT);
+                mContext,
+                0 /* requestCode */,
+                intent,
+                PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                null /* options */,
+                UserHandle.CURRENT);
 
         mNotifier.showNotification(nai.network.netId, type, nai, null, pendingIntent, highPriority);
     }
@@ -4286,9 +4323,11 @@ public class ConnectivityService extends IConnectivityManager.Stub
         enforceInternetPermission();
         final int uid = Binder.getCallingUid();
         final int connectivityInfo = encodeBool(hasConnectivity);
-        mHandler.sendMessage(
-                mHandler.obtainMessage(EVENT_REVALIDATE_NETWORK, uid, connectivityInfo, network));
 
+        // Handle ConnectivityDiagnostics event before attempting to revalidate the network. This
+        // forces an ordering of ConnectivityDiagnostics events in the case where hasConnectivity
+        // does not match the known connectivity of the network - this causes NetworkMonitor to
+        // revalidate the network and generate a ConnectivityDiagnostics ConnectivityReport event.
         final NetworkAgentInfo nai;
         if (network == null) {
             nai = getDefaultNetwork();
@@ -4301,6 +4340,9 @@ public class ConnectivityService extends IConnectivityManager.Stub
                             ConnectivityDiagnosticsHandler.EVENT_NETWORK_CONNECTIVITY_REPORTED,
                             connectivityInfo, 0, nai));
         }
+
+        mHandler.sendMessage(
+                mHandler.obtainMessage(EVENT_REVALIDATE_NETWORK, uid, connectivityInfo, network));
     }
 
     private void handleReportNetworkConnectivity(
@@ -5859,7 +5901,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
             // the call to mixInCapabilities below anyway, but sanitizing here means the NAI never
             // sees capabilities that may be malicious, which might prevent mistakes in the future.
             networkCapabilities = new NetworkCapabilities(networkCapabilities);
-            networkCapabilities.restrictCapabilitesForTestNetwork();
+            networkCapabilities.restrictCapabilitesForTestNetwork(Binder.getCallingUid());
         } else {
             enforceNetworkFactoryPermission();
         }
@@ -5872,7 +5914,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
         final NetworkAgentInfo nai = new NetworkAgentInfo(messenger, new AsyncChannel(),
                 new Network(mNetIdManager.reserveNetId()), new NetworkInfo(networkInfo), lp, nc,
                 currentScore, mContext, mTrackerHandler, new NetworkAgentConfig(networkAgentConfig),
-                this, mNetd, mDnsResolver, mNMS, providerId);
+                this, mNetd, mDnsResolver, mNMS, providerId, Binder.getCallingUid());
 
         // Make sure the LinkProperties and NetworkCapabilities reflect what the agent info says.
         nai.getAndSetNetworkCapabilities(mixInCapabilities(nai, nc));
@@ -5973,7 +6015,8 @@ public class ConnectivityService extends IConnectivityManager.Stub
             // Start or stop DNS64 detection and 464xlat according to network state.
             networkAgent.clatd.update();
             notifyIfacesChangedForNetworkStats();
-            networkAgent.networkMonitor().notifyLinkPropertiesChanged(newLp);
+            networkAgent.networkMonitor().notifyLinkPropertiesChanged(
+                    new LinkProperties(newLp, true /* parcelSensitiveFields */));
             if (networkAgent.everConnected) {
                 notifyNetworkCallbacks(networkAgent, ConnectivityManager.CALLBACK_IP_CHANGED);
             }
@@ -6418,7 +6461,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
             final boolean shouldFilter = requiresVpnIsolation(nai, newNc, nai.linkProperties);
             final String iface = nai.linkProperties.getInterfaceName();
             // For VPN uid interface filtering, old ranges need to be removed before new ranges can
-            // be added, due to the range being expanded and stored as invidiual UIDs. For example
+            // be added, due to the range being expanded and stored as individual UIDs. For example
             // the UIDs might be updated from [0, 99999] to ([0, 10012], [10014, 99999]) which means
             // prevRanges = [0, 99999] while newRanges = [0, 10012], [10014, 99999]. If prevRanges
             // were added first and then newRanges got removed later, there would be only one uid
@@ -7127,6 +7170,14 @@ public class ConnectivityService extends IConnectivityManager.Stub
             networkAgent.networkCapabilities.addCapability(NET_CAPABILITY_FOREGROUND);
 
             if (!createNativeNetwork(networkAgent)) return;
+            if (networkAgent.isVPN()) {
+                // Initialize the VPN capabilities to their starting values according to the
+                // underlying networks. This will avoid a spurious callback to
+                // onCapabilitiesUpdated being sent in updateAllVpnCapabilities below as
+                // the VPN would switch from its default, blank capabilities to those
+                // that reflect the capabilities of its underlying networks.
+                updateAllVpnsCapabilities();
+            }
             networkAgent.created = true;
         }
 
@@ -7153,7 +7204,9 @@ public class ConnectivityService extends IConnectivityManager.Stub
                 networkAgent.networkMonitor().setAcceptPartialConnectivity();
             }
             networkAgent.networkMonitor().notifyNetworkConnected(
-                    networkAgent.linkProperties, networkAgent.networkCapabilities);
+                    new LinkProperties(networkAgent.linkProperties,
+                            true /* parcelSensitiveFields */),
+                    networkAgent.networkCapabilities);
             scheduleUnvalidatedPrompt(networkAgent);
 
             // Whether a particular NetworkRequest listen should cause signal strength thresholds to
@@ -8150,5 +8203,42 @@ public class ConnectivityService extends IConnectivityManager.Stub
                         Binder.getCallingUid(),
                         0,
                         callback));
+    }
+
+    @Override
+    public void simulateDataStall(int detectionMethod, long timestampMillis,
+            @NonNull Network network, @NonNull PersistableBundle extras) {
+        enforceAnyPermissionOf(android.Manifest.permission.MANAGE_TEST_NETWORKS,
+                android.Manifest.permission.NETWORK_STACK);
+        final NetworkCapabilities nc = getNetworkCapabilitiesInternal(network);
+        if (!nc.hasTransport(TRANSPORT_TEST)) {
+            throw new SecurityException("Data Stall simluation is only possible for test networks");
+        }
+
+        final NetworkAgentInfo nai = getNetworkAgentInfoForNetwork(network);
+        if (nai == null || nai.creatorUid != Binder.getCallingUid()) {
+            throw new SecurityException("Data Stall simulation is only possible for network "
+                + "creators");
+        }
+
+        // Instead of passing the data stall directly to the ConnectivityDiagnostics handler, treat
+        // this as a Data Stall received directly from NetworkMonitor. This requires wrapping the
+        // Data Stall information as a DataStallReportParcelable and passing to
+        // #notifyDataStallSuspected. This ensures that unknown Data Stall detection methods are
+        // still passed to ConnectivityDiagnostics (with new detection methods masked).
+        final DataStallReportParcelable p = new DataStallReportParcelable();
+        p.timestampMillis = timestampMillis;
+        p.detectionMethod = detectionMethod;
+
+        if (hasDataStallDetectionMethod(p, DETECTION_METHOD_DNS_EVENTS)) {
+            p.dnsConsecutiveTimeouts = extras.getInt(KEY_DNS_CONSECUTIVE_TIMEOUTS);
+        }
+        if (hasDataStallDetectionMethod(p, DETECTION_METHOD_TCP_METRICS)) {
+            p.tcpPacketFailRate = extras.getInt(KEY_TCP_PACKET_FAIL_RATE);
+            p.tcpMetricsCollectionPeriodMillis = extras.getInt(
+                    KEY_TCP_METRICS_COLLECTION_PERIOD_MILLIS);
+        }
+
+        notifyDataStallSuspected(p, network.netId);
     }
 }

@@ -101,7 +101,6 @@ public class WallpaperControllerTests extends WindowTestsBase {
     public void testWallpaperSizeWithFixedTransform() {
         // No wallpaper
         final DisplayContent dc = createNewDisplay();
-        dc.mWmService.mIsFixedRotationTransformEnabled = true;
 
         // No wallpaper WSA Surface
         WindowToken wallpaperWindowToken = new WallpaperWindowToken(mWm, mock(IBinder.class),
@@ -269,6 +268,29 @@ public class WallpaperControllerTests extends WindowTestsBase {
         assertEquals(WINDOWING_MODE_FULLSCREEN, token.getWindowingMode());
         dc.setWindowingMode(WINDOWING_MODE_UNDEFINED);
         assertEquals(WINDOWING_MODE_FULLSCREEN, token.getWindowingMode());
+    }
+
+    @Test
+    public void testFixedRotationRecentsAnimatingTask() {
+        final RecentsAnimationController recentsController = mock(RecentsAnimationController.class);
+        doReturn(true).when(recentsController).isWallpaperVisible(eq(mAppWindow));
+        mWm.setRecentsAnimationController(recentsController);
+
+        mAppWindow.mActivityRecord.applyFixedRotationTransform(mDisplayContent.getDisplayInfo(),
+                mDisplayContent.mDisplayFrames, mDisplayContent.getConfiguration());
+        mAppWindow.mActivityRecord.mVisibleRequested = true;
+        mDisplayContent.mWallpaperController.adjustWallpaperWindows();
+
+        assertEquals(mAppWindow, mDisplayContent.mWallpaperController.getWallpaperTarget());
+        // Wallpaper should link the transform of its target.
+        assertTrue(mAppWindow.mActivityRecord.hasFixedRotationTransform());
+
+        mAppWindow.mActivityRecord.finishFixedRotationTransform();
+        // Invisible requested activity should not share its rotation transform.
+        mAppWindow.mActivityRecord.mVisibleRequested = false;
+        mDisplayContent.mWallpaperController.adjustWallpaperWindows();
+
+        assertFalse(mAppWindow.mActivityRecord.hasFixedRotationTransform());
     }
 
     private WindowState createWallpaperTargetWindow(DisplayContent dc) {

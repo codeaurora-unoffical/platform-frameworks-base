@@ -192,7 +192,7 @@
     <string name="network_logging_notification_title" msgid="554983187553845004">"Peranti ini diurus"</string>
     <string name="network_logging_notification_text" msgid="1327373071132562512">"Organisasi anda mengurus peranti ini dan mungkin memantau trafik rangkaian. Ketik untuk mendapatkan butiran."</string>
     <string name="location_changed_notification_title" msgid="3620158742816699316">"Apl boleh mengakses lokasi anda"</string>
-    <string name="location_changed_notification_text" msgid="7158423339982706912">"Hubungi pentadbir IT anda untuk mengetahui lebih lanjut"</string>
+    <string name="location_changed_notification_text" msgid="7158423339982706912">"Hubungi pentadbir IT untuk mengetahui lebih lanjut"</string>
     <string name="country_detector" msgid="7023275114706088854">"Pengesan Negara"</string>
     <string name="location_service" msgid="2439187616018455546">"Perkhidmatan Lokasi"</string>
     <string name="sensor_notification_service" msgid="7474531979178682676">"Perkhidmatan Pemberitahuan Penderia"</string>
@@ -202,8 +202,8 @@
     <string name="printing_disabled_by" msgid="3517499806528864633">"Pencetakan dilumpuhkan oleh <xliff:g id="OWNER_APP">%s</xliff:g>."</string>
     <string name="personal_apps_suspension_title" msgid="7561416677884286600">"Hidupkan profil kerja anda"</string>
     <string name="personal_apps_suspension_text" msgid="6115455688932935597">"Apl peribadi anda disekat sehingga anda menghidupkan profil kerja"</string>
-    <string name="personal_apps_suspension_tomorrow_text" msgid="6322541302153673994">"Apl peribadi anda akan disekat esok"</string>
-    <string name="personal_apps_suspended_turn_profile_on" msgid="4278188538997940785">"Hidupkan profil kerja"</string>
+    <string name="personal_apps_suspension_soon_text" msgid="8123898693479590">"Apl peribadi akan disekat pada <xliff:g id="DATE">%1$s</xliff:g> pukul <xliff:g id="TIME">%2$s</xliff:g>. Pentadbir IT anda tidak membenarkan profil kerja anda dimatikan melebihi <xliff:g id="NUMBER">%3$d</xliff:g> hari."</string>
+    <string name="personal_apps_suspended_turn_profile_on" msgid="2758012869627513689">"Hidupkan"</string>
     <string name="me" msgid="6207584824693813140">"Saya"</string>
     <string name="power_dialog" product="tablet" msgid="8333207765671417261">"Pilihan tablet"</string>
     <string name="power_dialog" product="tv" msgid="7792839006640933763">"Pilihan Android TV"</string>
@@ -536,7 +536,7 @@
     <string name="permdesc_imagesWrite" msgid="5195054463269193317">"Membenarkan apl mengubah suai koleksi foto anda."</string>
     <string name="permlab_mediaLocation" msgid="7368098373378598066">"baca lokasi daripada koleksi media anda"</string>
     <string name="permdesc_mediaLocation" msgid="597912899423578138">"Membenarkan apl membaca lokasi daripada koleksi media anda."</string>
-    <string name="biometric_dialog_default_title" msgid="5284880398508155088">"Sahkan diri anda"</string>
+    <string name="biometric_dialog_default_title" msgid="55026799173208210">"Sahkan itu anda"</string>
     <string name="biometric_error_hw_unavailable" msgid="2494077380540615216">"Perkakasan biometrik tidak tersedia"</string>
     <string name="biometric_error_user_canceled" msgid="6732303949695293730">"Pengesahan dibatalkan"</string>
     <string name="biometric_not_recognized" msgid="5106687642694635888">"Tidak dikenali"</string>
@@ -1341,17 +1341,20 @@
     <string name="ext_media_checking_notification_title" msgid="8299199995416510094">"Menyemak <xliff:g id="NAME">%s</xliff:g>…"</string>
     <string name="ext_media_checking_notification_message" msgid="2231566971425375542">"Menyemak kandungan semasa"</string>
     <string name="ext_media_new_notification_title" msgid="3517407571407687677">"<xliff:g id="NAME">%s</xliff:g> baharu"</string>
+    <string name="ext_media_new_notification_title" product="automotive" msgid="9085349544984742727">"<xliff:g id="NAME">%s</xliff:g> tidak berfungsi"</string>
     <string name="ext_media_new_notification_message" msgid="6095403121990786986">"Ketik untuk menyediakan"</string>
-    <string name="ext_media_new_notification_message" product="automotive" msgid="8488046026389025694"></string>
+    <string name="ext_media_new_notification_message" product="automotive" msgid="5140127881613227162">"Anda mungkin perlu memformatkan semula peranti. Ketik untuk mengeluarkan media."</string>
     <string name="ext_media_ready_notification_message" msgid="777258143284919261">"Untuk memindahkan foto dan media"</string>
     <string name="ext_media_unmountable_notification_title" msgid="4895444667278979910">"Isu dengan <xliff:g id="NAME">%s</xliff:g>"</string>
+    <string name="ext_media_unmountable_notification_title" product="automotive" msgid="3142723758949023280">"<xliff:g id="NAME">%s</xliff:g> tidak berfungsi"</string>
     <string name="ext_media_unmountable_notification_message" msgid="3256290114063126205">"Ketik untuk menyelesaikan masalah"</string>
     <string name="ext_media_unmountable_notification_message" product="tv" msgid="3003611129979934633">"<xliff:g id="NAME">%s</xliff:g> rosak. Pilih untuk baiki."</string>
-    <string name="ext_media_unmountable_notification_message" product="automotive" msgid="5622514265490819212"></string>
+    <string name="ext_media_unmountable_notification_message" product="automotive" msgid="2274596120715020680">"Anda mungkin perlu memformatkan semula peranti. Ketik untuk mengeluarkan media."</string>
     <string name="ext_media_unsupported_notification_title" msgid="4358280700537030333">"<xliff:g id="NAME">%s</xliff:g> tidak disokong"</string>
+    <string name="ext_media_unsupported_notification_title" product="automotive" msgid="6004193172658722381">"<xliff:g id="NAME">%s</xliff:g> tidak berfungsi"</string>
     <string name="ext_media_unsupported_notification_message" msgid="917738524888367560">"Peranti ini tidak menyokong <xliff:g id="NAME">%s</xliff:g> ini. Ketik untuk menyediakannya dalam format yang disokong."</string>
     <string name="ext_media_unsupported_notification_message" product="tv" msgid="7744945987775645685">"Peranti ini tidak menyokong <xliff:g id="NAME">%s</xliff:g> ini. Pilih untuk menyediakan media dalam format yang disokong."</string>
-    <string name="ext_media_unsupported_notification_message" product="automotive" msgid="7657357085538772913">"Peranti ini tidak menyokong <xliff:g id="NAME">%s</xliff:g> ini."</string>
+    <string name="ext_media_unsupported_notification_message" product="automotive" msgid="3412494732736336330">"Anda mungkin perlu memformatkan semula peranti"</string>
     <string name="ext_media_badremoval_notification_title" msgid="4114625551266196872">"<xliff:g id="NAME">%s</xliff:g> ditanggalkan tanpa dijangka"</string>
     <string name="ext_media_badremoval_notification_message" msgid="1986514704499809244">"Keluarkan media sebelum menanggalkan media itu untuk mengelakkan kehilangan kandungan"</string>
     <string name="ext_media_nomedia_notification_title" msgid="742671636376975890">"<xliff:g id="NAME">%s</xliff:g> dialih keluar"</string>
@@ -1545,9 +1548,7 @@
     <string name="launchBrowserDefault" msgid="6328349989932924119">"Lancarkan Penyemak Imbas?"</string>
     <string name="SetupCallDefault" msgid="5581740063237175247">"Terima panggilan?"</string>
     <string name="activity_resolver_use_always" msgid="5575222334666843269">"Sentiasa"</string>
-    <string name="activity_resolver_set_always" msgid="4142825808921411476">"Tetapkan agar sentiasa dibuka"</string>
     <string name="activity_resolver_use_once" msgid="948462794469672658">"Hanya sekali"</string>
-    <string name="activity_resolver_app_settings" msgid="6758823206817748026">"Tetapan"</string>
     <string name="activity_resolver_work_profiles_support" msgid="4071345609235361269">"%1$s tidak menyokong profil kerja"</string>
     <string name="default_audio_route_name" product="tablet" msgid="367936735632195517">"Tablet"</string>
     <string name="default_audio_route_name" product="tv" msgid="4908971385068087367">"TV"</string>
@@ -1618,15 +1619,12 @@
     <string name="kg_failed_attempts_almost_at_login" product="default" msgid="5270861875006378092">"Anda telah tersilap lukis corak buka kunci sebanyak <xliff:g id="NUMBER_0">%1$d</xliff:g> kali. Selepas <xliff:g id="NUMBER_1">%2$d</xliff:g> lagi percubaan yang tidak berjaya, anda akan diminta membuka kunci telefon anda menggunakan log masuk Google anda.\n\n Cuba lagi dalam <xliff:g id="NUMBER_2">%3$d</xliff:g> saat."</string>
     <string name="kg_text_message_separator" product="default" msgid="4503708889934976866">" — "</string>
     <string name="kg_reordering_delete_drop_target_text" msgid="2034358143731750914">"Alih keluar"</string>
-    <string name="allow_while_in_use_permission_in_fgs" msgid="4101339676785053656">"Perkhidmatan latar depan dimulakan latar belakang daripada <xliff:g id="PACKAGENAME">%1$s</xliff:g> tidak akan mempunyai kebenaran semasa-dalam-penggunaan dalam binaan R akan datang. Sila lihat go/r-bg-fgs-restriction dan failkan laporan pepijat."</string>
     <string name="safe_media_volume_warning" product="default" msgid="3751676824423049994">"Naikkan kelantangan melebihi paras yang disyokorkan?\n\nMendengar pada kelantangan yang tinggi untuk tempoh yang lama boleh merosakkan pendengaran anda."</string>
     <string name="accessibility_shortcut_warning_dialog_title" msgid="4017995837692622933">"Gunakan Pintasan Kebolehaksesan?"</string>
     <string name="accessibility_shortcut_toogle_warning" msgid="4161716521310929544">"Apabila pintasan dihidupkan, tindakan menekan kedua-dua butang kelantangan selama 3 saat akan memulakan ciri kebolehaksesan."</string>
     <string name="accessibility_shortcut_multiple_service_warning_title" msgid="8417489297036013065">"Hidupkan ciri kebolehaksesan?"</string>
     <string name="accessibility_shortcut_multiple_service_warning" msgid="3740723309483706911">"Tindakan menahan kedua-dua kekunci kelantangan selama beberapa saat akan menghidupkan ciri kebolehaksesan. Hal ini mungkin mengubah cara peranti anda berfungsi.\n\nCiri semasa:\n<xliff:g id="SERVICE">%1$s</xliff:g>\nAnda boleh menukar ciri yang dipilih dalam Tetapan &gt; Kebolehaksesan."</string>
     <string name="accessibility_shortcut_multiple_service_list" msgid="6935581470716541531">"	• <xliff:g id="SERVICE">%1$s</xliff:g>\n"</string>
-    <string name="accessibility_shortcut_talkback_warning_title" msgid="3410100187167382427">"Hidupkan TalkBack?"</string>
-    <string name="accessibility_shortcut_talkback_warning" msgid="8412954203626349109">"Tindakan menahan kedua-dua kekunci kelantangan selama beberapa saat akan menghidupkan TalkBack, iaitu satu pembaca skrin yang membantu orang buta atau rabun. TalkBack mengubah sepenuhnya cara peranti anda berfungsi.\n\nAnda boleh menukar pintasan ini kepada ciri lain dalam Tetapan &gt; Kebolehaksesan."</string>
     <string name="accessibility_shortcut_single_service_warning_title" msgid="2819109500943271385">"Hidupkan <xliff:g id="SERVICE">%1$s</xliff:g>?"</string>
     <string name="accessibility_shortcut_single_service_warning" msgid="6363127705112844257">"Tindakan menahan kedua-dua kekunci kelantangan selama beberapa saat akan menghidupkan <xliff:g id="SERVICE">%1$s</xliff:g>, iaitu satu ciri kebolehaksesan. Ini mungkin mengubah cara peranti anda berfungsi.\n\nAnda boleh menukar pintasan ini kepada ciri lain dalam Tetapan &gt; Kebolehaksesan."</string>
     <string name="accessibility_shortcut_on" msgid="5463618449556111344">"Hidupkan"</string>
@@ -2042,8 +2040,9 @@
     <string name="accessibility_system_action_power_dialog_label" msgid="8095341821683910781">"Dialog Kuasa"</string>
     <string name="accessibility_system_action_lock_screen_label" msgid="5484190691945563838">"Skrin Kunci"</string>
     <string name="accessibility_system_action_screenshot_label" msgid="3581566515062741676">"Tangkapan skrin"</string>
-    <string name="accessibility_system_action_accessibility_button_label" msgid="5941347017132886642">"Pintasan Kebolehaksesan Pada Skrin"</string>
-    <string name="accessibility_system_action_accessibility_button_chooser_label" msgid="6973618519666227981">"Pemilih Pintasan Kebolehaksesan Pada Skrin"</string>
+    <string name="accessibility_system_action_on_screen_a11y_shortcut_label" msgid="8488701469459210309">"Pintasan Kebolehaksesan Pada Skrin"</string>
+    <string name="accessibility_system_action_on_screen_a11y_shortcut_chooser_label" msgid="1057878690209817886">"Pemilih Pintasan Kebolehaksesan Pada Skrin"</string>
+    <string name="accessibility_system_action_hardware_a11y_shortcut_label" msgid="5764644187715255107">"Pintasan Kebolehaksesan"</string>
     <string name="accessibility_freeform_caption" msgid="8377519323496290122">"Bar kapsyen <xliff:g id="APP_NAME">%1$s</xliff:g>."</string>
     <string name="as_app_forced_to_restricted_bucket" msgid="8233871289353898964">"<xliff:g id="PACKAGE_NAME">%1$s</xliff:g> telah diletakkan dalam baldi TERHAD"</string>
     <string name="conversation_single_line_name_display" msgid="8958948312915255999">"<xliff:g id="SENDER_NAME">%1$s</xliff:g>:"</string>
@@ -2177,4 +2176,8 @@
     <string name="PERSOSUBSTATE_SIM_ICCID_SUCCESS" msgid="8058678548991999545">"Buka kunci ICCID berjaya."</string>
     <string name="PERSOSUBSTATE_SIM_IMPI_SUCCESS" msgid="2545608067978550571">"Buka kunci IMPI berjaya."</string>
     <string name="PERSOSUBSTATE_SIM_NS_SP_SUCCESS" msgid="4352382949744625007">"Buka kunci penyedia perkhidmatan subset rangkaian berjaya."</string>
+    <string name="config_pdp_reject_dialog_title" msgid="4072057179246785727"></string>
+    <string name="config_pdp_reject_user_authentication_failed" msgid="4531693033885744689"></string>
+    <string name="config_pdp_reject_service_not_subscribed" msgid="8190338397128671588"></string>
+    <string name="config_pdp_reject_multi_conn_to_same_pdn_not_allowed" msgid="6024904218067254186"></string>
 </resources>

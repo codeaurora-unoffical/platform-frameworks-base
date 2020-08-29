@@ -101,7 +101,7 @@ public:
     // Per atom dimension key size limit
     static const std::map<int, std::pair<size_t, size_t>> kAtomDimensionKeySizeLimitMap;
 
-    const static int kMaxConfigCountPerUid = 10;
+    const static int kMaxConfigCountPerUid = 20;
     const static int kMaxAlertCountPerConfig = 100;
     const static int kMaxConditionCountPerConfig = 300;
     const static int kMaxMetricCountPerConfig = 1000;
@@ -160,7 +160,7 @@ public:
     static const long kPullerCacheClearIntervalSec = 1;
 
     // Max time to do a pull.
-    static const int64_t kPullMaxDelayNs = 10 * NS_PER_SEC;
+    static const int64_t kPullMaxDelayNs = 30 * NS_PER_SEC;
 
     // Maximum number of pushed atoms statsd stats will track above kMaxPushedAtomId.
     static const int kMaxNonPlatformPushedAtoms = 100;
@@ -352,7 +352,7 @@ public:
     /*
      * Records pull exceeds timeout for the puller.
      */
-    void notePullTimeout(int pullAtomId);
+    void notePullTimeout(int pullAtomId, int64_t pullUptimeMillis, int64_t pullElapsedMillis);
 
     /*
      * Records pull exceeds max delay for a metric.
@@ -371,21 +371,30 @@ public:
                      int32_t lastAtomTag, int32_t uid, int32_t pid);
 
     /**
-     * Records that the pull of an atom has failed
+     * Records that the pull of an atom has failed. Eg, if the client indicated the pull failed, if
+     * the pull timed out, or if the outgoing binder call failed.
+     * This count will only increment if the puller was actually invoked.
+     *
+     * It does not include a pull not occurring due to not finding the appropriate
+     * puller. These cases are covered in other counts.
      */
     void notePullFailed(int atomId);
 
     /**
-     * Records that the pull of StatsCompanionService atom has failed
+     * Records that the pull of an atom has failed due to not having a uid provider.
      */
-    void noteStatsCompanionPullFailed(int atomId);
+    void notePullUidProviderNotFound(int atomId);
 
     /**
-     * Records that the pull of a StatsCompanionService atom has failed due to a failed binder
-     * transaction. This can happen when StatsCompanionService returns too
-     * much data (the max Binder parcel size is 1MB)
+     * Records that the pull of an atom has failed due not finding a puller registered by a
+     * trusted uid.
      */
-    void noteStatsCompanionPullBinderTransactionFailed(int atomId);
+    void notePullerNotFound(int atomId);
+
+    /**
+     * Records that the pull has failed due to the outgoing binder call failing.
+     */
+    void notePullBinderCallFailed(int atomId);
 
     /**
      * A pull with no data occurred
@@ -489,6 +498,14 @@ public:
      */
     void dumpStats(int outFd) const;
 
+    typedef struct PullTimeoutMetadata {
+        int64_t pullTimeoutUptimeMillis;
+        int64_t pullTimeoutElapsedMillis;
+        PullTimeoutMetadata(int64_t uptimeMillis, int64_t elapsedMillis) :
+            pullTimeoutUptimeMillis(uptimeMillis),
+            pullTimeoutElapsedMillis(elapsedMillis) {/* do nothing */}
+    } PullTimeoutMetadata;
+
     typedef struct {
         long totalPull = 0;
         long totalPullFromCache = 0;
@@ -503,12 +520,14 @@ public:
         long pullTimeout = 0;
         long pullExceedMaxDelay = 0;
         long pullFailed = 0;
-        long statsCompanionPullFailed = 0;
-        long statsCompanionPullBinderTransactionFailed = 0;
+        long pullUidProviderNotFound = 0;
+        long pullerNotFound = 0;
         long emptyData = 0;
         long registeredCount = 0;
         long unregisteredCount = 0;
         int32_t atomErrorCount = 0;
+        long binderCallFailCount = 0;
+        std::list<PullTimeoutMetadata> pullTimeoutMetadata;
     } PulledAtomStats;
 
     typedef struct {
@@ -650,6 +669,8 @@ private:
     FRIEND_TEST(StatsdStatsTest, TestAtomMetricsStats);
     FRIEND_TEST(StatsdStatsTest, TestActivationBroadcastGuardrailHit);
     FRIEND_TEST(StatsdStatsTest, TestAtomErrorStats);
+
+    FRIEND_TEST(StatsLogProcessorTest, InvalidConfigRemoved);
 };
 
 }  // namespace statsd

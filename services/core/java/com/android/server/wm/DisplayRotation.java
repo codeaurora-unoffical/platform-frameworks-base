@@ -430,6 +430,15 @@ public class DisplayRotation {
                         "Deferring rotation, still finishing previous rotation");
                 return false;
             }
+
+            if (mDisplayContent.mFixedRotationTransitionListener
+                    .isTopFixedOrientationRecentsAnimating()) {
+                // During the recents animation, the closing app might still be considered on top.
+                // In order to ignore its requested orientation to avoid a sensor led rotation (e.g
+                // user rotating the device while the recents animation is running), we ignore
+                // rotation update while the animation is running.
+                return false;
+            }
         }
 
         if (!mService.mDisplayEnabled) {
@@ -560,6 +569,7 @@ public class DisplayRotation {
         }, true /* traverseTopToBottom */);
         mSeamlessRotationCount = 0;
         mRotatingSeamlessly = false;
+        mDisplayContent.finishFixedRotationAnimationIfPossible();
     }
 
     private void prepareSeamlessRotation() {
@@ -573,11 +583,15 @@ public class DisplayRotation {
         return mRotatingSeamlessly;
     }
 
+    boolean hasSeamlessRotatingWindow() {
+        return mSeamlessRotationCount > 0;
+    }
+
     @VisibleForTesting
     boolean shouldRotateSeamlessly(int oldRotation, int newRotation, boolean forceUpdate) {
         // Display doesn't need to be frozen because application has been started in correct
         // rotation already, so the rest of the windows can use seamless rotation.
-        if (mDisplayContent.mFixedRotationLaunchingApp != null) {
+        if (mDisplayContent.hasTopFixedRotationLaunchingApp()) {
             return true;
         }
 
@@ -646,6 +660,7 @@ public class DisplayRotation {
                     "Performing post-rotate rotation after seamless rotation");
             // Finish seamless rotation.
             mRotatingSeamlessly = false;
+            mDisplayContent.finishFixedRotationAnimationIfPossible();
 
             updateRotationAndSendNewConfigIfChanged();
         }

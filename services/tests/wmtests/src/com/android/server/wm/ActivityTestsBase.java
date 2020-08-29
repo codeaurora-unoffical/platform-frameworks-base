@@ -109,6 +109,7 @@ class ActivityTestsBase extends SystemServiceTestsBase {
         private String mTargetActivity;
         private Task mTask;
         private String mProcessName = "name";
+        private String mAffinity;
         private int mUid = 12345;
         private boolean mCreateTask;
         private ActivityStack mStack;
@@ -223,7 +224,13 @@ class ActivityTestsBase extends SystemServiceTestsBase {
             return this;
         }
 
+        ActivityBuilder setAffinity(String affinity) {
+            mAffinity = affinity;
+            return this;
+        }
+
         ActivityRecord build() {
+            SystemServicesTestRule.checkHoldsLock(mService.mGlobalLock);
             try {
                 mService.deferWindowLayout();
                 return buildInner();
@@ -271,6 +278,7 @@ class ActivityTestsBase extends SystemServiceTestsBase {
             aInfo.maxAspectRatio = mMaxAspectRatio;
             aInfo.screenOrientation = mScreenOrientation;
             aInfo.configChanges |= mConfigChanges;
+            aInfo.taskAffinity = mAffinity;
 
             ActivityOptions options = null;
             if (mLaunchTaskBehind) {
@@ -288,6 +296,7 @@ class ActivityTestsBase extends SystemServiceTestsBase {
                 // fullscreen value is normally read from resources in ctor, so for testing we need
                 // to set it somewhere else since we can't mock resources.
                 doReturn(true).when(activity).occludesParent();
+                doReturn(true).when(activity).fillsParent();
                 mTask.addChild(activity);
                 // Make visible by default...
                 activity.setVisible(true);
@@ -386,6 +395,8 @@ class ActivityTestsBase extends SystemServiceTestsBase {
         }
 
         Task build() {
+            SystemServicesTestRule.checkHoldsLock(mSupervisor.mService.mGlobalLock);
+
             if (mStack == null && mCreateStack) {
                 TaskDisplayArea displayArea = mTaskDisplayArea != null ? mTaskDisplayArea
                         : mSupervisor.mRootWindowContainer.getDefaultTaskDisplayArea();
@@ -493,6 +504,8 @@ class ActivityTestsBase extends SystemServiceTestsBase {
         }
 
         ActivityStack build() {
+            SystemServicesTestRule.checkHoldsLock(mRootWindowContainer.mWmService.mGlobalLock);
+
             final int stackId = mStackId >= 0 ? mStackId : mTaskDisplayArea.getNextStackId();
             final ActivityStack stack = mTaskDisplayArea.createStackUnchecked(
                     mWindowingMode, mActivityType, stackId, mOnTop, mInfo, mIntent,

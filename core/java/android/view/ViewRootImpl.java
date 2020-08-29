@@ -21,7 +21,7 @@ import static android.view.Display.INVALID_DISPLAY;
 import static android.view.InputDevice.SOURCE_CLASS_NONE;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
-import static android.view.InsetsState.LAST_TYPE;
+import static android.view.InsetsState.SIZE;
 import static android.view.View.PFLAG_DRAW_ANIMATION;
 import static android.view.View.SYSTEM_UI_FLAG_FULLSCREEN;
 import static android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
@@ -564,7 +564,7 @@ public final class ViewRootImpl implements ViewParent,
             new DisplayCutout.ParcelableWrapper(DisplayCutout.NO_CUTOUT);
     boolean mPendingAlwaysConsumeSystemBars;
     private final InsetsState mTempInsets = new InsetsState();
-    private final InsetsSourceControl[] mTempControls = new InsetsSourceControl[LAST_TYPE + 1];
+    private final InsetsSourceControl[] mTempControls = new InsetsSourceControl[SIZE];
     final ViewTreeObserver.InternalInsetsInfo mLastGivenInsets
             = new ViewTreeObserver.InternalInsetsInfo();
 
@@ -703,6 +703,11 @@ public final class ViewRootImpl implements ViewParent,
     // the UI thread is paused and then applied and cleared from the UI thread right after
     // draw returns.
     private SurfaceControl.Transaction mRtBLASTSyncTransaction = new SurfaceControl.Transaction();
+
+    // Keeps track of whether the WM requested us to use BLAST Sync when calling relayout.
+    //  We use this to make sure we don't send the WM transactions from an internal BLAST sync
+    // (e.g. SurfaceView)
+    private boolean mSendNextFrameToWm = false;
 
     private HashSet<ScrollCaptureCallback> mRootScrollCaptureCallbacks;
 
@@ -1491,7 +1496,6 @@ public final class ViewRootImpl implements ViewParent,
                         final int newScreenState = toViewScreenState(newDisplayState);
                         if (oldScreenState != newScreenState) {
                             mView.dispatchScreenStateChanged(newScreenState);
-                            mImeFocusController.onScreenStateChanged(newScreenState);
                         }
                         if (oldDisplayState == Display.STATE_OFF) {
                             // Draw was suppressed so we need to for it to happen here.
@@ -1583,6 +1587,11 @@ public final class ViewRootImpl implements ViewParent,
         }
         mApplyInsetsRequested = true;
         requestLayout();
+
+        // See comment for View.sForceLayoutWhenInsetsChanged
+        if (View.sForceLayoutWhenInsetsChanged && mView != null) {
+            forceLayout(mView);
+        }
 
         // If this changes during traversal, no need to schedule another one as it will dispatch it
         // during the current traversal.
@@ -1717,7 +1726,9 @@ public final class ViewRootImpl implements ViewParent,
                 destroySurface();
             }
         }
+        scheduleConsumeBatchedInputImmediately();
     }
+
 
     /** Register callbacks to be notified when the ViewRootImpl surface changes. */
     interface SurfaceChangedCallback {
@@ -1771,6 +1782,7 @@ public final class ViewRootImpl implements ViewParent,
                     .setContainerLayer()
                     .setName("Bounds for - " + getTitle().toString())
                     .setParent(getRenderSurfaceControl())
+                    .setCallsite("ViewRootImpl.getBoundsLayer")
                     .build();
             setBoundsLayerCrop();
             mTransaction.show(mBoundsLayer).apply();
@@ -1967,6 +1979,11 @@ public final class ViewRootImpl implements ViewParent,
             mCompatibleVisibilityInfo.globalVisibility =
                     (mCompatibleVisibilityInfo.globalVisibility & ~View.SYSTEM_UI_FLAG_LOW_PROFILE)
                             | (mAttachInfo.mSystemUiVisibility & View.SYSTEM_UI_FLAG_LOW_PROFILE);
+            if (mDispatchedSystemUiVisibility != mCompatibleVisibilityInfo.globalVisibility) {
+                mHandler.removeMessages(MSG_DISPATCH_SYSTEM_UI_VISIBILITY);
+                mHandler.sendMessage(mHandler.obtainMessage(
+                        MSG_DISPATCH_SYSTEM_UI_VISIBILITY, mCompatibleVisibilityInfo));
+            }
             if (mAttachInfo.mKeepScreenOn != oldScreenOn
                     || mAttachInfo.mSystemUiVisibility != params.subtreeSystemUiVisibility
                     || mAttachInfo.mHasSystemUiListeners != params.hasSystemUiListeners) {
@@ -2018,9 +2035,11 @@ public final class ViewRootImpl implements ViewParent,
             }
         } else {
             info.globalVisibility |= systemUiFlag;
+            info.localChanges &= ~systemUiFlag;
         }
         if (mDispatchedSystemUiVisibility != info.globalVisibility) {
-            scheduleTraversals();
+            mHandler.removeMessages(MSG_DISPATCH_SYSTEM_UI_VISIBILITY);
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_DISPATCH_SYSTEM_UI_VISIBILITY, info));
         }
     }
 
@@ -2298,7 +2317,7 @@ public final class ViewRootImpl implements ViewParent,
                 || lp.type == TYPE_VOLUME_OVERLAY;
     }
 
-    private int dipToPx(int dip) {
+    int dipToPx(int dip) {
         final DisplayMetrics displayMetrics = mContext.getResources().getDisplayMetrics();
         return (int) (displayMetrics.density * dip + 0.5f);
     }
@@ -2467,9 +2486,6 @@ public final class ViewRootImpl implements ViewParent,
         if (mAttachInfo.mForceReportNewAttributes) {
             mAttachInfo.mForceReportNewAttributes = false;
             params = lp;
-        }
-        if (sNewInsetsMode == NEW_INSETS_MODE_FULL) {
-            handleDispatchSystemUiVisibilityChanged(mCompatibleVisibilityInfo);
         }
 
         if (mFirst || mAttachInfo.mViewVisibilityChanged) {
@@ -3048,6 +3064,7 @@ public final class ViewRootImpl implements ViewParent,
         if ((relayoutResult & WindowManagerGlobal.RELAYOUT_RES_BLAST_SYNC) != 0) {
             reportNextDraw();
             setUseBLASTSyncTransaction();
+            mSendNextFrameToWm = true;
         }
 
         boolean cancelDraw = mAttachInfo.mTreeObserver.dispatchOnPreDraw() || !isViewVisible;
@@ -3757,7 +3774,7 @@ public final class ViewRootImpl implements ViewParent,
             if (needFrameCompleteCallback) {
                 final Handler handler = mAttachInfo.mHandler;
                 mAttachInfo.mThreadedRenderer.setFrameCompleteCallback((long frameNr) -> {
-                        finishBLASTSync(!reportNextDraw);
+                        finishBLASTSync(!mSendNextFrameToWm);
                         handler.postAtFrontOfQueue(() -> {
                             if (reportNextDraw) {
                                 // TODO: Use the frame number
@@ -3779,7 +3796,7 @@ public final class ViewRootImpl implements ViewParent,
                 // so if we are BLAST syncing we make sure the previous draw has
                 // totally finished.
                 if (mAttachInfo.mThreadedRenderer != null) {
-                    mAttachInfo.mThreadedRenderer.fence();
+                    mAttachInfo.mThreadedRenderer.pause();
                 }
 
                 mNextReportConsumeBLAST = true;
@@ -4602,6 +4619,9 @@ public final class ViewRootImpl implements ViewParent,
     }
 
     void dispatchDetachedFromWindow() {
+        // Make sure we free-up insets resources if view never received onWindowFocusLost()
+        // because of a die-signal
+        mInsetsController.onWindowFocusLost();
         mFirstInputStage.onDetachedFromWindow();
         if (mView != null && mView.mAttachInfo != null) {
             mAttachInfo.mTreeObserver.dispatchOnWindowAttachedChange(false);
@@ -4619,6 +4639,8 @@ public final class ViewRootImpl implements ViewParent,
 
         setAccessibilityFocus(null, null);
 
+        mInsetsController.cancelExistingAnimations();
+
         mView.assignParent(null);
         mView = null;
         mAttachInfo.mRootView = null;
@@ -4631,13 +4653,16 @@ public final class ViewRootImpl implements ViewParent,
             mInputQueueCallback = null;
             mInputQueue = null;
         }
-        if (mInputEventReceiver != null) {
-            mInputEventReceiver.dispose();
-            mInputEventReceiver = null;
-        }
         try {
             mWindowSession.remove(mWindow);
         } catch (RemoteException e) {
+        }
+        // Dispose receiver would dispose client InputChannel, too. That could send out a socket
+        // broken event, so we need to unregister the server InputChannel when removing window to
+        // prevent server side receive the event and prompt error.
+        if (mInputEventReceiver != null) {
+            mInputEventReceiver.dispose();
+            mInputEventReceiver = null;
         }
 
         mDisplayManager.unregisterDisplayListener(mDisplayListener);
@@ -4971,6 +4996,11 @@ public final class ViewRootImpl implements ViewParent,
                     break;
                 }
                 case MSG_SHOW_INSETS: {
+                    if (mView == null) {
+                        Log.e(TAG,
+                                String.format("Calling showInsets(%d,%b) on window that no longer"
+                                        + " has views.", msg.arg1, msg.arg2 == 1));
+                    }
                     mInsetsController.show(msg.arg1, msg.arg2 == 1);
                     break;
                 }
@@ -8080,7 +8110,9 @@ public final class ViewRootImpl implements ViewParent,
     }
 
     void scheduleConsumeBatchedInput() {
-        if (!mConsumeBatchedInputScheduled) {
+        // If anything is currently scheduled to consume batched input then there's no point in
+        // scheduling it again.
+        if (!mConsumeBatchedInputScheduled && !mConsumeBatchedInputImmediatelyScheduled) {
             mConsumeBatchedInputScheduled = true;
             mChoreographer.postCallback(Choreographer.CALLBACK_INPUT,
                     mConsumedBatchedInputRunnable, null);
@@ -8103,22 +8135,15 @@ public final class ViewRootImpl implements ViewParent,
         }
     }
 
-    void doConsumeBatchedInput(long frameTimeNanos) {
-        if (mConsumeBatchedInputScheduled) {
-            mConsumeBatchedInputScheduled = false;
-            if (mInputEventReceiver != null) {
-                if (mInputEventReceiver.consumeBatchedInputEvents(frameTimeNanos)
-                        && frameTimeNanos != -1) {
-                    // If we consumed a batch here, we want to go ahead and schedule the
-                    // consumption of batched input events on the next frame. Otherwise, we would
-                    // wait until we have more input events pending and might get starved by other
-                    // things occurring in the process. If the frame time is -1, however, then
-                    // we're in a non-batching mode, so there's no need to schedule this.
-                    scheduleConsumeBatchedInput();
-                }
-            }
-            doProcessInputEvents();
+    boolean doConsumeBatchedInput(long frameTimeNanos) {
+        final boolean consumedBatches;
+        if (mInputEventReceiver != null) {
+            consumedBatches = mInputEventReceiver.consumeBatchedInputEvents(frameTimeNanos);
+        } else {
+            consumedBatches = false;
         }
+        doProcessInputEvents();
+        return consumedBatches;
     }
 
     final class TraversalRunnable implements Runnable {
@@ -8162,8 +8187,11 @@ public final class ViewRootImpl implements ViewParent,
 
         @Override
         public void onBatchedInputEventPending(int source) {
+            // mStopped: There will be no more choreographer callbacks if we are stopped,
+            // so we must consume all input immediately to prevent ANR
             final boolean unbuffered = mUnbufferedInputDispatch
-                    || (source & mUnbufferedInputSource) != SOURCE_CLASS_NONE;
+                    || (source & mUnbufferedInputSource) != SOURCE_CLASS_NONE
+                    || mStopped;
             if (unbuffered) {
                 if (mConsumeBatchedInputScheduled) {
                     unscheduleConsumeBatchedInput();
@@ -8191,7 +8219,14 @@ public final class ViewRootImpl implements ViewParent,
     final class ConsumeBatchedInputRunnable implements Runnable {
         @Override
         public void run() {
-            doConsumeBatchedInput(mChoreographer.getFrameTimeNanos());
+            mConsumeBatchedInputScheduled = false;
+            if (doConsumeBatchedInput(mChoreographer.getFrameTimeNanos())) {
+                // If we consumed a batch here, we want to go ahead and schedule the
+                // consumption of batched input events on the next frame. Otherwise, we would
+                // wait until we have more input events pending and might get starved by other
+                // things occurring in the process.
+                scheduleConsumeBatchedInput();
+            }
         }
     }
     final ConsumeBatchedInputRunnable mConsumedBatchedInputRunnable =
@@ -8201,6 +8236,7 @@ public final class ViewRootImpl implements ViewParent,
     final class ConsumeBatchedInputImmediatelyRunnable implements Runnable {
         @Override
         public void run() {
+            mConsumeBatchedInputImmediatelyScheduled = false;
             doConsumeBatchedInput(-1);
         }
     }
@@ -9747,6 +9783,7 @@ public final class ViewRootImpl implements ViewParent,
     }
 
     private void finishBLASTSync(boolean apply) {
+        mSendNextFrameToWm = false;
         if (mNextReportConsumeBLAST) {
             mNextReportConsumeBLAST = false;
 

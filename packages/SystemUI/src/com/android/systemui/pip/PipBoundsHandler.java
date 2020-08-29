@@ -36,34 +36,31 @@ import android.util.Size;
 import android.util.TypedValue;
 import android.view.DisplayInfo;
 import android.view.Gravity;
-import android.view.IWindowManager;
-import android.view.WindowManagerGlobal;
 import android.window.WindowContainerTransaction;
+
+import com.android.systemui.wm.DisplayController;
+import com.android.systemui.wm.DisplayLayout;
 
 import java.io.PrintWriter;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 
 /**
  * Handles bounds calculation for PIP on Phone and other form factors, it keeps tracking variant
  * state changes originated from Window Manager and is the source of truth for PiP window bounds.
  */
+@Singleton
 public class PipBoundsHandler {
 
     private static final String TAG = PipBoundsHandler.class.getSimpleName();
     private static final float INVALID_SNAP_FRACTION = -1f;
 
     private final Context mContext;
-    private final IWindowManager mWindowManager;
     private final PipSnapAlgorithm mSnapAlgorithm;
     private final DisplayInfo mDisplayInfo = new DisplayInfo();
-    private final Rect mTmpInsets = new Rect();
-
-    /**
-     * Tracks the destination bounds, used for any following
-     * {@link #onMovementBoundsChanged(Rect, Rect, Rect, DisplayInfo)} calculations.
-     */
-    private final Rect mLastDestinationBounds = new Rect();
+    private final DisplayController mDisplayController;
+    private final DisplayLayout mDisplayLayout;
 
     private ComponentName mLastPipComponentName;
     private float mReentrySnapFraction = INVALID_SNAP_FRACTION;
@@ -84,11 +81,24 @@ public class PipBoundsHandler {
     private boolean mIsShelfShowing;
     private int mShelfHeight;
 
+    private final DisplayController.OnDisplaysChangedListener mDisplaysChangedListener =
+            new DisplayController.OnDisplaysChangedListener() {
+        @Override
+        public void onDisplayAdded(int displayId) {
+            if (displayId == mContext.getDisplayId()) {
+                mDisplayLayout.set(mDisplayController.getDisplayLayout(displayId));
+            }
+        }
+    };
+
     @Inject
-    public PipBoundsHandler(Context context, PipSnapAlgorithm pipSnapAlgorithm) {
+    public PipBoundsHandler(Context context, PipSnapAlgorithm pipSnapAlgorithm,
+            DisplayController displayController) {
         mContext = context;
         mSnapAlgorithm = pipSnapAlgorithm;
-        mWindowManager = WindowManagerGlobal.getWindowManagerService();
+        mDisplayLayout = new DisplayLayout();
+        mDisplayController = displayController;
+        mDisplayController.addDisplayWindowListener(mDisplaysChangedListener);
         reloadResources();
         // Initialize the aspect ratio to the default aspect ratio.  Don't do this in reload
         // resources as it would clobber mAspectRatio when entering PiP from fullscreen which
@@ -196,15 +206,22 @@ public class PipBoundsHandler {
         mReentrySnapFraction = INVALID_SNAP_FRACTION;
         mReentrySize = null;
         mLastPipComponentName = null;
-        mLastDestinationBounds.setEmpty();
     }
 
-    public Rect getLastDestinationBounds() {
-        return mLastDestinationBounds;
+    /**
+     * Returns ture if there's a valid snap fraction. This is used with {@link EXTRA_IS_FIRST_ENTRY}
+     * to see if this is the first time user has entered PIP for the component.
+     */
+    public boolean hasSaveReentryBounds() {
+        return mReentrySnapFraction != INVALID_SNAP_FRACTION;
     }
 
     public Rect getDisplayBounds() {
         return new Rect(0, 0, mDisplayInfo.logicalWidth, mDisplayInfo.logicalHeight);
+    }
+
+    public int getDisplayRotation() {
+        return mDisplayInfo.rotation;
     }
 
     /**
@@ -233,10 +250,19 @@ public class PipBoundsHandler {
     }
 
     /**
-     * @return {@link Rect} of the destination PiP window bounds.
+     * See {@link #getDestinationBounds(ComponentName, float, Rect, Size, boolean)}
      */
     Rect getDestinationBounds(ComponentName componentName, float aspectRatio, Rect bounds,
             Size minimalSize) {
+        return getDestinationBounds(componentName, aspectRatio, bounds, minimalSize,
+                false /* useCurrentMinEdgeSize */);
+    }
+
+    /**
+     * @return {@link Rect} of the destination PiP window bounds.
+     */
+    Rect getDestinationBounds(ComponentName componentName, float aspectRatio, Rect bounds,
+            Size minimalSize, boolean useCurrentMinEdgeSize) {
         if (!componentName.equals(mLastPipComponentName)) {
             onResetReentryBoundsUnchecked();
             mLastPipComponentName = componentName;
@@ -252,11 +278,9 @@ public class PipBoundsHandler {
             destinationBounds = new Rect(bounds);
         }
         if (isValidPictureInPictureAspectRatio(aspectRatio)) {
-            transformBoundsToAspectRatio(destinationBounds, aspectRatio,
-                    false /* useCurrentMinEdgeSize */);
+            transformBoundsToAspectRatio(destinationBounds, aspectRatio, useCurrentMinEdgeSize);
         }
         mAspectRatio = aspectRatio;
-        mLastDestinationBounds.set(destinationBounds);
         return destinationBounds;
     }
 
@@ -265,13 +289,31 @@ public class PipBoundsHandler {
     }
 
     /**
+     * Updatest the display info and display layout on rotation change. This is needed even when we
+     * aren't in PIP because the rotation layout is used to calculate the proper insets for the
+     * next enter animation into PIP.
+     */
+    public void onDisplayRotationChangedNotInPip(int toRotation) {
+        // Update the display layout, note that we have to do this on every rotation even if we
+        // aren't in PIP since we need to update the display layout to get the right resources
+        mDisplayLayout.rotateTo(mContext.getResources(), toRotation);
+
+        // Populate the new {@link #mDisplayInfo}.
+        // The {@link DisplayInfo} queried from DisplayManager would be the one before rotation,
+        // therefore, the width/height may require a swap first.
+        // Moving forward, we should get the new dimensions after rotation from DisplayLayout.
+        mDisplayInfo.rotation = toRotation;
+        updateDisplayInfoIfNeeded();
+    }
+
+    /**
      * Updates the display info, calculating and returning the new stack and movement bounds in the
      * new orientation of the device if necessary.
      *
      * @return {@code true} if internal {@link DisplayInfo} is rotated, {@code false} otherwise.
      */
-    public boolean onDisplayRotationChanged(Rect outBounds, int displayId, int fromRotation,
-            int toRotation, WindowContainerTransaction t) {
+    public boolean onDisplayRotationChanged(Rect outBounds, Rect oldBounds, Rect outInsetBounds,
+            int displayId, int fromRotation, int toRotation, WindowContainerTransaction t) {
         // Bail early if the event is not sent to current {@link #mDisplayInfo}
         if ((displayId != mDisplayInfo.displayId) || (fromRotation == toRotation)) {
             return false;
@@ -289,8 +331,11 @@ public class PipBoundsHandler {
         }
 
         // Calculate the snap fraction of the current stack along the old movement bounds
-        final Rect postChangeStackBounds = new Rect(mLastDestinationBounds);
+        final Rect postChangeStackBounds = new Rect(oldBounds);
         final float snapFraction = getSnapFraction(postChangeStackBounds);
+
+        // Update the display layout
+        mDisplayLayout.rotateTo(mContext.getResources(), toRotation);
 
         // Populate the new {@link #mDisplayInfo}.
         // The {@link DisplayInfo} queried from DisplayManager would be the one before rotation,
@@ -306,8 +351,8 @@ public class PipBoundsHandler {
         mSnapAlgorithm.applySnapFraction(postChangeStackBounds, postChangeMovementBounds,
                 snapFraction);
 
+        getInsetBounds(outInsetBounds);
         outBounds.set(postChangeStackBounds);
-        mLastDestinationBounds.set(outBounds);
         t.setBounds(pinnedStackInfo.stackToken, outBounds);
         return true;
     }
@@ -424,15 +469,11 @@ public class PipBoundsHandler {
      * Populates the bounds on the screen that the PIP can be visible in.
      */
     protected void getInsetBounds(Rect outRect) {
-        try {
-            mWindowManager.getStableInsets(mContext.getDisplayId(), mTmpInsets);
-            outRect.set(mTmpInsets.left + mScreenEdgeInsets.x,
-                    mTmpInsets.top + mScreenEdgeInsets.y,
-                    mDisplayInfo.logicalWidth - mTmpInsets.right - mScreenEdgeInsets.x,
-                    mDisplayInfo.logicalHeight - mTmpInsets.bottom - mScreenEdgeInsets.y);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Failed to get stable insets from WM", e);
-        }
+        Rect insets = mDisplayLayout.stableInsets();
+        outRect.set(insets.left + mScreenEdgeInsets.x,
+                insets.top + mScreenEdgeInsets.y,
+                mDisplayInfo.logicalWidth - insets.right - mScreenEdgeInsets.x,
+                mDisplayInfo.logicalHeight - insets.bottom - mScreenEdgeInsets.y);
     }
 
     /**
@@ -499,6 +540,5 @@ public class PipBoundsHandler {
         pw.println(innerPrefix + "mImeHeight=" + mImeHeight);
         pw.println(innerPrefix + "mIsShelfShowing=" + mIsShelfShowing);
         pw.println(innerPrefix + "mShelfHeight=" + mShelfHeight);
-        mSnapAlgorithm.dump(pw, innerPrefix);
     }
 }

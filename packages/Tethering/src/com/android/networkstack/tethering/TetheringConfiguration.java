@@ -73,13 +73,26 @@ public class TetheringConfiguration {
     private static final String[] DEFAULT_IPV4_DNS = {"8.8.4.4", "8.8.8.8"};
 
     /**
+     * Override enabling BPF offload configuration for tethering.
+     */
+    public static final String OVERRIDE_TETHER_ENABLE_BPF_OFFLOAD =
+            "override_tether_enable_bpf_offload";
+
+    /**
      * Use the old dnsmasq DHCP server for tethering instead of the framework implementation.
      */
     public static final String TETHER_ENABLE_LEGACY_DHCP_SERVER =
             "tether_enable_legacy_dhcp_server";
 
+    /**
+     * Default value that used to periodic polls tether offload stats from tethering offload HAL
+     * to make the data warnings work.
+     */
+    public static final int DEFAULT_TETHER_OFFLOAD_POLL_INTERVAL_MS = 5000;
+
     public final String[] tetherableUsbRegexs;
     public final String[] tetherableWifiRegexs;
+    public final String[] tetherableWigigRegexs;
     public final String[] tetherableWifiP2pRegexs;
     public final String[] tetherableBluetoothRegexs;
     public final String[] tetherableNcmRegexs;
@@ -93,8 +106,13 @@ public class TetheringConfiguration {
     public final String[] provisioningApp;
     public final String provisioningAppNoUi;
     public final int provisioningCheckPeriod;
+    public final String provisioningResponse;
 
     public final int activeDataSubId;
+
+    private final int mOffloadPollInterval;
+    // TODO: Add to TetheringConfigurationParcel if required.
+    private final boolean mEnableBpfOffload;
 
     public TetheringConfiguration(Context ctx, SharedLog log, int id) {
         final SharedLog configLog = log.forSubComponent("config");
@@ -108,6 +126,7 @@ public class TetheringConfiguration {
         // us an interface name. Careful consideration needs to be given to
         // implications for Settings and for provisioning checks.
         tetherableWifiRegexs = getResourceStringArray(res, R.array.config_tether_wifi_regexs);
+        tetherableWigigRegexs = getResourceStringArray(res, R.array.config_tether_wigig_regexs);
         tetherableWifiP2pRegexs = getResourceStringArray(
                 res, R.array.config_tether_wifi_p2p_regexs);
         tetherableBluetoothRegexs = getResourceStringArray(
@@ -116,18 +135,26 @@ public class TetheringConfiguration {
         isDunRequired = checkDunRequired(ctx);
 
         chooseUpstreamAutomatically = getResourceBoolean(
-                res, R.bool.config_tether_upstream_automatic);
+                res, R.bool.config_tether_upstream_automatic, false /** defaultValue */);
         preferredUpstreamIfaceTypes = getUpstreamIfaceTypes(res, isDunRequired);
 
         legacyDhcpRanges = getLegacyDhcpRanges(res);
         defaultIPv4DNS = copy(DEFAULT_IPV4_DNS);
+        mEnableBpfOffload = getEnableBpfOffload(res);
         enableLegacyDhcpServer = getEnableLegacyDhcpServer(res);
 
         provisioningApp = getResourceStringArray(res, R.array.config_mobile_hotspot_provision_app);
-        provisioningAppNoUi = getProvisioningAppNoUi(res);
+        provisioningAppNoUi = getResourceString(res,
+                R.string.config_mobile_hotspot_provision_app_no_ui);
         provisioningCheckPeriod = getResourceInteger(res,
                 R.integer.config_mobile_hotspot_provision_check_period,
                 0 /* No periodic re-check */);
+        provisioningResponse = getResourceString(res,
+                R.string.config_mobile_hotspot_provision_response);
+
+        mOffloadPollInterval = getResourceInteger(res,
+                R.integer.config_tether_offload_poll_interval,
+                DEFAULT_TETHER_OFFLOAD_POLL_INTERVAL_MS);
 
         configLog.log(toString());
     }
@@ -140,6 +167,11 @@ public class TetheringConfiguration {
     /** Check whether input interface belong to wifi.*/
     public boolean isWifi(String iface) {
         return matchesDownstreamRegexs(iface, tetherableWifiRegexs);
+    }
+
+    /** Check whether input interface belong to wigig.*/
+    public boolean isWigig(String iface) {
+        return matchesDownstreamRegexs(iface, tetherableWigigRegexs);
     }
 
     /** Check whether this interface is Wifi P2P interface. */
@@ -189,9 +221,15 @@ public class TetheringConfiguration {
         dumpStringArray(pw, "legacyDhcpRanges", legacyDhcpRanges);
         dumpStringArray(pw, "defaultIPv4DNS", defaultIPv4DNS);
 
+        pw.print("offloadPollInterval: ");
+        pw.println(mOffloadPollInterval);
+
         dumpStringArray(pw, "provisioningApp", provisioningApp);
         pw.print("provisioningAppNoUi: ");
         pw.println(provisioningAppNoUi);
+
+        pw.print("enableBpfOffload: ");
+        pw.println(mEnableBpfOffload);
 
         pw.print("enableLegacyDhcpServer: ");
         pw.println(enableLegacyDhcpServer);
@@ -208,10 +246,12 @@ public class TetheringConfiguration {
                 makeString(tetherableBluetoothRegexs)));
         sj.add(String.format("isDunRequired:%s", isDunRequired));
         sj.add(String.format("chooseUpstreamAutomatically:%s", chooseUpstreamAutomatically));
+        sj.add(String.format("offloadPollInterval:%d", mOffloadPollInterval));
         sj.add(String.format("preferredUpstreamIfaceTypes:%s",
                 toIntArray(preferredUpstreamIfaceTypes)));
         sj.add(String.format("provisioningApp:%s", makeString(provisioningApp)));
         sj.add(String.format("provisioningAppNoUi:%s", provisioningAppNoUi));
+        sj.add(String.format("enableBpfOffload:%s", mEnableBpfOffload));
         sj.add(String.format("enableLegacyDhcpServer:%s", enableLegacyDhcpServer));
         return String.format("TetheringConfiguration{%s}", sj.toString());
     }
@@ -244,6 +284,14 @@ public class TetheringConfiguration {
         // TelephonyManager would uses the active data subscription, which should be the one used
         // by tethering.
         return (tm != null) ? tm.isTetheringApnRequired() : false;
+    }
+
+    public int getOffloadPollInterval() {
+        return mOffloadPollInterval;
+    }
+
+    public boolean isBpfOffloadEnabled() {
+        return mEnableBpfOffload;
     }
 
     private static Collection<Integer> getUpstreamIfaceTypes(Resources res, boolean dunRequired) {
@@ -304,19 +352,19 @@ public class TetheringConfiguration {
         return copy(LEGACY_DHCP_DEFAULT_RANGE);
     }
 
-    private static String getProvisioningAppNoUi(Resources res) {
+    private static String getResourceString(Resources res, final int resId) {
         try {
-            return res.getString(R.string.config_mobile_hotspot_provision_app_no_ui);
+            return res.getString(resId);
         } catch (Resources.NotFoundException e) {
             return "";
         }
     }
 
-    private static boolean getResourceBoolean(Resources res, int resId) {
+    private static boolean getResourceBoolean(Resources res, int resId, boolean defaultValue) {
         try {
             return res.getBoolean(resId);
         } catch (Resources.NotFoundException e404) {
-            return false;
+            return defaultValue;
         }
     }
 
@@ -337,14 +385,36 @@ public class TetheringConfiguration {
         }
     }
 
+    private boolean getEnableBpfOffload(final Resources res) {
+        // Get BPF offload config
+        // Priority 1: Device config
+        // Priority 2: Resource config
+        // Priority 3: Default value
+        final boolean defaultValue = getResourceBoolean(
+                res, R.bool.config_tether_enable_bpf_offload, true /** default value */);
+
+        return getDeviceConfigBoolean(OVERRIDE_TETHER_ENABLE_BPF_OFFLOAD, defaultValue);
+    }
+
     private boolean getEnableLegacyDhcpServer(final Resources res) {
-        return getResourceBoolean(res, R.bool.config_tether_enable_legacy_dhcp_server)
-                || getDeviceConfigBoolean(TETHER_ENABLE_LEGACY_DHCP_SERVER);
+        return getResourceBoolean(
+                res, R.bool.config_tether_enable_legacy_dhcp_server, false /** defaultValue */)
+                || getDeviceConfigBoolean(
+                TETHER_ENABLE_LEGACY_DHCP_SERVER, false /** defaultValue */);
+    }
+
+    private boolean getDeviceConfigBoolean(final String name, final boolean defaultValue) {
+        // Due to the limitation of static mock for testing, using #getDeviceConfigProperty instead
+        // of DeviceConfig#getBoolean. If using #getBoolean here, the test can't know that the
+        // returned boolean value comes from device config or default value (because of null
+        // property string). See the test case testBpfOffload{*} in TetheringConfigurationTest.java.
+        final String value = getDeviceConfigProperty(name);
+        return value != null ? Boolean.parseBoolean(value) : defaultValue;
     }
 
     @VisibleForTesting
-    protected boolean getDeviceConfigBoolean(final String name) {
-        return DeviceConfig.getBoolean(NAMESPACE_CONNECTIVITY, name, false /** defaultValue */);
+    protected String getDeviceConfigProperty(String name) {
+        return DeviceConfig.getProperty(NAMESPACE_CONNECTIVITY, name);
     }
 
     private Resources getResources(Context ctx, int subId) {

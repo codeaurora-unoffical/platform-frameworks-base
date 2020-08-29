@@ -80,6 +80,7 @@ public class SettingsHelper {
         sBroadcastOnRestore.add(Settings.Secure.UI_NIGHT_MODE);
         sBroadcastOnRestore.add(Settings.Secure.DARK_THEME_CUSTOM_START_TIME);
         sBroadcastOnRestore.add(Settings.Secure.DARK_THEME_CUSTOM_END_TIME);
+        sBroadcastOnRestore.add(Settings.Secure.ACCESSIBILITY_DISPLAY_MAGNIFICATION_NAVBAR_ENABLED);
     }
 
     private interface SettingsLookup {
@@ -218,15 +219,16 @@ public class SettingsHelper {
      */
     @VisibleForTesting
     public String getRealValueForSystemSetting(String setting) {
-        return Settings.System.getString(mContext.getContentResolver(),
+        // The real value irrespectively of the original setting's namespace is stored in
+        // Settings.Secure.
+        return Settings.Secure.getString(mContext.getContentResolver(),
                 setting + SETTING_ORIGINAL_KEY_SUFFIX);
     }
 
     @VisibleForTesting
     public boolean isReplacedSystemSetting(String setting) {
         // This list should not be modified.
-        if (!Settings.System.MASTER_MONO.equals(setting)
-                && !Settings.System.SCREEN_OFF_TIMEOUT.equals(setting)) {
+        if (!Settings.System.SCREEN_OFF_TIMEOUT.equals(setting)) {
             return false;
         }
         // If this flag is set, values for the system settings from the list above have been

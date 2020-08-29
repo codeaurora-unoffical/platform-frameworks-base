@@ -16,6 +16,7 @@
 
 package com.android.server.display;
 
+import static android.Manifest.permission.ADD_TRUSTED_DISPLAY;
 import static android.Manifest.permission.CAPTURE_SECURE_VIDEO_OUTPUT;
 import static android.Manifest.permission.CAPTURE_VIDEO_OUTPUT;
 import static android.Manifest.permission.INTERNAL_SYSTEM_WINDOW;
@@ -25,6 +26,7 @@ import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_C
 import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC;
 import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE;
 import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS;
+import static android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_TRUSTED;
 import static android.hardware.display.DisplayViewport.VIEWPORT_EXTERNAL;
 import static android.hardware.display.DisplayViewport.VIEWPORT_INTERNAL;
 import static android.hardware.display.DisplayViewport.VIEWPORT_VIRTUAL;
@@ -111,6 +113,7 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -971,6 +974,18 @@ public final class DisplayManagerService extends SystemService {
             if (diff == DisplayDeviceInfo.DIFF_STATE) {
                 Slog.i(TAG, "Display device changed state: \"" + info.name
                         + "\", " + Display.stateToString(info.state));
+                final Optional<Integer> viewportType = getViewportType(info);
+                if (viewportType.isPresent()) {
+                    for (DisplayViewport d : mViewports) {
+                        if (d.type == viewportType.get() && info.uniqueId.equals(d.uniqueId)) {
+                            // Update display view port power state
+                            d.isActive = Display.isActiveState(info.state);
+                        }
+                    }
+                    if (mInputManagerInternal != null) {
+                        mHandler.sendEmptyMessage(MSG_UPDATE_VIEWPORT);
+                    }
+                }
             } else if (diff != 0) {
                 Slog.i(TAG, "Display device changed: " + info);
             }
@@ -1507,6 +1522,23 @@ public final class DisplayManagerService extends SystemService {
         mViewports.clear();
     }
 
+    private Optional<Integer> getViewportType(DisplayDeviceInfo info) {
+        // Get the corresponding viewport type.
+        if ((info.flags & DisplayDeviceInfo.FLAG_DEFAULT_DISPLAY) != 0) {
+            return Optional.of(VIEWPORT_INTERNAL);
+        } else if (info.touch == DisplayDeviceInfo.TOUCH_EXTERNAL) {
+            return Optional.of(VIEWPORT_EXTERNAL);
+        } else if (info.touch == DisplayDeviceInfo.TOUCH_VIRTUAL
+                && !TextUtils.isEmpty(info.uniqueId)) {
+            return Optional.of(VIEWPORT_VIRTUAL);
+        } else {
+            if (DEBUG) {
+                Slog.i(TAG, "Display " + info + " does not support input device matching.");
+            }
+        }
+        return Optional.empty();
+    }
+
     private void configureDisplayLocked(SurfaceControl.Transaction t, DisplayDevice device) {
         final DisplayDeviceInfo info = device.getDisplayDeviceInfoLocked();
         final boolean ownContent = (info.flags & DisplayDeviceInfo.FLAG_OWN_CONTENT_ONLY) != 0;
@@ -1533,21 +1565,10 @@ public final class DisplayManagerService extends SystemService {
             return;
         }
         display.configureDisplayLocked(t, device, info.state == Display.STATE_OFF);
-        final int viewportType;
-        // Update the corresponding viewport.
-        if ((info.flags & DisplayDeviceInfo.FLAG_DEFAULT_DISPLAY) != 0) {
-            viewportType = VIEWPORT_INTERNAL;
-        } else if (info.touch == DisplayDeviceInfo.TOUCH_EXTERNAL) {
-            viewportType = VIEWPORT_EXTERNAL;
-        } else if (info.touch == DisplayDeviceInfo.TOUCH_VIRTUAL
-                && !TextUtils.isEmpty(info.uniqueId)) {
-            viewportType = VIEWPORT_VIRTUAL;
-        } else {
-            Slog.i(TAG, "Display " + info + " does not support input device matching.");
-            return;
+        final Optional<Integer> viewportType = getViewportType(info);
+        if (viewportType.isPresent()) {
+            populateViewportLocked(viewportType.get(), display.getDisplayIdLocked(), device, info);
         }
-
-        populateViewportLocked(viewportType, display.getDisplayIdLocked(), device, info.uniqueId);
     }
 
     /**
@@ -1587,12 +1608,13 @@ public final class DisplayManagerService extends SystemService {
         return viewport;
     }
 
-    private void populateViewportLocked(int viewportType,
-            int displayId, DisplayDevice device, String uniqueId) {
-        final DisplayViewport viewport = getViewportLocked(viewportType, uniqueId);
+    private void populateViewportLocked(int viewportType, int displayId, DisplayDevice device,
+            DisplayDeviceInfo info) {
+        final DisplayViewport viewport = getViewportLocked(viewportType, info.uniqueId);
         device.populateViewportLocked(viewport);
         viewport.valid = true;
         viewport.displayId = displayId;
+        viewport.isActive = Display.isActiveState(info.state);
     }
 
     private LogicalDisplay findLogicalDisplayForDeviceLocked(DisplayDevice device) {
@@ -2169,16 +2191,25 @@ public final class DisplayManagerService extends SystemService {
                 }
             }
 
+            if (callingUid == Process.SYSTEM_UID
+                    || checkCallingPermission(ADD_TRUSTED_DISPLAY, "createVirtualDisplay()")) {
+                flags |= VIRTUAL_DISPLAY_FLAG_TRUSTED;
+            } else {
+                flags &= ~VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS;
+            }
+
             // Sometimes users can have sensitive information in system decoration windows. An app
             // could create a virtual display with system decorations support and read the user info
             // from the surface.
             // We should only allow adding flag VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
-            // to virtual displays that are owned by the system.
-            if (callingUid != Process.SYSTEM_UID
-                    && (flags & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS) != 0) {
-                if (!checkCallingPermission(INTERNAL_SYSTEM_WINDOW, "createVirtualDisplay()")) {
+            // to trusted virtual displays.
+            final int trustedDisplayWithSysDecorFlag =
+                    (VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
+                            | VIRTUAL_DISPLAY_FLAG_TRUSTED);
+            if ((flags & trustedDisplayWithSysDecorFlag)
+                    == VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
+                    && !checkCallingPermission(INTERNAL_SYSTEM_WINDOW, "createVirtualDisplay()")) {
                     throw new SecurityException("Requires INTERNAL_SYSTEM_WINDOW permission");
-                }
             }
 
             final long token = Binder.clearCallingIdentity();

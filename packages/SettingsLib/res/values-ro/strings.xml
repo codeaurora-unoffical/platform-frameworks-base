@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"Afișați opțiunile pentru certificarea Ecran wireless"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"Măriți niv. de înr. prin Wi‑Fi, afișați în fcț. de SSID RSSI în Selectorul Wi‑Fi"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"Reduce descărcarea bateriei și îmbunătățește performanța rețelei"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"Când acest mod este activat, adresa MAC a dispozitivului se poate schimba de fiecare dată când se conectează la o rețea care are activată randomizarea MAC."</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"Contorizată"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"Necontorizată"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"Dimensiunile memoriei temporare a jurnalului"</string>
@@ -547,8 +546,13 @@
     <string name="profile_info_settings_title" msgid="105699672534365099">"Informații de profil"</string>
     <string name="user_need_lock_message" msgid="4311424336209509301">"Înainte de a putea crea un profil cu permisiuni limitate, va trebui să configurați blocarea ecranului pentru a vă proteja aplicațiile și datele personale."</string>
     <string name="user_set_lock_button" msgid="1427128184982594856">"Configurați blocarea"</string>
-    <string name="user_switch_to_user" msgid="6975428297154968543">"Comutați la <xliff:g id="USER_NAME">%s</xliff:g>"</string>
+    <string name="user_switch_to_user" msgid="6975428297154968543">"Treceți la <xliff:g id="USER_NAME">%s</xliff:g>"</string>
     <string name="guest_new_guest" msgid="3482026122932643557">"Adăugați un invitat"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"Ștergeți invitatul"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"Invitat"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"Prestabilit pentru dispozitiv"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"Dezactivat"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"Activat"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"Pentru ca modificarea să se aplice, trebuie să reporniți dispozitivul. Reporniți-l acum sau anulați."</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"Căști cu fir"</string>
 </resources>

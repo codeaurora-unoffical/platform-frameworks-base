@@ -67,8 +67,8 @@ class MultiFingerMultiTap extends GestureMatcher {
         Preconditions.checkArgumentPositive(taps, "Tap count must greater than 0.");
         mTargetTapCount = taps;
         mTargetFingerCount = fingers;
-        mDoubleTapSlop = ViewConfiguration.get(context).getScaledDoubleTapSlop();
-        mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+        mDoubleTapSlop = ViewConfiguration.get(context).getScaledDoubleTapSlop() * fingers;
+        mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop() * fingers;
 
         mBases = new PointF[mTargetFingerCount];
         for (int i = 0; i < mBases.length; i++) {
@@ -197,6 +197,7 @@ class MultiFingerMultiTap extends GestureMatcher {
         if (getState() == STATE_GESTURE_STARTED || getState() == STATE_CLEAR) {
             // Needs more fingers lifted within the tap timeout
             // after reaching the target number of fingers are down.
+            cancelAfterTapTimeout(event, rawEvent, policyFlags);
         } else {
             cancelGesture(event, rawEvent, policyFlags);
         }

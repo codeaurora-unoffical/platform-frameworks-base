@@ -66,6 +66,7 @@ import android.app.ActivityManager;
 import android.app.IApplicationThread;
 import android.content.ComponentName;
 import android.content.pm.ActivityInfo;
+import android.os.Binder;
 import android.os.UserHandle;
 import android.platform.test.annotations.Presubmit;
 
@@ -74,6 +75,9 @@ import androidx.test.filters.SmallTest;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import java.util.ArrayList;
+import java.util.function.Consumer;
 
 /**
  * Tests for the {@link ActivityStack} class.
@@ -1277,17 +1281,40 @@ public class ActivityStackTests extends ActivityTestsBase {
         secondActivity.app.setThread(null);
         // This should do nothing from a non-attached caller.
         assertFalse(mStack.navigateUpTo(secondActivity /* source record */,
-                firstActivity.intent /* destIntent */, 0 /* resultCode */, null /* resultData */));
+                firstActivity.intent /* destIntent */, null /* destGrants */,
+                0 /* resultCode */, null /* resultData */, null /* resultGrants */));
 
         secondActivity.app.setThread(thread);
         assertTrue(mStack.navigateUpTo(secondActivity /* source record */,
-                firstActivity.intent /* destIntent */, 0 /* resultCode */, null /* resultData */));
+                firstActivity.intent /* destIntent */, null /* destGrants */,
+                0 /* resultCode */, null /* resultData */, null /* resultGrants */));
         // The firstActivity uses default launch mode, so the activities between it and itself will
         // be finished.
         assertTrue(secondActivity.finishing);
         assertTrue(firstActivity.finishing);
         // The caller uid of the new activity should be the current real caller.
         assertEquals(starter.mRequest.callingUid, secondActivity.getUid());
+    }
+
+    @Test
+    public void testShouldUpRecreateTaskLockedWithCorrectAffinityFormat() {
+        final String affinity = "affinity";
+        final ActivityRecord activity = new ActivityBuilder(mService).setAffinity(affinity)
+                .setUid(Binder.getCallingUid()).setCreateTask(true).build();
+        activity.getTask().affinity = activity.taskAffinity;
+
+        assertFalse(mStack.shouldUpRecreateTaskLocked(activity, affinity));
+    }
+
+    @Test
+    public void testShouldUpRecreateTaskLockedWithWrongAffinityFormat() {
+        final String affinity = "affinity";
+        final ActivityRecord activity = new ActivityBuilder(mService).setAffinity(affinity)
+                .setUid(Binder.getCallingUid()).setCreateTask(true).build();
+        activity.getTask().affinity = activity.taskAffinity;
+        final String fakeAffinity = activity.getUid() + activity.taskAffinity;
+
+        assertTrue(mStack.shouldUpRecreateTaskLocked(activity, fakeAffinity));
     }
 
     @Test
@@ -1305,6 +1332,8 @@ public class ActivityStackTests extends ActivityTestsBase {
 
     @Test
     public void testCheckBehindFullscreenActivity() {
+        final ArrayList<ActivityRecord> occludedActivities = new ArrayList<>();
+        final Consumer<ActivityRecord> handleBehindFullscreenActivity = occludedActivities::add;
         final ActivityRecord bottomActivity =
                 new ActivityBuilder(mService).setStack(mStack).setTask(mTask).build();
         final ActivityRecord topActivity =
@@ -1315,11 +1344,20 @@ public class ActivityStackTests extends ActivityTestsBase {
         assertFalse(mStack.checkBehindFullscreenActivity(topActivity,
                 null /* handleBehindFullscreenActivity */));
 
+        // Top activity occludes bottom activity.
+        mStack.checkBehindFullscreenActivity(null /* toCheck */, handleBehindFullscreenActivity);
+        assertThat(occludedActivities).containsExactly(bottomActivity);
+
         doReturn(false).when(topActivity).occludesParent();
         assertFalse(mStack.checkBehindFullscreenActivity(bottomActivity,
                 null /* handleBehindFullscreenActivity */));
         assertFalse(mStack.checkBehindFullscreenActivity(topActivity,
                 null /* handleBehindFullscreenActivity */));
+
+        occludedActivities.clear();
+        // Top activity doesn't occlude parent, so the bottom activity is not occluded.
+        mStack.checkBehindFullscreenActivity(null /* toCheck */, handleBehindFullscreenActivity);
+        assertThat(occludedActivities).isEmpty();
 
         final ActivityRecord finishingActivity =
                 new ActivityBuilder(mService).setStack(mStack).setTask(mTask).build();
@@ -1354,8 +1392,7 @@ public class ActivityStackTests extends ActivityTestsBase {
         }
         mSupervisor.endDeferResume();
 
-        doReturn(false).when(mService).isBooting();
-        doReturn(true).when(mService).isBooted();
+        setBooted(mService);
         // 2 activities are started while keyguard is locked, so they are waiting to be resolved.
         assertFalse(unknownAppVisibilityController.allResolved());
 

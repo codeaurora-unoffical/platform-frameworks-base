@@ -1122,9 +1122,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     }
 
     public void setGutsView(MenuItem item) {
-        if (mGuts != null && item.getGutsView() instanceof NotificationGuts.GutsContent) {
-            ((NotificationGuts.GutsContent) item.getGutsView()).setGutsParent(mGuts);
-            mGuts.setGutsContent((NotificationGuts.GutsContent) item.getGutsView());
+        if (getGuts() != null && item.getGutsView() instanceof NotificationGuts.GutsContent) {
+            getGuts().setGutsContent((NotificationGuts.GutsContent) item.getGutsView());
         }
     }
 
@@ -2366,6 +2365,11 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         updateChildrenVisibility();
         applyChildrenRoundness();
     }
+
+    protected void expandNotification() {
+        mExpandClickListener.onClick(this);
+    }
+
     /**
      * Returns the number of channels covered by the notification row (including its children if
      * it's a summary notification).

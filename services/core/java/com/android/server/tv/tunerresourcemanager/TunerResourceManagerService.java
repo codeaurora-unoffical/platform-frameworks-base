@@ -18,7 +18,10 @@ package com.android.server.tv.tunerresourcemanager;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.ActivityManager;
+import android.app.ActivityManager.RunningAppProcessInfo;
 import android.content.Context;
+import android.media.IResourceManagerService;
 import android.media.tv.TvInputManager;
 import android.media.tv.tunerresourcemanager.CasSessionRequest;
 import android.media.tv.tunerresourcemanager.IResourcesReclaimListener;
@@ -42,6 +45,7 @@ import com.android.server.SystemService;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -50,7 +54,7 @@ import java.util.Set;
  *
  * @hide
  */
-public class TunerResourceManagerService extends SystemService {
+public class TunerResourceManagerService extends SystemService implements IBinder.DeathRecipient {
     private static final String TAG = "TunerResourceManagerService";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
@@ -71,7 +75,9 @@ public class TunerResourceManagerService extends SystemService {
     @GuardedBy("mLock")
     private Map<Integer, ResourcesReclaimListenerRecord> mListeners = new HashMap<>();
 
-    private TvInputManager mManager;
+    private TvInputManager mTvInputManager;
+    private ActivityManager mActivityManager;
+    private IResourceManagerService mMediaResourceManager;
     private UseCasePriorityHints mPriorityCongfig = new UseCasePriorityHints();
 
     // An internal resource request count to help generate resource handle.
@@ -94,8 +100,26 @@ public class TunerResourceManagerService extends SystemService {
         if (!isForTesting) {
             publishBinderService(Context.TV_TUNER_RESOURCE_MGR_SERVICE, new BinderService());
         }
-        mManager = (TvInputManager) getContext().getSystemService(Context.TV_INPUT_SERVICE);
+        mTvInputManager = (TvInputManager) getContext().getSystemService(Context.TV_INPUT_SERVICE);
+        mActivityManager =
+                (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
         mPriorityCongfig.parse();
+
+        if (mMediaResourceManager == null) {
+            IBinder mediaResourceManagerBinder = getBinderService("media.resource_manager");
+            if (mediaResourceManagerBinder == null) {
+                Slog.w(TAG, "Resource Manager Service not available.");
+                return;
+            }
+            try {
+                mediaResourceManagerBinder.linkToDeath(this, /*flags*/ 0);
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Could not link to death of native resource manager service.");
+                return;
+            }
+            mMediaResourceManager = IResourceManagerService.Stub.asInterface(
+                    mediaResourceManagerBinder);
+        }
     }
 
     private final class BinderService extends ITunerResourceManager.Stub {
@@ -204,7 +228,7 @@ public class TunerResourceManagerService extends SystemService {
 
         @Override
         public boolean requestDemux(@NonNull TunerDemuxRequest request,
-                    @NonNull int[] demuxHandle)  throws RemoteException {
+                    @NonNull int[] demuxHandle) throws RemoteException {
             enforceTunerAccessPermission("requestDemux");
             enforceTrmAccessPermission("requestDemux");
             if (demuxHandle == null) {
@@ -362,14 +386,28 @@ public class TunerResourceManagerService extends SystemService {
 
         @Override
         public boolean isHigherPriority(
-                ResourceClientProfile challengerProfile, ResourceClientProfile holderProfile) {
+                ResourceClientProfile challengerProfile, ResourceClientProfile holderProfile)
+                throws RemoteException {
             enforceTrmAccessPermission("isHigherPriority");
-            if (DEBUG) {
-                Slog.d(TAG,
-                        "isHigherPriority(challengerProfile=" + challengerProfile
-                                + ", holderProfile=" + challengerProfile + ")");
+            if (challengerProfile == null || holderProfile == null) {
+                throw new RemoteException("Client profiles can't be null.");
             }
-            return true;
+            synchronized (mLock) {
+                return isHigherPriorityInternal(challengerProfile, holderProfile);
+            }
+        }
+    }
+
+    /**
+     * Handle the death of the native resource manager service
+     */
+    @Override
+    public void binderDied() {
+        if (DEBUG) {
+            Slog.w(TAG, "Native media resource manager service has died");
+        }
+        synchronized (mLock) {
+            mMediaResourceManager = null;
         }
     }
 
@@ -381,7 +419,7 @@ public class TunerResourceManagerService extends SystemService {
         }
 
         clientId[0] = INVALID_CLIENT_ID;
-        if (mManager == null) {
+        if (mTvInputManager == null) {
             Slog.e(TAG, "TvInputManager is null. Can't register client profile.");
             return;
         }
@@ -390,7 +428,17 @@ public class TunerResourceManagerService extends SystemService {
 
         int pid = profile.getTvInputSessionId() == null
                 ? Binder.getCallingPid() /*callingPid*/
-                : mManager.getClientPid(profile.getTvInputSessionId()); /*tvAppId*/
+                : mTvInputManager.getClientPid(profile.getTvInputSessionId()); /*tvAppId*/
+
+        // Update Media Resource Manager with the tvAppId
+        if (profile.getTvInputSessionId() != null && mMediaResourceManager != null) {
+            try {
+                mMediaResourceManager.overridePid(Binder.getCallingPid(), pid);
+            } catch (RemoteException e) {
+                Slog.e(TAG, "Could not overridePid in resourceManagerSercice,"
+                        + " remote exception: " + e);
+            }
+        }
 
         ClientProfile clientProfile = new ClientProfile.Builder(clientId[0])
                                               .tvInputSessionId(profile.getTvInputSessionId())
@@ -408,6 +456,15 @@ public class TunerResourceManagerService extends SystemService {
             Slog.d(TAG, "unregisterClientProfile(clientId=" + clientId + ")");
         }
         removeClientProfile(clientId);
+        // Remove the Media Resource Manager callingPid to tvAppId mapping
+        if (mMediaResourceManager != null) {
+            try {
+                mMediaResourceManager.overridePid(Binder.getCallingPid(), -1);
+            } catch (RemoteException e) {
+                Slog.e(TAG, "Could not overridePid in resourceManagerSercice when unregister,"
+                        + " remote exception: " + e);
+            }
+        }
     }
 
     @VisibleForTesting
@@ -693,6 +750,33 @@ public class TunerResourceManagerService extends SystemService {
     }
 
     @VisibleForTesting
+    protected boolean isHigherPriorityInternal(ResourceClientProfile challengerProfile,
+            ResourceClientProfile holderProfile) {
+        if (DEBUG) {
+            Slog.d(TAG,
+                    "isHigherPriority(challengerProfile=" + challengerProfile
+                            + ", holderProfile=" + challengerProfile + ")");
+        }
+        if (mTvInputManager == null) {
+            Slog.e(TAG, "TvInputManager is null. Can't compare the priority.");
+            // Allow the client to acquire the hardware interface
+            // when the TRM is not able to compare the priority.
+            return true;
+        }
+
+        int challengerPid = challengerProfile.getTvInputSessionId() == null
+                ? Binder.getCallingPid() /*callingPid*/
+                : mTvInputManager.getClientPid(challengerProfile.getTvInputSessionId()); /*tvAppId*/
+        int holderPid = holderProfile.getTvInputSessionId() == null
+                ? Binder.getCallingPid() /*callingPid*/
+                : mTvInputManager.getClientPid(holderProfile.getTvInputSessionId()); /*tvAppId*/
+
+        int challengerPriority = getClientPriority(challengerProfile.getUseCase(), challengerPid);
+        int holderPriority = getClientPriority(holderProfile.getUseCase(), holderPid);
+        return challengerPriority > holderPriority;
+    }
+
+    @VisibleForTesting
     protected void releaseFrontendInternal(FrontendResource fe) {
         if (DEBUG) {
             Slog.d(TAG, "releaseFrontend(id=" + fe.getId() + ")");
@@ -818,8 +902,20 @@ public class TunerResourceManagerService extends SystemService {
 
     @VisibleForTesting
     protected boolean isForeground(int pid) {
-        // TODO: how to get fg/bg information from pid
-        return true;
+        if (mActivityManager == null) {
+            return false;
+        }
+        List<RunningAppProcessInfo> appProcesses = mActivityManager.getRunningAppProcesses();
+        if (appProcesses == null) {
+            return false;
+        }
+        for (RunningAppProcessInfo appProcess : appProcesses) {
+            if (appProcess.pid == pid
+                    && appProcess.importance == RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void updateFrontendClientMappingOnNewGrant(int grantingId, int ownerClientId) {
@@ -1044,7 +1140,7 @@ public class TunerResourceManagerService extends SystemService {
     }
 
     private void enforceTrmAccessPermission(String apiName) {
-        getContext().enforceCallingPermission("android.permission.TUNER_RESOURCE_ACCESS",
+        getContext().enforceCallingOrSelfPermission("android.permission.TUNER_RESOURCE_ACCESS",
                 TAG + ": " + apiName);
     }
 

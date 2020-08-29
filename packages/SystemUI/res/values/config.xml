@@ -95,9 +95,6 @@
     <!-- The maximum number of tiles in the QuickQSPanel -->
     <integer name="quick_qs_panel_max_columns">6</integer>
 
-    <!-- Whether QuickSettings is in a phone landscape -->
-    <bool name="quick_settings_wide">false</bool>
-
     <!-- The number of columns in the QuickSettings -->
     <integer name="quick_settings_num_columns">3</integer>
 
@@ -127,6 +124,13 @@
     <string name="quick_settings_tiles_retail_mode" translatable="false">
         night,dark,dnd,flashlight,rotation,location
     </string>
+
+    <!-- Tiles to auto add to Quick Settings upon first change of a given secure setting.
+         The syntax is setting-name:spec. If the tile is a TileService, the spec should be specified
+         as custom(package/class). Relative class name is supported. -->
+    <string-array name="config_quickSettingsAutoAdd" translatable="false">
+        <item>accessibility_display_inversion_enabled:inversion</item>
+    </string-array>
 
     <!-- Whether or not the RSSI tile is capitalized or not. -->
     <bool name="quick_settings_rssi_tile_capitalization">true</bool>
@@ -523,16 +527,20 @@
     <!--  ID for the camera that needs extra protection -->
     <string translatable="false" name="config_protectedCameraId"></string>
 
+    <!-- Comma-separated list of packages to exclude from camera protection e.g.
+    "com.android.systemui,com.android.xyz" -->
+    <string translatable="false" name="config_cameraProtectionExcludedPackages"></string>
+
     <!--  Flag to turn on the rendering of the above path or not  -->
     <bool name="config_enableDisplayCutoutProtection">false</bool>
 
     <!-- Respect drawable/rounded.xml intrinsic size for multiple radius corner path customization -->
     <bool name="config_roundedCornerMultipleRadius">false</bool>
 
-    <!-- Controls can query a preferred application for limited number of suggested controls.
-         This config value should contain the package name of that preferred application.
+    <!-- Controls can query 2 preferred applications for limited number of suggested controls.
+         This config value should contain a list of package names of thoses preferred applications.
     -->
-    <string translatable="false" name="config_controlsPreferredPackage"></string>
+    <string-array translatable="false" name="config_controlsPreferredPackages" />
 
     <!-- Max number of columns for quick controls area -->
     <integer name="controls_max_columns">2</integer>

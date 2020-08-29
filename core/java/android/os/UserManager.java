@@ -230,13 +230,14 @@ public class UserManager {
     public static final String DISALLOW_MODIFY_ACCOUNTS = "no_modify_accounts";
 
     /**
-     * Specifies if a user is disallowed from changing Wi-Fi
-     * access points. The default value is <code>false</code>.
-     * <p>
-     * Device owner and profile owner can set this restriction, although the restriction has no
-     * effect in a managed profile. When it is set by the profile owner of an organization-owned
-     * managed profile on the parent profile, it will disallow the personal user from changing
-     * Wi-Fi access points.
+     * Specifies if a user is disallowed from changing Wi-Fi access points via Settings.
+     *
+     * <p>A device owner and a profile owner can set this restriction, although the restriction has
+     * no effect in a managed profile. When it is set by a device owner, a profile owner on the
+     * primary user or by a profile owner of an organization-owned managed profile on the parent
+     * profile, it disallows the primary user from changing Wi-Fi access points.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -285,14 +286,16 @@ public class UserManager {
 
     /**
      * Specifies if a user is disallowed from turning on location sharing.
-     * The default value is <code>false</code>.
-     * <p>
-     * In a managed profile, location sharing always reflects the primary user's setting, but
+     *
+     * <p>In a managed profile, location sharing by default reflects the primary user's setting, but
      * can be overridden and forced off by setting this restriction to true in the managed profile.
-     * <p>
-     * Device owner and profile owner can set this restriction. When it is set by the profile
-     * owner of an organization-owned managed profile on the parent profile, it will prevent the
-     * user from turning on location sharing in the personal profile.
+     *
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a device
+     * owner, a profile owner on the primary user or by a profile owner of an organization-owned
+     * managed profile on the parent profile, it prevents the primary user from turning on
+     * location sharing.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -304,12 +307,13 @@ public class UserManager {
 
     /**
      * Specifies if airplane mode is disallowed on the device.
-     * <p>
-     * This restriction can only be set by the device owner, the profile owner on the primary user
-     * or the profile owner of an organization-owned managed profile on the parent profile, and it
-     * applies globally - i.e. it disables airplane mode on the entire device.
-     * <p>
-     * The default value is <code>false</code>.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by any of these owners, it applies globally - i.e., it disables airplane mode
+     * on the entire device.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -397,17 +401,18 @@ public class UserManager {
             "no_install_unknown_sources_globally";
 
     /**
-     * Specifies if a user is disallowed from configuring bluetooth.
-     * This does <em>not</em> restrict the user from turning bluetooth on or off.
-     * The default value is <code>false</code>.
-     * <p>
-     * This restriction doesn't prevent the user from using bluetooth. For disallowing usage of
+     * Specifies if a user is disallowed from configuring bluetooth via Settings. This does
+     * <em>not</em> restrict the user from turning bluetooth on or off.
+     *
+     * <p>This restriction doesn't prevent the user from using bluetooth. For disallowing usage of
      * bluetooth completely on the device, use {@link #DISALLOW_BLUETOOTH}.
-     * <p>
-     * Device owner and profile owner can set this restriction, although the restriction has no
-     * effect in a managed profile. When it is set by the profile owner of an organization-owned
-     * managed profile on the parent profile, it will disallow the personal user from configuring
-     * bluetooth.
+     *
+     * <p>A device owner and a profile owner can set this restriction, although the restriction has
+     * no effect in a managed profile. When it is set by a device owner, a profile owner on the
+     * primary user or by a profile owner of an organization-owned managed profile on the parent
+     * profile, it disallows the primary user from configuring bluetooth.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -418,13 +423,19 @@ public class UserManager {
     public static final String DISALLOW_CONFIG_BLUETOOTH = "no_config_bluetooth";
 
     /**
-     * Specifies if bluetooth is disallowed on the device.
+     * Specifies if bluetooth is disallowed on the device. If bluetooth is disallowed on the device,
+     * bluetooth cannot be turned on or configured via Settings.
      *
-     * <p> This restriction can only be set by the device owner, the profile owner on the
-     * primary user or the profile owner of an organization-owned managed profile on the
-     * parent profile and it applies globally - i.e. it disables bluetooth on the entire
-     * device.
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally - i.e., it disables bluetooth on
+     * the entire device and all users will be affected. When it is set by a profile owner on the
+     * primary user or by a profile owner of an organization-owned managed profile on the parent
+     * profile, it disables the primary user from using bluetooth and configuring bluetooth
+     * in Settings.
+     *
      * <p>The default value is <code>false</code>.
+     *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
      * @see DevicePolicyManager#addUserRestriction(ComponentName, String)
@@ -434,14 +445,17 @@ public class UserManager {
     public static final String DISALLOW_BLUETOOTH = "no_bluetooth";
 
     /**
-     * Specifies if outgoing bluetooth sharing is disallowed on the device. Device owner and profile
-     * owner can set this restriction. When it is set by device owner or the profile owner of an
-     * organization-owned managed profile on the parent profile, all users on this device will be
-     * affected.
+     * Specifies if outgoing bluetooth sharing is disallowed.
      *
-     * <p>Default is <code>true</code> for managed profiles and false for otherwise. When a device
-     * upgrades to {@link android.os.Build.VERSION_CODES#O}, the system sets it for all existing
-     * managed profiles.
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a device
+     * owner, it applies globally. When it is set by a profile owner on the primary user or by a
+     * profile owner of an organization-owned managed profile on the parent profile, it disables
+     * the primary user from any outgoing bluetooth sharing.
+     *
+     * <p>Default is <code>true</code> for managed profiles and false otherwise.
+     *
+     * <p>When a device upgrades to {@link android.os.Build.VERSION_CODES#O}, the system sets it
+     * for all existing managed profiles.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -452,10 +466,17 @@ public class UserManager {
     public static final String DISALLOW_BLUETOOTH_SHARING = "no_bluetooth_sharing";
 
     /**
-     * Specifies if a user is disallowed from transferring files over
-     * USB. This can only be set by device owners, profile owners on the primary user or
-     * profile owners of organization-owned managed profiles on the parent profile.
-     * The default value is <code>false</code>.
+     * Specifies if a user is disallowed from transferring files over USB.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from transferring files over USB. No other
+     * user on the device is able to use file transfer over USB because the UI for file transfer
+     * is always associated with the primary user.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -478,8 +499,8 @@ public class UserManager {
     public static final String DISALLOW_CONFIG_CREDENTIALS = "no_config_credentials";
 
     /**
-     * When set on the primary user this specifies if the user can remove other users.
-     * When set on a secondary user, this specifies if the user can remove itself.
+     * When set on the admin user this specifies if the user can remove users.
+     * When set on a non-admin secondary user, this specifies if the user can remove itself.
      * This restriction has no effect on managed profiles.
      * The default value is <code>false</code>.
      *
@@ -512,13 +533,16 @@ public class UserManager {
     public static final String DISALLOW_REMOVE_MANAGED_PROFILE = "no_remove_managed_profile";
 
     /**
-     * Specifies if a user is disallowed from enabling or accessing debugging features. When set on
-     * the primary user or by the profile owner of an organization-owned managed profile on the
-     * parent profile, disables debugging features altogether, including USB debugging. When set on
-     * a managed profile or a secondary user, blocks debugging for that user only, including
-     * starting activities, making service calls, accessing content providers, sending broadcasts,
-     * installing/uninstalling packages, clearing user data, etc.
-     * The default value is <code>false</code>.
+     * Specifies if a user is disallowed from enabling or accessing debugging features.
+     *
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a device
+     * owner, a profile owner on the primary user or by a profile owner of an organization-owned
+     * managed profile on the parent profile, it disables debugging features altogether, including
+     * USB debugging. When set on a managed profile or a secondary user, it blocks debugging for
+     * that user only, including starting activities, making service calls, accessing content
+     * providers, sending broadcasts, installing/uninstalling packages, clearing user data, etc.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -546,19 +570,18 @@ public class UserManager {
 
     /**
      * Specifies if a user is disallowed from enabling or disabling location providers. As a
-     * result, user is disallowed from turning on or off location.
+     * result, user is disallowed from turning on or off location via Settings.
      *
-     * <p>
-     * In a managed profile, location sharing is forced off when it is turned off on the primary
-     * user or by the profile owner of an organization-owned managed profile on the parent profile.
-     * The user can still turn off location sharing on a managed profile when the restriction is
-     * set by the profile owner on a managed profile.
-     * <p>
-     * This user restriction is different from {@link #DISALLOW_SHARE_LOCATION},
-     * as the device owner or profile owner can still enable or disable location mode via
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a device
+     * owner, a profile owner on the primary user or by a profile owner of an organization-owned
+     * managed profile on the parent profile, it disallows the primary user from turning location
+     * on or off.
+     *
+     * <p>The default value is <code>false</code>.
+     *
+     * <p>This user restriction is different from {@link #DISALLOW_SHARE_LOCATION},
+     * as a device owner or a profile owner can still enable or disable location mode via
      * {@link DevicePolicyManager#setLocationEnabled} when this restriction is on.
-     * <p>
-     * The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -570,15 +593,18 @@ public class UserManager {
     public static final String DISALLOW_CONFIG_LOCATION = "no_config_location";
 
     /**
-     * Specifies if date, time and timezone configuring is disallowed.
+     * Specifies configuring date, time and timezone is disallowed via Settings.
      *
-     * <p>When restriction is set by device owners or profile owners of organization-owned
-     * managed profiles on the parent profile, it applies globally - i.e., it disables date,
-     * time and timezone setting on the entire device and all users will be affected. When it's set
-     * by profile owners, it's only applied to the managed user.
+     * <p>A device owner and a profile owner can set this restriction, although the restriction has
+     * no effect in a managed profile. When it is set by a device owner or by a profile owner of an
+     * organization-owned managed profile on the parent profile, it applies globally - i.e.,
+     * it disables date, time and timezone setting on the entire device and all users are affected.
+     * When it is set by a profile owner on the primary user, it disables the primary user
+     * from configuring date, time and timezone and disables all configuring of date, time and
+     * timezone in Settings.
+     *
      * <p>The default value is <code>false</code>.
      *
-     * <p>This user restriction has no effect on managed profiles.
      * <p>Key for user restrictions.
      * <p>Type: Boolean
      * @see DevicePolicyManager#addUserRestriction(ComponentName, String)
@@ -588,10 +614,18 @@ public class UserManager {
     public static final String DISALLOW_CONFIG_DATE_TIME = "no_config_date_time";
 
     /**
-     * Specifies if a user is disallowed from configuring Tethering
-     * & portable hotspots. This can only be set by device owners, profile owners on the
-     * primary user or profile owners of organization-owned managed profiles on the parent profile.
-     * The default value is <code>false</code>.
+     * Specifies if a user is disallowed from configuring Tethering and portable hotspots
+     * via Settings.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from using Tethering and hotspots and
+     * disables all configuring of Tethering and hotspots in Settings.
+     *
+     * <p>The default value is <code>false</code>.
+     *
      * <p>In Android 9.0 or higher, if tethering is enabled when this restriction is set,
      * tethering will be automatically turned off.
      *
@@ -619,11 +653,11 @@ public class UserManager {
     public static final String DISALLOW_NETWORK_RESET = "no_network_reset";
 
     /**
-     * Specifies if a user is disallowed from factory resetting
-     * from Settings. This can only be set by device owners and profile owners on the primary user.
+     * Specifies if a user is disallowed from factory resetting from Settings.
+     * This can only be set by device owners and profile owners on an admin user.
      * The default value is <code>false</code>.
-     * <p>This restriction has no effect on secondary users and managed profiles since only the
-     * primary user can factory reset the device.
+     * <p>This restriction has no effect on non-admin users since they cannot factory reset the
+     * device.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -635,10 +669,11 @@ public class UserManager {
 
     /**
      * Specifies if a user is disallowed from adding new users. This can only be set by device
-     * owners, profile owners on the primary user or profile owners of organization-owned managed
-     * profiles on the parent profile. The default value is <code>false</code>.
+     * owners or profile owners on the primary user. The default value is <code>false</code>.
      * <p>This restriction has no effect on secondary users and managed profiles since only the
      * primary user can add other users.
+     * <p> When the device is an organization-owned device provisioned with a managed profile,
+     * this restriction will be set as a base restriction which cannot be removed by any admin.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -684,10 +719,16 @@ public class UserManager {
     public static final String ENSURE_VERIFY_APPS = "ensure_verify_apps";
 
     /**
-     * Specifies if a user is disallowed from configuring cell
-     * broadcasts. This can only be set by device owners, profile owners on the primary user or
-     * profile owners of organization-owned managed profiles on the parent profile.
-     * The default value is <code>false</code>.
+     * Specifies if a user is disallowed from configuring cell broadcasts.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from configuring cell broadcasts.
+     *
+     * <p>The default value is <code>false</code>.
+     *
      * <p>This restriction has no effect on secondary users and managed profiles since only the
      * primary user can configure cell broadcasts.
      *
@@ -700,10 +741,16 @@ public class UserManager {
     public static final String DISALLOW_CONFIG_CELL_BROADCASTS = "no_config_cell_broadcasts";
 
     /**
-     * Specifies if a user is disallowed from configuring mobile
-     * networks. This can only be set by device owners, profile owners on the primary user or
-     * profile owners of organization-owned managed profiles on the parent profile.
-     * The default value is <code>false</code>.
+     * Specifies if a user is disallowed from configuring mobile networks.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from configuring mobile networks.
+     *
+     * <p>The default value is <code>false</code>.
+     *
      * <p>This restriction has no effect on secondary users and managed profiles since only the
      * primary user can configure mobile networks.
      *
@@ -746,11 +793,14 @@ public class UserManager {
 
     /**
      * Specifies if a user is disallowed from mounting physical external media.
-     * <p>
-     * This restriction can only be set by the device owner, the profile owner on the primary user
-     * or the profile owner of an organization-owned managed profile on the parent profile.
-     * <p>
-     * The default value is <code>false</code>.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from mounting physical external media.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -763,13 +813,14 @@ public class UserManager {
     /**
      * Specifies if a user is disallowed from adjusting microphone volume. If set, the microphone
      * will be muted.
-     * <p>
-     * The default value is <code>false</code>.
-     * <p>
-     * Device owner and profile owner can set this restriction, although the restriction has no
-     * effect in a managed profile. When it is set by the profile owner of an organization-owned
-     * managed profile on the parent profile, it will disallow the personal user from adjusting the
-     * microphone volume.
+     *
+     * <p>A device owner and a profile owner can set this restriction, although the restriction has
+     * no effect in a managed profile. When it is set by a device owner, it applies globally. When
+     * it is set by a profile owner on the primary user or by a profile owner of an
+     * organization-owned managed profile on the parent profile, it will disallow the primary user
+     * from adjusting the microphone volume.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -799,13 +850,13 @@ public class UserManager {
     /**
      * Specifies that the user is not allowed to make outgoing phone calls. Emergency calls are
      * still permitted.
-     * <p>
-     * The default value is <code>false</code>.
-     * <p>
-     * Device owner and profile owner can set this restriction, although the restriction has no
-     * effect in a managed profile. When it is set by the profile owner of an organization-owned
-     * managed profile on the parent profile, it will disallow the personal user from making
-     * outgoing phone calls.
+     *
+     * <p>A device owner and a profile owner can set this restriction, although the restriction has
+     * no effect in a managed profile. When it is set by a device owner, a profile owner on the
+     * primary user or by a profile owner of an organization-owned managed profile on the parent
+     * profile, it disallows the primary user from making outgoing phone calls.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -816,12 +867,15 @@ public class UserManager {
     public static final String DISALLOW_OUTGOING_CALLS = "no_outgoing_calls";
 
     /**
-     * Specifies that the user is not allowed to send or receive
-     * SMS messages. The default value is <code>false</code>.
-     * <p>
-     * Device owner and profile owner can set this restriction. When it is set by the
-     * profile owner of an organization-owned managed profile on the parent profile,
-     * it will disable SMS in the personal profile.
+     * Specifies that the user is not allowed to send or receive SMS messages.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from sending or receiving SMS messages.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -940,9 +994,15 @@ public class UserManager {
 
     /**
      * Specifies if the user is not allowed to reboot the device into safe boot mode.
-     * This can only be set by device owners, profile owners on the primary user or profile
-     * owners of organization-owned managed profiles on the parent profile.
-     * The default value is <code>false</code>.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from rebooting the device into safe
+     * boot mode.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -980,12 +1040,14 @@ public class UserManager {
 
     /**
      * Specifies if a user is not allowed to use the camera.
-     * <p>
-     * Device owner and profile owner can set this restriction. When the restriction is set by
-     * the device owner or the profile owner of an organization-owned managed profile on the
-     * parent profile, it is applied globally.
-     * <p>
-     * The default value is <code>false</code>.
+     *
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a
+     * device owner, it applies globally - i.e., it disables the use of camera on the entire device
+     * and all users are affected. When it is set by a profile owner on the primary user or by a
+     * profile owner of an organization-owned managed profile on the parent profile, it disables
+     * the primary user from using camera.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * @see DevicePolicyManager#addUserRestriction(ComponentName, String)
      * @see DevicePolicyManager#clearUserRestriction(ComponentName, String)
@@ -1005,9 +1067,15 @@ public class UserManager {
     public static final String DISALLOW_UNMUTE_DEVICE = "disallow_unmute_device";
 
     /**
-     * Specifies if a user is not allowed to use cellular data when roaming. This can only be set by
-     * device owners or profile owners of organization-owned managed profiles on the parent profile.
-     * The default value is <code>false</code>.
+     * Specifies if a user is not allowed to use cellular data when roaming.
+     *
+     * <p>This restriction can only be set by a device owner, a profile owner on the primary
+     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * When it is set by a device owner, it applies globally. When it is set by a profile owner
+     * on the primary user or by a profile owner of an organization-owned managed profile on
+     * the parent profile, it disables the primary user from using cellular data when roaming.
+     *
+     * <p>The default value is <code>false</code>.
      *
      * @see DevicePolicyManager#addUserRestriction(ComponentName, String)
      * @see DevicePolicyManager#clearUserRestriction(ComponentName, String)
@@ -1102,9 +1170,10 @@ public class UserManager {
      * Specifies if the contents of a user's screen is not allowed to be captured for artificial
      * intelligence purposes.
      *
-     * <p>Device owner and profile owner can set this restriction. When it is set by the
-     * device owner or the profile owner of an organization-owned managed profile on the parent
-     * profile, only the target user will be affected.
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a device
+     * owner, a profile owner on the primary user or by a profile owner of an organization-owned
+     * managed profile on the parent profile, it disables the primary user's screen from being
+     * captured for artificial intelligence purposes.
      *
      * <p>The default value is <code>false</code>.
      *
@@ -1118,9 +1187,10 @@ public class UserManager {
      * Specifies if the current user is able to receive content suggestions for selections based on
      * the contents of their screen.
      *
-     * <p>Device owner and profile owner can set this restriction. When it is set by the
-     * device owner or the profile owner of an organization-owned managed profile on the parent
-     * profile, only the target user will be affected.
+     * <p>A device owner and a profile owner can set this restriction. When it is set by a device
+     * owner, a profile owner on the primary user or by a profile owner of an organization-owned
+     * managed profile on the parent profile, it disables the primary user from receiving content
+     * suggestions for selections based on the contents of their screen.
      *
      * <p>The default value is <code>false</code>.
      *
@@ -1184,10 +1254,11 @@ public class UserManager {
     /**
      * Specifies whether the user is allowed to modify private DNS settings.
      *
-     * <p>The default value is <code>false</code>.
+     * <p>This restriction can only be set by a device owner or a profile owner of an
+     * organization-owned managed profile on the parent profile. When it is set by either of these
+     * owners, it applies globally.
      *
-     * <p>This user restriction can only be applied by the device owner or the profile owner
-     * of an organization-owned managed profile on the parent profile.
+     * <p>The default value is <code>false</code>.
      *
      * <p>Key for user restrictions.
      * <p>Type: Boolean
@@ -1728,9 +1799,15 @@ public class UserManager {
      * <p>As of {@link android.os.Build.VERSION_CODES#LOLLIPOP}, this method can
      * now automatically identify goats using advanced goat recognition technology.</p>
      *
-     * @return Returns true if the user making this call is a goat.
+     * <p>As of {@link android.os.Build.VERSION_CODES#R}, this method always returns
+     * {@code false} in order to protect goat privacy.</p>
+     *
+     * @return Returns whether the user making this call is a goat.
      */
     public boolean isUserAGoat() {
+        if (mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R) {
+            return false;
+        }
         return mContext.getPackageManager()
                 .isPackageAvailable("com.coffeestainstudios.goatsimulator");
     }
@@ -2209,6 +2286,20 @@ public class UserManager {
                 }
             };
 
+    // Uses IS_USER_UNLOCKED_PROPERTY for invalidation as the APIs have the same dependencies.
+    private final PropertyInvalidatedCache<Integer, Boolean> mIsUserUnlockingOrUnlockedCache =
+            new PropertyInvalidatedCache<Integer, Boolean>(
+                32, CACHE_KEY_IS_USER_UNLOCKED_PROPERTY) {
+                @Override
+                protected Boolean recompute(Integer query) {
+                    try {
+                        return mService.isUserUnlockingOrUnlocked(query);
+                    } catch (RemoteException re) {
+                        throw re.rethrowFromSystemServer();
+                    }
+                }
+            };
+
     /** {@hide} */
     @UnsupportedAppUsage
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
@@ -2220,6 +2311,7 @@ public class UserManager {
     /** {@hide} */
     public void disableIsUserUnlockedCache() {
         mIsUserUnlockedCache.disableLocal();
+        mIsUserUnlockingOrUnlockedCache.disableLocal();
     }
 
     /** {@hide} */
@@ -2256,11 +2348,7 @@ public class UserManager {
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
             Manifest.permission.INTERACT_ACROSS_USERS}, conditional = true)
     public boolean isUserUnlockingOrUnlocked(@UserIdInt int userId) {
-        try {
-            return mService.isUserUnlockingOrUnlocked(userId);
-        } catch (RemoteException re) {
-            throw re.rethrowFromSystemServer();
-        }
+        return mIsUserUnlockingOrUnlockedCache.query(userId);
     }
 
     /**
@@ -2581,8 +2669,8 @@ public class UserManager {
     }
 
     /**
-     * Creates a user with the specified name and options. For non-admin users, default user
-     * restrictions are going to be applied.
+     * Creates a user with the specified name and options.
+     * Default user restrictions will be applied.
      * Requires {@link android.Manifest.permission#MANAGE_USERS} permission.
      *
      * @param name the user's name
@@ -2601,8 +2689,8 @@ public class UserManager {
     }
 
     /**
-     * Creates a user with the specified name and options. For non-admin users, default user
-     * restrictions will be applied.
+     * Creates a user with the specified name and options.
+     * Default user restrictions will be applied.
      *
      * <p>Requires {@link android.Manifest.permission#MANAGE_USERS}.
      * {@link android.Manifest.permission#CREATE_USERS} suffices if flags are in
@@ -2611,15 +2699,12 @@ public class UserManager {
      * @param name     the user's name
      * @param userType the type of user, such as {@link UserManager#USER_TYPE_FULL_GUEST}.
      * @param flags    UserInfo flags that specify user properties.
-     * @return the {@link UserInfo} object for the created user,
-     *         or throws {@link UserOperationException} if the user could not be created
-     *         and calling app is targeting {@link android.os.Build.VERSION_CODES#R} or above
-     *         (otherwise returns {@code null}).
+     * @return the {@link UserInfo} object for the created user, or {@code null} if the user
+     *         could not be created.
      *
-     * @throws UserOperationException if the user could not be created and the calling app is
-     *         targeting {@link android.os.Build.VERSION_CODES#R} or above.
-     * @hide
      * @see UserInfo
+     *
+     * @hide
      */
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
             Manifest.permission.CREATE_USERS})
@@ -2628,16 +2713,14 @@ public class UserManager {
         try {
             return mService.createUserWithThrow(name, userType, flags);
         } catch (ServiceSpecificException e) {
-            return returnNullOrThrowUserOperationException(e,
-                    mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R);
+            return null;
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
     }
 
     /**
-     * Pre-creates a user of the specified type. For non-admin users, default user
-     * restrictions will be applied.
+     * Pre-creates a user of the specified type. Default user restrictions will be applied.
      *
      * <p>This method can be used by OEMs to "warm" up the user creation by pre-creating some users
      * at the first boot, so they when the "real" user is created (for example,
@@ -2656,25 +2739,19 @@ public class UserManager {
      * com.android.server.pm.UserManagerService#ALLOWED_FLAGS_FOR_CREATE_USERS_PERMISSION}.
      *
      * @param userType the type of user, such as {@link UserManager#USER_TYPE_FULL_GUEST}.
-     * @return the {@link UserInfo} object for the created user,
-     *         or throws {@link UserOperationException} if the user could not be created
-     *         and calling app is targeting {@link android.os.Build.VERSION_CODES#R} or above
-     *         (otherwise returns {@code null}).
+     * @return the {@link UserInfo} object for the created user.
      *
-     * @throws UserOperationException if the user could not be created and the calling app is
-     *         targeting {@link android.os.Build.VERSION_CODES#R} or above.
-     *
+     * @throws UserOperationException if the user could not be created.
      * @hide
      */
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
             Manifest.permission.CREATE_USERS})
-    public @Nullable UserInfo preCreateUser(@NonNull String userType)
+    public @NonNull UserInfo preCreateUser(@NonNull String userType)
             throws UserOperationException {
         try {
             return mService.preCreateUserWithThrow(userType);
         } catch (ServiceSpecificException e) {
-            return returnNullOrThrowUserOperationException(e,
-                    mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R);
+            throw UserOperationException.from(e);
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
@@ -2684,18 +2761,14 @@ public class UserManager {
      * Creates a guest user and configures it.
      * @param context an application context
      * @param name the name to set for the user
-     * @return the {@link UserInfo} object for the created user,
-     *         or throws {@link UserOperationException} if the user could not be created
-     *         and calling app is targeting {@link android.os.Build.VERSION_CODES#R} or above
-     *         (otherwise returns {@code null}).
+     * @return the {@link UserInfo} object for the created user, or {@code null} if the user
+     *         could not be created.
      *
-     * @throws UserOperationException if the user could not be created and the calling app is
-     *         targeting {@link android.os.Build.VERSION_CODES#R} or above.
      * @hide
      */
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
             Manifest.permission.CREATE_USERS})
-    public UserInfo createGuest(Context context, String name) throws UserOperationException {
+    public UserInfo createGuest(Context context, String name) {
         UserInfo guest = null;
         try {
             guest = mService.createUserWithThrow(name, USER_TYPE_FULL_GUEST, 0);
@@ -2704,8 +2777,7 @@ public class UserManager {
                         Settings.Secure.SKIP_FIRST_USE_HINTS, "1", guest.id);
             }
         } catch (ServiceSpecificException e) {
-            return returnNullOrThrowUserOperationException(e,
-                    context.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R);
+            return null;
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
@@ -2815,26 +2887,20 @@ public class UserManager {
      * @param userId new user will be a profile of this user.
      * @param disallowedPackages packages that will not be installed in the profile being created.
      *
-     * @return the {@link UserInfo} object for the created user,
-     *         or throws {@link UserOperationException} if the user could not be created
-     *         and calling app is targeting {@link android.os.Build.VERSION_CODES#R} or above
-     *         (otherwise returns {@code null}).
+     * @return the {@link UserInfo} object for the created user, or {@code null} if the user could
+     *         not be created.
      *
-     * @throws UserOperationException if the user could not be created and the calling app is
-     *         targeting {@link android.os.Build.VERSION_CODES#R} or above.
      * @hide
      */
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
             Manifest.permission.CREATE_USERS})
     public UserInfo createProfileForUser(String name, @NonNull String userType,
-            @UserInfoFlag int flags, @UserIdInt int userId, String[] disallowedPackages)
-            throws UserOperationException {
+            @UserInfoFlag int flags, @UserIdInt int userId, String[] disallowedPackages) {
         try {
             return mService.createProfileForUserWithThrow(name, userType, flags, userId,
                     disallowedPackages);
         } catch (ServiceSpecificException e) {
-            return returnNullOrThrowUserOperationException(e,
-                    mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R);
+            return null;
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
@@ -2851,13 +2917,12 @@ public class UserManager {
             Manifest.permission.CREATE_USERS})
     public UserInfo createProfileForUserEvenWhenDisallowed(String name,
             @NonNull String userType, @UserInfoFlag int flags, @UserIdInt int userId,
-            String[] disallowedPackages) throws UserOperationException {
+            String[] disallowedPackages) {
         try {
             return mService.createProfileForUserEvenWhenDisallowedWithThrow(name, userType, flags,
                     userId, disallowedPackages);
         } catch (ServiceSpecificException e) {
-            return returnNullOrThrowUserOperationException(e,
-                    mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R);
+            return null;
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
@@ -2868,18 +2933,14 @@ public class UserManager {
      * restrictions and adds shared accounts.
      *
      * @param name profile's name
-     * @return the {@link UserInfo} object for the created user,
-     *         or throws {@link UserOperationException} if the user could not be created
-     *         and calling app is targeting {@link android.os.Build.VERSION_CODES#R} or above
-     *         (otherwise returns {@code null}).
+     * @return the {@link UserInfo} object for the created user, or {@code null} if the user
+     *         could not be created.
      *
-     * @throws UserOperationException if the user could not be created and the calling app is
-     *         targeting {@link android.os.Build.VERSION_CODES#R} or above.
      * @hide
      */
     @RequiresPermission(anyOf = {Manifest.permission.MANAGE_USERS,
             Manifest.permission.CREATE_USERS})
-    public UserInfo createRestrictedProfile(String name) throws UserOperationException {
+    public UserInfo createRestrictedProfile(String name) {
         try {
             UserHandle parentUserHandle = Process.myUserHandle();
             UserInfo user = mService.createRestrictedProfileWithThrow(name,
@@ -2890,8 +2951,7 @@ public class UserManager {
             }
             return user;
         } catch (ServiceSpecificException e) {
-            return returnNullOrThrowUserOperationException(e,
-                    mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R);
+            return null;
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
@@ -3662,7 +3722,8 @@ public class UserManager {
     }
 
     /**
-     * Returns the badge color for the given user (generally to color a profile's icon's badge).
+     * Returns the light theme badge color for the given user (generally to color a profile's
+     * icon's badge).
      *
      * <p>To check whether a badge color is expected for the user, first call {@link #hasBadge}.
      *
@@ -3675,6 +3736,27 @@ public class UserManager {
     public @ColorInt int getUserBadgeColor(@UserIdInt int userId) {
         try {
             final int resourceId = mService.getUserBadgeColorResId(userId);
+            return Resources.getSystem().getColor(resourceId, null);
+        } catch (RemoteException re) {
+            throw re.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Returns the dark theme badge color for the given user (generally to color a profile's icon's
+     * badge).
+     *
+     * <p>To check whether a badge color is expected for the user, first call {@link #hasBadge}.
+     *
+     * @return the color (not the resource ID) to be used for the user's badge
+     * @throws Resources.NotFoundException if no valid badge color exists for this user
+     *
+     * @see #getBadgedIconForUser more information about badging in general
+     * @hide
+     */
+    public @ColorInt int getUserBadgeDarkColor(@UserIdInt int userId) {
+        try {
+            final int resourceId = mService.getUserBadgeDarkColorResId(userId);
             return Resources.getSystem().getColor(resourceId, null);
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
@@ -3900,15 +3982,15 @@ public class UserManager {
      * Sets the user's photo.
      * @param userId the user for whom to change the photo.
      * @param icon the bitmap to set as the photo.
+     *
      * @hide
      */
     @RequiresPermission(android.Manifest.permission.MANAGE_USERS)
-    public void setUserIcon(@UserIdInt int userId, @NonNull Bitmap icon)
-            throws UserOperationException {
+    public void setUserIcon(@UserIdInt int userId, @NonNull Bitmap icon) {
         try {
             mService.setUserIcon(userId, icon);
         } catch (ServiceSpecificException e) {
-            throw UserOperationException.from(e);
+            return;
         } catch (RemoteException re) {
             throw re.rethrowFromSystemServer();
         }
@@ -3918,6 +4000,10 @@ public class UserManager {
      * Sets the context user's photo.
      *
      * @param icon the bitmap to set as the photo.
+     *
+     * @throws UserOperationException according to the function signature, but may not actually
+     * throw it in practice. Catch RuntimeException instead.
+     *
      * @hide
      */
     @SystemApi
@@ -3981,24 +4067,30 @@ public class UserManager {
     public static int getMaxSupportedUsers() {
         // Don't allow multiple users on certain builds
         if (android.os.Build.ID.startsWith("JVP")) return 1;
-        if (ActivityManager.isLowRamDeviceStatic()) {
-            // Low-ram devices are Svelte. Most of the time they don't get multi-user.
-            if ((Resources.getSystem().getConfiguration().uiMode & Configuration.UI_MODE_TYPE_MASK)
-                    != Configuration.UI_MODE_TYPE_TELEVISION) {
-                return 1;
-            }
-        }
         return SystemProperties.getInt("fw.max_users",
                 Resources.getSystem().getInteger(R.integer.config_multiuserMaximumUsers));
     }
 
     /**
-     * Returns true if the user switcher should be shown, this will be if device supports multi-user
-     * and there are at least 2 users available that are not managed profiles.
+     * Returns true if the user switcher is enabled (regardless of whether there is anything
+     * interesting for it to show).
+     *
+     * @return true if user switcher is enabled
      * @hide
-     * @return true if user switcher should be shown.
      */
     public boolean isUserSwitcherEnabled() {
+        return isUserSwitcherEnabled(true);
+    }
+
+    /**
+     * Returns true if the user switcher should be shown.
+     *
+     * @param showEvenIfNotActionable value to return if the feature is enabled but there is nothing
+     *                                actionable for the user to do anyway
+     * @return true if user switcher should be shown.
+     * @hide
+     */
+    public boolean isUserSwitcherEnabled(boolean showEvenIfNotActionable) {
         if (!supportsMultipleUsers()) {
             return false;
         }
@@ -4009,15 +4101,26 @@ public class UserManager {
         if (isDeviceInDemoMode(mContext)) {
             return false;
         }
-        // If user disabled this feature, don't show switcher
-        final boolean userSwitcherEnabled = Settings.Global.getInt(mContext.getContentResolver(),
-                Settings.Global.USER_SWITCHER_ENABLED, 1) != 0;
-        if (!userSwitcherEnabled) {
+        // Check the Settings.Global.USER_SWITCHER_ENABLED that the user can toggle on/off.
+        final boolean userSwitcherSettingOn = Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.USER_SWITCHER_ENABLED,
+                Resources.getSystem().getBoolean(R.bool.config_showUserSwitcherByDefault) ? 1 : 0)
+                != 0;
+        if (!userSwitcherSettingOn) {
             return false;
         }
-        List<UserInfo> users = getUsers(true);
+
+        // The feature is enabled. But is it worth showing?
+        return showEvenIfNotActionable
+                || areThereUsersToWhichToSwitch() // There are switchable users.
+                || !hasUserRestriction(UserManager.DISALLOW_ADD_USER); // New users can be added.
+    }
+
+    /** Returns whether there are any users (other than the current user) to which to switch. */
+    private boolean areThereUsersToWhichToSwitch() {
+        final List<UserInfo> users = getUsers(true);
         if (users == null) {
-           return false;
+            return false;
         }
         int switchableUserCount = 0;
         for (UserInfo user : users) {
@@ -4025,9 +4128,7 @@ public class UserManager {
                 ++switchableUserCount;
             }
         }
-        final boolean guestEnabled = !mContext.getSystemService(DevicePolicyManager.class)
-                .getGuestUserDisabled(null);
-        return switchableUserCount > 1 || guestEnabled;
+        return switchableUserCount > 1;
     }
 
     /**

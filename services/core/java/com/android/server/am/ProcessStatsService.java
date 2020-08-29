@@ -617,6 +617,14 @@ public final class ProcessStatsService extends IProcessStats.Stub {
         return newHighWaterMark;
     }
 
+    /**
+     * @return The threshold to decide if a given association should be dumped into metrics.
+     */
+    @Override
+    public long getMinAssociationDumpDuration() {
+        return mAm.mConstants.MIN_ASSOC_LOG_DURATION;
+    }
+
     private ParcelFileDescriptor protoToParcelFileDescriptor(ProcessStats stats, int section)
             throws IOException {
         final ParcelFileDescriptor[] fds = ParcelFileDescriptor.createPipe();
@@ -1261,12 +1269,12 @@ public final class ProcessStatsService extends IProcessStats.Stub {
      * Dump proto for the statsd, mainly for testing.
      */
     private void dumpProtoForStatsd(FileDescriptor fd) {
-        final ProtoOutputStream proto = new ProtoOutputStream(fd);
+        final ProtoOutputStream[] protos = {new ProtoOutputStream(fd)};
 
         ProcessStats procStats = new ProcessStats(false);
         getCommittedStatsMerged(0, 0, true, null, procStats);
-        procStats.dumpAggregatedProtoForStatsd(proto);
+        procStats.dumpAggregatedProtoForStatsd(protos, 999999 /* max bytes per shard */);
 
-        proto.flush();
+        protos[0].flush();
     }
 }

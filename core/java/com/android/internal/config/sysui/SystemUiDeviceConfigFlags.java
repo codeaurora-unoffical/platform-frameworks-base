@@ -61,22 +61,6 @@ public final class SystemUiDeviceConfigFlags {
     public static final String SCREENSHOT_NOTIFICATION_SMART_ACTIONS_TIMEOUT_MS =
             "screenshot_notification_smart_actions_timeout_ms";
 
-    // Flags related to controls
-
-    /**
-     * (boolean) Whether to have split behavior when opening QS
-     */
-    public static final String QS_SPLIT_ENABLED = "qs_split_enabled";
-
-    /**
-     * (int) Open settings panels for WiFi and BT tiles
-     * 0 - default behavior, link to settings
-     * 1 - open panel on long press, click remains the same
-     * 2 - open panel on click, long press remains the same
-     * 3 - use details on long press
-     */
-    public static final String QS_USE_SETTINGS_PANELS = "qs_use_settings_panels";
-
     // Flags related to Smart Suggestions - these are read in SmartReplyConstants.
 
     /** (boolean) Whether to enable smart suggestions in notifications. */
@@ -387,6 +371,11 @@ public final class SystemUiDeviceConfigFlags {
      * (boolean) Whether append direct share on Sharesheet is enabled.
      */
     public static final String APPEND_DIRECT_SHARE_ENABLED = "append_direct_share_enabled";
+
+    /**
+     * (boolean) Whether ChooserTargets ranking on Sharesheet is enabled.
+     */
+    public static final String CHOOSER_TARGET_RANKING_ENABLED = "chooser_target_ranking_enabled";
 
     /**
      * (boolean) Whether to enable user-drag resizing for PIP.

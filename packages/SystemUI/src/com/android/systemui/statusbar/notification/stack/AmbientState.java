@@ -64,7 +64,7 @@ public class AmbientState {
     private int mZDistanceBetweenElements;
     private int mBaseZHeight;
     private int mMaxLayoutHeight;
-    private ActivatableNotificationView mLastVisibleBackgroundChild;
+    private ExpandableView mLastVisibleBackgroundChild;
     private float mCurrentScrollVelocity;
     private int mStatusBarState;
     private float mExpandingVelocity;
@@ -83,6 +83,8 @@ public class AmbientState {
     private float mDozeAmount = 0.0f;
     private HeadsUpManager mHeadUpManager;
     private Runnable mOnPulseHeightChangedListener;
+    private ExpandableNotificationRow mTrackedHeadsUpRow;
+    private float mAppearFraction;
 
     public AmbientState(
             Context context,
@@ -346,11 +348,11 @@ public class AmbientState {
      * view in the shade, without the clear all button.
      */
     public void setLastVisibleBackgroundChild(
-            ActivatableNotificationView lastVisibleBackgroundChild) {
+            ExpandableView lastVisibleBackgroundChild) {
         mLastVisibleBackgroundChild = lastVisibleBackgroundChild;
     }
 
-    public ActivatableNotificationView getLastVisibleBackgroundChild() {
+    public ExpandableView getLastVisibleBackgroundChild() {
         return mLastVisibleBackgroundChild;
     }
 
@@ -542,5 +544,28 @@ public class AmbientState {
 
     public Runnable getOnPulseHeightChangedListener() {
         return mOnPulseHeightChangedListener;
+    }
+
+    public void setTrackedHeadsUpRow(ExpandableNotificationRow row) {
+        mTrackedHeadsUpRow = row;
+    }
+
+    /**
+     * Returns the currently tracked heads up row, if there is one and it is currently above the
+     * shelf (still appearing).
+     */
+    public ExpandableNotificationRow getTrackedHeadsUpRow() {
+        if (mTrackedHeadsUpRow == null || !mTrackedHeadsUpRow.isAboveShelf()) {
+            return null;
+        }
+        return mTrackedHeadsUpRow;
+    }
+
+    public void setAppearFraction(float appearFraction) {
+        mAppearFraction = appearFraction;
+    }
+
+    public float getAppearFraction() {
+        return mAppearFraction;
     }
 }

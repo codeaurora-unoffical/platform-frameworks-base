@@ -39,6 +39,7 @@ import android.util.Log;
 import com.android.systemui.Dumpable;
 import com.android.systemui.dagger.qualifiers.UiBackground;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
+import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 
 import java.io.FileDescriptor;
@@ -69,16 +70,6 @@ public class NavigationModeController implements Dumpable {
 
     private ArrayList<ModeChangedListener> mListeners = new ArrayList<>();
 
-    private BroadcastReceiver mReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (DEBUG) {
-                Log.d(TAG, "ACTION_OVERLAY_CHANGED");
-            }
-            updateCurrentInteractionMode(true /* notify */);
-        }
-    };
-
     private final DeviceProvisionedController.DeviceProvisionedListener mDeviceProvisionedCallback =
             new DeviceProvisionedController.DeviceProvisionedListener() {
                 @Override
@@ -93,10 +84,24 @@ public class NavigationModeController implements Dumpable {
                 }
             };
 
+    // The primary user SysUI process doesn't get AppInfo changes from overlay package changes for
+    // the secondary user (b/158613864), so we need to update the interaction mode here as well
+    // as a fallback if we don't receive the configuration change
+    private BroadcastReceiver mReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (DEBUG) {
+                Log.d(TAG, "ACTION_OVERLAY_CHANGED");
+            }
+            updateCurrentInteractionMode(true /* notify */);
+        }
+    };
+
 
     @Inject
     public NavigationModeController(Context context,
             DeviceProvisionedController deviceProvisionedController,
+            ConfigurationController configurationController,
             @UiBackground Executor uiBgExecutor) {
         mContext = context;
         mCurrentUserContext = context;
@@ -109,6 +114,16 @@ public class NavigationModeController implements Dumpable {
         overlayFilter.addDataScheme("package");
         overlayFilter.addDataSchemeSpecificPart("android", PatternMatcher.PATTERN_LITERAL);
         mContext.registerReceiverAsUser(mReceiver, UserHandle.ALL, overlayFilter, null, null);
+
+        configurationController.addCallback(new ConfigurationController.ConfigurationListener() {
+            @Override
+            public void onOverlayChanged() {
+                if (DEBUG) {
+                    Log.d(TAG, "onOverlayChanged");
+                }
+                updateCurrentInteractionMode(true /* notify */);
+            }
+        });
 
         updateCurrentInteractionMode(false /* notify */);
     }

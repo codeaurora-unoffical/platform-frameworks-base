@@ -19,10 +19,13 @@ package com.android.systemui.wm;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
+import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.util.Slog;
 import android.util.SparseArray;
 import android.view.IDisplayWindowInsetsController;
@@ -35,6 +38,7 @@ import android.view.WindowInsets;
 import android.view.animation.Interpolator;
 import android.view.animation.PathInterpolator;
 
+import com.android.internal.view.IInputMethodManager;
 import com.android.systemui.TransactionPool;
 import com.android.systemui.dagger.qualifiers.Main;
 
@@ -52,12 +56,14 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
 
     private static final boolean DEBUG = false;
 
+    // NOTE: All these constants came from InsetsController.
     public static final int ANIMATION_DURATION_SHOW_MS = 275;
     public static final int ANIMATION_DURATION_HIDE_MS = 340;
     public static final Interpolator INTERPOLATOR = new PathInterpolator(0.4f, 0f, 0.2f, 1f);
     private static final int DIRECTION_NONE = 0;
     private static final int DIRECTION_SHOW = 1;
     private static final int DIRECTION_HIDE = 2;
+    private static final int FLOATING_IME_BOTTOM_INSET = -80;
 
     SystemWindows mSystemWindows;
     final Handler mHandler;
@@ -177,6 +183,7 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
         ValueAnimator mAnimation = null;
         int mRotation = Surface.ROTATION_0;
         boolean mImeShowing = false;
+        final Rect mImeFrame = new Rect();
 
         PerDisplay(int displayId, int initialRotation) {
             mDisplayId = displayId;
@@ -185,10 +192,21 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
 
         @Override
         public void insetsChanged(InsetsState insetsState) {
-            if (mInsetsState.equals(insetsState)) {
-                return;
-            }
-            mInsetsState.set(insetsState, true /* copySources */);
+            mHandler.post(() -> {
+                if (mInsetsState.equals(insetsState)) {
+                    return;
+                }
+
+                final InsetsSource newSource = insetsState.getSource(InsetsState.ITYPE_IME);
+                final Rect newFrame = newSource.getFrame();
+                final Rect oldFrame = mInsetsState.getSource(InsetsState.ITYPE_IME).getFrame();
+
+                mInsetsState.set(insetsState, true /* copySources */);
+                if (mImeShowing && !newFrame.equals(oldFrame) && newSource.isVisible()) {
+                    if (DEBUG) Slog.d(TAG, "insetsChanged when IME showing, restart animation");
+                    startAnimation(mImeShowing, true /* forceRestart */);
+                }
+            });
         }
 
         @Override
@@ -221,7 +239,7 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
                 return;
             }
             if (DEBUG) Slog.d(TAG, "Got showInsets for ime");
-            startAnimation(true /* show */, false /* forceRestart */);
+            mHandler.post(() -> startAnimation(true /* show */, false /* forceRestart */));
         }
 
         @Override
@@ -230,7 +248,7 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
                 return;
             }
             if (DEBUG) Slog.d(TAG, "Got hideInsets for ime");
-            startAnimation(false /* show */, false /* forceRestart */);
+            mHandler.post(() -> startAnimation(false /* show */, false /* forceRestart */));
         }
 
         /**
@@ -244,8 +262,8 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
             }
         }
 
-        private int imeTop(InsetsSource imeSource, float surfaceOffset) {
-            return imeSource.getFrame().top + (int) surfaceOffset;
+        private int imeTop(float surfaceOffset) {
+            return mImeFrame.top + (int) surfaceOffset;
         }
 
         private void startAnimation(final boolean show, final boolean forceRestart) {
@@ -253,108 +271,134 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
             if (imeSource == null || mImeSourceControl == null) {
                 return;
             }
-            mHandler.post(() -> {
-                if (DEBUG) {
-                    Slog.d(TAG, "Run startAnim  show:" + show + "  was:"
-                            + (mAnimationDirection == DIRECTION_SHOW ? "SHOW"
-                            : (mAnimationDirection == DIRECTION_HIDE ? "HIDE" : "NONE")));
-                }
-                if (!forceRestart && (mAnimationDirection == DIRECTION_SHOW && show)
-                        || (mAnimationDirection == DIRECTION_HIDE && !show)) {
-                    return;
-                }
-                boolean seek = false;
-                float seekValue = 0;
-                if (mAnimation != null) {
-                    if (mAnimation.isRunning()) {
-                        seekValue = (float) mAnimation.getAnimatedValue();
-                        seek = true;
-                    }
-                    mAnimation.cancel();
-                }
-                final float defaultY = mImeSourceControl.getSurfacePosition().y;
-                final float x = mImeSourceControl.getSurfacePosition().x;
-                final float hiddenY = defaultY + imeSource.getFrame().height();
-                final float shownY = defaultY;
-                final float startY = show ? hiddenY : shownY;
-                final float endY = show ? shownY : hiddenY;
-                if (mAnimationDirection == DIRECTION_NONE && mImeShowing && show) {
-                    // IME is already showing, so set seek to end
-                    seekValue = shownY;
+            // Set frame, but only if the new frame isn't empty -- this maintains continuity
+            final Rect newFrame = imeSource.getFrame();
+            mImeFrame.set(newFrame);
+            final boolean isFloating = newFrame.height() == 0;
+            if (isFloating) {
+                // This is likely a "floating" or "expanded" IME, so to get animations, just
+                // pretend the ime has some size just below the screen.
+                mImeFrame.set(newFrame);
+                final int floatingInset = (int) (
+                        mSystemWindows.mDisplayController.getDisplayLayout(mDisplayId).density()
+                                * FLOATING_IME_BOTTOM_INSET);
+                mImeFrame.bottom -= floatingInset;
+            }
+            if (DEBUG) {
+                Slog.d(TAG, "Run startAnim  show:" + show + "  was:"
+                        + (mAnimationDirection == DIRECTION_SHOW ? "SHOW"
+                        : (mAnimationDirection == DIRECTION_HIDE ? "HIDE" : "NONE")));
+            }
+            if (!forceRestart && (mAnimationDirection == DIRECTION_SHOW && show)
+                    || (mAnimationDirection == DIRECTION_HIDE && !show)) {
+                return;
+            }
+            boolean seek = false;
+            float seekValue = 0;
+            if (mAnimation != null) {
+                if (mAnimation.isRunning()) {
+                    seekValue = (float) mAnimation.getAnimatedValue();
                     seek = true;
                 }
-                mAnimationDirection = show ? DIRECTION_SHOW : DIRECTION_HIDE;
-                mImeShowing = show;
-                mAnimation = ValueAnimator.ofFloat(startY, endY);
-                mAnimation.setDuration(
-                        show ? ANIMATION_DURATION_SHOW_MS : ANIMATION_DURATION_HIDE_MS);
-                if (seek) {
-                    mAnimation.setCurrentFraction((seekValue - startY) / (endY - startY));
-                }
+                mAnimation.cancel();
+            }
+            final float defaultY = mImeSourceControl.getSurfacePosition().y;
+            final float x = mImeSourceControl.getSurfacePosition().x;
+            final float hiddenY = defaultY + mImeFrame.height();
+            final float shownY = defaultY;
+            final float startY = show ? hiddenY : shownY;
+            final float endY = show ? shownY : hiddenY;
+            if (mAnimationDirection == DIRECTION_NONE && mImeShowing && show) {
+                // IME is already showing, so set seek to end
+                seekValue = shownY;
+                seek = true;
+            }
+            mAnimationDirection = show ? DIRECTION_SHOW : DIRECTION_HIDE;
+            mImeShowing = show;
+            mAnimation = ValueAnimator.ofFloat(startY, endY);
+            mAnimation.setDuration(
+                    show ? ANIMATION_DURATION_SHOW_MS : ANIMATION_DURATION_HIDE_MS);
+            if (seek) {
+                mAnimation.setCurrentFraction((seekValue - startY) / (endY - startY));
+            }
 
-                mAnimation.addUpdateListener(animation -> {
+            mAnimation.addUpdateListener(animation -> {
+                SurfaceControl.Transaction t = mTransactionPool.acquire();
+                float value = (float) animation.getAnimatedValue();
+                t.setPosition(mImeSourceControl.getLeash(), x, value);
+                final float alpha = isFloating ? (value - hiddenY) / (shownY - hiddenY) : 1.f;
+                t.setAlpha(mImeSourceControl.getLeash(), alpha);
+                dispatchPositionChanged(mDisplayId, imeTop(value), t);
+                t.apply();
+                mTransactionPool.release(t);
+            });
+            mAnimation.setInterpolator(INTERPOLATOR);
+            mAnimation.addListener(new AnimatorListenerAdapter() {
+                private boolean mCancelled = false;
+                @Override
+                public void onAnimationStart(Animator animation) {
                     SurfaceControl.Transaction t = mTransactionPool.acquire();
-                    float value = (float) animation.getAnimatedValue();
-                    t.setPosition(mImeSourceControl.getLeash(), x, value);
-                    dispatchPositionChanged(mDisplayId, imeTop(imeSource, value), t);
+                    t.setPosition(mImeSourceControl.getLeash(), x, startY);
+                    final float alpha = isFloating ? (startY - hiddenY) / (shownY - hiddenY) : 1.f;
+                    t.setAlpha(mImeSourceControl.getLeash(), alpha);
+                    if (DEBUG) {
+                        Slog.d(TAG, "onAnimationStart d:" + mDisplayId + " top:"
+                                + imeTop(hiddenY) + "->" + imeTop(shownY)
+                                + " showing:" + (mAnimationDirection == DIRECTION_SHOW));
+                    }
+                    dispatchStartPositioning(mDisplayId, imeTop(hiddenY),
+                            imeTop(shownY), mAnimationDirection == DIRECTION_SHOW,
+                            t);
+                    if (mAnimationDirection == DIRECTION_SHOW) {
+                        t.show(mImeSourceControl.getLeash());
+                    }
                     t.apply();
                     mTransactionPool.release(t);
-                });
-                mAnimation.setInterpolator(INTERPOLATOR);
-                mAnimation.addListener(new AnimatorListenerAdapter() {
-                    private boolean mCancelled = false;
-                    @Override
-                    public void onAnimationStart(Animator animation) {
-                        SurfaceControl.Transaction t = mTransactionPool.acquire();
-                        t.setPosition(mImeSourceControl.getLeash(), x, startY);
-                        if (DEBUG) {
-                            Slog.d(TAG, "onAnimationStart d:" + mDisplayId + " top:"
-                                    + imeTop(imeSource, hiddenY) + "->" + imeTop(imeSource, shownY)
-                                    + " showing:" + (mAnimationDirection == DIRECTION_SHOW));
-                        }
-                        dispatchStartPositioning(mDisplayId, imeTop(imeSource, hiddenY),
-                                imeTop(imeSource, shownY), mAnimationDirection == DIRECTION_SHOW,
-                                t);
-                        if (mAnimationDirection == DIRECTION_SHOW) {
-                            t.show(mImeSourceControl.getLeash());
-                        }
-                        t.apply();
-                        mTransactionPool.release(t);
-                    }
-                    @Override
-                    public void onAnimationCancel(Animator animation) {
-                        mCancelled = true;
-                    }
-                    @Override
-                    public void onAnimationEnd(Animator animation) {
-                        if (DEBUG) Slog.d(TAG, "onAnimationEnd " + mCancelled);
-                        SurfaceControl.Transaction t = mTransactionPool.acquire();
-                        if (!mCancelled) {
-                            t.setPosition(mImeSourceControl.getLeash(), x, endY);
-                        }
-                        dispatchEndPositioning(mDisplayId, mCancelled, t);
-                        if (mAnimationDirection == DIRECTION_HIDE && !mCancelled) {
-                            t.hide(mImeSourceControl.getLeash());
-                        }
-                        t.apply();
-                        mTransactionPool.release(t);
-
-                        mAnimationDirection = DIRECTION_NONE;
-                        mAnimation = null;
-                    }
-                });
-                if (!show) {
-                    // When going away, queue up insets change first, otherwise any bounds changes
-                    // can have a "flicker" of ime-provided insets.
-                    setVisibleDirectly(false /* visible */);
                 }
-                mAnimation.start();
-                if (show) {
-                    // When showing away, queue up insets change last, otherwise any bounds changes
-                    // can have a "flicker" of ime-provided insets.
-                    setVisibleDirectly(true /* visible */);
+                @Override
+                public void onAnimationCancel(Animator animation) {
+                    mCancelled = true;
+                }
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    if (DEBUG) Slog.d(TAG, "onAnimationEnd " + mCancelled);
+                    SurfaceControl.Transaction t = mTransactionPool.acquire();
+                    if (!mCancelled) {
+                        t.setPosition(mImeSourceControl.getLeash(), x, endY);
+                        t.setAlpha(mImeSourceControl.getLeash(), 1.f);
+                    }
+                    dispatchEndPositioning(mDisplayId, mCancelled, t);
+                    if (mAnimationDirection == DIRECTION_HIDE && !mCancelled) {
+                        t.hide(mImeSourceControl.getLeash());
+                        final IInputMethodManager imms = getImms();
+                        if (imms != null) {
+                            try {
+                                // Remove the IME surface to make the insets invisible for
+                                // non-client controlled insets.
+                                imms.removeImeSurface();
+                            } catch (RemoteException e) {
+                                Slog.e(TAG, "Failed to remove IME surface.", e);
+                            }
+                        }
+                    }
+                    t.apply();
+                    mTransactionPool.release(t);
+
+                    mAnimationDirection = DIRECTION_NONE;
+                    mAnimation = null;
                 }
             });
+            if (!show) {
+                // When going away, queue up insets change first, otherwise any bounds changes
+                // can have a "flicker" of ime-provided insets.
+                setVisibleDirectly(false /* visible */);
+            }
+            mAnimation.start();
+            if (show) {
+                // When showing away, queue up insets change last, otherwise any bounds changes
+                // can have a "flicker" of ime-provided insets.
+                setVisibleDirectly(true /* visible */);
+            }
         }
     }
 
@@ -366,9 +410,9 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
          * Called when the IME position is starting to animate.
          *
          * @param hiddenTop The y position of the top of the IME surface when it is hidden.
-         * @param shownTop The y position of the top of the IME surface when it is shown.
-         * @param showing {@code true} when we are animating from hidden to shown, {@code false}
-         *                            when animating from shown to hidden.
+         * @param shownTop  The y position of the top of the IME surface when it is shown.
+         * @param showing   {@code true} when we are animating from hidden to shown, {@code false}
+         *                  when animating from shown to hidden.
          */
         default void onImeStartPositioning(int displayId, int hiddenTop, int shownTop,
                 boolean showing, SurfaceControl.Transaction t) {}
@@ -389,5 +433,10 @@ public class DisplayImeController implements DisplayController.OnDisplaysChanged
          */
         default void onImeEndPositioning(int displayId, boolean cancel,
                 SurfaceControl.Transaction t) {}
+    }
+
+    public IInputMethodManager getImms() {
+        return IInputMethodManager.Stub.asInterface(
+                ServiceManager.getService(Context.INPUT_METHOD_SERVICE));
     }
 }

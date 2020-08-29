@@ -590,7 +590,7 @@ public final class ActiveServices {
         }
 
         NeededUriGrants neededGrants = mAm.mUgmInternal.checkGrantUriPermissionFromIntent(
-                callingUid, r.packageName, service, service.getFlags(), null, r.userId);
+                service, callingUid, r.packageName, r.userId);
 
         // If permissions need a review before any of the app components can run,
         // we do not start the service and launch a review activity if the calling app
@@ -622,7 +622,7 @@ public final class ActiveServices {
             }
             mAm.mAppOpsService.startOperation(AppOpsManager.getToken(mAm.mAppOpsService),
                     AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName, null,
-                    true, false, null);
+                    true, false, null, false);
         }
 
         final ServiceMap smap = getServiceMapLocked(r.userId);
@@ -1464,7 +1464,7 @@ public final class ActiveServices {
                         mAm.mAppOpsService.startOperation(
                                 AppOpsManager.getToken(mAm.mAppOpsService),
                                 AppOpsManager.OP_START_FOREGROUND, r.appInfo.uid, r.packageName,
-                                null, true, false, "");
+                                null, true, false, "", false);
                         FrameworkStatsLog.write(FrameworkStatsLog.FOREGROUND_SERVICE_STATE_CHANGED,
                                 r.appInfo.uid, r.shortInstanceName,
                                 FrameworkStatsLog.FOREGROUND_SERVICE_STATE_CHANGED__STATE__ENTER,
@@ -1634,21 +1634,23 @@ public final class ActiveServices {
                 new AppOpsManager.OnOpNotedListener() {
                     @Override
                     public void onOpNoted(int op, int uid, String pkgName, int result) {
-                        if (uid == mProcessRecord.uid && isNotTop()) {
-                            incrementOpCount(op, result == AppOpsManager.MODE_ALLOWED);
-                        }
+                        incrementOpCountIfNeeded(op, uid, result);
                     }
         };
 
-        private final AppOpsManager.OnOpActiveChangedInternalListener mOpActiveCallback =
-                new AppOpsManager.OnOpActiveChangedInternalListener() {
+        private final AppOpsManager.OnOpStartedListener mOpStartedCallback =
+                new AppOpsManager.OnOpStartedListener() {
                     @Override
-                    public void onOpActiveChanged(int op, int uid, String pkgName, boolean active) {
-                        if (uid == mProcessRecord.uid && active && isNotTop()) {
-                            incrementOpCount(op, true);
-                        }
+                    public void onOpStarted(int op, int uid, String pkgName, int result) {
+                        incrementOpCountIfNeeded(op, uid, result);
                     }
         };
+
+        private void incrementOpCountIfNeeded(int op, int uid, @AppOpsManager.Mode int result) {
+            if (uid == mProcessRecord.uid && isNotTop()) {
+                incrementOpCount(op, result == AppOpsManager.MODE_ALLOWED);
+            }
+        }
 
         private boolean isNotTop() {
             return mProcessRecord.getCurProcState() != ActivityManager.PROCESS_STATE_TOP;
@@ -1674,7 +1676,7 @@ public final class ActiveServices {
             mNumFgs++;
             if (mNumFgs == 1) {
                 mAppOpsManager.startWatchingNoted(LOGGED_AP_OPS, mOpNotedCallback);
-                mAppOpsManager.startWatchingActive(LOGGED_AP_OPS, mOpActiveCallback);
+                mAppOpsManager.startWatchingStarted(LOGGED_AP_OPS, mOpStartedCallback);
             }
         }
 
@@ -1684,7 +1686,7 @@ public final class ActiveServices {
                 mDestroyed = true;
                 logFinalValues();
                 mAppOpsManager.stopWatchingNoted(mOpNotedCallback);
-                mAppOpsManager.stopWatchingActive(mOpActiveCallback);
+                mAppOpsManager.stopWatchingStarted(mOpStartedCallback);
             }
         }
 
@@ -2458,6 +2460,22 @@ public final class ActiveServices {
                             && mAm.isValidSingletonCall(callingUid, sInfo.applicationInfo.uid)) {
                         userId = 0;
                         smap = getServiceMapLocked(0);
+                        // Bypass INTERACT_ACROSS_USERS permission check
+                        final long token = Binder.clearCallingIdentity();
+                        try {
+                            ResolveInfo rInfoForUserId0 =
+                                    mAm.getPackageManagerInternalLocked().resolveService(service,
+                                            resolvedType, flags, userId, callingUid);
+                            if (rInfoForUserId0 == null) {
+                                Slog.w(TAG_SERVICE,
+                                        "Unable to resolve service " + service + " U=" + userId
+                                                + ": not found");
+                                return null;
+                            }
+                            sInfo = rInfoForUserId0.serviceInfo;
+                        } finally {
+                            Binder.restoreCallingIdentity(token);
+                        }
                     }
                     sInfo = new ServiceInfo(sInfo);
                     sInfo.applicationInfo = mAm.getAppInfoForUser(sInfo.applicationInfo, userId);
@@ -4900,47 +4918,6 @@ public final class ActiveServices {
         if (isDeviceOwner) {
             return true;
         }
-
-        r.mInfoDenyWhileInUsePermissionInFgs =
-                "Background FGS start while-in-use permission restriction [callingPackage: "
-                + callingPackage
-                + "; callingUid: " + callingUid
-                + "; intent: " + intent
-                + "]";
         return false;
-    }
-
-    // TODO: remove this toast after feature development is done
-    void showWhileInUseDebugToastLocked(int uid, int op, int mode) {
-        for (int i = mAm.mProcessList.mLruProcesses.size() - 1; i >= 0; i--) {
-            ProcessRecord pr = mAm.mProcessList.mLruProcesses.get(i);
-            if (pr.uid != uid) {
-                continue;
-            }
-            for (int j = pr.numberOfRunningServices() - 1; j >= 0; j--) {
-                ServiceRecord r = pr.getRunningServiceAt(j);
-                if (!r.isForeground) {
-                    continue;
-                }
-                if (mode == DEBUG_FGS_ALLOW_WHILE_IN_USE) {
-                    if (!r.mAllowWhileInUsePermissionInFgs
-                            && r.mInfoDenyWhileInUsePermissionInFgs != null) {
-                        final String msg = r.mInfoDenyWhileInUsePermissionInFgs
-                                + " affected while-in-use permission:"
-                                + AppOpsManager.opToPublicName(op);
-                        Slog.wtf(TAG, msg);
-                    }
-                } else if (mode == DEBUG_FGS_ENFORCE_TYPE) {
-                    final String msg =
-                            "FGS Missing foregroundServiceType in manifest file [callingPackage: "
-                            + r.mRecentCallingPackage
-                            + "; intent:" + r.intent.getIntent()
-                            + "] affected while-in-use permission:"
-                            + AppOpsManager.opToPublicName(op)
-                            + "; targetSdkVersion:" + r.appInfo.targetSdkVersion;
-                    Slog.wtf(TAG, msg);
-                }
-            }
-        }
     }
 }

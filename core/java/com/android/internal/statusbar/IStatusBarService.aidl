@@ -79,6 +79,7 @@ interface IStatusBarService
     void onNotificationSettingsViewed(String key);
     void onNotificationBubbleChanged(String key, boolean isBubble, int flags);
     void onBubbleNotificationSuppressionChanged(String key, boolean isSuppressed);
+    void hideCurrentInputMethodForBubbles();
     void grantInlineReplyUriPermission(String key, in Uri uri, in UserHandle user, String packageName);
     void clearInlineReplyUriPermissions(String key);
 
@@ -106,7 +107,7 @@ interface IStatusBarService
     // Used to show the authentication dialog (Biometrics, Device Credential)
     void showAuthenticationDialog(in Bundle bundle, IBiometricServiceReceiverInternal receiver,
             int biometricModality, boolean requireConfirmation, int userId, String opPackageName,
-            long operationId);
+            long operationId, int sysUiSessionId);
     // Used to notify the authentication dialog that a biometric has been authenticated
     void onBiometricAuthenticated();
     // Used to set a temporary message, e.g. fingerprint not recognized, finger moved too fast, etc

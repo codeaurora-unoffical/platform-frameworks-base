@@ -45,6 +45,14 @@ public interface AppStandbyInternal {
                 boolean idle, int bucket, int reason);
 
         /**
+         * Callback to inform listeners that the parole state has changed. This means apps are
+         * allowed to do work even if they're idle or in a low bucket.
+         */
+        public void onParoleStateChanged(boolean isParoleOn) {
+            // No-op by default
+        }
+
+        /**
          * Optional callback to inform the listener that the app has transitioned into
          * an active state due to user interaction.
          */
@@ -63,7 +71,7 @@ public interface AppStandbyInternal {
      */
     void postOneTimeCheckIdleStates();
 
-    void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId);
+    void reportEvent(UsageEvents.Event event, int userId);
 
     void setLastJobRunTime(String packageName, int userId, long elapsedRealtime);
 
@@ -91,6 +99,11 @@ public interface AppStandbyInternal {
      */
     boolean isAppIdleFiltered(String packageName, int appId, int userId,
             long elapsedRealtime);
+
+    /**
+     * @return true if currently app idle parole mode is on.
+     */
+    boolean isInParole();
 
     int[] getIdleUidsForUser(int userId);
 
@@ -137,9 +150,7 @@ public interface AppStandbyInternal {
 
     void clearCarrierPrivilegedApps();
 
-    void flushToDisk(int userId);
-
-    void flushDurationsToDisk();
+    void flushToDisk();
 
     void initializeDefaultsForSystemApps(int userId);
 
@@ -149,7 +160,7 @@ public interface AppStandbyInternal {
 
     void postReportExemptedSyncStart(String packageName, int userId);
 
-    void dumpUser(IndentingPrintWriter idpw, int userId, List<String> pkgs);
+    void dumpUsers(IndentingPrintWriter idpw, int[] userIds, List<String> pkgs);
 
     void dumpState(String[] args, PrintWriter pw);
 

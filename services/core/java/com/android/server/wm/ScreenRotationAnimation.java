@@ -188,17 +188,20 @@ class ScreenRotationAnimation {
             mBackColorSurface = displayContent.makeChildSurface(null)
                     .setName("BackColorSurface")
                     .setColorLayer()
+                    .setCallsite("ScreenRotationAnimation")
                     .build();
 
             mScreenshotLayer = displayContent.makeOverlay()
                     .setName("RotationLayer")
                     .setBufferSize(mWidth, mHeight)
                     .setSecure(isSecure)
+                    .setCallsite("ScreenRotationAnimation")
                     .build();
 
             mEnterBlackFrameLayer = displayContent.makeOverlay()
                     .setName("EnterBlackFrameLayer")
                     .setContainerLayer()
+                    .setCallsite("ScreenRotationAnimation")
                     .build();
 
             // In case display bounds change, screenshot buffer and surface may mismatch so set a
@@ -732,13 +735,6 @@ class ScreenRotationAnimation {
                 mService.mAnimator.mBulkUpdateParams |= WindowSurfacePlacer.SET_UPDATE_ROTATION;
                 kill();
                 mService.updateRotation(false, false);
-                AccessibilityController accessibilityController = mService.mAccessibilityController;
-
-                if (accessibilityController != null) {
-                    // We just finished rotation animation which means we did not
-                    // announce the rotation and waited for it to end, announce now.
-                    accessibilityController.onRotationChangedLocked(mDisplayContent);
-                }
             }
         }
 

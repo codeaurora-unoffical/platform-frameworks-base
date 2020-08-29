@@ -182,7 +182,7 @@
       <item quantity="one">Sertifikat markazi sertifikati o‘rnatildi</item>
     </plurals>
     <string name="ssl_ca_cert_noti_by_unknown" msgid="4961102218216815242">"Noma‘lum uchinchi shaxslar tomonidan"</string>
-    <string name="ssl_ca_cert_noti_by_administrator" msgid="4564941950768783879">"Ishchi profil administratori"</string>
+    <string name="ssl_ca_cert_noti_by_administrator" msgid="4564941950768783879">"Ish profili administratori"</string>
     <string name="ssl_ca_cert_noti_managed" msgid="217337232273211674">"<xliff:g id="MANAGING_DOMAIN">%s</xliff:g> tomonidan"</string>
     <string name="work_profile_deleted" msgid="5891181538182009328">"Ichshi profil o‘chirildi"</string>
     <string name="work_profile_deleted_details" msgid="3773706828364418016">"Ishchi profilning administrator ilovasi yo‘q yoki buzilgan. Shuning uchun, ishchi profilingiz va unga aloqador ma’lumotlar o‘chirib tashlandi. Yordam olish uchun administratoringizga murojaat qiling."</string>
@@ -202,8 +202,8 @@
     <string name="printing_disabled_by" msgid="3517499806528864633">"Chop etish funksiyasi <xliff:g id="OWNER_APP">%s</xliff:g> tomonidan faolsizlantirilgan."</string>
     <string name="personal_apps_suspension_title" msgid="7561416677884286600">"Ish profilingizni yoqing"</string>
     <string name="personal_apps_suspension_text" msgid="6115455688932935597">"Ish profilingiz yoniqligida shaxsiy ilovalaringiz bloklanadi"</string>
-    <string name="personal_apps_suspension_tomorrow_text" msgid="6322541302153673994">"Shaxsiy ilovalaringiz ertaga bloklanadi"</string>
-    <string name="personal_apps_suspended_turn_profile_on" msgid="4278188538997940785">"Ish profilini yoqish"</string>
+    <string name="personal_apps_suspension_soon_text" msgid="8123898693479590">"Shaxsiy ilovalar <xliff:g id="DATE">%1$s</xliff:g> <xliff:g id="TIME">%2$s</xliff:g> da bloklanadi. AT administratoringiz ish profili <xliff:g id="NUMBER">%3$d</xliff:g> kundan ortiq oʻchiq qolishini taqiqlagan"</string>
+    <string name="personal_apps_suspended_turn_profile_on" msgid="2758012869627513689">"Yoqish"</string>
     <string name="me" msgid="6207584824693813140">"Men"</string>
     <string name="power_dialog" product="tablet" msgid="8333207765671417261">"Planshet sozlamalari"</string>
     <string name="power_dialog" product="tv" msgid="7792839006640933763">"Android TV parametrlari"</string>
@@ -472,7 +472,7 @@
     <string name="permdesc_transmitIr" product="tablet" msgid="5884738958581810253">"Dasturga planshetdagi infraqizil antenadan foydalanish ruxsatini beradi."</string>
     <string name="permdesc_transmitIr" product="tv" msgid="3278506969529173281">"Ilovaga Android TV qurilmangizning infraqizil uzatkichidan foydalanish huquqini beradi."</string>
     <string name="permdesc_transmitIr" product="default" msgid="8484193849295581808">"Dasturga telefondagi infraqizil antenadan foydalanish ruxsatini beradi."</string>
-    <string name="permlab_setWallpaper" msgid="6959514622698794511">"fonga rasm o‘rnatish"</string>
+    <string name="permlab_setWallpaper" msgid="6959514622698794511">"fonga rasm tanlash"</string>
     <string name="permdesc_setWallpaper" msgid="2973996714129021397">"Ilova tizim uchun orqa fon rasmlarini o‘rnatishi mumkin."</string>
     <string name="permlab_setWallpaperHints" msgid="1153485176642032714">"fon rasmi o‘lchamini moslash"</string>
     <string name="permdesc_setWallpaperHints" msgid="6257053376990044668">"Ilova tizimning orqa fon rasmlari uchun o‘lchamlarini ko‘rsatishi mumkin."</string>
@@ -536,7 +536,7 @@
     <string name="permdesc_imagesWrite" msgid="5195054463269193317">"Ilovaga suratlar to‘plamingizni o‘zgartirishga ruxsat beradi."</string>
     <string name="permlab_mediaLocation" msgid="7368098373378598066">"multimedia to‘plamidan joylashuv axborotini o‘qish"</string>
     <string name="permdesc_mediaLocation" msgid="597912899423578138">"Ilovaga multimedia to‘plamingizdan joylashuv axborotini o‘qishga ruxsat beradi."</string>
-    <string name="biometric_dialog_default_title" msgid="5284880398508155088">"Oʻzingizni taniting"</string>
+    <string name="biometric_dialog_default_title" msgid="55026799173208210">"Oʻzingizni taniting"</string>
     <string name="biometric_error_hw_unavailable" msgid="2494077380540615216">"Biometrik sensor ishlamayapti"</string>
     <string name="biometric_error_user_canceled" msgid="6732303949695293730">"Autentifikatsiya bekor qilindi"</string>
     <string name="biometric_not_recognized" msgid="5106687642694635888">"Aniqlanmadi"</string>
@@ -1306,12 +1306,12 @@
     <string name="usb_power_notification_message" msgid="7284765627437897702">"Ulangan qurilma quvvatlanmoqda. Boshqa parametrlar uchun bosing."</string>
     <string name="usb_unsupported_audio_accessory_title" msgid="2335775548086533065">"Analogli audio uskuna aniqlandi"</string>
     <string name="usb_unsupported_audio_accessory_message" msgid="1300168007129796621">"Biriktirilgan qurilma mazkur telefon bilan mos emas. Batafsil axborot olish uchun bu yerga bosing."</string>
-    <string name="adb_active_notification_title" msgid="408390247354560331">"USB orqali nosozliklarni aniqlash"</string>
-    <string name="adb_active_notification_message" msgid="5617264033476778211">"USB orqali nosozliklarni aniqlashni faolsizlantirish uchun bosing"</string>
+    <string name="adb_active_notification_title" msgid="408390247354560331">"USB debagging ulandi"</string>
+    <string name="adb_active_notification_message" msgid="5617264033476778211">"USB debaggingni uzish uchun bosing"</string>
     <string name="adb_active_notification_message" product="tv" msgid="6624498401272780855">"USB orqali nosozliklarni tuzatishni o‘chirib qo‘yish uchun bosing."</string>
     <string name="adbwifi_active_notification_title" msgid="6147343659168302473">"Wi-Fi orqali debagging yoqildi"</string>
     <string name="adbwifi_active_notification_message" msgid="930987922852867972">"Wi-Fi orqali debagging uzilishi uchun bosing"</string>
-    <string name="adbwifi_active_notification_message" product="tv" msgid="8633421848366915478">"Wi-Fi orqali debaggingni faolsizlantirish uchun bosing."</string>
+    <string name="adbwifi_active_notification_message" product="tv" msgid="8633421848366915478">"Uni faolsizlantirish uchun bosing."</string>
     <string name="test_harness_mode_notification_title" msgid="2282785860014142511">"Xavfsizlik sinovi rejimi yoqildi"</string>
     <string name="test_harness_mode_notification_message" msgid="3039123743127958420">"Xavfsizlik sinovi rejimini faolsizlantirish uchun zavod sozlamalariga qaytaring."</string>
     <string name="console_running_notification_title" msgid="6087888939261635904">"Ketma-ket port konsoli yoqildi"</string>
@@ -1341,17 +1341,20 @@
     <string name="ext_media_checking_notification_title" msgid="8299199995416510094">"<xliff:g id="NAME">%s</xliff:g> tekshirilmoqda…"</string>
     <string name="ext_media_checking_notification_message" msgid="2231566971425375542">"Joriy kontent tekshirilmoqda"</string>
     <string name="ext_media_new_notification_title" msgid="3517407571407687677">"Yangi <xliff:g id="NAME">%s</xliff:g>"</string>
+    <string name="ext_media_new_notification_title" product="automotive" msgid="9085349544984742727">"<xliff:g id="NAME">%s</xliff:g> ishlamayapti"</string>
     <string name="ext_media_new_notification_message" msgid="6095403121990786986">"Sozlash uchun bosing"</string>
-    <string name="ext_media_new_notification_message" product="automotive" msgid="8488046026389025694"></string>
+    <string name="ext_media_new_notification_message" product="automotive" msgid="5140127881613227162">"Qurilmani qayta formatlashingiz lozim. Chiqarib tashlash uchun bosing."</string>
     <string name="ext_media_ready_notification_message" msgid="777258143284919261">"Rasm va boshqa fayllarni o‘tkazish"</string>
     <string name="ext_media_unmountable_notification_title" msgid="4895444667278979910">"<xliff:g id="NAME">%s</xliff:g> bilan muammo"</string>
+    <string name="ext_media_unmountable_notification_title" product="automotive" msgid="3142723758949023280">"<xliff:g id="NAME">%s</xliff:g> ishlamayapti"</string>
     <string name="ext_media_unmountable_notification_message" msgid="3256290114063126205">"Tuzatish uchun bosing"</string>
     <string name="ext_media_unmountable_notification_message" product="tv" msgid="3003611129979934633">"<xliff:g id="NAME">%s</xliff:g>: buzilgan. Tuzatish uchun uni tanlang."</string>
-    <string name="ext_media_unmountable_notification_message" product="automotive" msgid="5622514265490819212"></string>
+    <string name="ext_media_unmountable_notification_message" product="automotive" msgid="2274596120715020680">"Qurilmani qayta formatlashingiz lozim. Chiqarib tashlash uchun bosing."</string>
     <string name="ext_media_unsupported_notification_title" msgid="4358280700537030333">"<xliff:g id="NAME">%s</xliff:g> qo‘llab-quvvatlanmaydi"</string>
+    <string name="ext_media_unsupported_notification_title" product="automotive" msgid="6004193172658722381">"<xliff:g id="NAME">%s</xliff:g> ishlamayapti"</string>
     <string name="ext_media_unsupported_notification_message" msgid="917738524888367560">"Bu xotira qurilmasi (<xliff:g id="NAME">%s</xliff:g>) qo‘llab-quvvatlanmaydi. Uni mos keladigan formatda sozlash uchun bu yerga bosing."</string>
     <string name="ext_media_unsupported_notification_message" product="tv" msgid="7744945987775645685">"Bu xotira qurilmasi (<xliff:g id="NAME">%s</xliff:g>) qo‘llab-quvvatlanmaydi. Mos formatda sozlash uchun uni tanlang."</string>
-    <string name="ext_media_unsupported_notification_message" product="automotive" msgid="7657357085538772913">"<xliff:g id="NAME">%s</xliff:g> bu qurilmada ishlamaydi."</string>
+    <string name="ext_media_unsupported_notification_message" product="automotive" msgid="3412494732736336330">"Qurilmani qayta formatlashingiz lozim"</string>
     <string name="ext_media_badremoval_notification_title" msgid="4114625551266196872">"<xliff:g id="NAME">%s</xliff:g> kutilmaganda chiqarib olindi"</string>
     <string name="ext_media_badremoval_notification_message" msgid="1986514704499809244">"Xotira qurilmasini olib tashlashdan oldin, uni o‘chiring, shuda ma’lumotlar o‘chib ketmaydi."</string>
     <string name="ext_media_nomedia_notification_title" msgid="742671636376975890">"<xliff:g id="NAME">%s</xliff:g> olib tashlandi"</string>
@@ -1416,7 +1419,7 @@
     <string name="sync_binding_label" msgid="469249309424662147">"Sinx"</string>
     <string name="accessibility_binding_label" msgid="1974602776545801715">"Maxsus imkoniyatlar"</string>
     <string name="wallpaper_binding_label" msgid="1197440498000786738">"Fon rasmi"</string>
-    <string name="chooser_wallpaper" msgid="3082405680079923708">"Fon rasmini o‘zgartirish"</string>
+    <string name="chooser_wallpaper" msgid="3082405680079923708">"Fon rasmini almashtirish"</string>
     <string name="notification_listener_binding_label" msgid="2702165274471499713">"Bildirishnoma tinglovchisi"</string>
     <string name="vr_listener_binding_label" msgid="8013112996671206429">"VR rejimi"</string>
     <string name="condition_provider_service_binding_label" msgid="8490641013951857673">"Shartlarni taqdim etuvchi"</string>
@@ -1545,9 +1548,7 @@
     <string name="launchBrowserDefault" msgid="6328349989932924119">"Brauzer ishga tushirilsinmi?"</string>
     <string name="SetupCallDefault" msgid="5581740063237175247">"Qo‘ng‘iroqni qabul qilasizmi?"</string>
     <string name="activity_resolver_use_always" msgid="5575222334666843269">"Har doim"</string>
-    <string name="activity_resolver_set_always" msgid="4142825808921411476">"Doim ochish"</string>
     <string name="activity_resolver_use_once" msgid="948462794469672658">"Faqat hozir"</string>
-    <string name="activity_resolver_app_settings" msgid="6758823206817748026">"Sozlamalar"</string>
     <string name="activity_resolver_work_profiles_support" msgid="4071345609235361269">"“%1$s” ishchi profilni qo‘llab-quvvatlamaydi"</string>
     <string name="default_audio_route_name" product="tablet" msgid="367936735632195517">"Planshet"</string>
     <string name="default_audio_route_name" product="tv" msgid="4908971385068087367">"TV"</string>
@@ -1618,15 +1619,12 @@
     <string name="kg_failed_attempts_almost_at_login" product="default" msgid="5270861875006378092">"Siz grafik kalitni <xliff:g id="NUMBER_0">%1$d</xliff:g> marta noto‘g‘ri chizdingiz. <xliff:g id="NUMBER_1">%2$d</xliff:g> marta muvaffaqiyatsiz urinishdan so‘ng, sizdan e-pochtangizdan foydalanib, telefon qulfini ochishingiz so‘raladi.\n\n <xliff:g id="NUMBER_2">%3$d</xliff:g> soniyadan so‘ng yana urinib ko‘ring."</string>
     <string name="kg_text_message_separator" product="default" msgid="4503708889934976866">" — "</string>
     <string name="kg_reordering_delete_drop_target_text" msgid="2034358143731750914">"Olib tashlash"</string>
-    <string name="allow_while_in_use_permission_in_fgs" msgid="4101339676785053656">"Fonda faol <xliff:g id="PACKAGENAME">%1$s</xliff:g> xizmatini ishga tushirish uchun kelgusi R nashrlarida ishlatilayotganda ruxsat berish imkoniyati boʻlmaydi. go/r-bg-fgs-restriction sahifasiga kiring va xatolik hisobotini yuboring."</string>
     <string name="safe_media_volume_warning" product="default" msgid="3751676824423049994">"Tovush balandligi tavsiya etilgan darajadan ham yuqori qilinsinmi?\n\nUzoq vaqt davomida baland ovozda tinglash eshitish qobiliyatingizga salbiy ta’sir ko‘rsatishi mumkin."</string>
     <string name="accessibility_shortcut_warning_dialog_title" msgid="4017995837692622933">"Tezkor ishga tushirishdan foydalanilsinmi?"</string>
     <string name="accessibility_shortcut_toogle_warning" msgid="4161716521310929544">"Maxsus imkoniyatlar funksiyasidan foydalanish uchun u yoniqligida ikkala tovush tugmasini 3 soniya bosib turing."</string>
     <string name="accessibility_shortcut_multiple_service_warning_title" msgid="8417489297036013065">"Maxsus imkoniyatlar yoqilsinmi?"</string>
     <string name="accessibility_shortcut_multiple_service_warning" msgid="3740723309483706911">"Maxsus imkoniyatlarni yoqish uchun ikkala tovush tugmalarini bir necha soniya bosib turing. Qurilmangiz ishlashida oʻzgarish yuz berishi mumkin.\n\nJoriy funksiyalar:\n<xliff:g id="SERVICE">%1$s</xliff:g>\nTanlangan funksiyalarni Sozlamalar ichidagi Maxsus imkoniyatlar ustiga bosib oʻzgartirishingiz mumkin."</string>
     <string name="accessibility_shortcut_multiple_service_list" msgid="6935581470716541531">"	• <xliff:g id="SERVICE">%1$s</xliff:g>\n"</string>
-    <string name="accessibility_shortcut_talkback_warning_title" msgid="3410100187167382427">"TalkBack yoqilsinmi?"</string>
-    <string name="accessibility_shortcut_talkback_warning" msgid="8412954203626349109">"TalkBack funksiyasini yoqish uchun ikkala tovush tugmalarini bir necha soniya bosib turing. U ekrandan oʻqish dasturi hisoblanib, koʻzi xira koʻradigan va koʻzi ojiz insonlar uchun juda foydali. TalkBack funksiyasi qurilmangiz ishlashini butunlay oʻzgartirib yuborishi mumkin.\n\nBu tezkor tugmalarni boshqa funksiyaga Sozlamalar ichidagi Maxsus imkoniyatlar orqali tayinlash mumkin."</string>
     <string name="accessibility_shortcut_single_service_warning_title" msgid="2819109500943271385">"<xliff:g id="SERVICE">%1$s</xliff:g> yoqilsinmi?"</string>
     <string name="accessibility_shortcut_single_service_warning" msgid="6363127705112844257">"<xliff:g id="SERVICE">%1$s</xliff:g> funksiyasini yoqish uchun ikkala tovush tugmalarini bir necha soniya bosib turing. Qurilmangiz ishlashida oʻzgarish yuz berishi mumkin.\n\nBu tezkor tugmalarni boshqa funksiyaga Sozlamalar ichidagi Maxsus imkoniyatlar orqali tayinlash mumkin."</string>
     <string name="accessibility_shortcut_on" msgid="5463618449556111344">"Yoqilsin"</string>
@@ -1642,9 +1640,9 @@
     <string name="accessibility_service_action_perform_description" msgid="2718852014003170558">"Ilova yoki qurilma sensori bilan munosabatlaringizni kuzatishi hamda sizning nomingizdan ilovalar bilan ishlashi mumkin."</string>
     <string name="accessibility_dialog_button_allow" msgid="2092558122987144530">"Ruxsat"</string>
     <string name="accessibility_dialog_button_deny" msgid="4129575637812472671">"Rad etish"</string>
-    <string name="accessibility_select_shortcut_menu_title" msgid="6002726538854613272">"Funksiyadan foydalanish uchun ustiga bosing:"</string>
+    <string name="accessibility_select_shortcut_menu_title" msgid="6002726538854613272">"Kerakli funksiyani tanlang"</string>
     <string name="accessibility_edit_shortcut_menu_button_title" msgid="239446795930436325">"Maxsus imkoniyatlar tugmasi bilan foydalanish uchun funksiyalarni tanlang"</string>
-    <string name="accessibility_edit_shortcut_menu_volume_title" msgid="1077294237378645981">"Tovush balandligi tugmasi bilan foydalanish uchun funksiyalarni tanlang"</string>
+    <string name="accessibility_edit_shortcut_menu_volume_title" msgid="1077294237378645981">"Tovush tugmasi bilan ishga tushiriladigan funksiyalarni tanlang"</string>
     <string name="accessibility_uncheck_legacy_item_warning" msgid="8047830891064817447">"<xliff:g id="SERVICE_NAME">%s</xliff:g> faolsizlantirildi"</string>
     <string name="edit_accessibility_shortcut_menu_button" msgid="8885752738733772935">"Tezkor tugmalarni tahrirlash"</string>
     <string name="done_accessibility_shortcut_menu_button" msgid="3668407723770815708">"OK"</string>
@@ -1854,7 +1852,7 @@
     <string name="stk_cc_ss_to_dial_video" msgid="1324194624384312664">"SS talabi video chaqiruvga almashtirildi"</string>
     <string name="stk_cc_ss_to_ussd" msgid="8417905193112944760">"SS talabi USSD talabiga almashtirildi"</string>
     <string name="stk_cc_ss_to_ss" msgid="132040645206514450">"Yangi SS talabiga almashtirildi"</string>
-    <string name="notification_work_profile_content_description" msgid="5296477955677725799">"Ishchi profil"</string>
+    <string name="notification_work_profile_content_description" msgid="5296477955677725799">"Ish profili"</string>
     <string name="notification_alerted_content_description" msgid="6139691253611265992">"Ogohlantirildi"</string>
     <string name="expand_button_content_description_collapsed" msgid="3873368935659010279">"Yoyish"</string>
     <string name="expand_button_content_description_expanded" msgid="7484217944948667489">"Yig‘ish"</string>
@@ -1888,8 +1886,8 @@
     <string name="app_suspended_default_message" msgid="6451215678552004172">"<xliff:g id="APP_NAME_0">%1$s</xliff:g> ishlamayapti. Uning ishlashini <xliff:g id="APP_NAME_1">%2$s</xliff:g> cheklamoqda."</string>
     <string name="app_suspended_more_details" msgid="211260942831587014">"Batafsil"</string>
     <string name="app_suspended_unsuspend_message" msgid="1665438589450555459">"Ilovani ishga tushirish"</string>
-    <string name="work_mode_off_title" msgid="5503291976647976560">"Ishchi profil yoqilsinmi?"</string>
-    <string name="work_mode_off_message" msgid="8417484421098563803">"Ishchi ilovalar, bildirishnomalar, ma’lumotlar va boshqa ishchi profil imkoniyatlari yoqiladi"</string>
+    <string name="work_mode_off_title" msgid="5503291976647976560">"Ish profili yoqilsinmi?"</string>
+    <string name="work_mode_off_message" msgid="8417484421098563803">"Ishga oid ilovalar, bildirishnomalar, ma’lumotlar va boshqa ish profili imkoniyatlari yoqiladi"</string>
     <string name="work_mode_turn_on" msgid="3662561662475962285">"Yoqish"</string>
     <string name="app_blocked_title" msgid="7353262160455028160">"Ilova ishlamayapti"</string>
     <string name="app_blocked_message" msgid="542972921087873023">"Ayni vaqtda <xliff:g id="APP_NAME">%1$s</xliff:g> ilovasi ishlamayapti."</string>
@@ -1898,7 +1896,7 @@
     <string name="new_sms_notification_title" msgid="6528758221319927107">"Sizga yangi SMS keldi"</string>
     <string name="new_sms_notification_content" msgid="3197949934153460639">"Ko‘rish uchun SMS ilovasini oching"</string>
     <string name="profile_encrypted_title" msgid="9001208667521266472">"Ayrim funksiyalar ishlamasligi mumkin"</string>
-    <string name="profile_encrypted_detail" msgid="5279730442756849055">"Ishchi profil yopiq"</string>
+    <string name="profile_encrypted_detail" msgid="5279730442756849055">"Ish profili yopiq"</string>
     <string name="profile_encrypted_message" msgid="1128512616293157802">"Qulfini ochish uchun bosing"</string>
     <string name="usb_mtp_launch_notification_title" msgid="774319638256707227">"<xliff:g id="PRODUCT_NAME">%1$s</xliff:g> qurilmasiga ulandi"</string>
     <string name="usb_mtp_launch_notification_description" msgid="6942535713629852684">"Fayllarni ko‘rish uchun bosing"</string>
@@ -2042,8 +2040,9 @@
     <string name="accessibility_system_action_power_dialog_label" msgid="8095341821683910781">"Quvvat muloqot oynasi"</string>
     <string name="accessibility_system_action_lock_screen_label" msgid="5484190691945563838">"Ekran qulfi"</string>
     <string name="accessibility_system_action_screenshot_label" msgid="3581566515062741676">"Skrinshot"</string>
-    <string name="accessibility_system_action_accessibility_button_label" msgid="5941347017132886642">"Ekranda tezkor ishga tushirish"</string>
-    <string name="accessibility_system_action_accessibility_button_chooser_label" msgid="6973618519666227981">"Ekranda tezkor ishga tushirishni tanlagich"</string>
+    <string name="accessibility_system_action_on_screen_a11y_shortcut_label" msgid="8488701469459210309">"Ekranda tezkor ishga tushirish"</string>
+    <string name="accessibility_system_action_on_screen_a11y_shortcut_chooser_label" msgid="1057878690209817886">"Ekranda tezkor ishga tushirishni tanlagich"</string>
+    <string name="accessibility_system_action_hardware_a11y_shortcut_label" msgid="5764644187715255107">"Tezkor ishga tushirish"</string>
     <string name="accessibility_freeform_caption" msgid="8377519323496290122">"<xliff:g id="APP_NAME">%1$s</xliff:g> taglavhalar paneli."</string>
     <string name="as_app_forced_to_restricted_bucket" msgid="8233871289353898964">"<xliff:g id="PACKAGE_NAME">%1$s</xliff:g> cheklangan turkumga joylandi"</string>
     <string name="conversation_single_line_name_display" msgid="8958948312915255999">"<xliff:g id="SENDER_NAME">%1$s</xliff:g>:"</string>
@@ -2063,7 +2062,7 @@
     <string name="resolver_cant_share_with_personal_apps_explanation" msgid="2959282422751315171">"AT administratoringiz bu turdagi kontentni shaxsiy profildagi ilovada ulashishni taqiqlagan"</string>
     <string name="resolver_cant_access_personal_apps" msgid="648291604475669395">"Shaxsiy ilovalarda ochilmaydi"</string>
     <string name="resolver_cant_access_personal_apps_explanation" msgid="2298773629302296519">"AT administratoringiz bu turdagi kontentni shaxsiy profildagi ilovada ochilishini taqiqlagan"</string>
-    <string name="resolver_turn_on_work_apps" msgid="884910835250037247">"Ishchi profil pauzada"</string>
+    <string name="resolver_turn_on_work_apps" msgid="884910835250037247">"Ish profili pauzada"</string>
     <string name="resolver_switch_on_work" msgid="2873009160846966379">"Yoqish"</string>
     <string name="resolver_no_work_apps_available_share" msgid="7933949011797699505">"Bu kontent bilan ishlay oladigan ishga oid ilovalar topilmadi"</string>
     <string name="resolver_no_work_apps_available_resolve" msgid="1244844292366099399">"Bu kontentni ocha oladigan ishga oid ilovalar topilmadi"</string>
@@ -2177,4 +2176,8 @@
     <string name="PERSOSUBSTATE_SIM_ICCID_SUCCESS" msgid="8058678548991999545">"ICCID qulfi ochildi."</string>
     <string name="PERSOSUBSTATE_SIM_IMPI_SUCCESS" msgid="2545608067978550571">"IMPI qulfi ochildi."</string>
     <string name="PERSOSUBSTATE_SIM_NS_SP_SUCCESS" msgid="4352382949744625007">"Aloqa operatori tarmoq qismi qulfdan chiqarilmadi."</string>
+    <string name="config_pdp_reject_dialog_title" msgid="4072057179246785727"></string>
+    <string name="config_pdp_reject_user_authentication_failed" msgid="4531693033885744689"></string>
+    <string name="config_pdp_reject_service_not_subscribed" msgid="8190338397128671588"></string>
+    <string name="config_pdp_reject_multi_conn_to_same_pdn_not_allowed" msgid="6024904218067254186"></string>
 </resources>

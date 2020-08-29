@@ -24,6 +24,10 @@ import android.app.blob.LeaseInfo;
 import android.content.Context;
 import android.content.res.Resources;
 import android.os.ParcelFileDescriptor;
+import android.util.Log;
+
+import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.test.uiautomator.UiDevice;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -32,6 +36,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 public class Utils {
+    public static final String TAG = "BlobStoreTest";
+
     public static final int BUFFER_SIZE_BYTES = 16 * 1024;
 
     public static final long KB_IN_BYTES = 1000;
@@ -53,22 +59,23 @@ public class Utils {
     public static void writeToSession(BlobStoreManager.Session session, ParcelFileDescriptor input,
             long lengthBytes) throws IOException {
         try (FileInputStream in = new ParcelFileDescriptor.AutoCloseInputStream(input)) {
-            writeToSession(session, in, 0, lengthBytes);
+            writeToSession(session, in, 0, lengthBytes, lengthBytes);
         }
     }
 
     public static void writeToSession(BlobStoreManager.Session session, FileInputStream in,
-            long offsetBytes, long lengthBytes) throws IOException {
+            long offsetBytes, long lengthBytes, long allocateBytes) throws IOException {
         in.getChannel().position(offsetBytes);
         try (FileOutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
-                session.openWrite(offsetBytes, lengthBytes))) {
+                session.openWrite(offsetBytes, allocateBytes))) {
             copy(in, out, lengthBytes);
         }
     }
 
     public static void assertLeasedBlobs(BlobStoreManager blobStoreManager,
             BlobHandle... expectedBlobHandles) throws IOException {
-        assertThat(blobStoreManager.getLeasedBlobs()).containsExactly(expectedBlobHandles);
+        assertThat(blobStoreManager.getLeasedBlobs()).containsExactly(
+                (Object[]) expectedBlobHandles);
     }
 
     public static void assertNoLeasedBlobs(BlobStoreManager blobStoreManager)
@@ -140,5 +147,17 @@ public class Utils {
         assertThat(leaseInfo.getExpiryTimeMillis()).isEqualTo(expiryTimeMs);
         assertThat(leaseInfo.getDescriptionResId()).isEqualTo(descriptionResId);
         assertThat(leaseInfo.getDescription()).isEqualTo(description);
+    }
+
+    public static void triggerIdleMaintenance() throws IOException {
+        runShellCmd("cmd blob_store idle-maintenance");
+    }
+
+    public static String runShellCmd(String cmd) throws IOException {
+        final UiDevice uiDevice = UiDevice.getInstance(
+                InstrumentationRegistry.getInstrumentation());
+        final String result = uiDevice.executeShellCommand(cmd).trim();
+        Log.i(TAG, "Output of '" + cmd + "': '" + result + "'");
+        return result;
     }
 }

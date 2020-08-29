@@ -16,12 +16,14 @@
 
 package android.view;
 
+import static android.view.InsetsController.ANIMATION_TYPE_SHOW;
 import static android.view.InsetsController.AnimationType;
+import static android.view.InsetsController.DEBUG;
 import static android.view.InsetsState.ISIDE_BOTTOM;
-import static android.view.InsetsState.ISIDE_FLOATING;
 import static android.view.InsetsState.ISIDE_LEFT;
 import static android.view.InsetsState.ISIDE_RIGHT;
 import static android.view.InsetsState.ISIDE_TOP;
+import static android.view.InsetsState.ITYPE_IME;
 
 import static com.android.internal.annotations.VisibleForTesting.Visibility.PACKAGE;
 
@@ -30,6 +32,7 @@ import android.graphics.Insets;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.util.ArraySet;
+import android.util.Log;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
 import android.util.SparseSetArray;
@@ -52,6 +55,8 @@ import java.util.ArrayList;
 public class InsetsAnimationControlImpl implements WindowInsetsAnimationController,
         InsetsAnimationControlRunner {
 
+    private static final String TAG = "InsetsAnimationCtrlImpl";
+
     private final Rect mTmpFrame = new Rect();
 
     private final WindowInsetsAnimationControlListener mListener;
@@ -70,6 +75,8 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
     private final @InsetsType int mTypes;
     private final InsetsAnimationControlCallbacks mController;
     private final WindowInsetsAnimation mAnimation;
+    /** @see WindowInsetsAnimationController#hasZeroInsetsIme */
+    private final boolean mHasZeroInsetsIme;
     private Insets mCurrentInsets;
     private Insets mPendingInsets;
     private float mPendingFraction;
@@ -80,6 +87,7 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
     private float mPendingAlpha = 1.0f;
     @VisibleForTesting(visibility = PACKAGE)
     public boolean mReadyDispatched;
+    private Boolean mPerceptible;
 
     @VisibleForTesting
     public InsetsAnimationControlImpl(SparseArray<InsetsSourceControl> controls, Rect frame,
@@ -98,6 +106,12 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
                 null /* typeSideMap */);
         mShownInsets = calculateInsets(mInitialInsetsState, frame, controls, true /* shown */,
                 mTypeSideMap);
+        mHasZeroInsetsIme = mShownInsets.bottom == 0 && controlsInternalType(ITYPE_IME);
+        if (mHasZeroInsetsIme) {
+            // IME has shownInsets of ZERO, and can't map to a side by default.
+            // Map zero insets IME to bottom, making it a special case of bottom insets.
+            mTypeSideMap.put(ITYPE_IME, ISIDE_BOTTOM);
+        }
         buildTypeSourcesMap(mTypeSideMap, mSideSourceMap, mControls);
 
         mAnimation = new WindowInsetsAnimation(mTypes, interpolator,
@@ -106,6 +120,19 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         mAnimationType = animationType;
         mController.startAnimation(this, listener, types, mAnimation,
                 new Bounds(mHiddenInsets, mShownInsets));
+    }
+
+    private boolean calculatePerceptible(Insets currentInsets, float currentAlpha) {
+        return 100 * currentInsets.left >= 5 * (mShownInsets.left - mHiddenInsets.left)
+                && 100 * currentInsets.top >= 5 * (mShownInsets.top - mHiddenInsets.top)
+                && 100 * currentInsets.right >= 5 * (mShownInsets.right - mHiddenInsets.right)
+                && 100 * currentInsets.bottom >= 5 * (mShownInsets.bottom - mHiddenInsets.bottom)
+                && currentAlpha >= 0.5f;
+    }
+
+    @Override
+    public boolean hasZeroInsetsIme() {
+        return mHasZeroInsetsIme;
     }
 
     @Override
@@ -157,6 +184,11 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         mPendingInsets = sanitize(insets);
         mPendingAlpha = sanitize(alpha);
         mController.scheduleApplyChangeInsets(this);
+        boolean perceptible = calculatePerceptible(mPendingInsets, mPendingAlpha);
+        if (mPerceptible == null || perceptible != mPerceptible) {
+            mController.reportPerceptible(mTypes, perceptible);
+            mPerceptible = perceptible;
+        }
     }
 
     @VisibleForTesting
@@ -165,6 +197,7 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
      */
     public boolean applyChangeInsets(InsetsState state) {
         if (mCancelled) {
+            if (DEBUG) Log.d(TAG, "applyChangeInsets canceled");
             return false;
         }
         final Insets offset = Insets.subtract(mShownInsets, mPendingInsets);
@@ -177,8 +210,6 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
                 params, state, mPendingAlpha);
         updateLeashesForSide(ISIDE_BOTTOM, offset.bottom, mShownInsets.bottom,
                 mPendingInsets.bottom, params, state, mPendingAlpha);
-        updateLeashesForSide(ISIDE_FLOATING, 0 /* offset */, 0 /* inset */, 0 /* maxInset */,
-                params, state, mPendingAlpha);
 
         mController.applySurfaceParams(params.toArray(new SurfaceParams[params.size()]));
         mCurrentInsets = mPendingInsets;
@@ -186,9 +217,13 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         mCurrentAlpha = mPendingAlpha;
         mAnimation.setAlpha(mPendingAlpha);
         if (mFinished) {
+            if (DEBUG) Log.d(TAG, String.format(
+                    "notifyFinished shown: %s, currentAlpha: %f, currentInsets: %s",
+                    mShownOnFinish, mCurrentAlpha, mCurrentInsets));
             mController.notifyFinished(this, mShownOnFinish);
             releaseLeashes();
         }
+        if (DEBUG) Log.d(TAG, "Animation finished abruptly.");
         return mFinished;
     }
 
@@ -203,12 +238,15 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
     @Override
     public void finish(boolean shown) {
         if (mCancelled || mFinished) {
+            if (DEBUG) Log.d(TAG, "Animation already canceled or finished, not notifying.");
             return;
         }
         mShownOnFinish = shown;
         mFinished = true;
         setInsetsAndAlpha(shown ? mShownInsets : mHiddenInsets, 1f /* alpha */, 1f /* fraction */,
                 true /* allowWhenFinished */);
+
+        if (DEBUG) Log.d(TAG, "notify control request finished for types: " + mTypes);
         mListener.onFinished(this);
     }
 
@@ -225,6 +263,7 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         }
         mCancelled = true;
         mListener.onCancelled(mReadyDispatched ? this : null);
+        if (DEBUG) Log.d(TAG, "notify Control request cancelled for types: " + mTypes);
 
         releaseLeashes();
     }
@@ -277,6 +316,9 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
         if (insets == null) {
             insets = getCurrentInsets();
         }
+        if (hasZeroInsetsIme()) {
+            return insets;
+        }
         return Insets.max(Insets.min(insets, mShownInsets), mHiddenInsets);
     }
 
@@ -300,17 +342,19 @@ public class InsetsAnimationControlImpl implements WindowInsetsAnimationControll
             mTmpFrame.set(source.getFrame());
             addTranslationToMatrix(side, offset, mTmpMatrix, mTmpFrame);
 
-            state.getSource(source.getType()).setVisible(side == ISIDE_FLOATING || inset != 0);
+            final boolean visible = mHasZeroInsetsIme && side == ISIDE_BOTTOM
+                    ? (mAnimationType == ANIMATION_TYPE_SHOW ? true : !mFinished)
+                    : inset != 0;
+
+            state.getSource(source.getType()).setVisible(visible);
             state.getSource(source.getType()).setFrame(mTmpFrame);
 
             // If the system is controlling the insets source, the leash can be null.
             if (leash != null) {
                 SurfaceParams params = new SurfaceParams.Builder(leash)
-                        .withAlpha(side == ISIDE_FLOATING ? 1 : alpha)
+                        .withAlpha(alpha)
                         .withMatrix(mTmpMatrix)
-                        .withVisibility(side == ISIDE_FLOATING
-                                ? mShownOnFinish
-                                : inset != 0 /* visible */)
+                        .withVisibility(visible)
                         .build();
                 surfaceParams.add(params);
             }

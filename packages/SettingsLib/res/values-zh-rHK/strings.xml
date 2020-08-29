@@ -23,7 +23,7 @@
     <string name="wifi_fail_to_scan" msgid="2333336097603822490">"無法掃瞄網絡"</string>
     <string name="wifi_security_none" msgid="7392696451280611452">"無"</string>
     <string name="wifi_remembered" msgid="3266709779723179188">"已儲存"</string>
-    <string name="wifi_disconnected" msgid="7054450256284661757">"已解除連接"</string>
+    <string name="wifi_disconnected" msgid="7054450256284661757">"已中斷連線"</string>
     <string name="wifi_disabled_generic" msgid="2651916945380294607">"已停用"</string>
     <string name="wifi_disabled_network_failure" msgid="2660396183242399585">"IP 設定失敗"</string>
     <string name="wifi_disabled_by_recommendation_provider" msgid="1302938248432705534">"網絡品質欠佳，因此無法連線"</string>
@@ -222,7 +222,7 @@
     <string name="adb_device_fingerprint_title_format" msgid="291504822917843701">"裝置指紋：<xliff:g id="FINGERPRINT_PARAM">%1$s</xliff:g>"</string>
     <string name="adb_wireless_connection_failed_title" msgid="664211177427438438">"連線失敗"</string>
     <string name="adb_wireless_connection_failed_message" msgid="9213896700171602073">"請確認<xliff:g id="DEVICE_NAME">%1$s</xliff:g> 已連線至相同的網絡。"</string>
-    <string name="adb_pairing_device_dialog_title" msgid="7141739231018530210">"與裝置配對"</string>
+    <string name="adb_pairing_device_dialog_title" msgid="7141739231018530210">"配對裝置"</string>
     <string name="adb_pairing_device_dialog_pairing_code_label" msgid="3639239786669722731">"Wi-Fi 配對碼"</string>
     <string name="adb_pairing_device_dialog_failed_title" msgid="3426758947882091735">"配對失敗"</string>
     <string name="adb_pairing_device_dialog_failed_msg" msgid="6611097519661997148">"請確認裝置已連線至相同的網絡。"</string>
@@ -284,8 +284,7 @@
     <string name="wifi_display_certification_summary" msgid="8111151348106907513">"顯示無線螢幕分享認證的選項"</string>
     <string name="wifi_verbose_logging_summary" msgid="4993823188807767892">"讓 Wi‑Fi 記錄功能升級，在 Wi‑Fi 選擇器中依每個 SSID RSSI 顯示 Wi‑Fi 詳細紀錄"</string>
     <string name="wifi_scan_throttling_summary" msgid="2577105472017362814">"減低耗電量並改善網絡表現"</string>
-    <!-- no translation found for wifi_enhanced_mac_randomization_summary (1210663439867489931) -->
-    <skip />
+    <string name="wifi_enhanced_mac_randomization_summary" msgid="1210663439867489931">"啟用此模式後，每次連接至已啟用 MAC 隨機處理的網絡時，此裝置的 MAC 位址都可能會變更。"</string>
     <string name="wifi_metered_label" msgid="8737187690304098638">"按用量收費"</string>
     <string name="wifi_unmetered_label" msgid="6174142840934095093">"不限數據用量收費"</string>
     <string name="select_logd_size_title" msgid="1604578195914595173">"記錄器緩衝區空間"</string>
@@ -453,7 +452,7 @@
     <string name="battery_info_status_charging_fast" msgid="8027559755902954885">"正在快速充電"</string>
     <string name="battery_info_status_charging_slow" msgid="3190803837168962319">"正在慢速充電"</string>
     <string name="battery_info_status_discharging" msgid="6962689305413556485">"非充電中"</string>
-    <string name="battery_info_status_not_charging" msgid="8330015078868707899">"已插入電源插座，但目前無法充電"</string>
+    <string name="battery_info_status_not_charging" msgid="8330015078868707899">"已連接電源插頭，但目前無法充電"</string>
     <string name="battery_info_status_full" msgid="4443168946046847468">"電量已滿"</string>
     <string name="disabled_by_admin_summary_text" msgid="5343911767402923057">"已由管理員停用"</string>
     <string name="disabled" msgid="8017887509554714950">"已停用"</string>
@@ -550,4 +549,9 @@
     <string name="guest_new_guest" msgid="3482026122932643557">"新增訪客"</string>
     <string name="guest_exit_guest" msgid="5908239569510734136">"移除訪客"</string>
     <string name="guest_nickname" msgid="6332276931583337261">"訪客"</string>
+    <string name="cached_apps_freezer_device_default" msgid="2616594131750144342">"裝置預設設定"</string>
+    <string name="cached_apps_freezer_disabled" msgid="4816382260660472042">"已停用"</string>
+    <string name="cached_apps_freezer_enabled" msgid="8866703500183051546">"已啟用"</string>
+    <string name="cached_apps_freezer_reboot_dialog_text" msgid="695330563489230096">"您的裝置必須重新開機，才能套用此變更。請立即重新開機或取消。"</string>
+    <string name="media_transfer_wired_usb_device_name" msgid="7699141088423210903">"有線耳機"</string>
 </resources>

@@ -28,6 +28,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
 
 import android.graphics.Point;
@@ -145,5 +147,43 @@ public class TaskTests extends WindowTestsBase {
         Rect bounds = new Rect(10, 10, 100, 200);
         task.setBounds(bounds);
         assertEquals(new Point(bounds.left, bounds.top), task.getLastSurfacePosition());
+    }
+
+    @Test
+    public void testIsInStack() {
+        final Task task1 = createTaskStackOnDisplay(mDisplayContent);
+        final Task task2 = createTaskStackOnDisplay(mDisplayContent);
+        final ActivityRecord activity1 =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task1);
+        final ActivityRecord activity2 =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task2);
+        assertEquals(activity1, task1.isInTask(activity1));
+        assertNull(task1.isInTask(activity2));
+    }
+
+    @Test
+    public void testRemoveChildForOverlayTask() {
+        final Task task = createTaskStackOnDisplay(mDisplayContent);
+        final int taskId = task.mTaskId;
+        final ActivityRecord activity1 =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task);
+        final ActivityRecord activity2 =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task);
+        final ActivityRecord activity3 =
+                WindowTestUtils.createActivityRecordInTask(mDisplayContent, task);
+        activity1.setTaskOverlay(true);
+        activity2.setTaskOverlay(true);
+        activity3.setTaskOverlay(true);
+
+        assertEquals(3, task.getChildCount());
+        assertTrue(task.onlyHasTaskOverlayActivities(true));
+
+        task.removeChild(activity1);
+
+        verify(task.mStackSupervisor).removeTask(any(), anyBoolean(), anyBoolean(), anyString());
+        assertEquals(2, task.getChildCount());
+        task.forAllActivities((r) -> {
+            assertTrue(r.finishing);
+        });
     }
 }

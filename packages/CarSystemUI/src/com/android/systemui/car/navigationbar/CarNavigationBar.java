@@ -16,9 +16,12 @@
 
 package com.android.systemui.car.navigationbar;
 
+import static android.view.InsetsState.ITYPE_CLIMATE_BAR;
+import static android.view.InsetsState.ITYPE_EXTRA_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
 import static android.view.InsetsState.containsType;
+import static android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
 
 import static com.android.systemui.statusbar.phone.BarTransitions.MODE_SEMI_TRANSPARENT;
 import static com.android.systemui.statusbar.phone.BarTransitions.MODE_TRANSPARENT;
@@ -34,30 +37,36 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
 import androidx.annotation.VisibleForTesting;
 
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.internal.statusbar.RegisterStatusBarResult;
+import com.android.internal.view.AppearanceRegion;
 import com.android.systemui.R;
 import com.android.systemui.SystemUI;
 import com.android.systemui.car.CarDeviceProvisionedController;
 import com.android.systemui.car.CarDeviceProvisionedListener;
-import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
+import com.android.systemui.dagger.qualifiers.UiBackground;
+import com.android.systemui.plugins.DarkIconDispatcher;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
 import com.android.systemui.statusbar.AutoHideUiElement;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.phone.AutoHideController;
 import com.android.systemui.statusbar.phone.BarTransitions;
+import com.android.systemui.statusbar.phone.LightBarController;
 import com.android.systemui.statusbar.phone.PhoneStatusBarPolicy;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
 import com.android.systemui.statusbar.phone.StatusBarSignalPolicy;
+import com.android.systemui.statusbar.phone.SysuiDarkIconDispatcher;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.concurrent.Executor;
 
 import javax.inject.Inject;
 
@@ -68,16 +77,16 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
 
     private final Resources mResources;
     private final CarNavigationBarController mCarNavigationBarController;
+    private final SysuiDarkIconDispatcher mStatusBarIconController;
     private final WindowManager mWindowManager;
     private final CarDeviceProvisionedController mCarDeviceProvisionedController;
     private final CommandQueue mCommandQueue;
     private final AutoHideController mAutoHideController;
     private final ButtonSelectionStateListener mButtonSelectionStateListener;
     private final Handler mMainHandler;
-    private final Handler mBgHandler;
+    private final Executor mUiBgExecutor;
     private final IStatusBarService mBarService;
     private final Lazy<KeyguardStateController> mKeyguardStateControllerLazy;
-    private final ButtonSelectionStateController mButtonSelectionStateController;
     private final Lazy<PhoneStatusBarPolicy> mIconPolicyLazy;
     private final Lazy<StatusBarIconController> mIconControllerLazy;
 
@@ -105,8 +114,11 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
     private boolean mDeviceIsSetUpForUser = true;
     private boolean mIsUserSetupInProgress = false;
 
-    private @BarTransitions.TransitionMode int mStatusBarMode;
-    private @BarTransitions.TransitionMode int mNavigationBarMode;
+    private AppearanceRegion[] mAppearanceRegions = new AppearanceRegion[0];
+    @BarTransitions.TransitionMode
+    private int mStatusBarMode;
+    @BarTransitions.TransitionMode
+    private int mNavigationBarMode;
     private boolean mStatusBarTransientShown;
     private boolean mNavBarTransientShown;
 
@@ -114,32 +126,34 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
     public CarNavigationBar(Context context,
             @Main Resources resources,
             CarNavigationBarController carNavigationBarController,
+            // TODO(b/156052638): Should not need to inject LightBarController
+            LightBarController lightBarController,
+            DarkIconDispatcher darkIconDispatcher,
             WindowManager windowManager,
             CarDeviceProvisionedController deviceProvisionedController,
             CommandQueue commandQueue,
             AutoHideController autoHideController,
             ButtonSelectionStateListener buttonSelectionStateListener,
             @Main Handler mainHandler,
-            @Background Handler bgHandler,
+            @UiBackground Executor uiBgExecutor,
             IStatusBarService barService,
             Lazy<KeyguardStateController> keyguardStateControllerLazy,
-            ButtonSelectionStateController buttonSelectionStateController,
             Lazy<PhoneStatusBarPolicy> iconPolicyLazy,
             Lazy<StatusBarIconController> iconControllerLazy
     ) {
         super(context);
         mResources = resources;
         mCarNavigationBarController = carNavigationBarController;
+        mStatusBarIconController = (SysuiDarkIconDispatcher) darkIconDispatcher;
         mWindowManager = windowManager;
         mCarDeviceProvisionedController = deviceProvisionedController;
         mCommandQueue = commandQueue;
         mAutoHideController = autoHideController;
         mButtonSelectionStateListener = buttonSelectionStateListener;
         mMainHandler = mainHandler;
-        mBgHandler = bgHandler;
+        mUiBgExecutor = uiBgExecutor;
         mBarService = barService;
         mKeyguardStateControllerLazy = keyguardStateControllerLazy;
-        mButtonSelectionStateController = buttonSelectionStateController;
         mIconPolicyLazy = iconPolicyLazy;
         mIconControllerLazy = iconControllerLazy;
 
@@ -162,6 +176,9 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
         } catch (RemoteException ex) {
             ex.rethrowFromSystemServer();
         }
+
+        onSystemBarAppearanceChanged(mDisplayId, result.mAppearance, result.mAppearanceRegions,
+                result.mNavbarColorManagedByIme);
 
         // StatusBarManagerService has a back up of IME token and it's restored here.
         setImeWindowStatus(mDisplayId, result.mImeToken, result.mImeWindowVis,
@@ -232,7 +249,7 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
         mActivityManagerWrapper = ActivityManagerWrapper.getInstance();
         mActivityManagerWrapper.registerTaskStackListener(mButtonSelectionStateListener);
 
-        mBgHandler.post(() -> mCarNavigationBarController.connectToHvac());
+        mUiBgExecutor.execute(mCarNavigationBarController::connectToHvac);
 
         // Lastly, call to the icon policy to install/update all the icons.
         // Must be called on the main thread due to the use of observeForever() in
@@ -260,10 +277,9 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
      * before and after the device is provisioned. . Also for change of density and font size.
      */
     private void restartNavBars() {
-        // remove and reattach all hvac components such that we don't keep a reference to unused
-        // ui elements
-        mCarNavigationBarController.removeAllFromHvac();
-        mButtonSelectionStateController.removeAll();
+        // remove and reattach all components such that we don't keep a reference to unused ui
+        // elements
+        mCarNavigationBarController.removeAll();
 
         if (mTopNavigationBarWindow != null) {
             mTopNavigationBarWindow.removeAllViews();
@@ -352,15 +368,13 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     height,
-                    WindowManager.LayoutParams.TYPE_STATUS_BAR_ADDITIONAL,
+                    WindowManager.LayoutParams.TYPE_STATUS_BAR,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                             | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                             | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
                     PixelFormat.TRANSLUCENT);
             lp.setTitle("TopCarNavigationBar");
-            lp.providesInsetsTypes = new int[]{ITYPE_STATUS_BAR};
-            lp.setFitInsetsTypes(0);
             lp.windowAnimations = 0;
             lp.gravity = Gravity.TOP;
             mWindowManager.addView(mTopNavigationBarWindow, lp);
@@ -374,14 +388,13 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     height,
-                    WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
+                    WindowManager.LayoutParams.TYPE_NAVIGATION_BAR,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                             | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                             | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
                     PixelFormat.TRANSLUCENT);
             lp.setTitle("BottomCarNavigationBar");
-            lp.providesInsetsTypes = new int[]{ITYPE_NAVIGATION_BAR};
             lp.windowAnimations = 0;
             lp.gravity = Gravity.BOTTOM;
             mWindowManager.addView(mBottomNavigationBarWindow, lp);
@@ -399,6 +412,8 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
                             | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
                     PixelFormat.TRANSLUCENT);
             leftlp.setTitle("LeftCarNavigationBar");
+            leftlp.providesInsetsTypes = new int[]{ITYPE_CLIMATE_BAR};
+            leftlp.setFitInsetsTypes(0);
             leftlp.windowAnimations = 0;
             leftlp.gravity = Gravity.LEFT;
             mWindowManager.addView(mLeftNavigationBarWindow, leftlp);
@@ -416,6 +431,8 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
                             | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
                     PixelFormat.TRANSLUCENT);
             rightlp.setTitle("RightCarNavigationBar");
+            rightlp.providesInsetsTypes = new int[]{ITYPE_EXTRA_NAVIGATION_BAR};
+            rightlp.setFitInsetsTypes(0);
             rightlp.windowAnimations = 0;
             rightlp.gravity = Gravity.RIGHT;
             mWindowManager.addView(mRightNavigationBarWindow, rightlp);
@@ -441,6 +458,64 @@ public class CarNavigationBar extends SystemUI implements CommandQueue.Callbacks
         boolean isKeyboardVisible = (vis & InputMethodService.IME_VISIBLE) != 0;
         mCarNavigationBarController.setBottomWindowVisibility(
                 isKeyboardVisible ? View.GONE : View.VISIBLE);
+    }
+
+    @Override
+    public void onSystemBarAppearanceChanged(
+            int displayId,
+            @WindowInsetsController.Appearance int appearance,
+            AppearanceRegion[] appearanceRegions,
+            boolean navbarColorManagedByIme) {
+        if (displayId != mDisplayId) {
+            return;
+        }
+        boolean barModeChanged = updateStatusBarMode(
+                mStatusBarTransientShown ? MODE_SEMI_TRANSPARENT : MODE_TRANSPARENT);
+        int numStacks = appearanceRegions.length;
+        boolean stackAppearancesChanged = mAppearanceRegions.length != numStacks;
+        for (int i = 0; i < numStacks && !stackAppearancesChanged; i++) {
+            stackAppearancesChanged |= !appearanceRegions[i].equals(mAppearanceRegions[i]);
+        }
+        if (stackAppearancesChanged || barModeChanged) {
+            mAppearanceRegions = appearanceRegions;
+            updateStatusBarAppearance();
+        }
+    }
+
+    private void updateStatusBarAppearance() {
+        int numStacks = mAppearanceRegions.length;
+        int numLightStacks = 0;
+
+        // We can only have maximum one light stack.
+        int indexLightStack = -1;
+
+        for (int i = 0; i < numStacks; i++) {
+            if (isLight(mAppearanceRegions[i].getAppearance())) {
+                numLightStacks++;
+                indexLightStack = i;
+            }
+        }
+
+        // If all stacks are light, all icons become dark.
+        if (numLightStacks == numStacks) {
+            mStatusBarIconController.setIconsDarkArea(null);
+            mStatusBarIconController.getTransitionsController().setIconsDark(
+                    /* dark= */ true, /* animate= */ false);
+        } else if (numLightStacks == 0) {
+            // If no one is light, all icons become white.
+            mStatusBarIconController.getTransitionsController().setIconsDark(
+                    /* dark= */ false, /* animate= */ false);
+        } else {
+            // Not the same for every stack, update icons in area only.
+            mStatusBarIconController.setIconsDarkArea(
+                    mAppearanceRegions[indexLightStack].getBounds());
+            mStatusBarIconController.getTransitionsController().setIconsDark(
+                    /* dark= */ true, /* animate= */ false);
+        }
+    }
+
+    private static boolean isLight(int appearance) {
+        return (appearance & APPEARANCE_LIGHT_STATUS_BARS) != 0;
     }
 
     @Override

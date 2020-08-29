@@ -31,15 +31,17 @@ import java.io.PrintWriter;
  * This keeps track of the touch state throughout the current touch gesture.
  */
 public class PipTouchState {
-    private static final String TAG = "PipTouchHandler";
+    private static final String TAG = "PipTouchState";
     private static final boolean DEBUG = false;
 
     @VisibleForTesting
     static final long DOUBLE_TAP_TIMEOUT = 200;
+    static final long HOVER_EXIT_TIMEOUT = 50;
 
     private final Handler mHandler;
     private final ViewConfiguration mViewConfig;
     private final Runnable mDoubleTapTimeoutCallback;
+    private final Runnable mHoverExitTimeoutCallback;
 
     private VelocityTracker mVelocityTracker;
     private long mDownTouchTime = 0;
@@ -64,10 +66,11 @@ public class PipTouchState {
     private int mActivePointerId;
 
     public PipTouchState(ViewConfiguration viewConfig, Handler handler,
-            Runnable doubleTapTimeoutCallback) {
+            Runnable doubleTapTimeoutCallback, Runnable hoverExitTimeoutCallback) {
         mViewConfig = viewConfig;
         mHandler = handler;
         mDoubleTapTimeoutCallback = doubleTapTimeoutCallback;
+        mHoverExitTimeoutCallback = hoverExitTimeoutCallback;
     }
 
     /**
@@ -197,6 +200,10 @@ public class PipTouchState {
                 recycleVelocityTracker();
                 break;
             }
+            case MotionEvent.ACTION_BUTTON_PRESS: {
+                removeHoverExitTimeoutCallback();
+                break;
+            }
         }
     }
 
@@ -316,6 +323,23 @@ public class PipTouchState {
             return Math.max(0, DOUBLE_TAP_TIMEOUT - (mUpTouchTime - mDownTouchTime));
         }
         return -1;
+    }
+
+    /**
+     * Removes the timeout callback if it's in queue.
+     */
+    public void removeDoubleTapTimeoutCallback() {
+        mIsWaitingForDoubleTap = false;
+        mHandler.removeCallbacks(mDoubleTapTimeoutCallback);
+    }
+
+    void scheduleHoverExitTimeoutCallback() {
+        mHandler.removeCallbacks(mHoverExitTimeoutCallback);
+        mHandler.postDelayed(mHoverExitTimeoutCallback, HOVER_EXIT_TIMEOUT);
+    }
+
+    void removeHoverExitTimeoutCallback() {
+        mHandler.removeCallbacks(mHoverExitTimeoutCallback);
     }
 
     void addMovementToVelocityTracker(MotionEvent event) {

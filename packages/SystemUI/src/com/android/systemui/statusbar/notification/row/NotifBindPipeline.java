@@ -115,6 +115,9 @@ public final class NotifBindPipeline {
         mLogger.logManagedRow(entry.getKey());
 
         final BindEntry bindEntry = getBindEntry(entry);
+        if (bindEntry == null) {
+            return;
+        }
         bindEntry.row = row;
         if (bindEntry.invalidated) {
             requestPipelineRun(entry);
@@ -151,12 +154,14 @@ public final class NotifBindPipeline {
      * the real work once rather than repeatedly start and cancel it.
      */
     private void requestPipelineRun(NotificationEntry entry) {
+        mLogger.logRequestPipelineRun(entry.getKey());
+
         final BindEntry bindEntry = getBindEntry(entry);
         if (bindEntry.row == null) {
             // Row is not managed yet but may be soon. Stop for now.
+            mLogger.logRequestPipelineRowNotSet(entry.getKey());
             return;
         }
-        mLogger.logRequestPipelineRun(entry.getKey());
 
         // Abort any existing pipeline run
         mStage.abortStage(entry, bindEntry.row);
@@ -223,11 +228,6 @@ public final class NotifBindPipeline {
 
     private @NonNull BindEntry getBindEntry(NotificationEntry entry) {
         final BindEntry bindEntry = mBindEntries.get(entry);
-        if (bindEntry == null) {
-            throw new IllegalStateException(
-                    String.format("Attempting bind on an inactive notification. key: %s",
-                            entry.getKey()));
-        }
         return bindEntry;
     }
 

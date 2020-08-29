@@ -408,6 +408,25 @@ public final class DefaultPermissionGrantPolicy {
             }
             grantRuntimePermissionsForSystemPackage(pm, userId, pkg);
         }
+
+        // Grant READ_PHONE_STATE to all system apps that have READ_PRIVILEGED_PHONE_STATE
+        for (PackageInfo pkg : packages) {
+            if (pkg == null
+                    || !doesPackageSupportRuntimePermissions(pkg)
+                    || ArrayUtils.isEmpty(pkg.requestedPermissions)
+                    || !pkg.applicationInfo.isPrivilegedApp()) {
+                continue;
+            }
+            for (String permission : pkg.requestedPermissions) {
+                if (Manifest.permission.READ_PRIVILEGED_PHONE_STATE.equals(permission)) {
+                    grantRuntimePermissions(pm, pkg,
+                            Collections.singleton(Manifest.permission.READ_PHONE_STATE),
+                            true, // systemFixed
+                            userId);
+                }
+            }
+        }
+
     }
 
     @SafeVarargs
@@ -797,7 +816,7 @@ public final class DefaultPermissionGrantPolicy {
         if (!TextUtils.isEmpty(contentCapturePackageName)) {
             grantPermissionsToSystemPackage(pm, contentCapturePackageName, userId,
                     PHONE_PERMISSIONS, SMS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
-                    CONTACTS_PERMISSIONS, STORAGE_PERMISSIONS);
+                    CONTACTS_PERMISSIONS);
         }
 
         // Atthention Service

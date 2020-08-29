@@ -961,7 +961,7 @@ class RecentTasks {
                 continue;
             }
 
-            res.add(createRecentTaskInfo(task));
+            res.add(createRecentTaskInfo(task, true /* stripExtras */));
         }
         return res;
     }
@@ -1031,9 +1031,13 @@ class RecentTasks {
     void add(Task task) {
         if (DEBUG_RECENTS_TRIM_TASKS) Slog.d(TAG, "add: task=" + task);
 
+        // Only allow trimming task if it is not updating visibility for activities, so the caller
+        // doesn't need to handle unexpected size and index when looping task containers.
+        final boolean canTrimTask = !mSupervisor.inActivityVisibilityUpdate();
+
         // Clean up the hidden tasks when going to home because the user may not be unable to return
         // to the task from recents.
-        if (!mHiddenTasks.isEmpty() && task.isActivityTypeHome()) {
+        if (canTrimTask && !mHiddenTasks.isEmpty() && task.isActivityTypeHome()) {
             removeUnreachableHiddenTasks(task.getWindowingMode());
         }
 
@@ -1155,7 +1159,9 @@ class RecentTasks {
         }
 
         // Trim the set of tasks to the active set
-        trimInactiveRecentTasks();
+        if (canTrimTask) {
+            trimInactiveRecentTasks();
+        }
         notifyTaskPersisterLocked(task, false /* flush */);
     }
 
@@ -1335,6 +1341,17 @@ class RecentTasks {
                 break;
         }
 
+        // Tasks managed by/associated with an ActivityView should be excluded from recents.
+        // singleTaskInstance is set on the VirtualDisplay managed by ActivityView
+        // TODO(b/126185105): Find a different signal to use besides isSingleTaskInstance
+        final ActivityStack stack = task.getStack();
+        if (stack != null) {
+            DisplayContent display = stack.getDisplay();
+            if (display != null && display.isSingleTaskInstance()) {
+                return false;
+            }
+        }
+
         // If we're in lock task mode, ignore the root task
         if (task == mService.getLockTaskController().getRootTask()) {
             return false;
@@ -1381,9 +1398,7 @@ class RecentTasks {
         return false;
     }
 
-    /**
-     * @return whether the given task can be trimmed even if it is outside the visible range.
-     */
+    /** @return whether the given task can be trimmed even if it is outside the visible range. */
     protected boolean isTrimmable(Task task) {
         final ActivityStack stack = task.getStack();
 
@@ -1398,17 +1413,21 @@ class RecentTasks {
             return false;
         }
 
+        final ActivityStack rootHomeTask = stack.getDisplayArea().getRootHomeTask();
+        // Home stack does not exist. Don't trim the task.
+        if (rootHomeTask == null) {
+            return false;
+        }
         // Trim tasks that are behind the home task.
-        final TaskDisplayArea taskDisplayArea = stack.getDisplayArea();
-        return task.compareTo(taskDisplayArea.getRootHomeTask()) < 0;
+        return task.compareTo(rootHomeTask) < 0;
     }
 
     /** Remove the tasks that user may not be able to return. */
     private void removeUnreachableHiddenTasks(int windowingMode) {
         for (int i = mHiddenTasks.size() - 1; i >= 0; i--) {
             final Task hiddenTask = mHiddenTasks.get(i);
-            if (!hiddenTask.hasChild()) {
-                // The task was removed by other path.
+            if (!hiddenTask.hasChild() || hiddenTask.inRecents) {
+                // The task was removed by other path or it became reachable (added to recents).
                 mHiddenTasks.remove(i);
                 continue;
             }
@@ -1430,6 +1449,9 @@ class RecentTasks {
      * of task as the given one.
      */
     private void removeForAddTask(Task task) {
+        // The adding task will be in recents so it is not hidden.
+        mHiddenTasks.remove(task);
+
         final int removeIndex = findRemoveIndexForAddTask(task);
         if (removeIndex == -1) {
             // Nothing to trim
@@ -1441,8 +1463,6 @@ class RecentTasks {
         // callbacks here.
         final Task removedTask = mTasks.remove(removeIndex);
         if (removedTask != task) {
-            // The added task is in recents so it is not hidden.
-            mHiddenTasks.remove(task);
             if (removedTask.hasChild()) {
                 // A non-empty task is replaced by a new task. Because the removed task is no longer
                 // managed by the recent tasks list, add it to the hidden list to prevent the task
@@ -1813,9 +1833,9 @@ class RecentTasks {
     /**
      * Creates a new RecentTaskInfo from a Task.
      */
-    ActivityManager.RecentTaskInfo createRecentTaskInfo(Task tr) {
+    ActivityManager.RecentTaskInfo createRecentTaskInfo(Task tr, boolean stripExtras) {
         ActivityManager.RecentTaskInfo rti = new ActivityManager.RecentTaskInfo();
-        tr.fillTaskInfo(rti);
+        tr.fillTaskInfo(rti, stripExtras);
         // Fill in some deprecated values
         rti.id = rti.isRunning ? rti.taskId : INVALID_TASK_ID;
         rti.persistentId = rti.taskId;

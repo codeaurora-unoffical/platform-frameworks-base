@@ -55,6 +55,9 @@ class ControlsRequestReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CONTROLS)) {
+            return
+        }
 
         val packageName = intent.getParcelableExtra<ComponentName>(Intent.EXTRA_COMPONENT_NAME)
                 ?.packageName
@@ -70,6 +73,7 @@ class ControlsRequestReceiver : BroadcastReceiver() {
             ControlsProviderService.EXTRA_CONTROL.let {
                 putExtra(it, intent.getParcelableExtra<Control>(it))
             }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
         }
         activityIntent.putExtra(Intent.EXTRA_USER_ID, context.userId)
 
