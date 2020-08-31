@@ -32,6 +32,11 @@ public class OobData implements Parcelable {
     private byte[] mSecurityManagerTk;
     private byte[] mLeSecureConnectionsConfirmation;
     private byte[] mLeSecureConnectionsRandom;
+    private byte[] mC192;
+    private byte[] mR192;
+    private byte[] mC256;
+    private byte[] mR256;
+
 
     public byte[] getLeBluetoothDeviceAddress() {
         return mLeBluetoothDeviceAddress;
@@ -75,6 +80,62 @@ public class OobData implements Parcelable {
         mLeSecureConnectionsRandom = leSecureConnectionsRandom;
     }
 
+    /**
+     * Secure Simple Pairing OOB Optional Data.
+     * Simple Pairing Hash C192 (16 bytes). Please see
+     * Bluetooth Core Spec, Vol 3, Part C, Section 5.2.2.7
+     * for a detailed description.
+     */
+    public byte[] getC192() {
+        return mC192;
+    }
+
+    public void setC192(byte[] c192) {
+        mC192 = c192;
+    }
+
+    /**
+     * Secure Simple Pairing OOB Optional Data.
+     * Simple Pairing Hash R192 (16 bytes). Please see
+     * Bluetooth Core Spec, Vol 3, Part C, Section 5.2.2.7
+     * for a detailed description.
+     */
+    public byte[] getR192() {
+        return mR192;
+    }
+
+    public void setR192(byte[] r192) {
+        mR192 = r192;
+    }
+
+    /**
+     * Secure Simple Pairing OOB Optional Data.
+     * Simple Pairing Hash C256 (16 bytes) if secure connection supported.
+     * Please see Bluetooth Core Spec, Vol 3, Part C, Section 5.2.2.7
+     * for a detailed description.
+     */
+    public byte[] getC256() {
+        return mC256;
+    }
+
+    public void setC256(byte[] c256) {
+        mC256 = c256;
+    }
+
+    /**
+     * Secure Simple Pairing OOB Optional Data.
+     * Simple Pairing Hash R256 (16 bytes) if secure connection supported.
+     * Please see Bluetooth Core Spec, Vol 3, Part C, Section 5.2.2.7
+     * for a detailed description.
+     */
+    public byte[] getR256() {
+        return mR256;
+    }
+
+    public void setR256(byte[] r256) {
+        mR256 = r256;
+    }
+
     public OobData() {
     }
 
@@ -83,6 +144,10 @@ public class OobData implements Parcelable {
         mSecurityManagerTk = in.createByteArray();
         mLeSecureConnectionsConfirmation = in.createByteArray();
         mLeSecureConnectionsRandom = in.createByteArray();
+        mC192 = in.createByteArray();
+        mR192 = in.createByteArray();
+        mC256 = in.createByteArray();
+        mR256 = in.createByteArray();
     }
 
     @Override
@@ -96,6 +161,10 @@ public class OobData implements Parcelable {
         out.writeByteArray(mSecurityManagerTk);
         out.writeByteArray(mLeSecureConnectionsConfirmation);
         out.writeByteArray(mLeSecureConnectionsRandom);
+        out.writeByteArray(mC192);
+        out.writeByteArray(mR192);
+        out.writeByteArray(mC256);
+        out.writeByteArray(mR256);
     }
 
     public static final @android.annotation.NonNull Parcelable.Creator<OobData> CREATOR =
