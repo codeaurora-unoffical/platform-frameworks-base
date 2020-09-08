@@ -3957,10 +3957,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
                 || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
             if (mUseTvRouting || mHandleVolumeKeysInWM) {
-                // On TVs or when the configuration is enabled, volume keys never
-                // go to the foreground app.
                 dispatchDirectAudioEvent(event);
-                return -1;
             }
 
             // If the device is in VR mode and keys are "internal" (e.g. on the side of the
