@@ -1401,6 +1401,14 @@ final class ActivityRecord extends WindowToken implements WindowManagerService.A
         return mLetterbox == null || mLetterbox.notIntersectsOrFullyContains(rect);
     }
 
+    /**
+     * @return {@code true} if there is a letterbox and any part of that letterbox overlaps with
+     * the given {@code rect}.
+     */
+    boolean isLetterboxOverlappingWith(Rect rect) {
+        return mLetterbox != null && mLetterbox.isOverlappingWith(rect);
+    }
+
     static class Token extends IApplicationToken.Stub {
         private WeakReference<ActivityRecord> weakActivity;
         private final String name;
