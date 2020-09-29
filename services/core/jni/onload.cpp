@@ -19,13 +19,10 @@
 #include "utils/Log.h"
 #include "utils/misc.h"
 
-#include "BroadcastRadio/BroadcastRadioService.h"
-#include "BroadcastRadio/Tuner.h"
 
 namespace android {
 int register_android_server_AlarmManagerService(JNIEnv* env);
 int register_android_server_BatteryStatsService(JNIEnv* env);
-int register_android_server_ConsumerIrService(JNIEnv *env);
 int register_android_server_InputManager(JNIEnv* env);
 int register_android_server_LightsService(JNIEnv* env);
 int register_android_server_PowerManagerService(JNIEnv* env);
@@ -36,16 +33,12 @@ int register_android_server_UsbAlsaJackDetector(JNIEnv* env);
 int register_android_server_UsbDeviceManager(JNIEnv* env);
 int register_android_server_UsbMidiDevice(JNIEnv* env);
 int register_android_server_UsbHostManager(JNIEnv* env);
-int register_android_server_vr_VrManagerService(JNIEnv* env);
 int register_android_server_VibratorService(JNIEnv* env);
 int register_android_server_location_GnssLocationProvider(JNIEnv* env);
 int register_android_server_connectivity_Vpn(JNIEnv* env);
 int register_android_server_connectivity_tethering_OffloadHardwareInterface(JNIEnv*);
 int register_android_server_TestNetworkService(JNIEnv* env);
 int register_android_server_devicepolicy_CryptoTestHelper(JNIEnv*);
-int register_android_server_hdmi_HdmiCecController(JNIEnv* env);
-int register_android_server_tv_TvUinputBridge(JNIEnv* env);
-int register_android_server_tv_TvInputHal(JNIEnv* env);
 int register_android_server_PersistentDataBlockService(JNIEnv* env);
 int register_android_server_Watchdog(JNIEnv* env);
 int register_android_server_HardwarePropertiesManagerService(JNIEnv* env);
@@ -73,8 +66,6 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
     }
     ALOG_ASSERT(env, "Could not retrieve the env!");
 
-    register_android_server_broadcastradio_BroadcastRadioService(env);
-    register_android_server_broadcastradio_Tuner(vm, env);
     register_android_server_PowerManagerService(env);
     register_android_server_SerialService(env);
     register_android_server_InputManager(env);
@@ -84,7 +75,6 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
     register_android_server_UsbMidiDevice(env);
     register_android_server_UsbAlsaJackDetector(env);
     register_android_server_UsbHostManager(env);
-    register_android_server_vr_VrManagerService(env);
     register_android_server_VibratorService(env);
     register_android_server_SystemServer(env);
     register_android_server_location_GnssLocationProvider(env);
@@ -92,11 +82,7 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
     register_android_server_connectivity_tethering_OffloadHardwareInterface(env);
     register_android_server_TestNetworkService(env);
     register_android_server_devicepolicy_CryptoTestHelper(env);
-    register_android_server_ConsumerIrService(env);
     register_android_server_BatteryStatsService(env);
-    register_android_server_hdmi_HdmiCecController(env);
-    register_android_server_tv_TvUinputBridge(env);
-    register_android_server_tv_TvInputHal(env);
     register_android_server_PersistentDataBlockService(env);
     register_android_server_HardwarePropertiesManagerService(env);
     register_android_server_storage_AppFuse(env);
