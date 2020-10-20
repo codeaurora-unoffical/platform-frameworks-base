@@ -1256,11 +1256,15 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         final boolean isTranslucent =
                 attributes.getBoolean(com.android.internal.R.styleable.Window_windowIsTranslucent,
                         false);
+        final boolean isSwipeToDismiss = !attributes.hasValue(
+                com.android.internal.R.styleable.Window_windowIsTranslucent)
+                && attributes.getBoolean(
+                        com.android.internal.R.styleable.Window_windowSwipeToDismiss, false);
         final boolean isFloating =
                 attributes.getBoolean(com.android.internal.R.styleable.Window_windowIsFloating,
                         false);
 
-        return isFloating || isTranslucent;
+        return isFloating || isTranslucent || isSwipeToDismiss;
     }
 
     /**
