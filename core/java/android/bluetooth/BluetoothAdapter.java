@@ -612,6 +612,23 @@ public final class BluetoothAdapter {
     public static final int STATE_DISCONNECTING =
             BluetoothProtoEnums.CONNECTION_STATE_DISCONNECTING;
 
+    /**
+     * Broadcast Action: Indicate local oob data
+     * <p>Always contains the extra field {@link #EXTRA_OOB}
+     * <p>Requires {@link android.Manifest.permission#BLUETOOTH} to receive.
+     * @hide
+     */
+    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION) public static final String
+            ACTION_LOCAL_OOB_DATA = "android.bluetooth.adapter.action.LOCAL_OOB_DATA";
+
+    /**
+     * Used as a Parcelable {@link OobData} extra field in {@link #ACTION_LOCAL_OOB_DATA}
+     * intents to report the local oob data.
+     * @hide
+     */
+    public static final String EXTRA_LOCAL_OOB_DATA = "android.bluetooth.adapter.extra.LOCAL_OOB_DATA";
+
+
     /** @hide */
     public static final String BLUETOOTH_MANAGER_SERVICE = "bluetooth_manager";
     private final IBinder mToken;
@@ -2487,6 +2504,27 @@ public final class BluetoothAdapter {
     public Pair<byte[], byte[]> readOutOfBandData() {
         return null;
     }
+
+    /**
+     * Read local oob data
+     * @return false on immediate error, true on success
+     * @hide
+     */
+
+     @RequiresPermission(Manifest.permission.BLUETOOTH_ADMIN)
+     public boolean readLocalOobData() {
+        if (getState() != STATE_ON) return false;
+        try {
+            mServiceLock.readLock().lock();
+            if (mService != null) return mService.readLocalOobData();
+        } catch (RemoteException e) {
+            Log.e(TAG, e.getMessage(), e);
+        } finally {
+            mServiceLock.readLock().unlock();
+        }
+        return true;
+    }
+
 
     /**
      * Get the profile proxy object associated with the profile.
