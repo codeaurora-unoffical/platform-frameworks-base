@@ -1385,16 +1385,15 @@ public final class SystemServer {
             mSystemServiceManager.startService(DevicePolicyManagerService.Lifecycle.class);
             t.traceEnd();
 
-            if (!isWatch) {
-                t.traceBegin("StartStatusBarManagerService");
-                try {
-                    statusBar = new StatusBarManagerService(context);
-                    ServiceManager.addService(Context.STATUS_BAR_SERVICE, statusBar);
-                } catch (Throwable e) {
-                    reportWtf("starting StatusBarManagerService", e);
-                }
-                t.traceEnd();
+            
+            t.traceBegin("StartStatusBarManagerService");
+            try {
+                statusBar = new StatusBarManagerService(context);
+                ServiceManager.addService(Context.STATUS_BAR_SERVICE, statusBar);
+            } catch (Throwable e) {
+                reportWtf("starting StatusBarManagerService", e);
             }
+            t.traceEnd();
 
             startContentCaptureService(context, t);
             startAttentionService(context, t);
@@ -1694,7 +1693,7 @@ public final class SystemServer {
 
             if (isWatch) {
                 t.traceBegin("StartThermalObserver");
-                mSystemServiceManager.startService(THERMAL_OBSERVER_CLASS);
+                //mSystemServiceManager.startService(THERMAL_OBSERVER_CLASS);
                 t.traceEnd();
             }
 
@@ -2040,38 +2039,36 @@ public final class SystemServer {
             t.traceEnd();
         }
 
-        if (!isWatch) {
-            t.traceBegin("StartMediaProjectionManager");
-            mSystemServiceManager.startService(MediaProjectionManagerService.class);
-            t.traceEnd();
-        }
+        t.traceBegin("StartMediaProjectionManager");
+        mSystemServiceManager.startService(MediaProjectionManagerService.class);
+        t.traceEnd();
 
         if (isWatch) {
             // Must be started before services that depend it, e.g. WearConnectivityService
             t.traceBegin("StartWearPowerService");
-            mSystemServiceManager.startService(WEAR_POWER_SERVICE_CLASS);
+            //mSystemServiceManager.startService(WEAR_POWER_SERVICE_CLASS);
             t.traceEnd();
 
             t.traceBegin("StartWearConnectivityService");
-            mSystemServiceManager.startService(WEAR_CONNECTIVITY_SERVICE_CLASS);
+            //mSystemServiceManager.startService(WEAR_CONNECTIVITY_SERVICE_CLASS);
             t.traceEnd();
 
             t.traceBegin("StartWearDisplayService");
-            mSystemServiceManager.startService(WEAR_DISPLAY_SERVICE_CLASS);
+            //mSystemServiceManager.startService(WEAR_DISPLAY_SERVICE_CLASS);
             t.traceEnd();
 
             t.traceBegin("StartWearTimeService");
-            mSystemServiceManager.startService(WEAR_TIME_SERVICE_CLASS);
+            //mSystemServiceManager.startService(WEAR_TIME_SERVICE_CLASS);
             t.traceEnd();
 
             if (enableLeftyService) {
                 t.traceBegin("StartWearLeftyService");
-                mSystemServiceManager.startService(WEAR_LEFTY_SERVICE_CLASS);
+                //mSystemServiceManager.startService(WEAR_LEFTY_SERVICE_CLASS);
                 t.traceEnd();
             }
 
             t.traceBegin("StartWearGlobalActionsService");
-            mSystemServiceManager.startService(WEAR_GLOBAL_ACTIONS_SERVICE_CLASS);
+            //mSystemServiceManager.startService(WEAR_GLOBAL_ACTIONS_SERVICE_CLASS);
             t.traceEnd();
         }
 
