@@ -961,7 +961,24 @@ public class SystemConfig {
         } finally {
             IoUtils.closeQuietly(permReader);
         }
-
+        if ((SystemProperties.get("ro.baseband")).equals("apq")) {
+            mUnavailableFeatures.add("android.hardware.sensor.accelerometer");
+            mUnavailableFeatures.add("android.hardware.sensor.compass");
+            mUnavailableFeatures.add("android.hardware.sensor.light");
+            mUnavailableFeatures.add("android.hardware.sensor.proximity");
+            mUnavailableFeatures.add("android.hardware.location.network");
+            mUnavailableFeatures.add("android.hardware.camera");
+            mUnavailableFeatures.add("android.hardware.camera.any");
+            mUnavailableFeatures.add("android.hardware.camera.autofocus");
+            mUnavailableFeatures.add("android.hardware.camera.capability.manual_post_processing");
+            mUnavailableFeatures.add("android.hardware.camera.capability.manual_sensor");
+            mUnavailableFeatures.add("android.hardware.camera.capability.raw");
+            mUnavailableFeatures.add("android.hardware.camera.flash");
+            mUnavailableFeatures.add("android.hardware.camera.front");
+            mUnavailableFeatures.add("android.hardware.camera.level.full");
+            mUnavailableFeatures.add("android.hardware.screen.portrait");
+            mUnavailableFeatures.add("android.software.picture_in_picture");
+            }
         // Some devices can be field-converted to FBE, so offer to splice in
         // those features if not already defined by the static config
         if (StorageManager.isFileEncryptedNativeOnly()) {
