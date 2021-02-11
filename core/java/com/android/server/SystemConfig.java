@@ -732,17 +732,6 @@ public class SystemConfig {
            unsupportFeatures.add("android.hardware.sensor.stepdetector");
            unsupportFeatures.add("android.hardware.sensor.ambient_temperature");
            unsupportFeatures.add("android.hardware.sensor.relative_humidity");
-           //disable camera features
-           unsupportFeatures.add("android.hardware.camera");
-           unsupportFeatures.add("android.hardware.camera.autofocus");
-           unsupportFeatures.add("android.hardware.camera.flash");
-           unsupportFeatures.add("android.hardware.camera.front");
-           unsupportFeatures.add("android.hardware.camera.any");
-           unsupportFeatures.add("android.hardware.camera.level.full");
-           unsupportFeatures.add("android.hardware.camera.capability.manual_sensor");
-           unsupportFeatures.add("android.hardware.camera.capability.manual_post_processing");
-           unsupportFeatures.add("android.hardware.camera.capability.raw");
-           unsupportFeatures.add("android.hardware.camera.external");
            Slog.i(TAG,"Removing unsupported features");
         }
 
@@ -776,6 +765,14 @@ public class SystemConfig {
     }
 
     private void addFeature(String name, int version) {
+        /* disable aware by vendor prop */
+        if (PackageManager.FEATURE_WIFI_AWARE.equals(name)) {
+            if (!SystemProperties.getBoolean("ro.vendor.wlan.aware", true)) {
+                Slog.w(TAG, "<" + name + "> not supported due to ro.vendor.wlan.aware is false");
+                return;
+            }
+        }
+
         FeatureInfo fi = mAvailableFeatures.get(name);
         if (fi == null) {
             fi = new FeatureInfo();
